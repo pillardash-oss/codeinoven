@@ -1,4 +1,4 @@
-import type { ThreadEmbeddingRecord } from './types'
+import type { ThreadEmbeddingRecord, ThreadEmbeddingWindow } from './types'
 
 /**
  * Pure vector math and index codec for intent search. No Node or DOM
@@ -38,8 +38,11 @@ export function cosineSimilarity(left: Float32Array, right: Float32Array): numbe
 }
 
 const INDEX_MAGIC = 0x43494f53 // "CIOS"
-// Version 3 indexes raw/truncated text first; summaries are optional refinements.
-const INDEX_VERSION = 3
+// Version 4 indexes several evenly spread windows per thread (see
+// ThreadEmbeddingRecord); version 3 held one head vector and is still read so an
+// upgrade keeps answering from the existing index instead of blanking it.
+const INDEX_VERSION = 4
+const HEAD_ONLY_INDEX_VERSION = 3
 
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
@@ -57,10 +60,10 @@ export function encodeThreadIndex(records: readonly ThreadEmbeddingRecord[]): Ui
   let size = 12
   for (const record of records) {
     const idBytes = textEncoder.encode(record.threadId)
-    const hashBytes = textEncoder.encode(
-      record.sourceHash ? `${record.sourceHash}:${record.contentHash}` : record.contentHash
-    )
-    size += 4 + idBytes.length + 4 + hashBytes.length + 4 + 8 + record.vector.length * 4
+    size += 4 + idBytes.length + 4 + 4 + 8 + 4
+    for (const window of record.windows) {
+      size += 4 + textEncoder.encode(window.contentHash).length + 4 + window.vector.length * 4
+    }
   }
   const buffer = new ArrayBuffer(size)
   const view = new DataView(buffer)
@@ -73,22 +76,28 @@ export function encodeThreadIndex(records: readonly ThreadEmbeddingRecord[]): Ui
   offset += 4
   for (const record of records) {
     const idBytes = textEncoder.encode(record.threadId)
-    const hashBytes = textEncoder.encode(
-      record.sourceHash ? `${record.sourceHash}:${record.contentHash}` : record.contentHash
-    )
     view.setUint32(offset, idBytes.length, false)
     offset += 4
     offset = writeBytes(view, offset, idBytes)
-    view.setUint32(offset, hashBytes.length, false)
+    view.setUint32(offset, record.planned, false)
     offset += 4
-    offset = writeBytes(view, offset, hashBytes)
-    view.setUint32(offset, record.dimensions, false)
+    view.setUint32(offset, record.width, false)
     offset += 4
     view.setFloat64(offset, record.updatedAt, false)
     offset += 8
-    for (let index = 0; index < record.vector.length; index += 1) {
-      view.setFloat32(offset, record.vector[index], false)
+    view.setUint32(offset, record.windows.length, false)
+    offset += 4
+    for (const window of record.windows) {
+      const hashBytes = textEncoder.encode(window.contentHash)
+      view.setUint32(offset, hashBytes.length, false)
       offset += 4
+      offset = writeBytes(view, offset, hashBytes)
+      view.setUint32(offset, window.vector.length, false)
+      offset += 4
+      for (let index = 0; index < window.vector.length; index += 1) {
+        view.setFloat32(offset, window.vector[index], false)
+        offset += 4
+      }
     }
   }
   return new Uint8Array(buffer)
@@ -99,7 +108,8 @@ export function decodeThreadIndex(buffer: Uint8Array): ThreadEmbeddingRecord[] |
   if (buffer.byteLength < 12) return null
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
   if (view.getUint32(0, false) !== INDEX_MAGIC) return null
-  if (view.getUint32(4, false) !== INDEX_VERSION) return null
+  const version = view.getUint32(4, false)
+  if (version !== INDEX_VERSION && version !== HEAD_ONLY_INDEX_VERSION) return null
   const count = view.getUint32(8, false)
   let offset = 12
   const records: ThreadEmbeddingRecord[] = []
@@ -110,27 +120,100 @@ export function decodeThreadIndex(buffer: Uint8Array): ThreadEmbeddingRecord[] |
     if (offset + idLength > buffer.byteLength) return null
     const threadId = textDecoder.decode(buffer.subarray(offset, offset + idLength))
     offset += idLength
-    if (offset + 4 > buffer.byteLength) return null
-    const hashLength = view.getUint32(offset, false)
+    if (version === HEAD_ONLY_INDEX_VERSION) {
+      const headOnly = readHeadOnlyRecord(view, buffer, offset, threadId)
+      if (!headOnly) return null
+      records.push(headOnly.record)
+      offset = headOnly.offset
+      continue
+    }
+    if (offset + 20 > buffer.byteLength) return null
+    const planned = view.getUint32(offset, false)
     offset += 4
-    if (offset + hashLength > buffer.byteLength) return null
-    const storedHash = textDecoder.decode(buffer.subarray(offset, offset + hashLength))
-    const [sourceHash, contentHash] = storedHash.includes(':')
-      ? storedHash.split(':', 2)
-      : [storedHash, storedHash]
-    offset += hashLength
-    if (offset + 12 > buffer.byteLength) return null
-    const dimensions = view.getUint32(offset, false)
+    const width = view.getUint32(offset, false)
     offset += 4
     const updatedAt = view.getFloat64(offset, false)
     offset += 8
-    if (offset + dimensions * 4 > buffer.byteLength) return null
-    const vector = new Float32Array(dimensions)
-    for (let index = 0; index < dimensions; index += 1) {
-      vector[index] = view.getFloat32(offset, false)
-      offset += 4
+    const windowCount = view.getUint32(offset, false)
+    offset += 4
+    const windows: ThreadEmbeddingWindow[] = []
+    let dimensions = 0
+    for (let index = 0; index < windowCount; index += 1) {
+      const decoded = readWindow(view, buffer, offset)
+      if (!decoded) return null
+      windows.push(decoded.window)
+      offset = decoded.offset
+      dimensions = decoded.window.vector.length
     }
-    records.push({ threadId, sourceHash, contentHash, dimensions, updatedAt, vector })
+    records.push({ threadId, planned, width, updatedAt, dimensions, windows })
   }
   return records
+}
+
+interface DecodedWindow {
+  window: ThreadEmbeddingWindow
+  offset: number
+}
+
+function readWindow(view: DataView, buffer: Uint8Array, start: number): DecodedWindow | null {
+  let offset = start
+  if (offset + 4 > buffer.byteLength) return null
+  const hashLength = view.getUint32(offset, false)
+  offset += 4
+  if (offset + hashLength > buffer.byteLength) return null
+  const contentHash = textDecoder.decode(buffer.subarray(offset, offset + hashLength))
+  offset += hashLength
+  if (offset + 4 > buffer.byteLength) return null
+  const dimensions = view.getUint32(offset, false)
+  offset += 4
+  if (dimensions === 0 || offset + dimensions * 4 > buffer.byteLength) return null
+  const vector = new Float32Array(dimensions)
+  for (let index = 0; index < dimensions; index += 1) {
+    vector[index] = view.getFloat32(offset, false)
+    offset += 4
+  }
+  return { window: { vector, contentHash }, offset }
+}
+
+/**
+ * Read one version-3 record: a single head vector described by a hash that
+ * encoded the raw and summary fingerprints as `source:content`.
+ */
+function readHeadOnlyRecord(
+  view: DataView,
+  buffer: Uint8Array,
+  start: number,
+  threadId: string
+): { record: ThreadEmbeddingRecord; offset: number } | null {
+  let offset = start
+  if (offset + 4 > buffer.byteLength) return null
+  const hashLength = view.getUint32(offset, false)
+  offset += 4
+  if (offset + hashLength > buffer.byteLength) return null
+  const storedHash = textDecoder.decode(buffer.subarray(offset, offset + hashLength))
+  offset += hashLength
+  if (offset + 12 > buffer.byteLength) return null
+  const dimensions = view.getUint32(offset, false)
+  offset += 4
+  const updatedAt = view.getFloat64(offset, false)
+  offset += 8
+  if (dimensions === 0 || offset + dimensions * 4 > buffer.byteLength) return null
+  const vector = new Float32Array(dimensions)
+  for (let index = 0; index < dimensions; index += 1) {
+    vector[index] = view.getFloat32(offset, false)
+    offset += 4
+  }
+  return {
+    record: {
+      threadId,
+      dimensions,
+      updatedAt,
+      windows: [{ vector, contentHash: storedHash }],
+      // The version-3 layout recorded no plan: the next sweep re-plans it and
+      // tops the record up with the windows the thread now needs.
+      planned: 0,
+      width: 0
+    },
+    offset
+  }
 }

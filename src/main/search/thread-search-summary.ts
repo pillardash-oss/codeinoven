@@ -11,6 +11,10 @@ const SUMMARY_CHARS = 2_000
 const MAX_SOURCE_CHARS = 262_144
 const SUMMARY_EXCERPT_CHARS = 8_000
 const MESSAGE_PAGE_SIZE = 16
+/** Message rows read per page while measuring a thread's text offsets. */
+const LAYOUT_PAGE_SIZE = 512
+/** Messages one window may be assembled from. Bounds the slice query's params. */
+const MAX_WINDOW_PARTS = 64
 
 export interface SearchSummaryThread {
   id: string
@@ -27,6 +31,49 @@ export interface SearchSummaryRequest {
 }
 
 export type SearchSummaryExecutor = (request: SearchSummaryRequest) => Promise<string>
+
+/** One message of a thread, with its offset in the thread's conversation text. */
+export interface ThreadTextPart {
+  id: string
+  /** Characters before this message, including the separator that precedes it. */
+  start: number
+  chars: number
+}
+
+/**
+ * The character layout of a thread's conversation: the same text the full-text
+ * index covers, addressed by offset so an embedding window can be sliced out of a
+ * conversation far larger than one embed window.
+ */
+export interface ThreadTextPlan {
+  total: number
+  parts: ThreadTextPart[]
+}
+
+/**
+ * How many evenly spread windows it takes to sample a thread of this size. One
+ * window already holds the whole conversation for a short thread.
+ */
+export function threadWindowCount(total: number, width: number, maxWindows: number): number {
+  if (total <= 0 || width <= 0) return 1
+  return Math.min(maxWindows, Math.max(1, Math.ceil(total / width)))
+}
+
+/**
+ * Character offset of one window: an even spread that always includes the
+ * thread's opening text and always ends at its latest text. Offsets are a pure
+ * function of (index, count, total, width), so window `index` describes the same
+ * region on every sweep and an unchanged window is never re-embedded.
+ */
+export function threadWindowOffset(
+  index: number,
+  count: number,
+  total: number,
+  width: number
+): number {
+  if (count <= 1 || total <= width) return 0
+  return Math.round((index * (total - width)) / (count - 1))
+}
 
 export function validateSearchSummary(raw: string): string | null {
   const text = raw.replace(/<think>[\s\S]*?<\/think>/giu, '').trim()
@@ -175,6 +222,110 @@ export class ThreadSearchSummaries {
     return text
   }
 
+  /**
+   * Measure a thread's conversation so windows can be sliced out of it by
+   * character offset. One pass over the message lengths, paged and yielding
+   * between pages, so this never blocks on a thread with thousands of messages.
+   */
+  async plan(thread: SearchSummaryThread, signal: AbortSignal): Promise<ThreadTextPlan> {
+    const parts: ThreadTextPart[] = []
+    let cursorTime = -1
+    let cursorId = ''
+    let total = 0
+    while (true) {
+      signal.throwIfAborted()
+      const page = await this.db.queryViaWorker(
+        `SELECT id, created_at, LENGTH(search_text) AS chars
+          FROM agent_messages
+          WHERE thread_id = ? AND visibility = 'conversation' AND session_id IS NULL
+            AND search_text != ''
+            AND (created_at > ? OR (created_at = ? AND id > ?))
+          ORDER BY created_at ASC, id ASC LIMIT ?`,
+        [thread.id, cursorTime, cursorTime, cursorId, LAYOUT_PAGE_SIZE],
+        LAYOUT_PAGE_SIZE
+      )
+      if (!page.ok) throw new Error('The conversation could not be measured for search indexing.')
+      for (const row of page.rows) {
+        const id = row['id']
+        const chars = row['chars']
+        if (typeof id !== 'string' || typeof chars !== 'number') {
+          throw new Error('The search corpus contained an invalid message.')
+        }
+        cursorId = id
+        const createdAt = row['created_at']
+        if (typeof createdAt === 'number') cursorTime = createdAt
+        parts.push({ id, start: total, chars })
+        // One separator character stands between consecutive messages.
+        total += chars + 1
+      }
+      if (page.rows.length < LAYOUT_PAGE_SIZE) break
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return { total: Math.max(0, total - (parts.length > 0 ? 1 : 0)), parts }
+  }
+
+  /**
+   * The `width` characters of a thread's conversation at one window offset.
+   * Reads only the message slices the window covers, so the cost of a window is
+   * bounded by the window itself and not by the size of the thread.
+   */
+  async window(
+    plan: ThreadTextPlan,
+    offset: number,
+    width: number,
+    signal: AbortSignal
+  ): Promise<string> {
+    signal.throwIfAborted()
+    if (plan.parts.length === 0) return ''
+    const end = offset + width
+    const slices: { id: string; from: number; length: number; separator: boolean }[] = []
+    for (let index = lowerBound(plan.parts, offset); index < plan.parts.length; index += 1) {
+      if (slices.length >= MAX_WINDOW_PARTS) break
+      const part = plan.parts[index]
+      if (part.start >= end) break
+      const from = Math.max(0, offset - part.start)
+      const to = Math.min(part.chars, end - part.start)
+      if (to <= from) continue
+      slices.push({
+        id: part.id,
+        from: from + 1,
+        length: to - from,
+        // The separator before an included message is text too, when it falls
+        // inside the window.
+        separator: from === 0 && part.start - 1 >= offset
+      })
+    }
+    if (slices.length === 0) return ''
+    const placeholders = slices.map(() => '(?, ?, ?)').join(', ')
+    const params = slices.flatMap((slice) => [slice.id, slice.from, slice.length])
+    const result = await this.db.queryViaWorker(
+      `WITH window_slice(id, from_char, slice_length) AS (VALUES ${placeholders})
+       SELECT window_slice.id AS id,
+              SUBSTR(m.search_text, window_slice.from_char, window_slice.slice_length) AS piece
+         FROM window_slice JOIN agent_messages m ON m.id = window_slice.id`,
+      params,
+      0
+    )
+    if (!result.ok) throw new Error('A conversation window could not be read for search indexing.')
+    const pieces = new Map<string, string>()
+    for (const row of result.rows) {
+      const id = row['id']
+      const piece = row['piece']
+      if (typeof id === 'string' && typeof piece === 'string') pieces.set(id, piece)
+    }
+    let text = ''
+    for (const slice of slices) {
+      const piece = pieces.get(slice.id)
+      if (piece === undefined) {
+        throw new Error('A conversation message changed during search indexing.')
+      }
+      if (slice.separator) text += '\n'
+      text += piece
+    }
+    signal.throwIfAborted()
+    return text
+  }
+
   private contentHash(thread: SearchSummaryThread) {
     return createHash('sha256')
       .update(String(SEARCH_SUMMARY_VERSION))
@@ -292,4 +443,16 @@ export class ThreadSearchSummaries {
 
 function cacheFile(thread: Pick<SearchSummaryThread, 'id' | 'projectId'>): string {
   return `${createHash('sha256').update(thread.projectId).update('\u0000').update(thread.id).digest('hex')}.json`
+}
+
+/** Index of the first part whose text starts at or after `offset`. */
+function lowerBound(parts: readonly ThreadTextPart[], offset: number): number {
+  let low = 0
+  let high = parts.length
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if (parts[middle].start + parts[middle].chars <= offset) low = middle + 1
+    else high = middle
+  }
+  return low
 }

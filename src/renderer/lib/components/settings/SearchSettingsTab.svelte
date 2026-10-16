@@ -273,7 +273,9 @@
     <!-- Models -->
     <div class="border bg-surface p-4">
       <div class="mb-1 flex items-center justify-between gap-3 border-b border-border pb-2">
-        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Embedding model</h3>
+        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+          Embedding model
+        </h3>
         <div class="flex items-center gap-1.5">
           <button
             type="button"
@@ -309,9 +311,7 @@
             {@const isActive = status?.activeModelId === model.id}
             <li class="flex items-center gap-3 py-2.5">
               <span
-                class="size-1.5 shrink-0 {isActive
-                  ? 'bg-primary'
-                  : 'bg-border-strong'}"
+                class="size-1.5 shrink-0 {isActive ? 'bg-primary' : 'bg-border-strong'}"
                 aria-hidden="true"
               ></span>
               <div class="min-w-0 flex-1">
@@ -371,8 +371,9 @@
           <div class="min-w-0">
             <p class="text-sm font-medium">Context window</p>
             <p class="mt-0.5 text-xs leading-relaxed text-muted">
-              How many tokens of each thread the model reads when it embeds. A wider window keeps
-              more of a long conversation; a narrower one is faster.
+              How many tokens the model may read in one pass. Each thread is indexed by several
+              windows spread across the conversation, so this bounds one window's size rather than
+              how much of a thread is searched.
             </p>
             <p class="mt-1 text-xs text-dimmed">Changing it clears the index and rebuilds it.</p>
           </div>
