@@ -32,10 +32,9 @@ function beats(candidate: RegisteredHost, incumbent: RegisteredHost | null): boo
   if (incumbent === null) return true
   const candidateScope = hostScope(candidate)
   const incumbentScope = hostScope(incumbent)
-  const active = document.activeElement
-  const candidateHasFocus = active instanceof Element && candidateScope?.contains(active)
-  const incumbentHasFocus = active instanceof Element && incumbentScope?.contains(active)
-  if (candidateHasFocus !== incumbentHasFocus) return Boolean(candidateHasFocus)
+  const candidateHasFocus = focusedWithin(candidateScope)
+  const incumbentHasFocus = focusedWithin(incumbentScope)
+  if (candidateHasFocus !== incumbentHasFocus) return candidateHasFocus
   if (candidate.lastInteractionAt !== incumbent.lastInteractionAt) {
     return candidate.lastInteractionAt > incumbent.lastInteractionAt
   }
@@ -49,57 +48,126 @@ function hostScope(host: RegisteredHost): Element | null {
   return element.closest('[data-voice-trigger-root]') ?? element
 }
 
+/**
+ * True when the caret is inside this scope in the document that scope belongs to.
+ *
+ * The mic is often not in the app's own document: the comment bubble over a
+ * browser page is adopted into a native floating panel, which is a real child
+ * window with its own realm. Focus therefore has to be read from the element's
+ * own document, and only counts while that whole window actually owns focus, so
+ * a panel sitting in the background never outranks the app.
+ */
+function focusedWithin(scope: Element | null): boolean {
+  if (!scope) return false
+  const doc = scope.ownerDocument
+  if (!doc.hasFocus()) return false
+  const active = doc.activeElement
+  return active !== null && scope.contains(active)
+}
+
 /** True when the element is rendered and genuinely topmost-on-view at its own
- *  position — buttons buried behind another view fail the hit test. */
+ *  position — buttons buried behind another view fail the hit test. The hit test
+ *  runs in the element's own document, because a floating panel's mic lives in
+ *  the child window's document and viewport, not the app's. */
 function visibleOnView(element: HTMLElement): boolean {
   const rects = element.getClientRects()
   if (rects.length === 0) return false
   const rect = rects[0]
+  const view = element.ownerDocument.defaultView
+  if (!view) return false
   const samplePoints: Array<[number, number]> = []
   for (const fraction of [0.3, 0.5, 0.7]) {
     samplePoints.push([
-      Math.min(Math.max(rect.left + rect.width * fraction, 1), window.innerWidth - 1),
-      Math.min(Math.max(rect.top + rect.height / 2, 1), window.innerHeight - 1)
+      Math.min(Math.max(rect.left + rect.width * fraction, 1), view.innerWidth - 1),
+      Math.min(Math.max(rect.top + rect.height / 2, 1), view.innerHeight - 1)
     ])
   }
+  const doc = element.ownerDocument
   return samplePoints.some(([x, y]) => {
-    const top = document.elementFromPoint(x, y)
+    const top = doc.elementFromPoint(x, y)
     return top !== null && (top === element || element.contains(top))
   })
 }
 
-let interactionTrackingInstalled = false
+/**
+ * Narrows an event target to an element without a same-realm `instanceof`.
+ *
+ * A floating panel's own nodes come from the child window's realm while the
+ * interaction listeners live in the app's, so `target instanceof Element` would
+ * reject exactly the nodes this tracking exists to record.
+ */
+function eventTargetElement(target: EventTarget | null): Element | null {
+  if (target === null) return null
+  return (target as Node).nodeType === 1 ? (target as Element) : null
+}
 
 function markInteraction(event: Event): void {
-  const target = event.target
-  if (!(target instanceof Element)) return
+  const target = eventTargetElement(event.target)
+  if (!target) return
   for (const host of hosts) {
     const scope = hostScope(host)
     if (scope && scope.contains(target)) host.lastInteractionAt = Date.now()
   }
 }
 
-function ensureInteractionTracking(): void {
-  if (interactionTrackingInstalled) return
-  interactionTrackingInstalled = true
-  window.addEventListener('focusin', markInteraction, true)
-  window.addEventListener('pointerdown', markInteraction, true)
+/**
+ * The documents currently worth observing for interaction.
+ *
+ * Read from the hosts themselves rather than remembered at registration: the
+ * comment bubble over a browser page is registered in the app's document and
+ * only afterwards adopted into a floating panel, so the document a host lives
+ * in is not the one it was registered in.
+ */
+function hostedDocuments(): Set<Document> {
+  const documents = new Set<Document>()
+  for (const host of hosts) {
+    const element = host.element()
+    if (element) documents.add(element.ownerDocument)
+  }
+  return documents
 }
 
-function maybeReleaseInteractionTracking(): void {
-  if (hosts.size > 0 || !interactionTrackingInstalled) return
-  interactionTrackingInstalled = false
-  window.removeEventListener('focusin', markInteraction, true)
-  window.removeEventListener('pointerdown', markInteraction, true)
+/** Documents whose interaction events are currently observed. */
+const observedDocuments = new Map<Document, Window>()
+
+/** Attach to exactly the documents that host a mic, and detach from the rest, so
+ *  no listener runs while no recorder is on screen. */
+function refreshInteractionTracking(): void {
+  const wanted = hostedDocuments()
+  for (const [doc, view] of observedDocuments) {
+    if (wanted.has(doc)) continue
+    view.removeEventListener('focusin', markInteraction, true)
+    view.removeEventListener('pointerdown', markInteraction, true)
+    observedDocuments.delete(doc)
+  }
+  for (const doc of wanted) {
+    if (observedDocuments.has(doc)) continue
+    const view = doc.defaultView
+    if (!view) continue
+    view.addEventListener('focusin', markInteraction, true)
+    view.addEventListener('pointerdown', markInteraction, true)
+    observedDocuments.set(doc, view)
+  }
 }
 
 export function registerVoiceTriggerHost(host: VoiceTriggerHost): () => void {
   const entry: RegisteredHost = { ...host, lastInteractionAt: 0 }
   hosts.add(entry)
-  ensureInteractionTracking()
+  refreshInteractionTracking()
+  // A floating panel adopts the mic into a child window after it registers, so
+  // the host's document has to be re-read at the move. The surface announcing
+  // the move is also genuinely being interacted with, which keeps the bubble's
+  // mic ahead of a composer the user happened to touch earlier.
+  const scope = hostScope(entry)
+  const onDocumentChange = (): void => {
+    entry.lastInteractionAt = Date.now()
+    refreshInteractionTracking()
+  }
+  scope?.addEventListener('native-floating-document-change', onDocumentChange)
   return () => {
+    scope?.removeEventListener('native-floating-document-change', onDocumentChange)
     hosts.delete(entry)
-    maybeReleaseInteractionTracking()
+    refreshInteractionTracking()
   }
 }
 
