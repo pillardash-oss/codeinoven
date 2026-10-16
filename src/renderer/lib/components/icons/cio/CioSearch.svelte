@@ -22,11 +22,15 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(-3.710 -3.710) scale(1.2773)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.2773)}
+    transform="translate(-3.330 -3.330) scale(1.2470)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.247)}
   >
-    <circle cx="10.4" cy="10.4" r="6.2" />
-    <path d="M15.2 15.2 20.4 20.4" />
-    <circle cx="10.4" cy="10.4" r="2.4" fill="currentColor" stroke="none" />
+    <circle cx="10.4" cy="10.4" r="6.2" /><path d="M15.2 15.2 20.4 20.4" /><circle
+      cx="10.4"
+      cy="10.4"
+      r="2.4"
+      fill="currentColor"
+      stroke="none"
+    />
   </g>
 </svg>

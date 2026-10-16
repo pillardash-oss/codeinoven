@@ -1,0 +1,40 @@
+<script lang="ts">
+  import { cioStrokeWidth, type CioGlyphProps } from './glyph'
+
+  let { size = 16, strokeWidth = 1.8, class: className = '' }: CioGlyphProps = $props()
+</script>
+
+<!--
+  CIO · Delete
+  Delete: a bin with a lid rule, a handle and one solid rib. Two ribs turned
+  the body into a smudge at 16px; one keeps the ribs reading as ribs.
+-->
+<svg
+  viewBox="0 0 24 24"
+  width={size}
+  height={size}
+  fill="none"
+  stroke="currentColor"
+  stroke-width={strokeWidth}
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  class={className}
+  aria-hidden="true"
+>
+  <g
+    transform="translate(-2.635 -3.235) scale(1.2196)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.2196)}
+  >
+    <path d="M4.4 7.4h15.2" /><path
+      d="M9.6 7.4V5.6a1.4 1.4 0 0 1 1.4-1.4h2a1.4 1.4 0 0 1 1.4 1.4v1.8"
+    /><path d="M6.8 7.4 7.8 19a2 2 0 0 0 2 1.8h4.4a2 2 0 0 0 2-1.8l1-11.6" /><rect
+      x="11"
+      y="10.6"
+      width="2"
+      height="6.2"
+      rx="1"
+      fill="currentColor"
+      stroke="none"
+    />
+  </g>
+</svg>

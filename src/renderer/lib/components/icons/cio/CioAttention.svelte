@@ -6,8 +6,8 @@
 
 <!--
   CIO · Decisions made for you
-  Decisions made for you: a triangle with a solid stem and a solid dot,
-  which is a warning without a second outline inside it.
+  Decisions made for you: a triangle with a solid stem and a solid dot, which
+  is a warning without a second outline inside it.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -22,13 +22,17 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(-2.132 -1.912) scale(1.1777)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.1777)}
+    transform="translate(-1.915 -1.698) scale(1.1596)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.1596)}
   >
     <path
       d="M10.8 4.6a1.4 1.4 0 0 1 2.4 0l7.4 13a1.4 1.4 0 0 1-1.2 2.1H4.6a1.4 1.4 0 0 1-1.2-2.1Z"
+    /><rect x="11" y="9.4" width="2" height="5.2" rx="1" fill="currentColor" stroke="none" /><circle
+      cx="12"
+      cy="16.8"
+      r="1.2"
+      fill="currentColor"
+      stroke="none"
     />
-    <rect x="11" y="9.4" width="2" height="5.2" rx="1" fill="currentColor" stroke="none" />
-    <circle cx="12" cy="16.8" r="1.2" fill="currentColor" stroke="none" />
   </g>
 </svg>

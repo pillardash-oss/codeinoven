@@ -23,8 +23,8 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(0.267 -0.802) scale(1.0668)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.0668)}
+    transform="translate(0.362 -0.692) scale(1.0577)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.0577)}
   >
     <path d="M14.6 5.4 7.4 12l7.2 6.6" />
   </g>

@@ -53,6 +53,7 @@
     "check:bundle": "bun scripts/check-bundle-budgets.ts",
     "verify:packaged-app": "bun run scripts/verify-packaged-app.ts",
     "smoke:packaged": "bun run scripts/smoke-packaged-app.ts",
+    "icons:build": "bun scripts/icons/build-icons.ts",
     "speech:catalog": "bun scripts/benchmark-speech-models.ts",
     "speech:build-mlx": "bun scripts/build-mlx-speech-worker.ts",
     "speech:build-coreml": "bun scripts/build-coreml-speech-worker.ts",

@@ -23,11 +23,17 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(-3.915 -4.047) scale(1.3263)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.3263)}
+    transform="translate(-3.478 -3.599) scale(1.2898)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.2898)}
   >
-    <rect x="4.2" y="4.6" width="15.6" height="3.8" rx="1.8" />
-    <rect x="4.2" y="10.2" width="15.6" height="3.8" rx="1.8" fill="currentColor" stroke="none" />
-    <rect x="4.2" y="15.8" width="15.6" height="3.8" rx="1.8" />
+    <rect x="4.2" y="4.6" width="15.6" height="3.8" rx="1.8" /><rect
+      x="4.2"
+      y="10.2"
+      width="15.6"
+      height="3.8"
+      rx="1.8"
+      fill="currentColor"
+      stroke="none"
+    /><rect x="4.2" y="15.8" width="15.6" height="3.8" rx="1.8" />
   </g>
 </svg>

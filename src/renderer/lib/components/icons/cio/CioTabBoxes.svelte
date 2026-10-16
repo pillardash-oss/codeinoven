@@ -5,10 +5,11 @@
 </script>
 
 <!--
-  CIO · Containers tab
-  Containers: a box with its contents in it, one object inside another and a
-  five-unit gap between them. Four equal panels read as a grid rather than
-  as a thing that holds things.
+  CIO · Containers
+  Containers: a crate seen from the front, with a lid rule across it and two
+  solid straps. The first drawing was a square with a smaller square inside,
+  which is the silhouette the scoped field wears, so the two were unreadable
+  apart at 12px. A box open at the top was tried and read as an inbox tray.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -23,10 +24,19 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(-3.915 -3.915) scale(1.3263)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.3263)}
+    transform="translate(-2.487 -3.944) scale(1.2072)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.2072)}
   >
-    <rect x="4.2" y="4.2" width="15.6" height="15.6" rx="2.6" />
-    <rect x="9.2" y="9.2" width="5.6" height="5.6" rx="1.6" fill="currentColor" stroke="none" />
+    <path d="M3.6 8.6h16.8v9.2a2 2 0 0 1-2 2H5.6a2 2 0 0 1-2-2Z" /><path
+      d="M3.6 8.6a2 2 0 0 1 2-2h12.8a2 2 0 0 1 2 2"
+    /><rect x="8.2" y="10.6" width="2" height="6.8" rx="1" fill="currentColor" stroke="none" /><rect
+      x="13.8"
+      y="10.6"
+      width="2"
+      height="6.8"
+      rx="1"
+      fill="currentColor"
+      stroke="none"
+    />
   </g>
 </svg>

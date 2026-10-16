@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { CioGlyphProps } from './glyph'
 
-  let { size = 16, strokeWidth = 1.8, class: className = '' }: CioGlyphProps = $props()
+  let { size = 16, class: className = '' }: CioGlyphProps = $props()
 </script>
 
 <!--
@@ -14,9 +14,6 @@
   height={size}
   fill="currentColor"
   stroke="none"
-  stroke-width={strokeWidth}
-  stroke-linecap="round"
-  stroke-linejoin="round"
   class={className}
   aria-hidden="true"
 >

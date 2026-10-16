@@ -6,9 +6,9 @@
 
 <!--
   CIO · Info tab
-  Update: a readout plate carrying its own mark. The dot and the stem are
-  1.8 units wide, above the one-device-pixel floor, which pass D's version
-  of this glyph was not.
+  Update: a readout plate carrying its own mark. The dot and the stem are 1.8
+  units wide, above the one-device-pixel floor, which pass D's version of this
+  glyph was not.
 -->
 <svg
   viewBox="0 0 24 24"

@@ -9,8 +9,8 @@
   Task manager: two running panels, one behind the other, the front one lit.
   Isometric planes and lanes were both tried first and both failed at 16px:
   the planes closed into a single downward point, and the lanes read as a
-  list, which is what Thread already is. The panels overlap by 2 units so
-  the offset is a visible step rather than two tiles touching.
+  list, which is what Thread already is. The panels overlap by 2 units so the
+  offset is a visible step rather than two tiles touching.
 -->
 <svg
   viewBox="0 0 24 24"

@@ -26,7 +26,6 @@
   >
     <path
       d="M3.5 8.6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v5.8a2 2 0 0 1-2 2h-7.3L7.4 20v-3.6H5.5a2 2 0 0 1-2-2Z"
-    />
-    <rect x="7.2" y="10.3" width="9.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" />
+    /> <rect x="7.2" y="10.3" width="9.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" />
   </g>
 </svg>

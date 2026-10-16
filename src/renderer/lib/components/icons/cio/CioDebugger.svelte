@@ -23,14 +23,19 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(-2.783 -4.508) scale(1.2319)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.2319)}
+    transform="translate(-2.487 -4.184) scale(1.2072)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.2072)}
   >
-    <rect x="6" y="7.4" width="12" height="12" rx="6" />
-    <path d="M6 10.6H3.6" />
-    <path d="M6 16.4H3.6" />
-    <path d="M18 10.6h2.4" />
-    <path d="M18 16.4h2.4" />
-    <rect x="8.6" y="12.2" width="6.8" height="2.6" rx="1.3" fill="currentColor" stroke="none" />
+    <rect x="6" y="7.4" width="12" height="12" rx="6" /><path d="M6 10.6H3.6" /><path
+      d="M6 16.4H3.6"
+    /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" /><rect
+      x="8.6"
+      y="12.2"
+      width="6.8"
+      height="2.6"
+      rx="1.3"
+      fill="currentColor"
+      stroke="none"
+    />
   </g>
 </svg>

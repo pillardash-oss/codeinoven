@@ -23,12 +23,17 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(-4.532 -3.142) scale(1.2618)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.2618)}
+    transform="translate(-4.148 -2.791) scale(1.2325)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.2325)}
   >
-    <path d="M6.2 3.8v16.4" />
-    <rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" />
-    <rect x="11.2" y="10.4" width="6.4" height="2.4" rx="1.2" fill="currentColor" stroke="none" />
-    <path d="M11.2 15.4h4.2" />
+    <path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" /><rect
+      x="11.2"
+      y="10.4"
+      width="6.4"
+      height="2.4"
+      rx="1.2"
+      fill="currentColor"
+      stroke="none"
+    /><path d="M11.2 15.4h4.2" />
   </g>
 </svg>

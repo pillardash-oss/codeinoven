@@ -26,7 +26,6 @@
   >
     <path d="M5.4 7.2v9.6" />
     <rect x="8.6" y="5.9" width="11.5" height="2.6" rx="1.3" fill="currentColor" stroke="none" />
-    <path d="M8.6 12h9.4" />
-    <path d="M8.6 16.4h6" />
+    <path d="M8.6 12h9.4" /> <path d="M8.6 16.4h6" />
   </g>
 </svg>

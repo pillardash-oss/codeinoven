@@ -6,8 +6,8 @@
 
 <!--
   CIO · Utilities
-  Utilities: the four panels the utilities page actually is, a grid of
-  skills, MCP servers and plugins.
+  Utilities: the four panels the utilities page actually is, a grid of skills,
+  MCP servers and plugins.
 -->
 <svg
   viewBox="0 0 24 24"

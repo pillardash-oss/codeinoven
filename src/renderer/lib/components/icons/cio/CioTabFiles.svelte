@@ -6,9 +6,9 @@
 
 <!--
   CIO · Files tab
-  Files: two sheets with one solid line on the front sheet. The dock
-  Workspace files is a folder tree; this one is the pages themselves, so the
-  two never collide.
+  Files: two sheets with one solid line on the front sheet. The dock Workspace
+  files is a folder tree; this one is the pages themselves, so the two never
+  collide.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -23,11 +23,11 @@
   aria-hidden="true"
 >
   <g
-    transform="translate(-2.891 -3.393) scale(1.2618)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.2618)}
+    transform="translate(-2.562 -3.054) scale(1.2340)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.234)}
   >
-    <rect x="4.2" y="6.4" width="11" height="14" rx="2" />
-    <path d="M8.2 6.4V6a2 2 0 0 1 2-2h7.2a2 2 0 0 1 2 2v10.6a2 2 0 0 1-2 2h-.4" />
-    <rect x="7" y="11.6" width="5.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" />
+    <rect x="4.2" y="6.4" width="11" height="14" rx="2" /><path
+      d="M8.2 6.4V6a2 2 0 0 1 2-2h7.2a2 2 0 0 1 2 2v10.6a2 2 0 0 1-2 2h-.4"
+    /><rect x="7" y="11.6" width="5.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" />
   </g>
 </svg>

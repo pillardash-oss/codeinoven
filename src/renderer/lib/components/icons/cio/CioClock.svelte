@@ -1,0 +1,38 @@
+<script lang="ts">
+  import { cioStrokeWidth, type CioGlyphProps } from './glyph'
+
+  let { size = 16, strokeWidth = 1.8, class: className = '' }: CioGlyphProps = $props()
+</script>
+
+<!--
+  CIO · Time
+  Time: a ring with two solid hands, the hour hand shorter, so the reading
+  survives 12px.
+-->
+<svg
+  viewBox="0 0 24 24"
+  width={size}
+  height={size}
+  fill="none"
+  stroke="currentColor"
+  stroke-width={strokeWidth}
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  class={className}
+  aria-hidden="true"
+>
+  <g
+    transform="translate(-2.791 -2.791) scale(1.2325)"
+    stroke-width={cioStrokeWidth(strokeWidth, 1.2325)}
+  >
+    <circle cx="12" cy="12" r="8.2" /><rect
+      x="11"
+      y="7"
+      width="2"
+      height="5.4"
+      rx="1"
+      fill="currentColor"
+      stroke="none"
+    /><rect x="12.4" y="11" width="4.2" height="2" rx="1" fill="currentColor" stroke="none" />
+  </g>
+</svg>
