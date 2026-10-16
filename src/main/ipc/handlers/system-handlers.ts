@@ -1,4 +1,5 @@
-import { net, app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
+import { dialog } from '../../system/file-dialogs'
+import { net, app, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import { lstat, readFile, writeFile, mkdir } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'

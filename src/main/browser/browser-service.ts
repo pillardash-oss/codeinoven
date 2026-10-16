@@ -1,3 +1,4 @@
+import { dialog } from '../system/file-dialogs'
 import {
   showBrowserNewTabMenu,
   validateBrowserNewTabMenuInput
@@ -18,7 +19,6 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  dialog,
   ipcMain as electronIpcMain,
   Menu,
   screen,

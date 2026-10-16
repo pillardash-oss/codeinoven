@@ -1,4 +1,5 @@
-import { app, dialog, shell, BrowserWindow, nativeImage } from 'electron'
+import { dialog } from '../../system/file-dialogs'
+import { app, shell, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, rm, stat } from 'fs/promises'

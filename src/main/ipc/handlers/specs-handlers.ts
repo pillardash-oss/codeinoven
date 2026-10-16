@@ -1,4 +1,5 @@
-import { BrowserWindow, dialog } from 'electron'
+import { dialog } from '../../system/file-dialogs'
+import { BrowserWindow } from 'electron'
 import { readFile } from 'fs/promises'
 import { basename } from 'path'
 import { atomicWrite } from '../../../lib/utils'

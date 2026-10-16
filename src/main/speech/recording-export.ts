@@ -1,3 +1,4 @@
+import { dialog } from '../system/file-dialogs'
 /**
  * Save a stored recording to a path the user picks.
  *
@@ -13,7 +14,7 @@
  * request with no dialog and no file.
  */
 
-import { BrowserWindow, dialog } from 'electron'
+import { BrowserWindow } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import type { SpeechPlaybackAudio } from '../../lib/speech/types'
 
