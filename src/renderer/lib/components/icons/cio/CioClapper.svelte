@@ -12,8 +12,10 @@
 
 <!--
   CIO · Video
-  Video: a board with two teeth up top and a solid band, which is a film
-  rather than a screen.
+  Video: an analogue camera, one reel sitting on the body with a lens cone
+  opening to the right. Two reels over one body read as a face at 32px, which
+  is why there is one, and the cone is what says camera rather than a box with
+  a lid.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -28,18 +30,15 @@
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
-  <g
-    transform="translate(-2.169 -2.404) scale(1.1807)"
-    stroke-width={cioStrokeWidth(weight, 1.1807)}
-  >
-    <rect x="3.6" y="9.6" width="16.8" height="10.2" rx="2" /><rect
-      x="6.4"
-      y="13"
-      width="11.2"
-      height="2.2"
-      rx="1.1"
+  <g transform="translate(-1.654 0.647) scale(1.0670)" stroke-width={cioStrokeWidth(weight, 1.067)}>
+    <circle cx="8.8" cy="6.6" r="3.1" /><circle
+      cx="8.8"
+      cy="6.6"
+      r="1.25"
       fill="currentColor"
       stroke="none"
-    /><path d="M4.6 9.6 6.6 4.6h3.8l-2 5" /><path d="M12.2 9.6l2-5h3.8l-2 5" />
+    /><path d="M3.4 17.8v-5.3a2.8 2.8 0 0 1 2.8-2.8h9.2a2.8 2.8 0 0 1 2.8 2.8v5.3Z" /><path
+      d="M18.2 12.2 22.2 9.8v7.6l-4-2.4Z"
+    />
   </g>
 </svg>

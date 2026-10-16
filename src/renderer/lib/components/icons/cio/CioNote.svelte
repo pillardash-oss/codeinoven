@@ -12,9 +12,11 @@
 
 <!--
   CIO · Thread note
-  Thread note: the thread itself, with the note hanging off it. A feather is
-  Lucide mark and a pen is a drawing of a pen; neither says the note belongs
-  to this thread. The card carries one solid line.
+  Thread note: a quill. The vane runs both sides of the shaft and tapers to a
+  point at each end, the shaft carries on past the vane to the nib, and one
+  solid band crosses the middle. The mark it replaces hung a card off a bar on
+  the left, which made it narrower than every mark beside it, and the pass
+  after that was a single-sided blade, which read as the bowl of a spoon.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -30,17 +32,20 @@
   {...rest}
 >
   <g
-    transform="translate(-3.812 -2.482) scale(1.2068)"
-    stroke-width={cioStrokeWidth(weight, 1.2068)}
+    transform="translate(0.508 -0.499) scale(0.9996)"
+    stroke-width={cioStrokeWidth(weight, 0.9996)}
   >
-    <path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" /><rect
-      x="11.2"
-      y="10.4"
-      width="6.4"
-      height="2.4"
-      rx="1.2"
-      fill="currentColor"
-      stroke="none"
-    /><path d="M11.2 15.4h4.2" />
+    <path d="M21.6 2.4Q7.06 5.06 4.4 19.6Q18.94 16.94 21.6 2.4Z" /><path d="M21.6 2.4 1.4 22.6" /><g
+      transform="rotate(-45 12 12)"
+      ><rect
+        x="8.6"
+        y="11.1"
+        width="6.8"
+        height="1.7"
+        rx="0.85"
+        fill="currentColor"
+        stroke="none"
+      /></g
+    >
   </g>
 </svg>

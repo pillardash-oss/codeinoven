@@ -344,19 +344,6 @@ for (const name of await readdir(OUT)) {
 
 await Bun.write(join(OUT, 'glyph.ts'), GLYPH_TS)
 
-// Format what was just written, so the generated files are always the files the
-// project's own formatter would have produced and a build cannot leave the tree
-// in a state where `prettier --check` fails.
-const prettier = Bun.spawnSync(['npx', 'prettier', '--write', `${OUT}/*.svelte`, `${OUT}/*.ts`], {
-  cwd: process.cwd(),
-  stdout: 'ignore',
-  stderr: 'inherit'
-})
-if (prettier.exitCode !== 0) {
-  process.stderr.write('prettier could not format the generated glyphs.\n')
-  process.exit(1)
-}
-
 const registry = built
   .map((b) => ({ ...b, name: pascal(b.id), component: pascal(b.id) }))
   .sort((a, b) => a.name.localeCompare(b.name))
@@ -401,6 +388,26 @@ export { type CioGlyphProps, cioStrokeWidth } from './glyph'
 export { ICON_SIZE, type IconSize } from './scale'
 `
 await Bun.write(join(OUT, 'index.ts'), indexSource)
+
+// Format what was just written, so the generated files are always the files the
+// project's own formatter would have produced and a build cannot leave the tree
+// in a state where `prettier --check` fails. The paths are listed rather than
+// globbed: no shell expands the pattern here, so a glob would match nothing and
+// the build would report a clean tree it never formatted.
+const generated = [
+  ...built.map((b) => join(OUT, b.file)),
+  join(OUT, 'glyph.ts'),
+  join(OUT, 'index.ts')
+]
+const prettier = Bun.spawnSync(['npx', 'prettier', '--write', ...generated], {
+  cwd: process.cwd(),
+  stdout: 'ignore',
+  stderr: 'inherit'
+})
+if (prettier.exitCode !== 0) {
+  process.stderr.write('prettier could not format the generated glyphs.\n')
+  process.exit(1)
+}
 
 const lines = [
   `${built.length} glyphs written to ${OUT}`,

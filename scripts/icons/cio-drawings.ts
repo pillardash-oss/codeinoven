@@ -3,8 +3,9 @@
  *
  * The language, read off pass F's own drawings rather than invented:
  *
- *   light      shape outlines stroked at the weight the call site asks, the same
- *              law Lucide follows: a surface asking for 1.8 gets 1.8
+ *   light      shape outlines stroked at an effective 1.8 units in the 24 box, the
+ *              same weight the call site asks for, so a surface asking for 1.8 gets
+ *              1.8 the way Lucide's law has it
  *   anchor     one or two solid masses per glyph, filled with no stroke, because
  *              mass is what reads at 16px where an outline needs more extent
  *   radii      2 units on the shape, 1 to 1.3 on the anchors
@@ -16,7 +17,7 @@
  *              picture box reads as a much larger control than the glyphs beside it
  *
  * Nothing here is Lucide geometry. A drawing is written in a local box of roughly
- * 3.4 to 20.6 and fitted to the 22.6-unit box by `build-icons.ts`, so proportions
+ * 3.4 to 20.6 and fitted to the 22-unit box by `build-icons.ts`, so proportions
  * are the drawing's job and size is the generator's. A glyph carried from pass F
  * or from a settled round arrives already fitted and is kept verbatim, so running
  * the generator again cannot drift it.
@@ -284,8 +285,8 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     title: 'Video',
     glyph: {
       kind: 'drawn',
-      note: 'Video: a board with two teeth up top and a solid band, which is a film rather than a screen.',
-      shapes: `<rect x="3.6" y="9.6" width="16.8" height="10.2" rx="2" />${solid(6.4, 13, 11.2, 2.2, 1.1)}<path d="M4.6 9.6 6.6 4.6h3.8l-2 5" /><path d="M12.2 9.6l2-5h3.8l-2 5" />`
+      note: 'Video: an analogue camera, one reel sitting on the body with a lens cone opening to the right. Two reels over one body read as a face at 32px, which is why there is one, and the cone is what says camera rather than a box with a lid.',
+      shapes: `<circle cx="8.8" cy="6.6" r="3.1" />${dot(8.8, 6.6, 1.25)}<path d="M3.4 17.8v-5.3a2.8 2.8 0 0 1 2.8-2.8h9.2a2.8 2.8 0 0 1 2.8 2.8v5.3Z" /><path d="M18.2 12.2 22.2 9.8v7.6l-4-2.4Z" />`
     }
   },
   {
@@ -799,8 +800,8 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     title: 'Thread note',
     glyph: {
       kind: 'drawn',
-      note: 'Thread note: the thread itself, with the note hanging off it. A feather is Lucide mark and a pen is a drawing of a pen; neither says the note belongs to this thread. The card carries one solid line.',
-      shapes: `<path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" />${solid(11.2, 10.4, 6.4, 2.4, 1.2)}<path d="M11.2 15.4h4.2" />`
+      note: 'Thread note: a quill. The vane runs both sides of the shaft and tapers to a point at each end, the shaft carries on past the vane to the nib, and one solid band crosses the middle. The mark it replaces hung a card off a bar on the left, which made it narrower than every mark beside it, and the pass after that was a single-sided blade, which read as the bowl of a spoon.',
+      shapes: `<path d="M21.6 2.4Q7.06 5.06 4.4 19.6Q18.94 16.94 21.6 2.4Z" /><path d="M21.6 2.4 1.4 22.6" /><g transform="rotate(-45 12 12)">${solid(8.6, 11.1, 6.8, 1.7, 0.85)}</g>`
     }
   },
   {
@@ -1243,9 +1244,9 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     id: 'thread-browser',
     title: 'Browser in a thread',
     glyph: {
-      kind: 'drawn',
-      note: 'Browser in a thread: the thread mark with the browser mark hanging off it, the same construction the thread note uses, so a reader who knows one knows the other.',
-      shapes: `<path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" /><ellipse cx="14.4" cy="12" rx="4.6" ry="2" transform="rotate(-24 14.4 12)" />${dot(14.4, 12, 2.2)}`
+      kind: 'solid',
+      note: 'Browser in a thread: the browser mark itself, with a thread run as a bar from the centre to the right. The bar is one more subpath of the same even-odd path as the disc and the ring, so where it crosses the ring both are knocked out and the ring reads open on the right. The mark before it was a disc of its own with a crescent bitten out of it, which filled the circle and read as a smudge.',
+      body: `<path fill="currentColor" fill-rule="evenodd" d="M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM11.0,10.95H21.6A0.95,0.95 0 0 1 21.6,12.85H11.0A0.95,0.95 0 0 1 11.0,10.95Z" />`
     }
   },
   {

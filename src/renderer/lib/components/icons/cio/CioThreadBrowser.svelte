@@ -1,44 +1,34 @@
 <script lang="ts">
-  import { cioStrokeWidth, type CioGlyphProps } from './glyph'
+  import type { CioGlyphProps } from './glyph'
 
-  let { size = 16, strokeWidth = 1.8, class: className = '', ...rest }: CioGlyphProps = $props()
+  let { size = 16, class: className = '', ...rest }: CioGlyphProps = $props()
 
   /** An icon is decoration unless the call site names it for a screen reader. */
   let named = $derived(rest.role === 'img' || rest['aria-label'] !== undefined)
-
-  /** The weight as a number: the prop takes a string the way Lucide's does. */
-  let weight = $derived(typeof strokeWidth === 'number' ? strokeWidth : Number(strokeWidth) || 1.8)
 </script>
 
 <!--
   CIO · Browser in a thread
-  Browser in a thread: the thread mark with the browser mark hanging off it,
-  the same construction the thread note uses, so a reader who knows one knows
-  the other.
+  Browser in a thread: the browser mark itself, with a thread run as a bar
+  from the centre to the right. The bar is one more subpath of the same
+  even-odd path as the disc and the ring, so where it crosses the ring both
+  are knocked out and the ring reads open on the right. The mark before it was
+  a disc of its own with a crescent bitten out of it, which filled the circle
+  and read as a smudge.
 -->
 <svg
   viewBox="0 0 24 24"
   width={size}
   height={size}
-  fill="none"
-  stroke="currentColor"
-  stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  fill="currentColor"
+  stroke="none"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
-  <g
-    transform="translate(-3.812 -2.482) scale(1.2068)"
-    stroke-width={cioStrokeWidth(weight, 1.2068)}
-  >
-    <path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" /><ellipse
-      cx="14.4"
-      cy="12"
-      rx="4.6"
-      ry="2"
-      transform="rotate(-24 14.4 12)"
-    /><circle cx="14.4" cy="12" r="2.2" fill="currentColor" stroke="none" />
-  </g>
+  <path
+    fill="currentColor"
+    fill-rule="evenodd"
+    d="M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM11.0,10.95H21.6A0.95,0.95 0 0 1 21.6,12.85H11.0A0.95,0.95 0 0 1 11.0,10.95Z"
+  />
 </svg>
