@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import {
@@ -1250,6 +1250,40 @@
     void ensureComposition(directory)
   })
 
+  /**
+   * The composition tab the board has most recently been driving.
+   *
+   * Deliberately outside the reactive graph: a pause has to be sent even after the
+   * view is gone, and the store that holds the tab has already forgotten it by
+   * then.
+   */
+  let drivenTabId = ''
+
+  // The board owns the film: it is the surface the user is on, so leaving the board
+  // stops playback. Going full screen must not, because that is this same board
+  // showing this same tab bigger, and a pause there would freeze the film the user
+  // just asked to watch. It is also why the stage itself must never pause: it
+  // unmounts on the way into full screen (so exactly one surface ever places the
+  // native view), and a teardown pause would freeze the film every time.
+  $effect(() => {
+    const live = liveTab
+    if (live !== null) drivenTabId = live.tabId
+    if (active || drivenTabId === '') return
+    void invoke('browser:transport', drivenTabId, 'pause', 0).catch(() => {})
+  })
+
+  // The board going away takes the film with it, exactly as leaving it does.
+  onDestroy(() => {
+    if (drivenTabId === '') return
+    void invoke('browser:transport', drivenTabId, 'pause', 0).catch(() => {})
+  })
+
+  // A board that is no longer the surface on screen cannot keep a full screen
+  // window: the picture would stay up over whatever the user navigated to.
+  $effect(() => {
+    if (!active) compositionFullscreen = false
+  })
+
   // The board owns the composition job poll, because it draws the export above the
   // controls and both must read the same list. A design has no jobs, so nothing
   // polls for one.
@@ -1310,7 +1344,7 @@
         </button>
       </div>
     {/if}
-    {#if liveTab}
+    {#if liveTab && !compositionFullscreen}
       <!--
         The live composition, played in the board.
 
@@ -1320,12 +1354,16 @@
         the composition's own aspect ratio inside this pane, so the frame is whole
         at every panel size.
 
-        While the composition is watched full screen this stage stays mounted and
-        keeps its transport, and the store resolves the single native view to the
-        surface on top. The board remains the control surface either way, and the
-        page comes back to this frame when that surface closes.
+        It stands aside while the composition is watched full screen, and the
+        full screen surface is what places the view then. That is deliberate: the
+        store resolves one owner per native view but a surface only ever asks
+        whether this tab may be shown, not whether it is the one showing it, so two
+        mounted surfaces for one tab would race for the frame and leave it wherever
+        the loser put it. Unmounting here is also what gives the pane its picture
+        back: the stage places the view as it mounts, after the full screen surface
+        has let it go.
       -->
-      <CompositionStage tab={liveTab} {active} shownElsewhere={compositionFullscreen} />
+      <CompositionStage tab={liveTab} {active} />
     {:else if !playable}
       <div
         class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"

@@ -31,18 +31,9 @@
   interface Props {
     tab: VideoCompositionTab
     active?: boolean
-    /**
-     * Whether another surface is showing this composition right now.
-     *
-     * The board is the control surface, so its transport has to count a
-     * composition the full screen picture is displaying as on screen too. Without
-     * it the transport stops the moment the user maximizes, and stopping is a
-     * pause: the film would freeze on the frame it was maximized at.
-     */
-    shownElsewhere?: boolean
   }
 
-  let { tab, active = true, shownElsewhere = false }: Props = $props()
+  let { tab, active = true }: Props = $props()
 
   const surface = 'panel' as const
   // The tab identity is snapshotted at construction: the key is this stage's entry
@@ -217,12 +208,7 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col overflow-hidden border border-border bg-surface">
-  <BrowserCompositionTransport
-    tabId={tab.tabId}
-    composition={tab}
-    active={active && (placed || shownElsewhere)}
-    pauseWhenHidden
-  />
+  <BrowserCompositionTransport tabId={tab.tabId} composition={tab} active={active && placed} />
   <div
     {@attach attachHost}
     data-native-composition-stage
