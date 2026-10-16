@@ -21,6 +21,8 @@ export interface FileExplorerProjectState {
   selectedPaths: string[]
   explorerVisible: boolean
   width: number
+  /** User choice to keep the automatically applied checkpoint filter off. */
+  lastTurnAutoOverride: boolean
 }
 
 export interface FileExplorerSnapshot {
@@ -41,7 +43,8 @@ export function emptyFileExplorerProjectState(): FileExplorerProjectState {
     revealedPath: null,
     selectedPaths: [],
     explorerVisible: true,
-    width: FILE_EXPLORER_DEFAULT_WIDTH
+    width: FILE_EXPLORER_DEFAULT_WIDTH,
+    lastTurnAutoOverride: false
   }
 }
 
@@ -91,7 +94,8 @@ function parseProjectState(value: unknown): FileExplorerProjectState | null {
     revealedPath: isValidPath(value.revealedPath) ? value.revealedPath : null,
     selectedPaths: parseSelectedPaths(value.selectedPaths),
     explorerVisible: value.explorerVisible !== false,
-    width: parseWidth(value.width)
+    width: parseWidth(value.width),
+    lastTurnAutoOverride: value.lastTurnAutoOverride === true
   }
 }
 

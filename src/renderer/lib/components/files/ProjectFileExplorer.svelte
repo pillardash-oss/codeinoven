@@ -18,7 +18,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
-  import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
+  import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
@@ -113,10 +113,6 @@
   /** Backed by the per-project files store so sidebar tab remounts keep it. */
   let lastTurnOnly = $derived(projectState.lastTurnOnly)
   let autoFiltered = $state(false)
-  /** Set when the user manually turns the auto-applied "Last turn" filter
-   *  off. While set, checkpoint navigation must not silently re-enable the
-   *  filter; it clears once the user leaves checkpoint files entirely. */
-  let lastTurnAutoOverride = $state(false)
   let searchRequestId = 0
   /** Directories the user explicitly collapsed while a filter (search query or
    *  last-turn mode) is active. Filtered trees force-render matching folders
@@ -253,7 +249,7 @@
     const checkpointId = activeCheckpointId
     if (checkpointId && checkpointId !== lastAppliedCheckpointId) {
       lastAppliedCheckpointId = checkpointId
-      if (lastTurnAutoOverride) return
+      if (fileExplorerStore.project(projectId).lastTurnAutoOverride) return
       projectFilesWorkspace.setLastTurnOnly(projectId, true)
       autoFiltered = true
     } else if (!checkpointId) {
@@ -262,7 +258,7 @@
         projectFilesWorkspace.setLastTurnOnly(projectId, false)
         autoFiltered = false
       }
-      lastTurnAutoOverride = false
+      fileExplorerStore.update(projectId, { lastTurnAutoOverride: false })
     }
   })
 
@@ -339,7 +335,7 @@
     const next = !lastTurnOnly
     projectFilesWorkspace.setLastTurnOnly(projectId, next)
     if (!next) {
-      if (autoFiltered) lastTurnAutoOverride = true
+      if (autoFiltered) fileExplorerStore.update(projectId, { lastTurnAutoOverride: true })
       autoFiltered = false
     }
     clearCollapsedOverrides()
