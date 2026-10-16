@@ -1106,6 +1106,31 @@ export class ProviderAccountOrchestrator {
     }
   }
 
+  /**
+   * The integration a managed account's own credential store reports, for
+   * harnesses whose store CodeInOven reads locally (OpenCode V2). Undefined for
+   * every other harness, which would need a CLI probe, and when the store does
+   * not name exactly one integration.
+   *
+   * A managed row's provider id is fixed when its container is created, so a
+   * release that renames an integration leaves the row naming a provider the
+   * command line no longer knows. OpenCode's `OpenCode Zen` became
+   * `OpenCode Console` while the id stayed `opencode`, and the row kept the V1
+   * slug `opencode-zen`, which `auth login` rejects with "Integration not
+   * found". Reading the container's store is what lets the row be repaired
+   * without running the harness.
+   */
+  async storedProviderFor(
+    harnessId: string,
+    environment: NodeJS.ProcessEnv
+  ): Promise<string | undefined> {
+    const definition = await this.resolveDefinitionOrUndefined(harnessId)
+    if (!definition || definition.nativeStore !== 'v2') return undefined
+    const stored = await readOpenCodeV2StoredCredentials(environment)
+    const integrations = [...new Set(stored.map((credential) => credential.integrationId))]
+    return integrations.length === 1 ? integrations[0] : undefined
+  }
+
   /** Store an API key for one catalog provider in a file-backed auth store. */
   async setCredential(
     harnessId: string,
