@@ -85,6 +85,21 @@ interface AuthDefinition {
    */
   resolveLogoutTarget?(providerId: string, providerHint?: string): Promise<string | undefined>
   /**
+   * Resolve the integration id the harness CLI currently uses for an account,
+   * read from that account's own credential store.
+   *
+   * A managed row's provider id is pinned when its container is created, so a
+   * release that renames an integration leaves the row naming a provider the
+   * CLI no longer knows. OpenCode's `opencode-zen` became `opencode`, and every
+   * command built from the stale id ends with "Integration not found:
+   * opencode-zen". The account's store is the authority for the integration a
+   * command names, so login, logout and switch all resolve through it.
+   */
+  resolveStoredIntegration?(
+    providerId: string,
+    environment: NodeJS.ProcessEnv
+  ): Promise<string | undefined>
+  /**
    * Resolves the credential selector a multi-account CLI needs as the second
    * positional logout argument.
    *
@@ -317,6 +332,28 @@ async function resolveOpenCodeV2LogoutCredential(
   }
   if (forIntegration.length === 1) return forIntegration[0]?.id
   return hint || undefined
+}
+
+async function resolveOpenCodeV2StoredIntegration(
+  providerId: string,
+  environment: NodeJS.ProcessEnv
+): Promise<string | undefined> {
+  const stored = await readOpenCodeV2StoredCredentials(environment)
+  const integrations = [...new Set(stored.map((credential) => credential.integrationId))]
+  const lowered = providerId.toLowerCase()
+  const exact = integrations.find((integration) => integration.toLowerCase() === lowered)
+  if (exact) return exact
+  const slugged = integrations.find((integration) => accountId(integration) === lowered)
+  if (slugged) return slugged
+  // A renamed integration is the one case left: the store holds a single
+  // integration that shares the stale id's stem. Matching on a shared stem
+  // keeps the resolution off an unrelated provider, so a command can never land
+  // on an integration the user did not name; anything else stays unresolved and
+  // the CLI's own error is reported instead.
+  if (integrations.length !== 1) return undefined
+  const only = integrations[0] as string
+  const onlyLowered = only.toLowerCase()
+  return lowered.startsWith(onlyLowered) || onlyLowered.startsWith(lowered) ? only : undefined
 }
 
 function parseCodexStatus(output: string, succeeded: boolean): HarnessAuthStatus {
@@ -940,6 +977,7 @@ function openCodeV2Auth(command: string): AuthDefinition {
       ...(options.providerId ? [options.providerId] : []),
       '--standalone'
     ],
+    resolveStoredIntegration: resolveOpenCodeV2StoredIntegration,
     logoutArgs: (providerId, credential) => [
       'auth',
       'logout',
@@ -1302,6 +1340,15 @@ export class ProviderAccountOrchestrator {
     ) {
       delete loginOptions.providerId
     }
+    // The account's own store names the integration, so a row whose provider id
+    // went stale still signs in against the integration the CLI knows.
+    if (loginOptions.providerId !== undefined && definition.resolveStoredIntegration) {
+      const resolved = await definition.resolveStoredIntegration(
+        loginOptions.providerId,
+        environment
+      )
+      if (resolved) loginOptions.providerId = resolved
+    }
     const prepared = await prepareHarnessTerminalHandoff(
       definition.command,
       definition.loginArgs(loginOptions)
@@ -1345,13 +1392,16 @@ export class ProviderAccountOrchestrator {
       )
     }
     let target = providerId
-    if (definition.resolveLogoutTarget && providerId !== undefined) {
-      target = (await definition.resolveLogoutTarget(providerId, providerHint)) ?? providerId
+    if (target !== undefined && definition.resolveStoredIntegration) {
+      target = (await definition.resolveStoredIntegration(target, environment)) ?? target
+    }
+    if (definition.resolveLogoutTarget && target !== undefined) {
+      target = (await definition.resolveLogoutTarget(target, providerHint)) ?? target
     }
     const credential =
-      definition.resolveLogoutCredential && providerId !== undefined
+      definition.resolveLogoutCredential && target !== undefined
         ? await definition.resolveLogoutCredential(
-            providerId,
+            target,
             credentialHint ?? providerHint,
             environment
           )
@@ -1392,9 +1442,13 @@ export class ProviderAccountOrchestrator {
     if (!definition.activateArgs) {
       throw new Error(`${harnessId} does not support switching its active account.`)
     }
+    // The stored integration is what the CLI's switch command names, so a row
+    // whose provider id went stale still switches the credential it holds.
+    const target =
+      (await definition.resolveStoredIntegration?.(providerId, environment)) ?? providerId
     const result = await this.run(
       definition.command,
-      definition.activateArgs(providerId, credentialId),
+      definition.activateArgs(target, credentialId),
       homedir(),
       environment
     )
