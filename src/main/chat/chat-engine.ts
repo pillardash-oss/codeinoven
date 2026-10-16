@@ -9009,10 +9009,41 @@ export class ChatEngine {
       isolated?: IsolatedSessionHandle
     ) => Promise<void>
     const deliverNow = async (): Promise<void> => {
-      if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
-        await steer(projectPath, steerOptions, activeBrainstorm.isolated)
-      } else {
-        await steer(projectPath, steerOptions)
+      try {
+        if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
+          await steer(projectPath, steerOptions, activeBrainstorm.isolated)
+        } else {
+          await steer(projectPath, steerOptions)
+        }
+      } catch (error) {
+        if (error instanceof SteerDeliveryFailedError) throw error
+        // The turn can settle inside the race window between the working check
+        // above and this delivery (auto-compaction, silent continue, retry)
+        // pi considers compaction part of the working trace but the driver's
+        // registered turn is already gone. A settled trace must never reject the
+        // user's message: deliver it as the next regular turn instead. The
+        // driver's own registered-turn probe is authoritative over the cached
+        // status, which can lag a compaction or process exit by seconds.
+        const state = this.sessionStatuses.get(activeSessionId)?.state
+        const turnStillLive = driver.hasActiveTurn
+          ? driver.hasActiveTurn(activeSessionId)
+          : state === 'working' || state === 'waiting'
+        if (turnStillLive) throw error
+        Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
+          projectId,
+          threadId,
+          sessionId: activeSessionId,
+          error: rawErrorMessage(error)
+        })
+        if (previousPendingMemoryDecision) {
+          this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
+        } else {
+          this.pendingMemoryDecisions.delete(activeSessionId)
+        }
+        this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+        this.handleSessionIdleSignal(activeSessionId)
+        await this.awaitSessionIdleFinalization(activeSessionId)
+        await deliverAsRegularSend()
       }
     }
     // CodeInOven owns steer delivery timing for every harness: while the turn
@@ -9057,38 +9088,7 @@ export class ChatEngine {
       })
       return withoutTransportParts(userMessage)
     }
-    try {
-      await deliverNow()
-    } catch (error) {
-      if (error instanceof SteerDeliveryFailedError) throw error
-      // The turn can settle inside the race window between the working check
-      // above and this delivery (auto-compaction, silent continue, retry)
-      // pi considers compaction part of the working trace but the driver's
-      // registered turn is already gone. A settled trace must never reject the
-      // user's message: deliver it as the next regular turn instead. The
-      // driver's own registered-turn probe is authoritative over the cached
-      // status, which can lag a compaction or process exit by seconds.
-      const state = this.sessionStatuses.get(activeSessionId)?.state
-      const turnStillLive = driver.hasActiveTurn
-        ? driver.hasActiveTurn(activeSessionId)
-        : state === 'working' || state === 'waiting'
-      if (turnStillLive) throw error
-      Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
-        projectId,
-        threadId,
-        sessionId: activeSessionId,
-        error: rawErrorMessage(error)
-      })
-      if (previousPendingMemoryDecision) {
-        this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
-      } else {
-        this.pendingMemoryDecisions.delete(activeSessionId)
-      }
-      this.sessionStatuses.set(activeSessionId, { state: 'idle' })
-      this.handleSessionIdleSignal(activeSessionId)
-      await this.awaitSessionIdleFinalization(activeSessionId)
-      return deliverAsRegularSend()
-    }
+    await deliverNow()
     return withoutTransportParts(userMessage)
   }
 

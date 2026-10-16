@@ -357,6 +357,11 @@ export class CodexDriver extends PersistentCliDriver {
     // "A turn is already active" on every retry, so a dispatch that lands on a
     // live native turn is delivered as a steer instead - the driver's turn
     // registry is authoritative, not the engine's session status.
+    const previousTurn = this.activeTurns.get(session.id)
+    if (previousTurn?.completionReceived) {
+      // Let the old turn finish emitting idle before a new turn can start.
+      await previousTurn.completion
+    }
     if (this.activeTurns.has(session.id)) {
       await this.steerPrompt(projectPath, options)
       return
@@ -525,16 +530,24 @@ export class CodexDriver extends PersistentCliDriver {
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
     const active = this.activeTurns.get(session.id)
-    if (!active?.nativeThreadId || !active.turnId) {
+    if (!active?.nativeThreadId || !active.turnId || active.completionReceived || active.finished) {
       throw new Error(`No active Codex turn is available to steer for session ${session.id}`)
     }
-    this.appendUserMessage(session, options)
+    const input = await this.codexInput(options.text, options.attachments, session.id)
+    if (
+      this.activeTurns.get(session.id) !== active ||
+      active.completionReceived ||
+      active.finished
+    ) {
+      throw new Error(`Codex turn finished before steering session ${session.id}`)
+    }
     await this.appServerRequest(active.host, 'turn/steer', {
       threadId: active.nativeThreadId,
       clientUserMessageId: options.userMessageId,
-      input: await this.codexInput(options.text, options.attachments, session.id),
+      input,
       expectedTurnId: active.turnId
     })
+    this.appendUserMessage(session, options)
     await this.persistSession(session)
   }
 
@@ -1474,7 +1487,7 @@ export class CodexDriver extends PersistentCliDriver {
     // A card answer arriving during that refresh must resume from persisted
     // history instead of being written into the completed turn.
     active.completionReceived = true
-    void this.completeAppServerTurn(active, message, issue)
+    active.completion = this.completeAppServerTurn(active, message, issue)
   }
 
   /** Promote Codex's asynchronous default-mode question item into CIO's

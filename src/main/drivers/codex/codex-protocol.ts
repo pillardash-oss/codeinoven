@@ -41,6 +41,8 @@ export interface CodexAppServerTurn {
   waitingForRetry?: boolean
   /** Set synchronously when `turn/completed` arrives, before async telemetry refresh. */
   completionReceived?: boolean
+  /** Settles after terminal telemetry, persistence, and the idle event. */
+  completion?: Promise<void>
   finished: boolean
 }
 
