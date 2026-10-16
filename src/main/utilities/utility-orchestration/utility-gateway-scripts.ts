@@ -4,7 +4,7 @@ import type {
   ResolvedUtility,
   UtilityDefinitionFor
 } from '../../../lib/types'
-import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
+import { GATEWAY_TOOLS, gatewayToolForModel } from '../../../lib/gateway-tools'
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
@@ -528,7 +528,7 @@ export function gatewayUtility(
  *  behind it. Each call answers on its own by JSON-RPC id, and a client cancellation aborts
  *  exactly the call it names. */
 export function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
-  const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
+  const tools = gatewayTools.map(gatewayToolForModel).map(({ name, description, inputSchema }) => ({
     name,
     description,
     inputSchema

@@ -38,6 +38,7 @@
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
+  gatewayToolForModel,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
@@ -87,7 +88,7 @@ export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
 function gatewayTool(name: string): GatewayToolDefinition {
   const definition = GATEWAY_TOOLS.find((tool) => tool.name === name)
   if (!definition) throw new Error(`Gateway tool ${name} is missing from GATEWAY_TOOLS`)
-  return definition
+  return gatewayToolForModel(definition)
 }
 
 const searchTool = gatewayTool(UTILITY_SEARCH_TOOL_NAME)

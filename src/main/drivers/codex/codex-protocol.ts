@@ -44,6 +44,9 @@ export interface CodexAppServerTurn {
   /** Settles after terminal telemetry, persistence, and the idle event. */
   completion?: Promise<void>
   finished: boolean
+  /** Excludes responses from previous user turns when usage arrives early. */
+  messageOffset?: number
+  pendingUsage?: Record<string, unknown>
 }
 
 export interface CodexCompactionRun {

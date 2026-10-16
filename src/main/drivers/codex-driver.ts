@@ -4,6 +4,7 @@ import type {
   AgentBankedResets,
   AgentEvent,
   AgentMessage,
+  AgentTokenUsage,
   AgentProviderIssue,
   AgentRateLimitWindow,
   AgentUsageCredits,
@@ -22,6 +23,7 @@ import { Logger } from '../system/logger'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
+  gatewayToolForModel,
   UTILITY_SUGGEST_TOOL_NAME
 } from '../../lib/gateway-tools'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
@@ -100,7 +102,7 @@ import {
   codexUsageLimitIssue,
   isCodexRetryRecoveryActivity
 } from './codex/codex-errors'
-import { mapCodexRateLimits, mapCodexUsage } from './codex/codex-usage'
+import { mapCodexRateLimits, mapCodexUsage, mapCodexTotalUsage } from './codex/codex-usage'
 import {
   appServerRequestId,
   notificationThreadId,
@@ -412,29 +414,37 @@ export class CodexDriver extends PersistentCliDriver {
       options.settings.thinkingLevel
     )
     this.appendUserMessage(session, options)
+    active.messageOffset = session.messages.length
 
     try {
       const dynamicTools = [
         codexQuestionTool((await this.storage.getConfig()).agentQuestionCap),
         ...(this.utilityEndpoints.has(session.id)
-          ? GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
-              name,
-              description,
-              inputSchema
-            }))
+          ? GATEWAY_TOOLS.filter(({ name }) => {
+              const granted = this.utilityEndpoints.get(session.id)?.toolNames
+              return granted === undefined || granted.includes(name)
+            })
+              .map(gatewayToolForModel)
+              .map(({ name, description, inputSchema }) => ({
+                name,
+                description,
+                inputSchema
+              }))
           : [])
       ]
       const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
       const contextWindow = this.codexContextWindowOverride(options.settings)
-      const contextConfig =
-        contextWindow === undefined
-          ? {}
-          : {
-              config: {
+      const contextConfig = {
+        config: {
+          tool_output_token_limit: 3_000,
+          ...(contextWindow === undefined
+            ? {}
+            : {
                 model_context_window: contextWindow,
                 model_auto_compact_token_limit: Math.floor(contextWindow * 0.9)
-              }
-            }
+              })
+        }
+      }
       const startThread = (): Promise<Record<string, unknown>> =>
         this.appServerRequest(host, 'thread/start', {
           ...contextConfig,
@@ -520,6 +530,15 @@ export class CodexDriver extends PersistentCliDriver {
         throw new Error('Codex app-server did not return a new thread ID for the transfer')
       }
       active.nativeThreadId = nativeThreadId
+      if (!previousNativeId || nativeThreadId !== previousNativeId) {
+        session.codexUsageCheckpoint = {
+          nativeThreadId,
+          tokens:
+            forkForTransfer && session.codexUsageCheckpoint
+              ? session.codexUsageCheckpoint.tokens
+              : { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+        }
+      }
       session.nativeSessionId = nativeThreadId
       this.threadSessionsByNativeId.set(nativeThreadId, { sessionId: session.id, projectPath })
       await this.persistSession(session)
@@ -1540,11 +1559,65 @@ export class CodexDriver extends PersistentCliDriver {
       return
     }
     if (method === 'thread/tokenUsage/updated') {
-      const usage = mapCodexUsage(params['tokenUsage'] ?? params)
-      const message = [...active.session.messages]
-        .reverse()
-        .find((candidate) => candidate.role === 'assistant')
+      let usage = mapCodexUsage(params['tokenUsage'] ?? params)
+      const message = active.session.messages
+        .slice(active.messageOffset ?? 0)
+        .findLast((candidate) => candidate.role === 'assistant')
+      if (usage && !message) {
+        // Wait for this turn's first response instead of rewriting the previous
+        // turn's final response. Cumulative counters recover coalesced updates.
+        active.pendingUsage = params
+        return
+      }
       if (usage && message) {
+        const total = mapCodexTotalUsage(params['tokenUsage'] ?? params)
+        const checkpoint = active.session.codexUsageCheckpoint
+        if (total && active.nativeThreadId) {
+          const previous =
+            checkpoint?.nativeThreadId === active.nativeThreadId ? checkpoint.tokens : undefined
+          // A legacy resumed session has no checkpoint. Its first last-request
+          // snapshot is all that can be attributed honestly; retain the total
+          // from then on rather than charging old session history to this turn.
+          if (previous && total.total >= previous.total) {
+            const tokens = { ...total }
+            for (const key of Object.keys(tokens) as Array<keyof AgentTokenUsage>) {
+              tokens[key] = (message.tokens?.[key] ?? 0) + Math.max(0, total[key] - previous[key])
+            }
+            const mapped = mapCodexUsage({ ...tokens, totalTokens: tokens.total })
+            if (mapped) {
+              usage = {
+                ...usage,
+                aggregateTokens: mapped.aggregateTokens,
+                normalizedUsage: mapped.normalizedUsage
+                  ? {
+                      ...mapped.normalizedUsage,
+                      cachedInput:
+                        usage.normalizedUsage?.cachedInput === null
+                          ? null
+                          : mapped.normalizedUsage.cachedInput,
+                      cacheWrite:
+                        usage.normalizedUsage?.cacheWrite === null
+                          ? null
+                          : mapped.normalizedUsage.cacheWrite,
+                      reasoning:
+                        usage.normalizedUsage?.reasoning === null
+                          ? null
+                          : mapped.normalizedUsage.reasoning,
+                      rawProviderUsage: {
+                        providerSnapshot: recordValue(params['tokenUsage'] ?? params) ?? {},
+                        cumulative: total,
+                        previousCumulative: previous
+                      }
+                    }
+                  : undefined
+              }
+            }
+          }
+          active.session.codexUsageCheckpoint = {
+            nativeThreadId: active.nativeThreadId,
+            tokens: total
+          }
+        }
         if (usage.normalizedUsage) message.normalizedUsage = usage.normalizedUsage
         const event: AgentEvent = {
           type: 'usage.updated',
@@ -1771,7 +1844,12 @@ export class CodexDriver extends PersistentCliDriver {
     try {
       const tool = GATEWAY_TOOLS.find(({ name }) => name === params['tool'])
       const endpoint = this.utilityEndpoints.get(active.session.id)
-      if (!tool || !endpoint || active.finished) {
+      if (
+        !tool ||
+        !endpoint ||
+        active.finished ||
+        (endpoint.toolNames !== undefined && !endpoint.toolNames.includes(tool.name))
+      ) {
         throw new Error('The utility tool is not active for this turn')
       }
       const response = await fetch(`${endpoint.url}${tool.route}`, {
@@ -1973,6 +2051,11 @@ export class CodexDriver extends PersistentCliDriver {
       this.applyEventToSession(active.session, event)
       this.emit(event)
     }
+    if (active.pendingUsage && result.messages?.some((message) => message.role === 'assistant')) {
+      const pendingUsage = active.pendingUsage
+      delete active.pendingUsage
+      this.handleAppServerNotification(active.host, 'thread/tokenUsage/updated', pendingUsage)
+    }
     active.session.updatedAt = Date.now()
   }
 
@@ -2055,6 +2138,23 @@ export class CodexDriver extends PersistentCliDriver {
   ): Promise<void> {
     if (!error) this.appServerRecoveriesBySessionId.delete(active.session.id)
     if (active.finished) return
+    if (active.pendingUsage) {
+      // A cancelled or failed request can report usage without ever emitting
+      // content. Keep an accounting-only response rather than losing its spend.
+      this.applyCodexResult(active, {
+        messages: [
+          {
+            id: `${active.session.id}:${active.turnId ?? 'turn'}:usage`,
+            role: 'assistant',
+            visibility: 'working_trace',
+            parts: [],
+            createdAt: Date.now(),
+            completedAt: Date.now(),
+            ...(error ? { error } : {})
+          }
+        ]
+      })
+    }
     active.finished = true
     if (this.activeTurns.get(active.session.id) === active) {
       this.activeTurns.delete(active.session.id)
@@ -2410,6 +2510,7 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)
+    args.push('-c', 'tool_output_token_limit=3000')
     const inlineSvg = await inlineSvgAttachments(options.attachments)
     const attachmentPrompts: string[] = []
     for (const attachment of options.attachments) {

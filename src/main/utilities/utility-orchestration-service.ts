@@ -69,8 +69,8 @@ import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { currentWorkRoots } from '../design/work-roots-state'
 import { gatewayStructuredResult } from '../../lib/image-payload'
+import { budgetGatewayOutput } from './utility-orchestration/utility-gateway-output'
 import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
-import { BACKGROUND_AGENT_CONTROL_INSTRUCTION } from '../../lib/agent-control-policy'
 import {
   cuaActionReference,
   cuaRefusal,
@@ -1186,7 +1186,7 @@ export class UtilityOrchestrationService {
       request.permissionLevel !== 'full_access' &&
       (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     const toolInstructions = [
-      BACKGROUND_AGENT_CONTROL_INSTRUCTION,
+      'Use available code mode to batch independent tool calls in one model request. Run independent reads with bounded parallelism and inspect every result; keep dependent operations, mutations, approvals and retries sequential. Filter large results before returning them to the model. Reuse loaded documentation and activated utilities. Read workstation targets only when dispatching work, and the app catalog only when driving the app.',
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
@@ -1208,32 +1208,32 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasScopeCapability
         ? [
-            `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
+            `The app-owned worktree capability is not exposed directly. Only when the user explicitly requests a separate worktree, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result and invoke it. Never create one on your own or run raw git worktree add.`
           ]
         : []),
       ...(hasAdbCapability
         ? [
-            `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context. It is a baseline, not an authority: if the project or your harness already provides its own Android or adb skill or runbook, follow that one and use this only for what it does not cover.`
+            `Before probing an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the device playbook. Follow project Android guidance first; use this playbook for gaps. Re-list lost docs with ${UTILITY_DOCS_TOOL_NAME}.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)
         ? [
-            `The app-owned cio-artifact skill (utility ${APP_ARTIFACT_UTILITY_ID}) handles explicitly requested inline artifacts. Only when the user asks to create or edit an artifact inside this thread, activate it with ${UTILITY_ACTIVATE_TOOL_NAME} before producing the output. It covers image, audio, video, HTML and SVG delivery and prefers available direct generators. For ordinary design or media work use the task-specific capability. Inline artifact requests take this route before the design/video guidance below.`
+            `For requested inline artifacts, activate ${APP_ARTIFACT_UTILITY_ID} before producing output; it covers image, audio, video, HTML and SVG delivery. Ordinary design or video work uses its task-specific capability.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `The app-owned in-app browser (utility \`${APP_BROWSER_UTILITY_ID}\`) exists in this session and is your browser for anything that has to be rendered: a design, a prototype, a video composition, a served page. When you author or change something a browser renders, get its served URL from the capability that owns that folder, activate \`${APP_BROWSER_UTILITY_ID}\` with ${UTILITY_SEARCH_TOOL_NAME} and ${UTILITY_ACTIVATE_TOOL_NAME} if it is not in your tool list yet, and look at the page with \`screenshot\`, \`viewport\`, \`snapshot\` and \`console\`. Never render your own work with a browser of your own, such as a cached headless Chrome or Chromium binary, \`npx playwright\`, \`puppeteer\` or \`curl\`: the tab the app served is the page the user is watching.`
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
           ]
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus app operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed step for one screen, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. \`preview\` returns the URL the thread's in-app browser capability (\`${APP_BROWSER_UTILITY_ID}\`) opens, and looking at the render there is how the work is checked, never with a browser of your own. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `For interface design or HTML prototypes, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate ${APP_DESIGN_UTILITY_ID}. Its playbook owns folders, screens, preview, checkpoints, delegation and media generation. Inspect its preview in ${APP_BROWSER_UTILITY_ID}. Follow project design language first.`
           ]
         : []),
       ...(hasVideoCapability
         ? [
-            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed edit step, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. The preview tab also belongs to the thread's in-app browser capability (\`${APP_BROWSER_UTILITY_ID}\`), which is how the work is checked when a still is not enough, and never a browser of your own. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
+            `For video work, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate ${APP_VIDEO_UTILITY_ID}. Its playbook covers composition, preview, checkpoints and frame capture. Inspect every changed frame and use ${APP_BROWSER_UTILITY_ID} for motion. Follow project motion guidance first.`
           ]
         : []),
       ...(hasOnDemand
@@ -1288,6 +1288,7 @@ export class UtilityOrchestrationService {
       directEndpoint: {
         url: bridgeUrl,
         token,
+        toolNames: gatewayTools.map(({ name }) => name),
         timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
       },
       managementEnabled: request.allowManagement === true,
@@ -1794,7 +1795,10 @@ export class UtilityOrchestrationService {
       this.respond(
         response,
         200,
-        this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result
+        await budgetGatewayOutput(
+          this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result,
+          state.request.projectPath
+        )
       )
     } catch (error) {
       this.respond(response, 400, {
