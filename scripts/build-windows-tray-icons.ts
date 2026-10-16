@@ -17,7 +17,14 @@ const MEASURE_PX = 1024
  * states (brackets and exclamation) would not sit at the same optical size.
  */
 function frameTrayArtwork(svg: string): string {
+  const viewBox = svg.match(/viewBox="([^"]*)"/)
+  if (!viewBox) throw new Error('Windows tray artwork has no viewBox to re-frame')
+  const rawViewBox = viewBox[1]
+  if (!rawViewBox) throw new Error('Windows tray artwork has an empty viewBox')
+  const [viewX, viewY, viewWidth, viewHeight] = rawViewBox.split(/\s+/).map(Number)
   const rendered = new Resvg(svg, { fitTo: { mode: 'width', value: MEASURE_PX } }).render()
+  const scaleX = rendered.width / viewWidth
+  const scaleY = rendered.height / viewHeight
   const pixels = rendered.pixels
   let left = rendered.width
   let top = rendered.height
@@ -33,11 +40,16 @@ function frameTrayArtwork(svg: string): string {
     }
   }
   if (right < left) throw new Error('Windows tray artwork is empty')
-  const extent = Math.max(right - left + 1, bottom - top + 1) * (16 / 14)
-  const x = (left + right + 1 - extent) / 2
-  const y = (top + bottom + 1 - extent) / 2
-  const viewBox = svg.match(/viewBox="[^"]*"/)
-  if (!viewBox) throw new Error('Windows tray artwork has no viewBox to re-frame')
+  // Pixel bounds must return to SVG user units before changing viewBox. Using
+  // the measured raster coordinates directly makes the mark nearly vanish in
+  // the corner because the original artwork uses a much smaller coordinate grid.
+  const inkWidth = (right - left + 1) / scaleX
+  const inkHeight = (bottom - top + 1) / scaleY
+  const extent = Math.max(inkWidth, inkHeight) * (16 / 14)
+  const centerX = viewX + (left + right + 1) / (2 * scaleX)
+  const centerY = viewY + (top + bottom + 1) / (2 * scaleY)
+  const x = centerX - extent / 2
+  const y = centerY - extent / 2
   return svg.replace(viewBox[0], `viewBox="${x} ${y} ${extent} ${extent}"`)
 }
 
