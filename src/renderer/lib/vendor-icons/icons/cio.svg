@@ -1,10 +1,10 @@
-<svg width="1em" height="1em" viewBox="0 0 248 188" xmlns="http://www.w3.org/2000/svg"><title>CodeInOven</title>
+<svg width="1em" height="1em" viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg"><title>CodeInOven</title>
   <style>
-    .mark-stroke { fill: none; stroke: currentColor; stroke-linecap: butt; stroke-linejoin: miter; }
+    .mark-stroke { fill: none; stroke: currentColor; stroke-linecap: square; stroke-linejoin: miter; }
     .mark-dot { fill: #d4af37; }
   </style>
-  <path class="mark-stroke" d="M110 39a64 64 0 1 0 0 110" stroke-width="13"/>
-  <path class="mark-stroke" d="M144.5 48.5h78v91h-78z" stroke-width="13"/>
-  <path class="mark-stroke" d="M144.5 94h78" stroke-width="13"/>
-  <circle class="mark-dot" cx="222.5" cy="94" r="10"/>
+  <path class="mark-stroke" d="M49 17a31 31 0 1 0 0 62" stroke-width="8"/>
+  <path class="mark-stroke" d="M61 23h23v50H61z" stroke-width="7"/>
+  <rect x="58" y="45" width="29" height="6" fill="currentColor"/>
+  <circle class="mark-dot" cx="84" cy="48" r="5"/>
 </svg>
