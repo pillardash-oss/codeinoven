@@ -799,6 +799,66 @@ export async function prepareHarnessTerminalHandoff(
   }
 }
 
+/** The fixed Windows PowerShell location, for when it is not on the app's PATH. */
+function fixedWindowsPowerShell(env: NodeJS.ProcessEnv): string {
+  return win32.join(
+    env['SystemRoot'] ?? 'C:\\Windows',
+    'System32',
+    'WindowsPowerShell',
+    'v1.0',
+    'powershell.exe'
+  )
+}
+
+/**
+ * Resolve the executable for a documented one-shot command, falling back to the
+ * fixed PowerShell location for a bare `powershell`.
+ */
+function resolveTerminalExecutable(command: string, env: NodeJS.ProcessEnv): string | undefined {
+  const resolved = resolveExecutablePath(command, env)
+  if (resolved) return resolved
+  if (process.platform === 'win32' && (command === 'powershell' || command === 'powershell.exe')) {
+    const fixed = fixedWindowsPowerShell(env)
+    return existsSync(fixed) ? fixed : undefined
+  }
+  return undefined
+}
+
+/**
+ * Prepare a documented one-shot CLI command (the package manager or installer
+ * shell an install/uninstall channel uses) for the user-visible embedded
+ * terminal.
+ *
+ * node-pty's Windows ConPTY host resolves the executable against PATH looking
+ * for a file of exactly that name, so a bare `npm`, `winget` or `powershell`
+ * never starts there (Windows ships `npm.cmd`, `winget.exe`, `powershell.exe`),
+ * and it cannot execute a `.cmd`/`.bat` shim at all. An install handoff that
+ * returned the documented bare command therefore died with a bare
+ * "File not found" the moment the terminal opened. Resolve the executable here
+ * and route a `.cmd`/`.bat` shim through its PowerShell companion, the same way
+ * the interactive harness handoff already does, so an install or uninstall
+ * actually starts. A POSIX PTY resolves the bare name against the PATH it is
+ * given, so non-Windows is returned untouched.
+ */
+export function prepareTerminalCommandHandoff(
+  command: string,
+  args: string[]
+): { command: string; args: string[] } {
+  if (process.platform !== 'win32') return { command, args }
+  const env = buildProcessEnvironment()
+  const executable = resolveTerminalExecutable(command, env)
+  if (!executable) {
+    throw new Error(`${command} was not found on this machine, so it cannot run in the terminal.`)
+  }
+  if (!commandRequiresShell(executable)) return { command: executable, args }
+  const shim = prepareNativeInvocation(
+    { command, executable, resolvedPath: executable, target: { kind: 'native' } },
+    args,
+    env
+  )
+  return { command: shim.command, args: shim.args }
+}
+
 export function prepareWslTerminalHandoff(
   distribution: string,
   command: string,
