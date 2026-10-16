@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Download, Loader2, Trash2 } from '@lucide/svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { onDestroy, onMount } from 'svelte'
   import { formatBytes } from '$lib/format/bytes'
   import { videoPackagesStore as packages } from '$lib/stores/video-packages.svelte'
@@ -36,7 +38,11 @@
 </script>
 
 <div id="settings-block-design-video-packages" class="border bg-surface p-4">
-  <h3 class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Video pack</h3>
+  <h3
+    class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Video pack
+  </h3>
   <p class="mt-2 text-xs leading-relaxed text-dimmed">
     Background removal on the GPU is the only video operation the base install does not cover. It
     needs a separate pack of matting libraries, downloaded once into this app's own folder. Probe,
@@ -80,7 +86,7 @@
         aria-label="Remove the video pack and its downloaded model weights"
         onclick={() => (pendingRemove = true)}
       >
-        <Trash2 size={13} aria-hidden="true" /> Remove
+        <CioTrash size={13} aria-hidden="true" /> Remove
       </button>
     </div>
   {:else}
@@ -94,9 +100,9 @@
         onclick={() => void packages.install()}
       >
         {#if !pack}
-          <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+          <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
         {:else}
-          <Download size={13} aria-hidden="true" />
+          <CioDownload size={13} aria-hidden="true" />
         {/if}
         Install
       </button>

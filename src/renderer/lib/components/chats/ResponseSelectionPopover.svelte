@@ -1,10 +1,7 @@
 <script lang="ts">
-  import {
-    GitFork,
-    MessageCircleDashed,
-    MessageCirclePlus,
-    MessageSquareDashed
-  } from '@lucide/svelte'
+  import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import { MessageCirclePlus } from '@lucide/svelte'
 
   interface Props {
     text: string
@@ -66,7 +63,7 @@
       title="Explain this selection in a temporary read-only chat"
       onclick={onElaborate}
     >
-      <MessageCircleDashed size={13} />
+      <CioTemporaryChat size={13} />
       Explain
     </button>
   {/if}
@@ -77,7 +74,7 @@
       title="Start a temporary read-only chat with this selection"
       onclick={onQuickChat}
     >
-      <MessageSquareDashed size={13} />
+      <CioTemporaryChat size={13} />
       Quick chat
     </button>
   {/if}
@@ -88,7 +85,7 @@
       title="Start a new thread with this selection already in the composer"
       onclick={onNewThread}
     >
-      <GitFork size={13} />
+      <CioFork size={13} />
       New thread
     </button>
   {/if}

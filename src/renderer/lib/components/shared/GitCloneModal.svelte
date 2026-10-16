@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { FolderInput, Loader2, GitBranch } from '@lucide/svelte'
+  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
@@ -213,7 +215,7 @@
           </button>
           <span class="h-5 w-px bg-border"></span>
           <span class="flex h-8 w-8 items-center justify-center bg-elevated">
-            <GitBranch size={14} class="text-muted" />
+            <CioTabGit size={14} class="text-muted" />
           </span>
           {#if exitCode !== undefined}
             <span class="h-5 w-px bg-border"></span>
@@ -234,7 +236,7 @@
       <div class="overflow-hidden border bg-surface">
         <div class="flex items-center justify-between gap-3 border-b px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
-            <GitBranch size={14} class="shrink-0 text-muted" />
+            <CioTabGit size={14} class="shrink-0 text-muted" />
             <span class="truncate text-xs font-medium">{handoff.repoName}</span>
             <code class="truncate font-mono text-[0.625rem] text-dimmed">
               $ {handoff.command}
@@ -243,7 +245,7 @@
           </div>
           {#if exitCode === undefined}
             <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-info">
-              <Loader2 size={11} class="animate-spin" /> Cloning
+              <CioSpinner size={11} class="animate-spin" /> Cloning
             </span>
           {:else if exitCode === 0}
             <span class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success"
@@ -321,7 +323,7 @@
             aria-label="Choose destination folder"
             onclick={() => void pickDestination()}
           >
-            <FolderInput size={14} /> Browse
+            <CioFolderInput size={14} /> Browse
           </button>
         </div>
         {#if destination}
@@ -355,7 +357,7 @@
       >
         {#if busy}
           <span class="flex items-center gap-1.5"
-            ><Loader2 size={14} class="animate-spin" /> Starting…</span
+            ><CioSpinner size={14} class="animate-spin" /> Starting…</span
           >
         {:else}
           Clone

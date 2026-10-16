@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronLeft, ChevronRight, Pause, Play, Repeat, Square } from '@lucide/svelte'
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import { Repeat, Square } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     BrowserCompositionPlayback,
@@ -138,9 +142,9 @@
     onclick={togglePlay}
   >
     {#if playing}
-      <Pause size={14} />
+      <CioPause size={14} />
     {:else}
-      <Play size={14} />
+      <CioPlay size={14} />
     {/if}
   </button>
   <button
@@ -159,7 +163,7 @@
     title={`Step back one frame (${composition.fps} fps)`}
     onclick={() => step(-1)}
   >
-    <ChevronLeft size={14} />
+    <CioBack size={14} />
   </button>
   <button
     type="button"
@@ -168,7 +172,7 @@
     title={`Step forward one frame (${composition.fps} fps)`}
     onclick={() => step(1)}
   >
-    <ChevronRight size={14} />
+    <CioForward size={14} />
   </button>
   <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed">{format(shown)}</span>
   <input

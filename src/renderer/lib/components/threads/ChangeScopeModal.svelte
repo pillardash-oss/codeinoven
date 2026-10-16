@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { X, Search, Check, Plus } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
@@ -128,7 +131,7 @@
 <Modal {open} title="Change Scope" {onClose}>
   <div class="space-y-3">
     <div class="flex items-center gap-2 border bg-elevated px-3 py-2">
-      <Search size={14} class="shrink-0 text-dimmed" />
+      <CioSearch size={14} class="shrink-0 text-dimmed" />
       <input
         bind:this={searchInput}
         bind:value={query}
@@ -146,7 +149,7 @@
           title="Create scope {query.trim()}"
           onclick={openCreateModal}
         >
-          <Plus size={14} strokeWidth={2} />
+          <CioPlus size={14} strokeWidth={2} />
         </button>
       {/if}
       {#if query}
@@ -159,7 +162,7 @@
             searchInput?.focus()
           }}
         >
-          <X size={12} />
+          <CioClose size={12} />
         </button>
       {/if}
     </div>
@@ -198,7 +201,7 @@
           <span class="flex-1 truncate">{bucket.name}</span>
           {#if bucket.id === currentBucketId}
             <span class="flex shrink-0 items-center gap-1 text-[0.625rem] text-dimmed">
-              <Check size={10} />
+              <CioCheck size={10} />
               Current
             </span>
           {/if}

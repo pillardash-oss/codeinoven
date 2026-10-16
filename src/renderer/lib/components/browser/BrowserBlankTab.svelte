@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ArrowRight, Boxes, Globe } from '@lucide/svelte'
+  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { publicAssetUrl } from '$lib/static-assets'
@@ -219,7 +221,7 @@
         aria-label="Open address"
         title="Open address"
       >
-        <ArrowRight size={15} />
+        <CioArrowRight size={15} />
       </button>
     </div>
     {#if drawerVisible}
@@ -260,14 +262,12 @@
             {#if iconUrl}
               <img src={iconUrl} alt="" class="h-6 w-6 object-contain" />
             {:else if option.box?.id === DEFAULT_BOX_ID}
-              <Globe size={20} class="text-dimmed" />
+              <CioBrowser size={20} class="text-dimmed" />
             {:else if option.box}
-              <span
-                class="h-2.5 w-2.5"
-                style:background-color={browserAppearanceAccent(option.box)}
+              <span class="h-2.5 w-2.5" style:background-color={browserAppearanceAccent(option.box)}
               ></span>
             {:else}
-              <Boxes size={20} class="text-dimmed" />
+              <CioTabBoxes size={20} class="text-dimmed" />
             {/if}
           </span>
           <span class="w-full truncate text-center text-[0.6875rem] font-medium text-foreground">

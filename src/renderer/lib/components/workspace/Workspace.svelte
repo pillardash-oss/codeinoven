@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
   import { contentThreadFamily } from '$lib/content-view-threads'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { feature } from '$lib/feature-registry'
@@ -121,7 +125,7 @@
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import { GlobeCode, History, Info, Plus, SquarePen } from '@lucide/svelte'
+  import { GlobeCode } from '@lucide/svelte'
   import { tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
@@ -133,8 +137,8 @@
     assistantForeignThread
   } from '../assistant/assistant-view'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import AssistantKnowledgeIcon from '$lib/components/icons/AssistantKnowledgeIcon.svelte'
-  import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
+  import AssistantKnowledgeIcon from '$lib/components/icons/cio/AssistantKnowledgeIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import AssistantCreateControl from '../assistant/AssistantCreateControl.svelte'
   import AssistantOwnerPicker from '../assistant/AssistantOwnerPicker.svelte'
@@ -1159,7 +1163,7 @@
         label: hasMessages
           ? `Message history (${workspaceState.messageCount} messages you sent)`
           : 'Message history',
-        icon: hasMessages ? undefined : History,
+        icon: hasMessages ? undefined : CioHistory,
         countLabel: hasMessages ? String(workspaceState.messageCount) : undefined,
         active: showHistoryMenu,
         menu: showHistoryMenu ? historyMenu : undefined,
@@ -1295,7 +1299,7 @@
           workspaceState.sourceProcessCount > 0
             ? `Sources (${workspaceState.sourceProcessCount} ${workspaceState.sourceProcessCount === 1 ? 'process' : 'processes'} running)`
             : 'Sources',
-        icon: Info,
+        icon: CioTabInfo,
         active: dockKindActive('sources'),
         countBadge:
           workspaceState.sourceProcessCount > 0
@@ -2679,7 +2683,7 @@
           ? [
               {
                 id: 'new-thread',
-                icon: Plus,
+                icon: CioPlus,
                 ariaLabel: `New thread in ${activeProject.name}`,
                 title: `New thread in ${activeProject.name}`,
                 shortcut: keymapState.keysFor('nav-new-thread'),
@@ -2710,7 +2714,7 @@
         },
         {
           id: 'new-chat',
-          icon: SquarePen,
+          icon: CioPencil,
           ariaLabel: 'New chat',
           title: 'New chat',
           shortcut: keymapState.keysFor('nav-new-thread'),
@@ -2739,7 +2743,7 @@
         },
         {
           id: 'new-thread',
-          icon: Plus,
+          icon: CioPlus,
           ariaLabel: 'New thread in this scope',
           title: 'New thread in this scope',
           shortcut: keymapState.keysFor('nav-new-thread'),

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Server } from '@lucide/svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import { ovenMarkUrl } from '$lib/stores/ovens.svelte'
@@ -50,7 +50,7 @@
     {#if markUrl}
       <img src={markUrl} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
     {:else}
-      <Server size={13} class="shrink-0" />
+      <CioServer size={13} class="shrink-0" />
     {/if}
   {/snippet}
   {#snippet actions()}

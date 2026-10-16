@@ -1,4 +1,12 @@
 <script lang="ts">
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import {
@@ -67,16 +75,7 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import {
-    Bookmark,
-    Eye,
-    Check,
-    GitBranch,
-    MessageCircleDashed,
-    Monitor,
-    Pin,
-    Server
-  } from '@lucide/svelte'
+
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -920,7 +919,7 @@
       role="img"
       class="flex shrink-0 items-center text-accent"
       title="Peek open in this thread"
-      aria-label="Peek open in this thread"><Eye size={12} /></span
+      aria-label="Peek open in this thread"><CioEye size={12} /></span
     >
   {/if}
 {/snippet}
@@ -949,7 +948,7 @@
       aria-label={temporaryChatLabel}
       title={temporaryChatLabel}
     >
-      <MessageCircleDashed size={11} strokeWidth={2} aria-hidden="true" />
+      <CioTemporaryChat size={11} strokeWidth={2} aria-hidden="true" />
     </span>
   {/if}
 {/snippet}
@@ -973,7 +972,7 @@
         />
       {/if}
       {#if scopeBucket.pinned}
-        <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
+        <CioPin size={8} class="shrink-0 text-accent" aria-hidden="true" />
       {/if}
       <!-- The scope is shortened at its own punctuation before the chip ever
            truncates, so a long name keeps its distinguishing head instead of
@@ -1031,7 +1030,7 @@
         }
       }}
     >
-      {#if thread.bookmarked}<Bookmark size={11} class="text-accent" />{:else}<Pin
+      {#if thread.bookmarked}<CioBookmark size={11} class="text-accent" />{:else}<CioPin
           size={11}
           class={effectivePinned ? 'text-accent' : 'text-dimmed'}
         />{/if}
@@ -1118,7 +1117,7 @@
         >
       {/if}
       {#if selected}
-        <Check size={13} class="shrink-0 text-primary" />
+        <CioCheck size={13} class="shrink-0 text-primary" />
       {/if}
     </span>
 
@@ -1154,7 +1153,7 @@
               {#if oven?.iconUrl}
                 <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
               {:else}
-                <Server size={11} class="shrink-0" />
+                <CioServer size={11} class="shrink-0" />
               {/if}
             </span>
           {/if}
@@ -1163,7 +1162,7 @@
               class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
               title={`Branch: ${branch}`}
             >
-              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+              <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
               <span>{branchLabel}</span>
             </span>
           {/if}
@@ -1275,8 +1274,8 @@
           }}
         >
           {#if thread.bookmarked}
-            <Bookmark size={14} class="text-thread-pinned" aria-hidden="true" />
-          {:else}<Pin
+            <CioBookmark size={14} class="text-thread-pinned" aria-hidden="true" />
+          {:else}<CioPin
               size={14}
               fill={effectivePinned ? 'currentColor' : 'none'}
               class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
@@ -1418,7 +1417,7 @@
                 {#if oven?.iconUrl}
                   <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
                 {:else}
-                  <Server size={11} class="shrink-0" />
+                  <CioServer size={11} class="shrink-0" />
                 {/if}
               </span>
             {/if}
@@ -1427,7 +1426,7 @@
                 class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
                 title={`Branch: ${branch}`}
               >
-                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
                 <span>{branchLabel}</span>
               </span>
             {/if}
@@ -1592,10 +1591,10 @@
                 {#if oven?.iconUrl}
                   <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
                 {:else}
-                  <Server size={11} class="shrink-0" />
+                  <CioServer size={11} class="shrink-0" />
                 {/if}
               {:else}
-                <Monitor size={10} class="shrink-0" aria-hidden="true" />
+                <CioDisplay size={10} class="shrink-0" aria-hidden="true" />
               {/if}
             </span>
             {#if branch}
@@ -1603,7 +1602,7 @@
                 class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
                 title={`Branch: ${branch}`}
               >
-                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
                 <span class="truncate">{branchLabel}</span>
               </span>
             {/if}

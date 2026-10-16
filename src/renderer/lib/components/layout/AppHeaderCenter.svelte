@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
   import { toast } from 'svelte-sonner'
-  import { AppWindow } from '@lucide/svelte'
+
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
@@ -179,7 +180,7 @@
               : 'bg-info/10 text-info'}"
           >
             {#if isForeignRun}
-              <AppWindow size={10} />
+              <CioWindow size={10} />
             {/if}
             <span class="header-status-label">
               {workspaceState.specStudioFormulating

@@ -1,18 +1,16 @@
 <script lang="ts">
-  import {
-    CircleX,
-    Cloud,
-    Loader2,
-    Pencil,
-    Plus,
-    RefreshCw,
-    Rocket,
-    Search,
-    Server,
-    Trash2,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
+  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioRocket from '$lib/components/icons/cio/CioRocket.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
@@ -701,7 +699,7 @@ ${fence}`
               aria-label="Add a {chip.label} container to monitor"
               onclick={() => openConfigSheet('container')}
             >
-              <Plus size={11} />
+              <CioPlus size={11} />
             </button>
           </div>
         {/each}
@@ -710,12 +708,12 @@ ${fence}`
 
     {#if configLoading}
       <div class="flex flex-1 items-center justify-center gap-2 py-10 text-sm text-muted">
-        <Loader2 size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         Loading deployments…
       </div>
     {:else if !configured}
       <EmptyState
-        icon={Rocket}
+        icon={CioRocket}
         title="No cloud deployments configured"
         description="Add a provider and its containers to monitor deployment status and logs for this project."
       >
@@ -730,10 +728,10 @@ ${fence}`
         {/snippet}
       </EmptyState>
     {:else if error && !hasContainers}
-      <EmptyState icon={CircleX} title="Deployments unavailable" description={error} />
+      <EmptyState icon={CioCrossCircle} title="Deployments unavailable" description={error} />
     {:else if containersLoading}
       <div class="flex min-h-0 flex-1 items-center justify-center gap-2 py-10 text-sm text-muted">
-        <Loader2 size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         Loading containers…
       </div>
     {:else if containers.length === 0}
@@ -741,7 +739,7 @@ ${fence}`
            show, so its error leads rather than reading as "nothing configured". -->
       {#if anyAccessError}
         <EmptyState
-          icon={CircleX}
+          icon={CioCrossCircle}
           title="Deployments unavailable"
           description={Object.values(accessErrors).join(' · ')}
         >
@@ -757,7 +755,7 @@ ${fence}`
         </EmptyState>
       {:else}
         <EmptyState
-          icon={Cloud}
+          icon={CioCloud}
           title="No containers added yet"
           description="Pick the containers (projects or applications) on your provider account to monitor. Status and logs appear here once added."
         >
@@ -774,7 +772,7 @@ ${fence}`
       {/if}
     {:else if !hasFilteredResults}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-        <Search size={16} class="text-dimmed" />
+        <CioSearch size={16} class="text-dimmed" />
         <p class="text-[0.6875rem] font-medium text-foreground">No matching containers</p>
         <button
           type="button"
@@ -831,14 +829,14 @@ ${fence}`
                   ]} access error"
                   onclick={() => dismissAccessError(kind)}
                 >
-                  <X size={11} />
+                  <CioClose size={11} />
                 </button>
               </div>
             {/if}
             {#each projectGroups as projectGroup (projectGroup.project)}
               <div class="border-t border-border">
                 <div class="flex items-center gap-1.5 bg-surface/50 px-3 py-1">
-                  <Server size={9} class="shrink-0 text-dimmed" />
+                  <CioServer size={9} class="shrink-0 text-dimmed" />
                   <span class="truncate text-[0.5625rem] font-medium text-muted">
                     {projectGroup.project}
                   </span>
@@ -866,7 +864,9 @@ ${fence}`
                             <StatusPill
                               tone={runtimeStatusTone(container.runtimeStatus)}
                               dot
-                              title="Container runtime: {runtimeStatusLabel(container.runtimeStatus)}"
+                              title="Container runtime: {runtimeStatusLabel(
+                                container.runtimeStatus
+                              )}"
                             >
                               {runtimeStatusLabel(container.runtimeStatus)}
                             </StatusPill>
@@ -880,7 +880,7 @@ ${fence}`
                             {/if}
                             {#if containerError(container)}
                               {@const pollError = containerError(container)}
-                              <TriangleAlert
+                              <CioAttention
                                 size={12}
                                 class="shrink-0 text-warning"
                                 title="Status check failed: {pollError}"
@@ -893,7 +893,8 @@ ${fence}`
                           >
                             <span class="truncate font-mono">{container.id}</span>
                             {#if container.updatedAt}
-                              <span class="shrink-0">· {formatCompactAge(container.updatedAt)}</span>
+                              <span class="shrink-0">· {formatCompactAge(container.updatedAt)}</span
+                              >
                             {/if}
                           </div>
                         </div>
@@ -915,7 +916,7 @@ ${fence}`
                           aria-label="Edit {container.label}"
                           onclick={() => editContainer(container)}
                         >
-                          <Pencil size={11} />
+                          <CioPencil size={11} />
                         </button>
                         <button
                           type="button"
@@ -924,7 +925,7 @@ ${fence}`
                           aria-label="Remove {container.label}"
                           onclick={() => requestRemoveContainer(container)}
                         >
-                          <Trash2 size={11} />
+                          <CioTrash size={11} />
                         </button>
                       </div>
                     </div>
@@ -939,7 +940,7 @@ ${fence}`
 
     {#if configured && hasContainers && searchOpen}
       <div class="relative shrink-0 border-t border-border bg-surface px-2 py-1.5">
-        <Search
+        <CioSearch
           size={11}
           class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -974,7 +975,7 @@ ${fence}`
         aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
       >
-        <Plus size={13} />
+        <CioPlus size={13} />
         {configured ? 'Add' : 'Connect'}
       </button>
 
@@ -990,7 +991,7 @@ ${fence}`
             aria-pressed={searchOpen}
             onclick={toggleSearch}
           >
-            <Search size={13} />
+            <CioSearch size={13} />
           </button>
         {/if}
         {#if configured}
@@ -1001,7 +1002,7 @@ ${fence}`
             aria-label="Refresh deployment statuses now"
             onclick={() => void refreshAll()}
           >
-            <RefreshCw size={13} class={refreshingAll ? 'animate-spin' : ''} />
+            <CioRefresh size={13} class={refreshingAll ? 'animate-spin' : ''} />
           </button>
         {/if}
         <Switch
@@ -1054,7 +1055,7 @@ ${fence}`
           class="flex h-9 items-center justify-center gap-1.5 bg-danger px-4 text-xs font-medium text-on-danger hover:bg-danger-hover"
           onclick={() => void confirmRemoveContainer()}
         >
-          <Trash2 size={13} />
+          <CioTrash size={13} />
           Remove
         </button>
       </div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import Modal, { type ModalSize } from './Modal.svelte'
 
@@ -102,7 +102,7 @@
       onclick={() => void onConfirm()}
     >
       {#if busy}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {/if}
       <span>{confirmLabel}</span>
     </button>

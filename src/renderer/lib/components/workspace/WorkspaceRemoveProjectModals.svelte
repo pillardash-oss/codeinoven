@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { APP_NAME } from '$shared/brand'
@@ -57,7 +57,7 @@
       onclick={() => void dialogs.confirmRemoveProject()}
     >
       {#if dialogs.deletingProjectId !== null}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
         Removing…
       {:else}
         Remove
@@ -94,7 +94,7 @@
       onclick={() => void dialogs.confirmRemoveWithFolder()}
     >
       {#if dialogs.deletingProjectId !== null}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
         Deleting…
       {:else}
         Delete Project and Folder

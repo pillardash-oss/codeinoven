@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { BookOpen, Pencil, Server, Trash2 } from '@lucide/svelte'
+  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import type { AgentCapabilityEntry } from '$shared/types'
   import { originLabel } from './sources-panel-helpers'
 
@@ -18,9 +21,9 @@
   <div class="flex items-start gap-3">
     <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-muted">
       {#if kind === 'mcp'}
-        <Server size={15} />
+        <CioServer size={15} />
       {:else}
-        <BookOpen size={15} />
+        <CioBook size={15} />
       {/if}
     </span>
     <div class="min-w-0 flex-1">
@@ -65,7 +68,7 @@
         title="Edit {entry.name}"
         onclick={() => onEdit(entry)}
       >
-        <Pencil size={13} />
+        <CioPencil size={13} />
       </button>
       <button
         type="button"
@@ -74,7 +77,7 @@
         title="Delete {entry.name}"
         onclick={() => onDelete(entry)}
       >
-        <Trash2 size={13} />
+        <CioTrash size={13} />
       </button>
     </div>
   </div>

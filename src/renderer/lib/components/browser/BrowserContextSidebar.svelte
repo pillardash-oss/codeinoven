@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessagesCircle } from '@lucide/svelte'
+  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { appPanelSlot } from '$lib/app-panel-portal'
@@ -520,7 +520,7 @@
            is created by asking for it, so a tab the user only visited is never
            given a transcript they did not want. -->
       <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <MessagesCircle size={20} class="text-dimmed" />
+        <CioChat size={20} class="text-dimmed" />
         <p class="text-xs text-muted">Ask the agent about the page on this tab.</p>
         <button
           type="button"

@@ -1,19 +1,16 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    ChevronRight,
-    Ellipsis,
-    CalendarDays,
-    Pause,
-    Pencil,
-    Pin,
-    PinOff,
-    Plus,
-    SkipForward,
-    Trash2
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSkipForward from '$lib/components/icons/cio/CioSkipForward.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import { CalendarDays, PinOff } from '@lucide/svelte'
   import { DropdownMenu, Portal } from 'bits-ui'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
   import { type ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
@@ -286,7 +283,7 @@
         class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100"
         aria-hidden="true"
       >
-        <ChevronRight
+        <CioForward
           size={13}
           class="text-dimmed transition-transform duration-150 {expanded ? 'rotate-90' : ''}"
         />
@@ -296,7 +293,7 @@
     <span class="min-w-0 flex-1">
       <span class="flex items-center gap-1.5">
         {#if assistant.pinned}
-          <Pin size={11} class="shrink-0 text-accent" aria-hidden="true" />
+          <CioPin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
         <span class="truncate text-[0.8125rem] text-foreground">{assistant.name}</span>
         <ThreadStateCounts counts={stateCounts} class="shrink-0" />
@@ -325,7 +322,7 @@
             aria-label="This assistant is paused"
             title="Paused: this assistant does not run until you resume it"
           >
-            <Pause size={11} />
+            <CioPause size={11} />
           </span>
         {/if}
         {#if incomplete}
@@ -336,7 +333,7 @@
             aria-label={gapLabel}
             title={gapLabel}
           >
-            <AlertTriangle size={11} />
+            <CioAttention size={11} />
           </span>
         {/if}
         {#if missed}
@@ -347,7 +344,7 @@
             aria-label="A scheduled run was missed"
             title="A scheduled run was missed"
           >
-            <AlertTriangle size={11} />
+            <CioAttention size={11} />
           </span>
         {/if}
       </span>
@@ -376,7 +373,7 @@
       title="New task"
       onclick={() => onCreateTask(assistant)}
     >
-      <Plus size={12} />
+      <CioPlus size={12} />
     </button>
     <DropdownMenu.Root bind:open={menuOpen} onOpenChange={onMenuOpenChange}>
       <DropdownMenu.Trigger
@@ -385,7 +382,7 @@
         title="Assistant options"
         oncontextmenu={(event: MouseEvent) => event.preventDefault()}
       >
-        <Ellipsis size={12} />
+        <CioEllipsis size={12} />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
@@ -406,7 +403,7 @@
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onEdit(assistant)}
           >
-            <Pencil size={14} class="text-muted" />
+            <CioPencil size={14} class="text-muted" />
             Edit assistant
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
@@ -415,7 +412,7 @@
               class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
               onSelect={() => (skipConfirm = 'next')}
             >
-              <SkipForward size={14} class="text-muted" />
+              <CioSkipForward size={14} class="text-muted" />
               Skip next run
             </DropdownMenu.Item>
             {#if hasRunsToday}
@@ -436,7 +433,7 @@
               <PinOff size={14} class="text-muted" />
               Unpin Assistant
             {:else}
-              <Pin size={14} class="text-muted" />
+              <CioPin size={14} class="text-muted" />
               Pin Assistant
             {/if}
           </DropdownMenu.Item>
@@ -445,7 +442,7 @@
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
             onSelect={() => onDelete(assistant)}
           >
-            <Trash2 size={14} />
+            <CioTrash size={14} />
             Remove Assistant
           </DropdownMenu.Item>
         </DropdownMenu.Content>

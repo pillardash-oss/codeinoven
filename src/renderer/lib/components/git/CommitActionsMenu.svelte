@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { GitCommit, RotateCcw, Copy, Info, MessageSquareText, Trash2 } from '@lucide/svelte'
+  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitResetMode } from '$shared/types'
 
@@ -34,18 +39,18 @@
 
 {#if onShowInfo}
   <DropdownMenu.Item class={itemClass} onSelect={onShowInfo} disabled={resetBusy || deleteBusy}>
-    <Info size={12} class="shrink-0 text-dimmed" />
+    <CioTabInfo size={12} class="shrink-0 text-dimmed" />
     Commit info
   </DropdownMenu.Item>
   <DropdownMenu.Separator class="my-1 h-px bg-border" />
 {/if}
 
 <DropdownMenu.Item class={itemClass} onSelect={onCopyHash} disabled={resetBusy || deleteBusy}>
-  <Copy size={12} class="shrink-0 text-dimmed" />
+  <CioCopy size={12} class="shrink-0 text-dimmed" />
   Copy commit hash
 </DropdownMenu.Item>
 <DropdownMenu.Item class={itemClass} onSelect={onCopyMessage} disabled={resetBusy || deleteBusy}>
-  <MessageSquareText size={12} class="shrink-0 text-dimmed" />
+  <CioMessage size={12} class="shrink-0 text-dimmed" />
   Copy commit message
 </DropdownMenu.Item>
 
@@ -53,7 +58,7 @@
 
 <DropdownMenu.Sub>
   <DropdownMenu.SubTrigger class={itemClass} disabled={resetBusy || deleteBusy}>
-    <RotateCcw size={12} class="shrink-0 text-dimmed" />
+    <CioUndo size={12} class="shrink-0 text-dimmed" />
     Reset to here…
   </DropdownMenu.SubTrigger>
   <DropdownMenu.SubContent
@@ -80,7 +85,7 @@
 
 {#if isHead && onAmend}
   <DropdownMenu.Item class={itemClass} onSelect={onAmend} disabled={resetBusy || deleteBusy}>
-    <GitCommit size={12} class="shrink-0 text-dimmed" />
+    <CioCommit size={12} class="shrink-0 text-dimmed" />
     Amend commit message
   </DropdownMenu.Item>
 {/if}
@@ -92,6 +97,6 @@
   onSelect={onDelete}
   disabled={deleteBusy || resetBusy}
 >
-  <Trash2 size={12} class="shrink-0" />
+  <CioTrash size={12} class="shrink-0" />
   Delete commit
 </DropdownMenu.Item>

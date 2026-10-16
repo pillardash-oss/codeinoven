@@ -1,4 +1,21 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
+  import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioZap from '$lib/components/icons/cio/CioZap.svelte'
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import {
     latestWorkingTraceParts,
@@ -19,27 +36,7 @@
     CONVERSATION_METADATA_ICONS
   } from './conversation-metadata-badges'
 
-  import {
-    AudioLines,
-    Check,
-    ChevronDown,
-    Copy,
-    FileText,
-    FileDown,
-    FolderInput,
-    GitFork,
-    Loader2,
-    MessageSquare,
-    Network,
-    Pencil,
-    ShieldCheck,
-    Target,
-    Trash2,
-    TriangleAlert,
-    Undo2,
-    Video,
-    Zap
-  } from '@lucide/svelte'
+  import { AudioLines, Video } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
   import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
@@ -551,7 +548,7 @@
    *  tail with the newest `mountedCount` messages. */
   let windowStartId = $state<string | null>(null)
   /** Absolute index of the first mounted message. If the anchored message
-   *  left the store (truncated/deleted), fall back without touching state  
+   *  left the store (truncated/deleted), fall back without touching state
    *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
    *  current working page ([prompt][trace][output]) and the previous page,
    *  even when it sits out of the viewport. */
@@ -724,7 +721,7 @@
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   /** Composer recall texts: the merged full history, minus blank entries that
-   *  would only produce an empty recall step. Keyed on the structure snapshot  
+   *  would only produce an empty recall step. Keyed on the structure snapshot
    *  a user message's text only ever changes through a merge that reports
    *  itself structural, so recall never lags behind what the user typed. */
   let composerHistoryTexts = $derived(
@@ -1185,7 +1182,7 @@
   }
 
   /** Stop the Engineering lifecycle from the prominent failure card. The failed
-   *  stage already ended, so no in-flight turn needs the replacement guard  
+   *  stage already ended, so no in-flight turn needs the replacement guard
    *  cancelling reveals the normal card for the stage underneath. */
   async function cancelEngineeringFailure(): Promise<void> {
     try {
@@ -3846,7 +3843,8 @@
       projectId: thread.projectId,
       threadId: coordinatorDockThreadId,
       label,
-      icon: kind === 'assignment' ? Network : kind === 'achievement' ? Target : ShieldCheck,
+      icon:
+        kind === 'assignment' ? CioNetwork : kind === 'achievement' ? CioTarget : CioShieldCheck,
       panel
     })
     // Docks itself the first time a thread starts coordinating, unless the user
@@ -7259,7 +7257,9 @@
    * The app's own shortcut for starting a task with an assistant, for the copy
    * that sends the user to a new task rather than a message in this thread.
    */
-  const assistantNewTaskShortcut = $derived(formatKeyCombo(keymapState.keysFor('assistant-new-task')))
+  const assistantNewTaskShortcut = $derived(
+    formatKeyCombo(keymapState.keysFor('assistant-new-task'))
+  )
 
   /** The assistant's own connection labels, for the recap card's kept ones. */
   const existingAssistantConnections = $derived(
@@ -12829,7 +12829,7 @@
       <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
         {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
-            <Loader2 size={16} class="animate-spin" />
+            <CioSpinner size={16} class="animate-spin" />
             Loading conversation...
           </div>
         {:else}
@@ -12871,7 +12871,7 @@
               {:else if kind === 'renderable'}
                 <FileTypeIcon path={name} size={12} class="shrink-0" />
               {:else}
-                <FileText size={11} class="shrink-0" />
+                <CioFileText size={11} class="shrink-0" />
               {/if}
               <span class="max-w-32 truncate">{name}</span>
             </button>
@@ -13095,7 +13095,7 @@
                                 ? `${reference.comment}\n\n${reference.text}`
                                 : reference.text}
                             >
-                              <MessageSquare size={11} class="shrink-0 text-accent" />
+                              <CioMessage size={11} class="shrink-0 text-accent" />
                               <span class="font-medium text-foreground">{reference.label}</span>
                               <span class="max-w-56 truncate text-muted">{reference.text}</span>
                               {#if reference.comment}
@@ -13234,7 +13234,7 @@
                             title="Undo   the agent never receives a steered message that is undone"
                             onclick={() => void undoHeldSteer(msg)}
                           >
-                            <Undo2 size={12} />
+                            <CioUndo size={12} />
                           </button>
                         {/if}
                         <button
@@ -13244,9 +13244,9 @@
                           onclick={() => copyMessage(msg)}
                         >
                           {#if copiedMessageId === msg.id}
-                            <Check size={12} class="text-success" />
+                            <CioCheck size={12} class="text-success" />
                           {:else}
-                            <Copy size={12} />
+                            <CioCopy size={12} />
                           {/if}
                         </button>
                         {#if !explicitPresentation}
@@ -13257,7 +13257,7 @@
                             disabled={busy}
                             onclick={() => editMessage(msg)}
                           >
-                            <Pencil size={12} />
+                            <CioPencil size={12} />
                           </button>
                           <button
                             class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
@@ -13266,7 +13266,7 @@
                             disabled={busy}
                             onclick={() => requestDeleteMessage(msg)}
                           >
-                            <Trash2 size={12} />
+                            <CioTrash size={12} />
                           </button>
                         {/if}
                       </div>
@@ -13528,9 +13528,9 @@
                                 onclick={() => copyMessage(msg, deliveredClosingText)}
                               >
                                 {#if copiedMessageId === msg.id}
-                                  <Check size={12} class="text-success" />
+                                  <CioCheck size={12} class="text-success" />
                                 {:else}
-                                  <Copy size={12} />
+                                  <CioCopy size={12} />
                                 {/if}
                               </button>
                               <SpeechPlaybackButton
@@ -13551,9 +13551,9 @@
                                   onclick={() => void continueInThread()}
                                 >
                                   {#if continuingInThread}
-                                    <Loader2 size={12} class="animate-spin" />
+                                    <CioSpinner size={12} class="animate-spin" />
                                   {:else}
-                                    <MessageSquare size={12} />
+                                    <CioMessage size={12} />
                                   {/if}
                                 </button>
                               {/if}
@@ -13566,9 +13566,9 @@
                                   onclick={() => forkFromMessage(msg)}
                                 >
                                   {#if forkingMessageId === msg.id}
-                                    <Loader2 size={12} class="animate-spin" />
+                                    <CioSpinner size={12} class="animate-spin" />
                                   {:else}
-                                    <GitFork size={12} />
+                                    <CioFork size={12} />
                                   {/if}
                                 </button>
                               {/if}
@@ -13579,7 +13579,7 @@
                                   title="Continue in a project"
                                   onclick={() => openContinueInProject()}
                                 >
-                                  <FolderInput size={12} />
+                                  <CioFolderInput size={12} />
                                 </button>
                               {/if}
                               <button
@@ -13588,7 +13588,7 @@
                                 title="Export transcript"
                                 onclick={openTranscriptExport}
                               >
-                                <FileDown size={12} />
+                                <CioDownload size={12} />
                               </button>
                             </div>
                             <div
@@ -13611,7 +13611,7 @@
                                   />
                                   {modelLabel}
                                   {#if fastVariant}
-                                    <Zap
+                                    <CioZap
                                       size={10}
                                       class="text-accent"
                                       fill="currentColor"
@@ -13773,7 +13773,7 @@
           onclick={scrollToLatest}
           transition:fly={{ y: -8, duration: 140 }}
         >
-          <ChevronDown
+          <CioChevronDown
             size={12}
             class="shrink-0 text-muted transition-colors group-hover:text-foreground"
           />
@@ -13891,7 +13891,7 @@
                   joinsBelow
                 >
                   <CardHead
-                    icon={TriangleAlert}
+                    icon={CioAttention}
                     title="Compaction interrupted"
                     chip={{
                       text: 'Stopped',
@@ -13903,7 +13903,7 @@
                   />
                   {#if !compactionFold.folded}
                     <div class="space-y-2 px-3 py-2.5">
-                      <CardNotice icon={TriangleAlert} tone="warn">
+                      <CardNotice icon={CioAttention} tone="warn">
                         {compactionInterruptedNotice}
                       </CardNotice>
                     </div>

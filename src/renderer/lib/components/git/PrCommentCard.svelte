@@ -9,8 +9,12 @@
    * frames its summary together with the threads that review wrote, so this row
    * draws no border of its own when it is embedded (`framed={false}`).
    */
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
-  import { Check, ChevronDown, Loader2, MoreHorizontal } from '@lucide/svelte'
+
   import { DropdownMenu } from 'bits-ui'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -363,7 +367,7 @@
         title={folded ? 'Show this comment' : 'Fold this comment'}
         onclick={() => (folded = !folded)}
       >
-        <ChevronDown size={13} class={['transition-transform', folded && '-rotate-90']} />
+        <CioChevronDown size={13} class={['transition-transform', folded && '-rotate-90']} />
       </button>
     {/if}
     {#if !editing && reactable}
@@ -382,7 +386,7 @@
           aria-label="Actions for {displayLogin}'s comment"
           title="Comment actions"
         >
-          <MoreHorizontal size={13} />
+          <CioEllipsis size={13} />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
@@ -459,10 +463,10 @@
           onclick={() => void saveEdit()}
         >
           {#if savingComment}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
             Saving…
           {:else}
-            <Check size={12} />
+            <CioCheck size={12} />
             Save
           {/if}
         </button>

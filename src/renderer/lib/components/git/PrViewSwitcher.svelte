@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { Check, ChevronDown } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { PrDetailTabId } from './pr-view'
 
   interface Props {
     /** The reader's views with their counts, from `pr-view.ts`. */
-    views: Array<{ id: PrDetailTabId; label: string; icon: typeof Check; count: number }>
+    views: Array<{ id: PrDetailTabId; label: string; icon: typeof CioCheck; count: number }>
     active: PrDetailTabId
     onSelect: (id: PrDetailTabId) => void
   }
@@ -31,7 +32,7 @@
       <ActiveIcon size={12} class="shrink-0" />
     {/if}
     <span class="min-w-0 truncate">{activeEntry?.label ?? 'View'}</span>
-    <ChevronDown size={10} class="shrink-0 text-dimmed" />
+    <CioChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
@@ -53,7 +54,7 @@
             <span class="shrink-0 tabular-nums text-dimmed">{view.count}</span>
           {/if}
           {#if active === view.id}
-            <Check size={12} class="shrink-0 text-primary" />
+            <CioCheck size={12} class="shrink-0 text-primary" />
           {/if}
         </DropdownMenu.Item>
       {/each}

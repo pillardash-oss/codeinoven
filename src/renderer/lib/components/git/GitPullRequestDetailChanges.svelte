@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { FileDiff, GitCommitHorizontal, Loader2 } from '@lucide/svelte'
+  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import type { PullRequestCommit, PullRequestFile } from '$shared/types'
   import PrDiffHunk from './PrDiffHunk.svelte'
@@ -45,7 +47,7 @@
         class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
         onclick={() => (expandedFile = expandedFile === fileKey ? null : fileKey)}
       >
-        <FileDiff size={12} class="shrink-0 text-dimmed" />
+        <CioDiff size={12} class="shrink-0 text-dimmed" />
         <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-foreground">
           {file.path}
         </span>
@@ -76,7 +78,7 @@
 {#if mode === 'files'}
   {#if files.length === 0}
     <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-      <FileDiff size={18} class="text-dimmed" />
+      <CioDiff size={18} class="text-dimmed" />
       <p class="text-[0.6875rem] leading-relaxed text-dimmed">No changed files.</p>
     </div>
   {:else}
@@ -84,7 +86,7 @@
   {/if}
 {:else if commits.length === 0}
   <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-    <GitCommitHorizontal size={18} class="text-dimmed" />
+    <CioCommit size={18} class="text-dimmed" />
     <p class="text-[0.6875rem] leading-relaxed text-dimmed">No commits on this branch.</p>
   </div>
 {:else}
@@ -96,7 +98,7 @@
         title="Show the files changed in {commit.shortSha}"
         onclick={() => void toggleCommit(commit.sha)}
       >
-        <GitCommitHorizontal size={12} class="mt-0.5 shrink-0 text-dimmed" />
+        <CioCommit size={12} class="mt-0.5 shrink-0 text-dimmed" />
         <div class="min-w-0 flex-1">
           <p class="truncate text-[0.6875rem] text-foreground">{commit.message}</p>
           <p class="truncate text-[0.5625rem] text-dimmed">
@@ -105,7 +107,7 @@
           </p>
         </div>
         {#if loadingCommit === commit.sha}
-          <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-dimmed" />
+          <CioSpinner size={12} class="mt-0.5 shrink-0 animate-spin text-dimmed" />
         {/if}
       </button>
       {#if expandedCommit === commit.sha}

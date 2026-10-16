@@ -1,19 +1,14 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioFileCode from '$lib/components/icons/cio/CioFileCode.svelte'
+  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
+  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
+  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    ArrowLeftToLine,
-    ArrowRightToLine,
-    Check,
-    FileCode2,
-    FileWarning,
-    GitMerge,
-    Loader2,
-    Redo2,
-    Save,
-    Undo2,
-    WrapText
-  } from '@lucide/svelte'
+  import { ArrowLeftToLine, ArrowRightToLine, FileWarning, WrapText } from '@lucide/svelte'
   import type { GitConflictWorkFile, GitConflictWorkHunkState } from '$shared/types'
   import {
     createFileEditor,
@@ -479,7 +474,7 @@
 <div class="flex h-full min-h-0 flex-col bg-app" data-region="conflict-editor">
   {#if loading && !workFile}
     <div class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed">
-      <Loader2 size={14} class="animate-spin" /> Preparing conflict scratch document
+      <CioSpinner size={14} class="animate-spin" /> Preparing conflict scratch document
     </div>
   {:else if error}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
@@ -493,7 +488,7 @@
     </div>
   {:else if analysis.binary || analysis.truncated}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-      <AlertTriangle size={22} class="text-warning" />
+      <CioAttention size={22} class="text-warning" />
       <p class="text-xs font-medium text-foreground">
         {analysis.binary ? 'Binary conflict' : 'File too large for the merge editor'}
       </p>
@@ -508,14 +503,14 @@
           title="Reveal the original conflicted file in the file tree and open it in the file editor"
           onclick={onOpenOriginal}
         >
-          <FileCode2 size={12} />
+          <CioFileCode size={12} />
           Open original file
         </button>
       {/if}
     </div>
   {:else}
     <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-      <GitMerge size={13} class="text-warning" />
+      <CioMerge size={13} class="text-warning" />
       <span class="text-[0.625rem] font-semibold text-foreground"
         >Conflict {activeHunk + 1} of {analysis.hunks.length}</span
       >
@@ -552,7 +547,9 @@
         title={conflictSaveActionTitle('draft')}
         onclick={() => void saveDraft()}
       >
-        {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
+        {#if draftSaving}<CioSpinner size={11} class="animate-spin" />{:else}<CioSave
+            size={11}
+          />{/if}
         {conflictSaveActionLabels.draft}
       </button>
       <button
@@ -560,14 +557,14 @@
         class="flex h-6 w-6 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
         title="Undo conflict edit"
         aria-label="Undo conflict edit"
-        onclick={undo}><Undo2 size={12} /></button
+        onclick={undo}><CioUndo size={12} /></button
       >
       <button
         type="button"
         class="flex h-6 w-6 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
         title="Redo conflict edit"
         aria-label="Redo conflict edit"
-        onclick={redo}><Redo2 size={12} /></button
+        onclick={redo}><CioRedo size={12} /></button
       >
     </div>
 
@@ -595,7 +592,7 @@
             title={`Conflict ${state.index + 1}`}
             onclick={() => selectHunk(state.index)}
           >
-            {#if isResolved(state)}<Check size={9} />{/if}{state.index + 1}
+            {#if isResolved(state)}<CioCheck size={9} />{/if}{state.index + 1}
           </button>
         {/each}
       </div>

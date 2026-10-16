@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Plug, Sparkles } from '@lucide/svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
   import { slide } from 'svelte/transition'
   import { harnessCatalogs, harnessHasProvider } from '$lib/ai-account'
   import { withModelSelection } from '../chats/chat-composer-settings'
@@ -111,7 +112,7 @@
 <div out:slide={dismissSlide()} role="status" aria-live="polite">
   <CardFrame placement="replace" label="AI account setup" {stackedAbove} {joinsBelow}>
     <CardHead
-      icon={connected ? Sparkles : Plug}
+      icon={connected ? CioSparkles : CioPlug}
       title={connected ? 'Choose the model for this thread' : 'Connect your AI account'}
       chip={connected ? { text: 'Ready' } : { text: 'Waiting', tone: 'paused' }}
       bind:folded={foldState.folded}
@@ -182,7 +183,7 @@
           <CardButton
             label="Connect Your AI Account"
             title="Connect your AI account"
-            icon={Plug}
+            icon={CioPlug}
             variant="primary"
             onclick={onConnect}
           />

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SquareTerminal } from '@lucide/svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -35,7 +35,7 @@
     onMinimize={() => onTabIdChange(null)}
   >
     {#snippet icon()}
-      <SquareTerminal size={11} class="shrink-0" />
+      <CioTerminal size={11} class="shrink-0" />
     {/snippet}
     {#if terminalTab?.kind === 'terminal'}
       {#key tabId}

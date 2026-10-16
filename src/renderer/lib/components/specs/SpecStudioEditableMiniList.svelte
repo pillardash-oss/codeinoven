@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Plus, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
 
   interface Props {
@@ -20,7 +21,7 @@
       class="p-1 text-dimmed hover:bg-elevated hover:text-foreground"
       aria-label={`Add ${title.toLowerCase()}`}
       title={`Add ${title.toLowerCase()}`}
-      onclick={onAdd}><Plus size={12} /></button
+      onclick={onAdd}><CioPlus size={12} /></button
     >
   </div>
   <ul class="mt-2 space-y-1.5">
@@ -37,7 +38,7 @@
           class="p-1 text-dimmed opacity-0 hover:text-danger group-hover:opacity-100"
           aria-label={`Remove ${title} item ${index + 1}`}
           title="Remove item"
-          onclick={() => onRemove(index)}><X size={10} /></button
+          onclick={() => onRemove(index)}><CioClose size={10} /></button
         >
       </li>
     {:else}

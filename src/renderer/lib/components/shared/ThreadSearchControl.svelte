@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Loader2, Search, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { Popover } from 'bits-ui'
   import { isOrchestrationChildThread, type Thread, type ThreadSearchResult } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
@@ -138,7 +140,7 @@
     aria-label={title}
     {title}
   >
-    <Search size={15} strokeWidth={1.8} />
+    <CioSearch size={15} strokeWidth={1.8} />
   </Popover.Trigger>
 
   <Popover.Portal>
@@ -151,7 +153,7 @@
       onCloseAutoFocus={(e) => e.preventDefault()}
     >
       <div class="flex items-center gap-2 border-b px-3 py-2">
-        <Search size={14} class="shrink-0 text-dimmed" />
+        <CioSearch size={14} class="shrink-0 text-dimmed" />
         <input
           bind:this={searchInput}
           bind:value={query}
@@ -175,7 +177,7 @@
               searchInput?.focus()
             }}
           >
-            <X size={13} />
+            <CioClose size={13} />
           </button>
         {/if}
       </div>
@@ -186,7 +188,7 @@
             <p
               class="flex items-center justify-center gap-1.5 px-3 py-6 text-center text-xs text-dimmed"
             >
-              <Loader2 size={12} class="animate-spin" />
+              <CioSpinner size={12} class="animate-spin" />
               Searching…
             </p>
           {:else if results.length === 0}

@@ -1,4 +1,10 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     ASSISTANT_SPACE_ID,
@@ -35,7 +41,7 @@
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
-  import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
+
   import type { Thread } from '$shared/types'
 
   interface Props {
@@ -855,7 +861,7 @@
             type="button"
             onclick={addEntry}
           >
-            <Plus size={14} />
+            <CioPlus size={14} />
             <span class="memory-action-label">Add Memory</span>
           </button>
         {/if}
@@ -869,11 +875,11 @@
             onclick={() => void save()}
           >
             {#if saving}
-              <Loader2 size={14} class="animate-spin" />
+              <CioSpinner size={14} class="animate-spin" />
             {:else if saved}
-              <Check size={14} />
+              <CioCheck size={14} />
             {:else}
-              <Save size={14} />
+              <CioSave size={14} />
             {/if}
             <span class="memory-action-label">{saved ? 'Saved' : 'Save'}</span>
           </button>
@@ -920,7 +926,7 @@
                       disabled={proposalBusyIds.includes(row.proposal.id)}
                       onclick={() => void resolveProposal(row, true)}
                     >
-                      <Check size={15} />
+                      <CioCheck size={15} />
                     </button>
                     <button
                       class="p-1.5 text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
@@ -930,7 +936,7 @@
                       disabled={proposalBusyIds.includes(row.proposal.id)}
                       onclick={() => void resolveProposal(row, false)}
                     >
-                      <X size={15} />
+                      <CioClose size={15} />
                     </button>
                   </div>
                 </div>
@@ -962,7 +968,7 @@
 
       <div class="mb-4 {variant === 'sidebar' ? 'space-y-2' : 'flex flex-wrap items-center gap-2'}">
         <div class="relative {variant === 'sidebar' ? '' : 'min-w-[160px] flex-1'}">
-          <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
+          <CioSearch size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
           <input
             class="w-full border bg-elevated pl-8 pr-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
             placeholder="Search memories..."

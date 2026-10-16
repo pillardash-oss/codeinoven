@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { GitCommit, Loader2 } from '@lucide/svelte'
+  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { GitCommitInfo, GitStatus } from '$shared/types'
   import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 
@@ -50,7 +51,7 @@
   <div class="shrink-0 border-t border-border bg-surface">
     {#if amendMode}
       <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
-        <GitCommit size={11} class="shrink-0 text-warning" />
+        <CioCommit size={11} class="shrink-0 text-warning" />
         <p class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning">
           Amending the most recent commit no new commit will be created.
         </p>
@@ -80,9 +81,9 @@
         onclick={onCommitInline}
       >
         {#if commitBusy}
-          <Loader2 size={11} class="animate-spin" />
+          <CioSpinner size={11} class="animate-spin" />
         {:else}
-          <GitCommit size={11} />
+          <CioCommit size={11} />
         {/if}
         {amendMode ? 'Amend commit' : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ''}`}
       </button>

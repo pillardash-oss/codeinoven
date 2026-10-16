@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import { onMount } from 'svelte'
-  import { FileSearch, FolderKanban, Globe, Timeline } from '@lucide/svelte'
+  import { FileSearch, Timeline } from '@lucide/svelte'
   import type {
     CommandPaletteProps,
     PaletteFooterFilter
@@ -410,7 +412,7 @@
           title: 'Search browser tabs',
           placeholder: 'Search open tabs by title, address, or group…',
           emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
-          headerIcon: Globe,
+          headerIcon: CioBrowser,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-primary/25 bg-primary/10 text-primary',
           serverFiltered: true,
@@ -429,7 +431,7 @@
           title: 'Switch project',
           placeholder: 'Search projects…',
           emptyLabel: 'No matching projects',
-          headerIcon: FolderKanban,
+          headerIcon: CioProjects,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-success/25 bg-success/10 text-success',
           onBack: backToSpotlightHome,

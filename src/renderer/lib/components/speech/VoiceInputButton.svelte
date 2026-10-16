@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioMic from '$lib/components/icons/cio/CioMic.svelte'
   import { onMount, onDestroy } from 'svelte'
-  import { Mic, TriangleAlert } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import RecordingIndicator from './RecordingIndicator.svelte'
@@ -435,7 +437,7 @@
     {#if action === 'stop'}
       <RecordingIndicator decorative />
     {:else if action === 'retry'}
-      <TriangleAlert size={14} aria-hidden="true" />
+      <CioAttention size={14} aria-hidden="true" />
     {:else if voiceSendStage && (transcribingHere || stoppingHere)}
       <!-- Armed while the dictation is still being produced, including the
            window where the capture is finalising and the row already shows
@@ -446,7 +448,7 @@
     {:else if transcribingHere}
       <WaveBars decorative label="Transcribing your last recording" />
     {:else}
-      <Mic size={14} aria-hidden="true" />
+      <CioMic size={14} aria-hidden="true" />
     {/if}
   </button>
 

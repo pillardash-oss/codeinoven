@@ -1,4 +1,18 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
@@ -22,23 +36,7 @@
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
   } from '$shared/types'
-  import {
-    AlertTriangle,
-    Check,
-    CheckCircle2,
-    Circle,
-    Clock,
-    Copy,
-    Download,
-    Loader2,
-    Plug,
-    Plug2,
-    RefreshCw,
-    RotateCcw,
-    Search,
-    Trash2,
-    X
-  } from '@lucide/svelte'
+  import { Plug2 } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -163,7 +161,7 @@
   }
 
   interface BadgeInfo {
-    Icon: typeof CheckCircle2
+    Icon: typeof CioCheckCircle
     label: string
     classes: string
     spin?: boolean
@@ -173,7 +171,7 @@
   function badgeFor(provider: ProviderConnectionInfo): BadgeInfo {
     if (provider.status === 'error') {
       return {
-        Icon: AlertTriangle,
+        Icon: CioAttention,
         label: 'Needs attention',
         classes: 'border-danger/30 bg-danger/10 text-danger'
       }
@@ -184,14 +182,14 @@
       harnessLifecycleStore.updateAvailableFor(provider.id)
     ) {
       return {
-        Icon: Download,
+        Icon: CioDownload,
         label: 'Update available',
         classes: 'border-warning/30 bg-warning/10 text-warning'
       }
     }
     if (provider.status === 'available' && provider.integration === 'ready') {
       return {
-        Icon: CheckCircle2,
+        Icon: CioCheckCircle,
         label:
           provider.executionTarget?.kind === 'wsl'
             ? `Ready · WSL ${provider.executionTarget.distribution}`
@@ -203,14 +201,14 @@
     }
     if (provider.status === 'available') {
       return {
-        Icon: Circle,
+        Icon: CioCircle,
         label: 'Detected · integration planned',
         classes: 'border-warning/30 bg-warning/10 text-warning'
       }
     }
     if (provider.status === 'checking') {
       return {
-        Icon: Loader2,
+        Icon: CioSpinner,
         label: 'Checking…',
         classes: 'border-info/30 bg-info/10 text-info',
         spin: true
@@ -218,12 +216,16 @@
     }
     if (provider.status === 'not_found') {
       return {
-        Icon: Circle,
+        Icon: CioCircle,
         label: 'Not installed',
         classes: 'border-border bg-elevated text-dimmed'
       }
     }
-    return { Icon: Circle, label: 'Not checked', classes: 'border-border bg-elevated text-dimmed' }
+    return {
+      Icon: CioCircle,
+      label: 'Not checked',
+      classes: 'border-border bg-elevated text-dimmed'
+    }
   }
 
   /** Secondary actions tucked into the row's "..." menu. */
@@ -231,7 +233,7 @@
     const items: MenuItem[] = [
       {
         label: 'Check',
-        icon: RefreshCw,
+        icon: CioRefresh,
         disabled: provider.status === 'checking',
         onClick: () => void checkOne(provider.id)
       }
@@ -242,7 +244,7 @@
     if (canRestartHarness(provider)) {
       items.push({
         label: 'Restart harness',
-        icon: RotateCcw,
+        icon: CioUndo,
         disabled: harnessLifecycleStore.isRunning(provider.id),
         onClick: () => requestRestart(provider)
       })
@@ -250,7 +252,7 @@
     if (canUninstallHarness(provider)) {
       items.push({
         label: 'Uninstall',
-        icon: Trash2,
+        icon: CioTrash,
         danger: true,
         disabled: harnessLifecycleStore.isRunning(provider.id),
         onClick: () => void requestUninstall(provider)
@@ -613,7 +615,7 @@
   {#if activeTab === 'harnesses'}
     <div class="mb-4 flex flex-wrap items-center gap-2">
       <div class="relative min-w-[200px] flex-1">
-        <Search
+        <CioSearch
           size={14}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -637,7 +639,7 @@
                 searchInputEl?.focus()
               }}
             >
-              <X size={12} />
+              <CioClose size={12} />
             </button>
           {:else}
             <kbd
@@ -719,7 +721,7 @@
         onclick={() => void recheckAll()}
         disabled={providerStore.checkingCount > 0}
       >
-        <RefreshCw size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
+        <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
         Check all
       </button>
     </div>
@@ -780,9 +782,9 @@
                       onclick={() => void copyPath(provider)}
                     >
                       {#if copiedPathId === provider.id}
-                        <Check size={11} class="text-success" />
+                        <CioCheck size={11} class="text-success" />
                       {:else}
-                        <Copy size={11} />
+                        <CioCopy size={11} />
                       {/if}
                     </button>
                   {/if}
@@ -822,7 +824,7 @@
                   title="Re-check {provider.name}"
                   onclick={() => void checkOne(provider.id)}
                 >
-                  <RefreshCw size={13} />
+                  <CioRefresh size={13} />
                   Retry
                 </button>
                 <button
@@ -843,9 +845,9 @@
                       void harnessLifecycleStore.startInstall(provider.id, provider.name)}
                   >
                     {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <Loader2 size={13} class="animate-spin" />
+                      <CioSpinner size={13} class="animate-spin" />
                     {:else}
-                      <Download size={13} />
+                      <CioDownload size={13} />
                     {/if}
                     Install
                   </button>
@@ -867,9 +869,9 @@
                       void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
                   >
                     {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <Loader2 size={13} class="animate-spin" />
+                      <CioSpinner size={13} class="animate-spin" />
                     {:else}
-                      <Download size={13} />
+                      <CioDownload size={13} />
                     {/if}
                     Update
                   </button>
@@ -996,7 +998,7 @@
     </div>
 
     <div class="mt-6 border border-dashed p-4 text-center">
-      <Plug size={18} class="mx-auto mb-1 text-dimmed" />
+      <CioPlug size={18} class="mx-auto mb-1 text-dimmed" />
       <p class="text-xs text-dimmed">
         Harnesses are detected from your system PATH and Windows Subsystem for Linux distributions,
         then verified with a version probe. Install the CLI tool and click Check.
@@ -1008,20 +1010,20 @@
     >
       <div class="flex flex-wrap items-center gap-4">
         <span class="flex items-center gap-1.5 text-success">
-          <CheckCircle2 size={12} />
+          <CioCheckCircle size={12} />
           {readyCount} ready
         </span>
         <span class="flex items-center gap-1.5 text-warning">
-          <Download size={12} />
+          <CioDownload size={12} />
           {updatesCount} update{updatesCount === 1 ? '' : 's'}
         </span>
         <span class="flex items-center gap-1.5 text-danger">
-          <AlertTriangle size={12} />
+          <CioAttention size={12} />
           {issuesCount} issue{issuesCount === 1 ? '' : 's'}
         </span>
       </div>
       <span class="flex items-center gap-1.5 text-dimmed">
-        <Clock size={12} />
+        <CioClock size={12} />
         {lastCheckedLabel}
       </span>
     </div>
@@ -1071,9 +1073,9 @@
         disabled={uninstallBusy || uninstallLoading || !!uninstallError}
       >
         {#if uninstallBusy}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Trash2 size={13} />
+          <CioTrash size={13} />
         {/if}
         Uninstall
       </button>
@@ -1087,7 +1089,7 @@
         <div
           class="flex items-center gap-2 border border-border bg-raised p-3 font-mono text-xs text-muted"
         >
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Resolving uninstall command…
         </div>
       {:else if uninstallError}

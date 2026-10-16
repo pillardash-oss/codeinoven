@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot } from '@lucide/svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import PrAgentReportCard from './PrAgentReportCard.svelte'
   import type { PrAgentReport, PullRequestSummary } from '$shared/types'
 
@@ -49,7 +49,7 @@
 
 {#if reports.length === 0}
   <div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
-    <Bot size={18} class="text-dimmed" />
+    <CioSubagent size={18} class="text-dimmed" />
     <p class="text-[0.6875rem] leading-relaxed text-muted">
       No agent assignment yet. Assigning an agent opens a thread where it triages this pull request
       in a worktree of its own, tests it when that is warranted, and writes its findings to
@@ -61,7 +61,7 @@
       class="flex h-7 min-w-0 cursor-pointer items-center gap-1 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
       onclick={() => onAssignAgent(summary)}
     >
-      <Bot size={12} class="shrink-0" />
+      <CioSubagent size={12} class="shrink-0" />
       <span class="min-w-0 truncate">Assign an agent</span>
     </button>
   </div>

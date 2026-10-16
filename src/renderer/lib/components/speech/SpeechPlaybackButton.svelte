@@ -1,6 +1,11 @@
 <script lang="ts">
+  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
+  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
   import { onMount } from 'svelte'
-  import { CircleAlert, LoaderCircle, Pause, Play, Volume2 } from '@lucide/svelte'
+
   import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -100,15 +105,15 @@
       onclick={activate}
     >
       {#if ownsSession && playbackState.state === 'preparing'}
-        <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+        <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'playing'}
-        <Pause size={12} aria-hidden="true" />
+        <CioPause size={12} aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'paused'}
-        <Play size={12} aria-hidden="true" />
+        <CioPlay size={12} aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'failed'}
-        <CircleAlert size={12} aria-hidden="true" />
+        <CioAlertCircle size={12} aria-hidden="true" />
       {:else}
-        <Volume2 size={12} aria-hidden="true" />
+        <CioVolume size={12} aria-hidden="true" />
       {/if}
     </button>
     {#if seekExpanded}

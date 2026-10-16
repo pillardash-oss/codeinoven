@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Trash2 } from '@lucide/svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import Switch from '../ui/Switch.svelte'
   import type { PendingDeletion } from './sound-settings-helpers'
@@ -30,7 +30,11 @@
 </script>
 
 <section id="settings-block-sound-rules" class="border bg-surface p-4">
-  <h2 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Learned lessons</h2>
+  <h2
+    class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Learned lessons
+  </h2>
   <p class="mb-3 text-xs text-dimmed">
     After you edit a transcript before sending, the local instruct model compares what it heard with
     what you actually wrote and distills reusable style lessons word choices, punctuation habits,
@@ -69,7 +73,7 @@
             action: 'lesson',
             targetId: lesson.id,
             label: lesson.instruction
-          })}><Trash2 size={13} aria-hidden="true" /></button
+          })}><CioTrash size={13} aria-hidden="true" /></button
       >
     </div>
   {/each}

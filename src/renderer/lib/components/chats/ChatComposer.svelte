@@ -1,9 +1,11 @@
 <script lang="ts">
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { fade } from 'svelte/transition'
-  import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
+  import { ArrowUp, Flame, Minimize2, Square } from '@lucide/svelte'
   import { motionDuration } from '$lib/motion'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
@@ -1999,7 +2001,7 @@
         {#if expansion.maximized}
           <Minimize2 size={13} />
         {:else}
-          <Maximize2 size={13} />
+          <CioMaximize size={13} />
         {/if}
       </button>
     {/if}
@@ -2163,7 +2165,7 @@
     {#if showSendControl}
       <!-- Send / Queue / Stop button.
            - Agent idle:       ArrowUp (send)   primary, disabled when empty
-           - Agent working, user typing:  Clock (queue)   primary, always clickable
+           - Agent working, user typing:  CioClock (queue)   primary, always clickable
            - Agent working, no text:      Square (stop)   danger tint
            - Stop confirmation pending:   "Stop?" danger label -->
       <button
@@ -2200,7 +2202,7 @@
         {:else if canStop}
           <Square size={14} />
         {:else if working}
-          <Clock size={15} />
+          <CioClock size={15} />
         {:else}
           <ArrowUp size={16} />
         {/if}

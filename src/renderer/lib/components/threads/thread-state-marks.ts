@@ -1,18 +1,13 @@
-import {
-  AlarmClock,
-  AppWindow,
-  CircleCheck,
-  CircleX,
-  Clock,
-  Inbox,
-  MessageCircleDashed,
-  Pickaxe,
-  RefreshCw,
-  SquarePen,
-  Toolbox
-} from '@lucide/svelte'
+import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
+import { AlarmClock, Inbox, Pickaxe, Toolbox } from '@lucide/svelte'
 import type { Component } from 'svelte'
-import TriangleQuestionMark from '$lib/components/icons/TriangleQuestionMark.svelte'
+import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
 import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
 /**
@@ -81,14 +76,14 @@ export const THREAD_STATE_MARKS = {
     dash: 'solid'
   },
   'temporary-unread': {
-    icon: MessageCircleDashed,
+    icon: CioTemporaryChat,
     label: 'Side chat unread',
     tone: 'done',
     colour: 'var(--color-thread-unread)',
     dash: 'dashed'
   },
   read: {
-    icon: CircleCheck,
+    icon: CioCheckCircle,
     label: 'Read',
     tone: 'done',
     colour: 'var(--color-thread-done)',
@@ -96,7 +91,7 @@ export const THREAD_STATE_MARKS = {
     rail: false
   },
   completed: {
-    icon: CircleCheck,
+    icon: CioCheckCircle,
     label: 'Completed',
     tone: 'done',
     colour: 'var(--color-thread-done)',
@@ -104,7 +99,7 @@ export const THREAD_STATE_MARKS = {
     rail: false
   },
   todo: {
-    icon: SquarePen,
+    icon: CioPencil,
     label: 'Draft',
     tone: 'todo',
     colour: 'var(--color-muted)',
@@ -118,7 +113,7 @@ export const THREAD_STATE_MARKS = {
     dash: 'solid'
   },
   'working-paused': {
-    icon: RefreshCw,
+    icon: CioRefresh,
     label: 'Retrying',
     tone: 'working-paused',
     colour: 'var(--color-warning)',
@@ -139,7 +134,7 @@ export const THREAD_STATE_MARKS = {
     dash: 'solid'
   },
   error: {
-    icon: CircleX,
+    icon: CioCrossCircle,
     label: 'Failed',
     tone: 'error',
     colour: 'var(--color-danger)',
@@ -167,14 +162,14 @@ export const THREAD_STATE_MARKS = {
  */
 export const THREAD_SECONDARY_MARKS = {
   draft: {
-    icon: SquarePen,
+    icon: CioPencil,
     label: 'Draft in the composer',
     tone: 'todo',
     colour: 'var(--color-muted)',
     dash: 'dashed'
   },
   queued: {
-    icon: Clock,
+    icon: CioClock,
     label: 'Message queued',
     tone: 'todo',
     colour: 'var(--color-info)',
@@ -213,7 +208,7 @@ export function threadSecondaryMark(secondary: ThreadRowSecondary): ThreadStateM
  * derived from the same vocabulary instead of drifting apart.
  */
 export const THREAD_FOREIGN_MARK: ThreadStateMark = {
-  icon: AppWindow,
+  icon: CioWindow,
   label: 'Running in another instance',
   tone: 'working',
   colour: 'var(--color-thread-working)',

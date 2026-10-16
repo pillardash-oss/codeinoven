@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onDestroy, onMount } from 'svelte'
   import { GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -32,7 +36,7 @@
     Thread,
     ThreadSettings
   } from '$shared/types'
-  import { CheckCircle2, CircleCheck, GitPullRequest, Loader2, TriangleAlert } from '@lucide/svelte'
+
   import GitPullRequestSheetCompose from './GitPullRequestSheetCompose.svelte'
   import GitPullRequestSheetCompare from './GitPullRequestSheetCompare.svelte'
   import GitPullRequestSheetPushRecovery from './GitPullRequestSheetPushRecovery.svelte'
@@ -846,7 +850,7 @@
         {#if resolvedProjectIcon}
           <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0" />
         {:else}
-          <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="truncate text-[0.625rem] font-semibold text-foreground">{dockProjectName}</span
         >
@@ -868,12 +872,12 @@
             <span
               class="flex items-center gap-1 bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success"
             >
-              <CheckCircle2 size={10} aria-hidden="true" />
+              <CioCheckCircle size={10} aria-hidden="true" />
               Created
             </span>
             <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
           {:else if dockDetail || creating || submitting}
-            <Loader2 size={14} class="shrink-0 animate-spin text-info" />
+            <CioSpinner size={14} class="shrink-0 animate-spin text-info" />
             <span class="text-[0.6875rem] font-medium"
               >{dockDetail || 'Creating pull request…'}</span
             >
@@ -881,7 +885,7 @@
             <span
               class="flex items-center gap-1 bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-warning"
             >
-              <TriangleAlert size={10} aria-hidden="true" />
+              <CioAttention size={10} aria-hidden="true" />
               Needs attention
             </span>
             <span class="text-[0.6875rem] font-medium">New pull request</span>
@@ -889,12 +893,12 @@
             <span
               class="flex items-center gap-1 bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success"
             >
-              <CircleCheck size={10} aria-hidden="true" />
+              <CioCheckCircle size={10} aria-hidden="true" />
               Composed
             </span>
             <span class="text-[0.6875rem] font-medium">New pull request</span>
           {:else}
-            <GitPullRequest size={14} class="shrink-0 text-dimmed" />
+            <CioPullRequest size={14} class="shrink-0 text-dimmed" />
             <span class="text-[0.6875rem] font-medium">New pull request</span>
           {/if}
         </button>
@@ -931,7 +935,7 @@
           class="flex flex-wrap items-start gap-2 border border-warning/30 bg-warning/10 px-2.5 py-1.5"
           role="alert"
         >
-          <TriangleAlert size={11} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+          <CioAttention size={11} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
           <div class="min-w-0 flex-1">
             <p class="text-[0.625rem] font-semibold text-warning">
               {providerIssueTitle(composeIssue.kind)}
@@ -1100,9 +1104,9 @@
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}
-          <Loader2 size={12} class="animate-spin" />
+          <CioSpinner size={12} class="animate-spin" />
         {:else}
-          <GitPullRequest size={12} />
+          <CioPullRequest size={12} />
         {/if}
         {submitting ? 'Creating pull request…' : 'Create pull request'}
       </button>

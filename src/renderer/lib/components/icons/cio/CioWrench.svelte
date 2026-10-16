@@ -1,13 +1,22 @@
 <script lang="ts">
   import { cioStrokeWidth, type CioGlyphProps } from './glyph'
 
-  let { size = 16, strokeWidth = 1.8, class: className = '' }: CioGlyphProps = $props()
+  let { size = 16, strokeWidth = 1.8, class: className = '', ...rest }: CioGlyphProps = $props()
+
+  /** An icon is decoration unless the call site names it for a screen reader. */
+  let named = $derived(rest.role === 'img' || rest['aria-label'] !== undefined)
+
+  /** The weight as a number: the prop takes a string the way Lucide's does. */
+  let weight = $derived(typeof strokeWidth === 'number' ? strokeWidth : Number(strokeWidth) || 1.8)
 </script>
 
 <!--
   CIO · Repair
-  Repair: a handle into an open jaw. This is the engineering tool rather than
-  the office box the app drew before.
+  Repair: an open-ended spanner. The jaw is a ring with its mouth cut at the
+  far end and the shaft leaves the ring at its back, so the two read as one
+  struck thing. Two earlier drawings failed: three loose strokes with the jaw
+  closed read as a broken compass, and a ring the shaft ran into read as a
+  magnifier, which is the search mark.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -15,18 +24,27 @@
   height={size}
   fill="none"
   stroke="currentColor"
-  stroke-width={strokeWidth}
+  stroke-width={weight}
   stroke-linecap="round"
   stroke-linejoin="round"
   class={className}
-  aria-hidden="true"
+  aria-hidden={named ? undefined : 'true'}
+  {...rest}
 >
   <g
-    transform="translate(-3.343 -2.997) scale(1.1784)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.1784)}
+    transform="translate(-9.678 -5.198) scale(1.6199)"
+    stroke-width={cioStrokeWidth(weight, 1.6199)}
   >
-    <path d="M4.4 19.6 13.2 10.8" /><path d="M12.2 9.8 15.2 6.8a3.9 3.9 0 0 1 5.5 5.5l-3 3Z" /><path
-      d="M16.2 12.4 19.6 9"
-    />
+    <g transform="rotate(-45 12 12)"
+      ><rect
+        x="4.8"
+        y="10.3"
+        width="8.4"
+        height="3.4"
+        rx="1.7"
+        fill="currentColor"
+        stroke="none"
+      /></g
+    ><path d="M16.3 4.7a4 4 0 1 0 3 3" />
   </g>
 </svg>

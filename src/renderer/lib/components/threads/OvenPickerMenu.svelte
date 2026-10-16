@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import { onMount } from 'svelte'
-  import { ChevronDown, Server, Monitor } from '@lucide/svelte'
+
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenProbe, OvenState } from '$shared/ovens'
@@ -152,7 +155,7 @@
     oncontextmenu={openOvenSettings}
   >
     {#if selectedId === LOCAL_OVEN_ID}
-      <Monitor
+      <CioDisplay
         size={variant === 'segment' ? 12 : 10}
         class={variant === 'segment'
           ? 'shrink-0 text-dimmed transition-colors group-hover:text-foreground'
@@ -169,7 +172,7 @@
             ? getCustomSvgDataUrl(current.customSvg, current.color)
             : getIconSvgDataUrl(current.icon, current.color))}
       />
-    {:else}<Server
+    {:else}<CioServer
         size={variant === 'segment' ? 12 : 10}
         class={variant === 'segment'
           ? 'shrink-0 text-dimmed transition-colors group-hover:text-foreground'
@@ -181,7 +184,7 @@
       <span
         class="shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
       >
-        <ChevronDown size={11} />
+        <CioChevronDown size={11} />
       </span>
     {/if}
   </button>
@@ -227,7 +230,7 @@
             onclick={() => void choose(oven.id)}
           >
             {#if oven.id === LOCAL_OVEN_ID}
-              <Monitor size={12} class="shrink-0" />
+              <CioDisplay size={12} class="shrink-0" />
             {:else}<img
                 class="h-3 w-3 shrink-0"
                 alt=""

@@ -1,6 +1,11 @@
 <script lang="ts">
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { CheckCircle2, Cloud, Loader2, Plus, Search } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
@@ -850,7 +855,7 @@
             onclick={() => void testConnection()}
           >
             {#if testing}
-              <Loader2 size={13} class="animate-spin" />
+              <CioSpinner size={13} class="animate-spin" />
             {/if}
             Test connection
           </button>
@@ -862,7 +867,7 @@
           onclick={() => void (mode === 'provider' ? saveProvider() : saveContainer())}
         >
           {#if saving}
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
           {/if}
           {mode === 'provider'
             ? createMode === 'reuse'
@@ -934,7 +939,7 @@
               </span>
             </span>
             {#if isSelected}
-              <CheckCircle2 size={15} class="shrink-0 text-primary" />
+              <CioCheckCircle size={15} class="shrink-0 text-primary" />
             {/if}
           </button>
         {/each}
@@ -1081,7 +1086,7 @@
     <div class="space-y-4">
       {#if !canAddContainer}
         <div class="space-y-3 border bg-elevated px-4 py-6 text-center">
-          <Cloud size={20} class="mx-auto text-dimmed" />
+          <CioCloud size={20} class="mx-auto text-dimmed" />
           <p class="text-xs text-muted">
             Attach a provider account first, then add a container to it.
           </p>
@@ -1136,7 +1141,7 @@
                 ]} account, then continue adding containers"
                 onclick={() => addAccountForContainerProvider()}
               >
-                <Plus size={13} />
+                <CioPlus size={13} />
                 New account
               </button>
             {/if}
@@ -1152,7 +1157,7 @@
         {#if containerProviderKind !== ''}
           {#if availableLoading}
             <div class="flex h-24 items-center justify-center">
-              <Loader2 size={17} class="animate-spin text-dimmed" />
+              <CioSpinner size={17} class="animate-spin text-dimmed" />
             </div>
           {:else if availableError}
             <p
@@ -1181,7 +1186,7 @@
               </div>
             {:else}
               <div class="relative">
-                <Search
+                <CioSearch
                   size={13}
                   class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
                 />
@@ -1260,7 +1265,7 @@
                         {/if}
                       </span>
                       {#if selected}
-                        <CheckCircle2 size={14} class="shrink-0 text-primary" />
+                        <CioCheckCircle size={14} class="shrink-0 text-primary" />
                       {/if}
                     </button>
                   {/each}

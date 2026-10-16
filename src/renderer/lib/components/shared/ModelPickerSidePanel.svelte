@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
   import { Popover } from 'bits-ui'
-  import { ChevronRight, Layers, ListFilter } from '@lucide/svelte'
+
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { activeModelProfile } from '$shared/model-profiles'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
@@ -252,9 +255,9 @@
         onkeydown={onPanelKeydown}
       >
         {#if profiles}
-          <Layers size={11} class="shrink-0" />
+          <CioLayers size={11} class="shrink-0" />
         {:else}
-          <ListFilter size={11} class="shrink-0" />
+          <CioFilter size={11} class="shrink-0" />
         {/if}
         <span class="min-w-0 flex-auto truncate">{rowLabel}</span>
         <span class="ml-auto flex shrink-0 items-center gap-1.5">
@@ -270,11 +273,11 @@
               class="flex items-center gap-1 bg-raised px-1 py-px text-[0.5625rem] font-medium text-primary"
               title={`Model list narrowed to ${filter.label}`}
             >
-              <ListFilter size={10} />
+              <CioFilter size={10} />
               {filter.selected.size}
             </span>
           {/if}
-          <ChevronRight size={11} class="text-dimmed" />
+          <CioForward size={11} class="text-dimmed" />
         </span>
       </Popover.Trigger>
 
@@ -352,7 +355,7 @@
           title="Show every harness"
           onclick={filter.onClear}
         >
-          <ListFilter size={10} class="shrink-0" />
+          <CioFilter size={10} class="shrink-0" />
           All
         </button>
         {#each filter.options as option (option.id)}

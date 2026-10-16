@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Layers, LayoutGrid, Star } from '@lucide/svelte'
+  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+  import { LayoutGrid } from '@lucide/svelte'
   import RailHighlight from '../layout/RailHighlight.svelte'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import type { PickerHarnessOption, PickerRailView } from './model-picker-helpers'
@@ -66,7 +68,7 @@
       aria-current={isActive('favorites') ? 'true' : undefined}
       onclick={() => onSelect({ kind: 'favorites' })}
     >
-      <Star size={16} strokeWidth={1.8} />
+      <CioStar size={16} strokeWidth={1.8} />
     </button>
   {/if}
 
@@ -79,7 +81,7 @@
       aria-current={isActive('profiles') ? 'true' : undefined}
       onclick={() => onSelect({ kind: 'profiles' })}
     >
-      <Layers size={16} strokeWidth={1.8} />
+      <CioLayers size={16} strokeWidth={1.8} />
     </button>
   {/if}
 

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Ellipsis, MoreVertical } from '@lucide/svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import { MoreVertical } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
 
@@ -64,7 +65,7 @@
     {#if vertical}
       <MoreVertical size={13} />
     {:else}
-      <Ellipsis size={13} />
+      <CioEllipsis size={13} />
     {/if}
   </DropdownMenu.Trigger>
 

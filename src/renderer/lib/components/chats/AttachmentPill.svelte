@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { AudioLines, FileText, Image as ImageIcon, Video, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import { AudioLines, Image as ImageIcon, Video } from '@lucide/svelte'
   import { attachmentPreviewKind } from '$lib/mime'
   import type { PromptAttachment } from '$shared/types'
 
@@ -42,7 +44,7 @@
     {:else if previewKind === 'audio'}
       <AudioLines size={11} class="shrink-0" />
     {:else}
-      <FileText size={11} class="shrink-0" />
+      <CioFileText size={11} class="shrink-0" />
     {/if}
     <span class="max-w-32 truncate">{name}</span>
   {/snippet}
@@ -69,7 +71,7 @@
       aria-label={`Remove ${name}`}
       onclick={onRemove}
     >
-      <X size={11} />
+      <CioClose size={11} />
     </button>
   {/if}
 </div>

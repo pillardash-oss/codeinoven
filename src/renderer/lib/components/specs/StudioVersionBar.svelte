@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Archive, Bell, Check, ChevronDown, CircleDot, History, Pencil, Save, TriangleAlert } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioDot from '$lib/components/icons/cio/CioDot.svelte'
+  import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
+  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
   import { DropdownMenu } from 'bits-ui'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
@@ -51,11 +59,11 @@
   function statusIcon(statusLabel: string | undefined): Component | null {
     if (!statusLabel) return null
     const label = statusLabel.toLowerCase()
-    if (/approv|final|passed|complete|sign/.test(label)) return Check
-    if (/rework|required|fail|stop/.test(label)) return TriangleAlert
-    if (/supersed|archiv/.test(label)) return Archive
-    if (/draft|pending|review/.test(label)) return Pencil
-    if (/progress|running|active|implement/.test(label)) return CircleDot
+    if (/approv|final|passed|complete|sign/.test(label)) return CioCheck
+    if (/rework|required|fail|stop/.test(label)) return CioAttention
+    if (/supersed|archiv/.test(label)) return CioArchive
+    if (/draft|pending|review/.test(label)) return CioPencil
+    if (/progress|running|active|implement/.test(label)) return CioDot
     return null
   }
 
@@ -63,50 +71,54 @@
 </script>
 
 {#if versions.length > 1 && onSelectVersion}
-<DropdownMenu.Root>
-  <DropdownMenu.Trigger
-    class="flex items-center gap-1 px-1.5 py-1 hover:bg-elevated hover:text-foreground"
-    title={versionMenuTitle}
-  >
-    <History size={12} />
-    <span class="version-word">Version</span>
-    {currentVersion}
-    <ChevronDown size={11} />
-  </DropdownMenu.Trigger>
-  <DropdownMenu.Portal>
-    <DropdownMenu.Content
-      side="bottom"
-      align="start"
-      sideOffset={4}
-      collisionPadding={8}
-      strategy="fixed"
-      class="z-50 max-h-52 min-w-44 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
+  <DropdownMenu.Root>
+    <DropdownMenu.Trigger
+      class="flex items-center gap-1 px-1.5 py-1 hover:bg-elevated hover:text-foreground"
+      title={versionMenuTitle}
     >
-      {#each versions as version (version.version)}
-        <DropdownMenu.Item
-          class="flex cursor-pointer items-center justify-between gap-3 px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
-          textValue={`Version ${version.version}`}
-          title={versionItemTitle(version.version)}
-          onSelect={() => void onSelectVersion(version.version)}
-        >
-          <span>Version {version.version}</span>
-          <span class="flex items-center gap-1.5 capitalize text-dimmed">
-            {#if version.status}{version.status}{/if}
-            {#if version.version === currentVersion}<Check size={11} class="text-primary" />{/if}
-          </span>
-        </DropdownMenu.Item>
-      {/each}
-    </DropdownMenu.Content>
-  </DropdownMenu.Portal>
-</DropdownMenu.Root>
+      <CioHistory size={12} />
+      <span class="version-word">Version</span>
+      {currentVersion}
+      <CioChevronDown size={11} />
+    </DropdownMenu.Trigger>
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        collisionPadding={8}
+        strategy="fixed"
+        class="z-50 max-h-52 min-w-44 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
+      >
+        {#each versions as version (version.version)}
+          <DropdownMenu.Item
+            class="flex cursor-pointer items-center justify-between gap-3 px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+            textValue={`Version ${version.version}`}
+            title={versionItemTitle(version.version)}
+            onSelect={() => void onSelectVersion(version.version)}
+          >
+            <span>Version {version.version}</span>
+            <span class="flex items-center gap-1.5 capitalize text-dimmed">
+              {#if version.status}{version.status}{/if}
+              {#if version.version === currentVersion}<CioCheck
+                  size={11}
+                  class="text-primary"
+                />{/if}
+            </span>
+          </DropdownMenu.Item>
+        {/each}
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
 {/if}
-<StudioHistoryControls {canUndo} {canRedo} onUndo={onUndo} onRedo={onRedo} />
+<StudioHistoryControls {canUndo} {canRedo} {onUndo} {onRedo} />
 <span class="updated-text">Updated {formatDateTimeCompact(updatedAt)}</span>
 <span
   class="updated-icon text-muted"
   title={`Updated ${formatDateTimeCompact(updatedAt)}`}
-  aria-label={`Updated ${formatDateTimeCompact(updatedAt)}`}>
-  <Bell size={12} />
+  aria-label={`Updated ${formatDateTimeCompact(updatedAt)}`}
+>
+  <CioNotifications size={12} />
 </span>
 {#if statusLabel}
   {#if compactStatusIcon}
@@ -115,7 +127,8 @@
       class="status-icon px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {statusClass ??
         'bg-raised text-dimmed'}"
       title={statusLabel}
-      aria-label={statusLabel}>
+      aria-label={statusLabel}
+    >
       <CompactStatusIcon size={11} />
     </span>
   {/if}
@@ -123,6 +136,17 @@
     class="status-text px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {statusClass ??
       'bg-raised text-dimmed'}">{statusLabel}</span
   >
+{/if}
+{#if dirty && canSave}
+  <button
+    class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
+    disabled={busy || savePending}
+    title="Save changes (Cmd/Ctrl+S)"
+    onclick={onSave}
+  >
+    <CioSave size={11} />
+    Save
+  </button>
 {/if}
 
 <style>
@@ -152,14 +176,3 @@
     }
   }
 </style>
-{#if dirty && canSave}
-  <button
-    class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
-    disabled={busy || savePending}
-    title="Save changes (Cmd/Ctrl+S)"
-    onclick={onSave}
-  >
-    <Save size={11} />
-    Save
-  </button>
-{/if}

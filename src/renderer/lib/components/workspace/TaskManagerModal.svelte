@@ -1,22 +1,16 @@
 <script lang="ts">
-  import {
-    BatteryCharging,
-    BatteryMedium,
-    Cog,
-    Cpu,
-    GlobeCode,
-    MemoryStick,
-    MessagesSquare,
-    Network,
-    Plug,
-    RefreshCw,
-    Search,
-    Server,
-    SquareTerminal,
-    Thermometer,
-    Trash2,
-    X
-  } from '@lucide/svelte'
+  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
+  import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import { BatteryCharging, BatteryMedium, Cog, GlobeCode, Thermometer } from '@lucide/svelte'
   import type { Attachment } from 'svelte/attachments'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -809,7 +803,7 @@
       {:else if searchedServices.length === 0 && searchedProcesses.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <div class="max-w-64">
-            <Plug size={20} class="mx-auto text-muted" />
+            <CioPlug size={20} class="mx-auto text-muted" />
             {#if searchTokens.length > 0}
               <p class="mt-3 text-sm font-semibold text-foreground">No matches</p>
               <p class="mt-1 text-xs leading-relaxed text-dimmed">
@@ -861,13 +855,13 @@
               class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
             >
               {#if service.kind === 'mcp'}
-                <Plug size={15} />
+                <CioPlug size={15} />
               {:else if service.kind === 'gateway'}
-                <Network size={15} />
+                <CioNetwork size={15} />
               {:else if service.kind === 'worker'}
                 <Cog size={15} />
               {:else}
-                <Server size={15} />
+                <CioServer size={15} />
               {/if}
             </span>
             <div class="min-w-0 flex-1">
@@ -902,14 +896,14 @@
                     class="inline-flex items-center gap-1 text-muted"
                     title="CPU used by the process behind this service"
                   >
-                    <Cpu size={11} />
+                    <CioCpu size={11} />
                     {formatCpu(service.cpuPercent)}
                   </span>
                   <span
                     class="inline-flex items-center gap-1 text-muted"
                     title="Memory used by the process behind this service"
                   >
-                    <MemoryStick size={11} />
+                    <CioDisk size={11} />
                     {formatMemory(service.memoryBytes)}
                   </span>
                   <span>PID {service.pid}</span>
@@ -928,7 +922,7 @@
                 aria-label={`Stop ${service.name}`}
                 onclick={() => requestStopService(service)}
               >
-                <Trash2 size={15} />
+                <CioTrash size={15} />
               </button>
             </div>
           </li>
@@ -975,7 +969,7 @@
                 <span
                   class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
                 >
-                  <SquareTerminal size={15} />
+                  <CioTerminal size={15} />
                 </span>
               {/if}
               <div class="min-w-0 flex-1">
@@ -1015,14 +1009,14 @@
                     class="inline-flex items-center gap-1 text-muted"
                     title="CPU used by this process"
                   >
-                    <Cpu size={11} />
+                    <CioCpu size={11} />
                     {formatCpu(process.cpuPercent)}
                   </span>
                   <span
                     class="inline-flex items-center gap-1 text-muted"
                     title="Memory used by this process"
                   >
-                    <MemoryStick size={11} />
+                    <CioDisk size={11} />
                     {formatMemory(process.memoryBytes)}
                   </span>
                   <span>PID {process.pid}</span>
@@ -1058,7 +1052,7 @@
                 aria-label={`Open ${processName(process.command)} path in the in-app terminal`}
                 onclick={() => void openInTerminal(process)}
               >
-                <SquareTerminal size={15} />
+                <CioTerminal size={15} />
               </button>
               <button
                 type="button"
@@ -1070,7 +1064,7 @@
                 aria-label={`Open the thread responsible for ${processName(process.command)}`}
                 onclick={() => void navigateToProcess(process)}
               >
-                <MessagesSquare size={15} />
+                <CioChat size={15} />
               </button>
             </div>
           </li>
@@ -1158,7 +1152,7 @@
           <div
             class="flex h-7 min-w-0 flex-1 items-center gap-1.5 border border-border bg-elevated px-2"
           >
-            <Search size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+            <CioSearch size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
             <input
               {@attach focusSearchInput}
               bind:value={searchQuery}
@@ -1206,7 +1200,7 @@
             title="Total memory used by the listed processes and services"
             aria-label="Total memory used by the listed processes and services"
           >
-            <MemoryStick size={13} aria-hidden="true" />
+            <CioDisk size={13} aria-hidden="true" />
             {formatMemory(totalRamBytes)}
           </span>
           <span
@@ -1214,7 +1208,7 @@
             title="Total CPU usage of the listed processes and services"
             aria-label="Total CPU usage of the listed processes and services"
           >
-            <Cpu size={13} aria-hidden="true" />
+            <CioCpu size={13} aria-hidden="true" />
             {formatCpu(totalCpuPercent)}
           </span>
           <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
@@ -1238,7 +1232,7 @@
               aria-label="Clear the project filter"
               onclick={() => setFilterProject(null)}
             >
-              <X size={12} />
+              <CioClose size={12} />
             </button>
           {/if}
           <EnumSelect
@@ -1267,9 +1261,9 @@
           onclick={toggleSearch}
         >
           {#if searchOpen}
-            <X size={13} />
+            <CioClose size={13} />
           {:else}
-            <Search size={13} />
+            <CioSearch size={13} />
           {/if}
         </button>
       </div>
@@ -1290,7 +1284,7 @@
             ></span>
             Refresh
           {:else}
-            <RefreshCw size={13} />
+            <CioRefresh size={13} />
             Refresh
           {/if}
         </button>
@@ -1309,7 +1303,7 @@
                 aria-hidden="true"
               ></span>
             {:else}
-              <X size={14} />
+              <CioClose size={14} />
             {/if}
             End
           </button>
@@ -1320,7 +1314,7 @@
             title="Force kill the selected processes"
             onclick={requestForceEnd}
           >
-            <Trash2 size={14} />
+            <CioTrash size={14} />
             Force end
           </button>
         {/if}
@@ -1369,7 +1363,7 @@
           aria-hidden="true"
         ></span>
       {:else}
-        <Trash2 size={14} />
+        <CioTrash size={14} />
       {/if}
       Force end
     </button>

@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, ExternalLink, Plus, Search } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { Popover } from 'bits-ui'
   import { SvelteMap } from 'svelte/reactivity'
   import { utilityKindIcon, utilityKindLabel } from './utility-kind'
@@ -75,7 +78,7 @@
     title={label}
     aria-label={label}
   >
-    <Plus size={13} strokeWidth={1.8} />
+    <CioPlus size={13} strokeWidth={1.8} />
     <span class="truncate">{label}</span>
     {#if entries.length > 0}
       <span class="ml-auto shrink-0 text-[0.625rem] text-dimmed">{entries.length}</span>
@@ -95,7 +98,7 @@
       onCloseAutoFocus={(event) => event.preventDefault()}
     >
       <div class="flex items-center gap-1.5 border-b border-border px-2.5 py-2">
-        <Search size={12} strokeWidth={1.8} class="shrink-0 text-dimmed" />
+        <CioSearch size={12} strokeWidth={1.8} class="shrink-0 text-dimmed" />
         <input
           type="text"
           class="min-w-0 flex-1 bg-transparent text-[0.75rem] text-foreground outline-none placeholder:text-dimmed"
@@ -187,7 +190,7 @@
                 {/if}
               </span>
               {#if connected}
-                <Check size={12} strokeWidth={2} class="mt-1 shrink-0 text-primary" />
+                <CioCheck size={12} strokeWidth={2} class="mt-1 shrink-0 text-primary" />
               {/if}
             </button>
           {/each}
@@ -205,7 +208,7 @@
             onOpenLibrary?.()
           }}
         >
-          <ExternalLink size={12} strokeWidth={1.8} />
+          <CioExternalLink size={12} strokeWidth={1.8} />
           Manage utilities
         </button>
       {/if}

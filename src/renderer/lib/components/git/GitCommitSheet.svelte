@@ -1,8 +1,9 @@
 <script lang="ts">
+  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
-  import { GitCommit, Loader2 } from '@lucide/svelte'
 
   interface Props {
     projectId: string
@@ -70,9 +71,9 @@
         onclick={() => void commit()}
       >
         {#if committing}
-          <Loader2 size={12} class="animate-spin" />
+          <CioSpinner size={12} class="animate-spin" />
         {:else}
-          <GitCommit size={12} />
+          <CioCommit size={12} />
         {/if}
         Commit
       </button>

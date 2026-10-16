@@ -1,15 +1,12 @@
 <script lang="ts">
+  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import {
-    BookOpen,
-    Brain,
-    GlobeCode,
-    Image as ImageIcon,
-    Loader2,
-    Search,
-    Server,
-    SquareTerminal
-  } from '@lucide/svelte'
+  import { GlobeCode, Image as ImageIcon } from '@lucide/svelte'
   import { isImageMime, fileUrlToPath } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type {
@@ -467,7 +464,7 @@
           title={`No ${sourceFilterLabel(sourceFilter)} sources`}
           description="Nothing in this conversation matches the active filter."
         >
-          {#snippet icon()}<Search size={18} />{/snippet}
+          {#snippet icon()}<CioSearch size={18} />{/snippet}
           <button
             type="button"
             class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
@@ -500,7 +497,7 @@
           title="No MCP servers"
           description="No Model Context Protocol servers match this filter."
         >
-          {#snippet icon()}<Server size={18} />{/snippet}
+          {#snippet icon()}<CioServer size={18} />{/snippet}
           <button
             type="button"
             class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
@@ -530,7 +527,7 @@
           title="No skills"
           description="No reusable skills match this filter."
         >
-          {#snippet icon()}<BookOpen size={18} />{/snippet}
+          {#snippet icon()}<CioBook size={18} />{/snippet}
           <button
             type="button"
             class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
@@ -587,7 +584,7 @@
           title="No memory"
           description="Enabled memory entries for this conversation will appear here."
         >
-          {#snippet icon()}<Brain size={18} />{/snippet}
+          {#snippet icon()}<CioMemory size={18} />{/snippet}
           {#if projectId && threadId}
             <button
               type="button"
@@ -629,7 +626,7 @@
           title="No running processes"
           description="Commands started by the agent will appear here while they are still running."
         >
-          {#snippet icon()}<SquareTerminal size={18} />{/snippet}
+          {#snippet icon()}<CioTerminal size={18} />{/snippet}
         </SourcesPanelEmptyState>
       {:else}
         {#if processesError}
@@ -710,7 +707,7 @@
         disabled={deleting}
         onclick={() => void confirmDelete()}
       >
-        {#if deleting}<Loader2 size={13} class="animate-spin" />{/if}
+        {#if deleting}<CioSpinner size={13} class="animate-spin" />{/if}
         Delete
       </button>
     {/snippet}

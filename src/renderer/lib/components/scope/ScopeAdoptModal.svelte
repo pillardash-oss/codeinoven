@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { FolderInput, Loader2, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -125,7 +127,7 @@
           class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-2.5 text-xs text-muted hover:bg-overlay"
           onclick={() => void pickFolder()}
         >
-          <FolderInput size={12} />
+          <CioFolderInput size={12} />
           Pick folder
         </button>
       </div>
@@ -148,7 +150,7 @@
           class="flex items-start gap-1.5 border border-warning/30 bg-warning/10 p-3 text-xs text-warning"
           role="status"
         >
-          <TriangleAlert size={13} class="mt-0.5 shrink-0" />
+          <CioAttention size={13} class="mt-0.5 shrink-0" />
           <span>{preview.reason ?? 'This path cannot be adopted.'}</span>
         </div>
       {/if}
@@ -174,7 +176,7 @@
       onclick={() => void detect()}
     >
       {#if detecting}
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
       {/if}
       Check
     </button>

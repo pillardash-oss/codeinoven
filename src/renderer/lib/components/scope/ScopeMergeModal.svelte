@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RefreshCw } from '@lucide/svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ScopeHealthNotice from './ScopeHealthNotice.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -271,7 +271,7 @@
 
     <div class="relative space-y-2 border bg-elevated/50 p-3 text-xs text-muted">
       {#if refreshing}
-        <RefreshCw
+        <CioRefresh
           size={12}
           class="absolute right-2 top-2 animate-spin text-dimmed"
           aria-hidden="true"

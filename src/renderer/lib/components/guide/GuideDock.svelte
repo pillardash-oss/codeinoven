@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import { onMount } from 'svelte'
-  import { ArrowLeft, ArrowRight, X } from '@lucide/svelte'
+
   import { cubicOut } from 'svelte/easing'
   import { fly } from 'svelte/transition'
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
@@ -209,7 +212,7 @@
             aria-label="Close the guide"
             onclick={() => guideState.close()}
           >
-            <X size={12} />
+            <CioClose size={12} />
             Close
           </button>
           <span class="flex-1"></span>
@@ -234,7 +237,7 @@
             disabled={stopIndex === 0}
             onclick={() => guideState.back()}
           >
-            <ArrowLeft size={12} />
+            <CioArrowLeft size={12} />
             Back
           </button>
           {#if action}
@@ -245,7 +248,7 @@
               onclick={() => guideState.requestAction()}
             >
               {action.label}
-              <ArrowRight size={12} />
+              <CioArrowRight size={12} />
             </button>
           {:else}
             <button
@@ -255,7 +258,7 @@
               onclick={() => guideState.next()}
             >
               {guideState.onLastStop ? 'Done' : 'Next'}
-              {#if !guideState.onLastStop}<ArrowRight size={12} />{/if}
+              {#if !guideState.onLastStop}<CioArrowRight size={12} />{/if}
             </button>
           {/if}
         </div>

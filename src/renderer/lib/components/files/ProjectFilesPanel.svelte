@@ -1,19 +1,17 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import {
-    ChevronRight,
-    FolderTree,
-    FolderOpen,
-    Loader2,
-    Minimize2,
-    Save,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import { Minimize2 } from '@lucide/svelte'
   import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
@@ -860,7 +858,7 @@
       ]}
       role="alert"
     >
-      <TriangleAlert size={13} class="shrink-0 text-warning" />
+      <CioAttention size={13} class="shrink-0 text-warning" />
       <span class="text-[0.625rem] font-medium text-warning">Viewing an older version</span>
       <button
         type="button"
@@ -907,7 +905,7 @@
             {/if}
           </button>
           {#each breadcrumbParts as part, index (`${part}:${index}`)}
-            <ChevronRight size={10} class="shrink-0 text-dimmed" />
+            <CioForward size={10} class="shrink-0 text-dimmed" />
             {#if index === breadcrumbParts.length - 1}
               <span class="shrink-0 text-foreground">{part}</span>
             {:else}
@@ -940,7 +938,7 @@
           title={projectState.explorerVisible ? 'Hide file explorer' : 'Show file explorer'}
           onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
         >
-          <FolderTree size={15} />
+          <CioFiles size={15} />
         </button>
       </div>
 
@@ -1032,7 +1030,7 @@
       {:else if !activeTab}
         <div class="flex min-h-0 flex-1 items-center justify-center px-6">
           <div class="text-center">
-            <FolderOpen size={24} class="mx-auto mb-2 text-dimmed" />
+            <CioFolderOpen size={24} class="mx-auto mb-2 text-dimmed" />
             <p class="text-xs font-medium text-foreground">Open file</p>
             <p class="mt-1 text-[0.625rem] text-dimmed">Select a file from the workspace tree.</p>
             {#if !projectState.explorerVisible}
@@ -1071,7 +1069,7 @@
         </div>
       {:else if activeTab.loadingDiff && !checkpointDiff}
         <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading diff
         </div>
       {:else if activeTab.view === 'diff' && checkpointDiff}
@@ -1100,7 +1098,7 @@
         />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
         <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading file
         </div>
       {:else if activeTab && !activeSession && !deletedAtCheckpoint}
@@ -1269,7 +1267,7 @@
                 onclick={() =>
                   fileTab.fileTabId && closeFullscreenFileTab(fileTab.id, fileTab.fileTabId)}
               >
-                <X size={11} />
+                <CioClose size={11} />
               </button>
             {/if}
           </div>
@@ -1287,13 +1285,13 @@
         onclick={runPanelSave}
       >
         {#if activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving}
-          <Loader2 size={11} class="animate-spin" />
+          <CioSpinner size={11} class="animate-spin" />
         {:else}
-          <Save size={11} />
+          <CioSave size={11} />
         {/if}
         {#if activeFileInMergeEditor}
           {conflictSaveText}
-        {:else}Save{/if}
+        {:else}CioSave{/if}
       </button>
     {/if}
     <button
@@ -1309,7 +1307,7 @@
       title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
       onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
     >
-      <FolderTree size={15} />
+      <CioFiles size={15} />
     </button>
     <button
       type="button"

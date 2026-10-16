@@ -1,15 +1,13 @@
 <script lang="ts">
-  import {
-    ArrowUpRight,
-    Clock,
-    Ellipsis,
-    MessageSquare,
-    Paperclip,
-    Pencil,
-    Plus,
-    Send,
-    Trash2
-  } from '@lucide/svelte'
+  import CioArrowUpRight from '$lib/components/icons/cio/CioArrowUpRight.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioPaperclip from '$lib/components/icons/cio/CioPaperclip.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import AttachmentPill from '../chats/AttachmentPill.svelte'
   import CardButton from '../shared/CardButton.svelte'
   import CardStack from '../shared/CardStack.svelte'
@@ -130,7 +128,7 @@ that only needs one action has no foot, and deleting the message already lives i
 the head's menu. -->
 <CardStack
   label="Queued message"
-  icon={Clock}
+  icon={CioClock}
   {title}
   {chip}
   {stackedAbove}
@@ -151,7 +149,7 @@ the head's menu. -->
       aria-label="Add thread to Starts after"
       onclick={onAddStartAfter}
     >
-      <Plus size={13} />
+      <CioPlus size={13} />
     </button>
     <div class="relative">
       <button
@@ -167,7 +165,7 @@ the head's menu. -->
           queueMenuOpen = true
         }}
       >
-        <Ellipsis size={13} />
+        <CioEllipsis size={13} />
       </button>
       {#if queueMenuOpen}
         <button
@@ -187,7 +185,7 @@ the head's menu. -->
               role="menuitem"
               onclick={() => runMenuAction(onEdit)}
             >
-              <Pencil size={13} class="text-muted" />
+              <CioPencil size={13} class="text-muted" />
               Edit
             </button>
             <div class="mx-2 my-1 border-t"></div>
@@ -198,7 +196,7 @@ the head's menu. -->
             role="menuitem"
             onclick={() => runMenuAction(onDelete)}
           >
-            <Trash2 size={13} />
+            <CioTrash size={13} />
             Delete
           </button>
           {#if count > 1}
@@ -209,7 +207,7 @@ the head's menu. -->
               role="menuitem"
               onclick={() => runMenuAction(onDeleteAll)}
             >
-              <Trash2 size={13} />
+              <CioTrash size={13} />
               Delete all ({count})
             </button>
           {/if}
@@ -219,7 +217,7 @@ the head's menu. -->
     <CardButton
       label="Send now"
       title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end`}
-      icon={Send}
+      icon={CioSend}
       size="xs"
       disabled={!hasQueuedPayload}
       onclick={onSteer}
@@ -237,7 +235,7 @@ the head's menu. -->
                 ? `${reference.comment}\n\n${reference.text}`
                 : reference.text}
             >
-              <MessageSquare size={11} class="shrink-0 text-accent" />
+              <CioMessage size={11} class="shrink-0 text-accent" />
               <span class="font-medium text-foreground">{reference.label}</span>
               <span class="max-w-56 truncate text-muted">{reference.text}</span>
               {#if reference.comment}
@@ -256,7 +254,7 @@ the head's menu. -->
               role="group"
               onmouseenter={() => onPreloadStartAfter(dependency.id)}
             >
-              <Clock size={12} class="shrink-0 text-info" />
+              <CioClock size={12} class="shrink-0 text-info" />
               <button
                 type="button"
                 class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
@@ -273,7 +271,7 @@ the head's menu. -->
                 aria-label={`Remove ${dependency.title} from Starts after`}
                 onclick={() => onRemoveStartAfter(dependency)}
               >
-                <Trash2 size={12} />
+                <CioTrash size={12} />
               </button>
               <button
                 type="button"
@@ -282,7 +280,7 @@ the head's menu. -->
                 aria-label={`Open ${dependency.title}`}
                 onclick={() => onOpenStartAfter(dependency.id)}
               >
-                <ArrowUpRight size={12} />
+                <CioArrowUpRight size={12} />
               </button>
             </div>
           {/each}
@@ -325,7 +323,7 @@ the head's menu. -->
                   class="flex shrink-0 items-center gap-0.5 border border-border px-1 text-[0.625rem] text-dimmed"
                   title={`${entry.attachments} ${entry.attachments === 1 ? 'attachment' : 'attachments'}`}
                 >
-                  <Paperclip size={10} />
+                  <CioPaperclip size={10} />
                   {entry.attachments}
                   <span class="sr-only">attachments</span>
                 </span>

@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    Brain,
-    Image as ImageIcon,
-    Loader2,
-    RefreshCw,
-    Search,
-    SquareTerminal
-  } from '@lucide/svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import { Image as ImageIcon } from '@lucide/svelte'
   import type {
     ContextSection,
     OriginFilter,
@@ -174,7 +172,7 @@
         if (contextSection === 'memory') onMemoryRequested()
       }}
     >
-      <Brain size={12} />
+      <CioMemory size={12} />
       Contexts
       {#if contextSection === 'memory' && memoryCount > 0}
         <span class="text-[0.625rem] tabular-nums">{memoryCount}</span>
@@ -288,7 +286,7 @@
       </button>
     </div>
     <label class="relative mt-3 block">
-      <Search
+      <CioSearch
         size={13}
         class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
       />
@@ -393,9 +391,9 @@
         onclick={onRefreshProcesses}
       >
         {#if processesRefreshing}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <RefreshCw size={13} />
+          <CioRefresh size={13} />
         {/if}
         <span aria-live="polite">{processesRefreshing ? 'Refreshing…' : 'Refresh'}</span>
       </button>
@@ -408,9 +406,9 @@
           onclick={onStopAllProcesses}
         >
           {#if stoppingAll}
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
           {:else}
-            <SquareTerminal size={13} />
+            <CioTerminal size={13} />
           {/if}
           Stop all
         </button>

@@ -1,24 +1,22 @@
 <script lang="ts">
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { prefersReducedMotion } from 'svelte/motion'
   import { fade, slide } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { listRowMove } from '$lib/motion'
-  import {
-    ChevronDown,
-    Copy,
-    Ellipsis,
-    ExternalLink,
-    Folder,
-    FolderKanban,
-    FolderOpen,
-    FolderTree,
-    MessageSquare,
-    Pencil,
-    Pin,
-    PinOff,
-    Plus,
-    Trash2
-  } from '@lucide/svelte'
+  import { PinOff } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -491,7 +489,7 @@
                   onerror={projectIconOnError(scopeProject)}
                 />
               {:else}
-                <Folder size={14} class="shrink-0 text-muted" />
+                <CioFolder size={14} class="shrink-0 text-muted" />
               {/if}
               {#if scopeProject}
                 <ProjectIdentity
@@ -514,7 +512,7 @@
                     aria-label="Managed Git worktree scope on {scopeBucket.root.branch}"
                     title="Managed Git worktree scope on {scopeBucket.root.branch}"
                   >
-                    <FolderTree size={12} class="text-warning" />
+                    <CioFiles size={12} class="text-warning" />
                   </span>
                 {/if}
                 <!-- The scope itself is the menu trigger: click or right-click it to
@@ -535,7 +533,7 @@
                 class="h-5 w-5 shrink-0 text-dimmed hover:text-foreground"
                 onSwitch={onSwitchScopedProject}
               >
-                <FolderKanban size={12} />
+                <CioProjects size={12} />
               </ProjectSwitch>
             </div>
 
@@ -633,7 +631,7 @@
                           />
                         {/if}
                         {#if bucket.pinned}
-                          <Pin size={10} class="shrink-0 text-accent" aria-hidden="true" />
+                          <CioPin size={10} class="shrink-0 text-accent" aria-hidden="true" />
                         {/if}
                         {#if bucket.root.kind === 'worktree'}
                           <span
@@ -642,7 +640,7 @@
                             aria-label="Managed Git worktree scope on {bucket.root.branch}"
                             title="Managed Git worktree scope on {bucket.root.branch}"
                           >
-                            <FolderTree size={10} class="text-warning" />
+                            <CioFiles size={10} class="text-warning" />
                           </span>
                         {/if}
                         <span class="truncate">{bucket.name}</span>
@@ -794,7 +792,7 @@
           </div>
         {:else if pinnedInboxThreads.length === 0}
           <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-            <MessageSquare size={20} class="text-dimmed" />
+            <CioMessage size={20} class="text-dimmed" />
             <p class="text-xs text-muted">No chats yet</p>
             <p class="text-xs text-dimmed">Start a new chat to get going</p>
           </div>
@@ -978,7 +976,7 @@
               title="{pinnedFold.isFolded('projects-projects') ? 'Expand' : 'Fold'} Pinned Projects"
               onclick={() => pinnedFold.toggle('projects-projects')}
             >
-              <ChevronDown
+              <CioChevronDown
                 size={12}
                 class="shrink-0 text-dimmed transition-transform {pinnedFold.isFolded(
                   'projects-projects'
@@ -1051,7 +1049,7 @@
                               data-shortcut={keymapState.keysFor('nav-new-thread').join(',')}
                               onclick={() => onCreateThread(project)}
                             >
-                              <Plus size={12} />
+                              <CioPlus size={12} />
                             </button>
                             <DropdownMenu.Trigger
                               class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
@@ -1059,7 +1057,7 @@
                               title="Project options"
                               oncontextmenu={(e: MouseEvent) => e.preventDefault()}
                             >
-                              <Ellipsis size={12} />
+                              <CioEllipsis size={12} />
                             </DropdownMenu.Trigger>
                           </span>
                         {/snippet}
@@ -1194,28 +1192,28 @@
                           class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => projectDialogs.askEditProject(project.id)}
                         >
-                          <Pencil size={14} class="text-muted" />
+                          <CioPencil size={14} class="text-muted" />
                           Edit Project
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => openInEditor(project.id)}
                         >
-                          <ExternalLink size={14} class="text-muted" />
+                          <CioExternalLink size={14} class="text-muted" />
                           Open in Editor
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => copyProjectPath(project.id)}
                         >
-                          <Copy size={14} class="text-muted" />
+                          <CioCopy size={14} class="text-muted" />
                           Copy Path
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                           onSelect={() => revealProjectInFileManager(project.id)}
                         >
-                          <FolderOpen size={14} class="text-muted" />
+                          <CioFolderOpen size={14} class="text-muted" />
                           {osFileManagerLabel()}
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
@@ -1226,7 +1224,7 @@
                             <PinOff size={14} class="text-muted" />
                             Unpin Project
                           {:else}
-                            <Pin size={14} class="text-muted" />
+                            <CioPin size={14} class="text-muted" />
                             Pin Project
                           {/if}
                         </DropdownMenu.Item>
@@ -1235,7 +1233,7 @@
                           class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
                           onSelect={() => projectDialogs.askRemoveProject(project.id)}
                         >
-                          <Trash2 size={14} />
+                          <CioTrash size={14} />
                           Remove Project
                         </DropdownMenu.Item>
                       </DropdownMenu.Content>
@@ -1250,7 +1248,7 @@
         <!-- Folder tree -->
         {#if regularProjects.length === 0 && pinnedProjects.length === 0}
           <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-            <FolderOpen size={20} class="text-dimmed" />
+            <CioFolderOpen size={20} class="text-dimmed" />
             <p class="text-xs text-muted">No projects yet</p>
             <p class="text-xs text-dimmed">Add a folder to get started</p>
           </div>
@@ -1313,7 +1311,7 @@
                           data-shortcut={keymapState.keysFor('nav-new-thread').join(',')}
                           onclick={() => onCreateThread(project)}
                         >
-                          <Plus size={12} />
+                          <CioPlus size={12} />
                         </button>
                         <DropdownMenu.Trigger
                           class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
@@ -1321,7 +1319,7 @@
                           title="Project options"
                           oncontextmenu={(e: MouseEvent) => e.preventDefault()}
                         >
-                          <Ellipsis size={12} />
+                          <CioEllipsis size={12} />
                         </DropdownMenu.Trigger>
                       </span>
                     {/snippet}
@@ -1456,28 +1454,28 @@
                       class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => projectDialogs.askEditProject(project.id)}
                     >
-                      <Pencil size={14} class="text-muted" />
+                      <CioPencil size={14} class="text-muted" />
                       Edit Project
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => openInEditor(project.id)}
                     >
-                      <ExternalLink size={14} class="text-muted" />
+                      <CioExternalLink size={14} class="text-muted" />
                       Open in Editor
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => copyProjectPath(project.id)}
                     >
-                      <Copy size={14} class="text-muted" />
+                      <CioCopy size={14} class="text-muted" />
                       Copy Path
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                       onSelect={() => revealProjectInFileManager(project.id)}
                     >
-                      <FolderOpen size={14} class="text-muted" />
+                      <CioFolderOpen size={14} class="text-muted" />
                       {osFileManagerLabel()}
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
@@ -1488,7 +1486,7 @@
                         <PinOff size={14} class="text-muted" />
                         Unpin Project
                       {:else}
-                        <Pin size={14} class="text-muted" />
+                        <CioPin size={14} class="text-muted" />
                         Pin Project
                       {/if}
                     </DropdownMenu.Item>
@@ -1497,7 +1495,7 @@
                       class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
                       onSelect={() => projectDialogs.askRemoveProject(project.id)}
                     >
-                      <Trash2 size={14} />
+                      <CioTrash size={14} />
                       Remove Project
                     </DropdownMenu.Item>
                   </DropdownMenu.Content>

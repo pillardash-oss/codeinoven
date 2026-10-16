@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Play, ShieldCheck } from '@lucide/svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -87,7 +88,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Audit implementation">
     <CardHead
-      icon={ShieldCheck}
+      icon={CioShieldCheck}
       title={reworkCycle
         ? `Rework ${reworkCycle} complete   audit again`
         : 'Implementation finished'}
@@ -146,7 +147,7 @@
             <CardButton
               label={reworkCycle ? 'Audit again' : 'Audit'}
               title={reworkCycle ? 'Run the audit again' : 'Run an independent audit'}
-              icon={Play}
+              icon={CioPlay}
               variant="primary"
               disabled={busy}
               loading={busy}

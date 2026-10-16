@@ -1,20 +1,19 @@
 <script lang="ts">
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioChevronUp from '$lib/components/icons/cio/CioChevronUp.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { fly, slide } from 'svelte/transition'
-  import {
-    Bookmark,
-    ChevronDown,
-    ChevronLeft,
-    ChevronUp,
-    Ellipsis,
-    FolderPlus,
-    Globe,
-    Pencil,
-    Search,
-    Trash2,
-    X
-  } from '@lucide/svelte'
+
   import { DropdownMenu } from 'bits-ui'
   import {
     browserLibraryHost,
@@ -323,7 +322,7 @@
             title="Bookmark options"
             oncontextmenu={(event: MouseEvent) => event.preventDefault()}
           >
-            <Ellipsis size={13} />
+            <CioEllipsis size={13} />
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -342,14 +341,14 @@
                 class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                 onSelect={() => (expandedId = bookmark.id)}
               >
-                <Pencil size={13} class="shrink-0 text-muted" />
+                <CioPencil size={13} class="shrink-0 text-muted" />
                 Edit bookmark
               </DropdownMenu.Item>
               <DropdownMenu.Sub>
                 <DropdownMenu.SubTrigger
                   class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated data-[state=open]:bg-elevated"
                 >
-                  <FolderPlus size={13} class="shrink-0 text-muted" />
+                  <CioFolderPlus size={13} class="shrink-0 text-muted" />
                   Move to group
                 </DropdownMenu.SubTrigger>
                 <DropdownMenu.SubContent
@@ -384,7 +383,7 @@
                       openCreatePage(bookmark.id)
                     }}
                   >
-                    <FolderPlus size={13} class="shrink-0 text-muted" />
+                    <CioFolderPlus size={13} class="shrink-0 text-muted" />
                     New group…
                   </DropdownMenu.Item>
                 </DropdownMenu.SubContent>
@@ -394,7 +393,7 @@
                 disabled={rowIndex <= 0}
                 onSelect={() => moveUp(bookmark)}
               >
-                <ChevronUp size={13} class="shrink-0 text-muted" />
+                <CioChevronUp size={13} class="shrink-0 text-muted" />
                 Move up
               </DropdownMenu.Item>
               <DropdownMenu.Item
@@ -402,7 +401,7 @@
                 disabled={rowIndex === mates.length - 1}
                 onSelect={() => moveDown(bookmark)}
               >
-                <ChevronDown size={13} class="shrink-0 text-muted" />
+                <CioChevronDown size={13} class="shrink-0 text-muted" />
                 Move down
               </DropdownMenu.Item>
               <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
@@ -410,7 +409,7 @@
                 class="flex w-full items-center gap-2 px-2.5 py-1.5 text-xs text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
                 onSelect={() => (removingId = bookmark.id)}
               >
-                <Trash2 size={13} />
+                <CioTrash size={13} />
                 Remove bookmark
               </DropdownMenu.Item>
             </DropdownMenu.Content>
@@ -428,7 +427,7 @@
           aria-controls="bookmark-editor-{bookmark.id}"
           onclick={() => toggleExpanded(bookmark.id)}
         >
-          <ChevronDown size={13} class={expanded ? 'rotate-180' : ''} />
+          <CioChevronDown size={13} class={expanded ? 'rotate-180' : ''} />
         </button>
       {/snippet}
     </BrowserLibraryRow>
@@ -462,7 +461,7 @@
           aria-label="Back to bookmarks"
           onclick={closeCreatePage}
         >
-          <ChevronLeft size={15} />
+          <CioBack size={15} />
         </button>
         <p class="text-xs font-medium text-foreground">New group</p>
       </div>
@@ -477,7 +476,7 @@
   {:else}
     <div class="shrink-0 space-y-1.5 border-b border-border px-3 py-2">
       <div class="flex items-center gap-1.5 bg-elevated px-2.5">
-        <Search size={13} class="shrink-0 text-dimmed" />
+        <CioSearch size={13} class="shrink-0 text-dimmed" />
         <input
           type="text"
           class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
@@ -495,7 +494,7 @@
             title="Clear search"
             onclick={() => (query = '')}
           >
-            <X size={13} />
+            <CioClose size={13} />
           </button>
         {/if}
       </div>
@@ -506,20 +505,20 @@
         aria-label="Create a group for bookmarks"
         onclick={() => openCreatePage()}
       >
-        <FolderPlus size={13} />
+        <CioFolderPlus size={13} />
         New group
       </button>
     </div>
 
     {#if browserBookmarks.bookmarks.length === 0 && groups.length === 0}
       <EmptyState
-        icon={Bookmark}
+        icon={CioBookmark}
         title="No bookmarks yet"
         description="Save a page from the star beside its address, and it appears here to return to at any time."
       />
     {:else if matching.length === 0 && trimmedQuery !== ''}
       <EmptyState
-        icon={Search}
+        icon={CioSearch}
         title="No matching bookmarks"
         description="Nothing you saved matches that search."
       />
@@ -559,7 +558,7 @@
                 aria-expanded={!collapsed}
                 onclick={() => toggleGroupCollapsed(group.id)}
               >
-                <ChevronDown
+                <CioChevronDown
                   size={12}
                   class="shrink-0 text-muted {collapsed ? '-rotate-90' : ''}"
                 />
@@ -571,8 +570,7 @@
                     draggable="false"
                   />
                 {:else}
-                  <span class="h-2 w-2 shrink-0" style="background-color: {accent}"
-                  ></span>
+                  <span class="h-2 w-2 shrink-0" style="background-color: {accent}"></span>
                 {/if}
                 <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
                   {group.name}
@@ -588,7 +586,7 @@
                 aria-label={`Edit ${group.name}`}
                 onclick={() => toggleGroupEditor(group.id)}
               >
-                <Pencil size={12} />
+                <CioPencil size={12} />
               </button>
             </div>
             {#if expandedGroupId === group.id}
@@ -667,7 +665,7 @@
   {:else if bookmark.favicon}
     <img src={bookmark.favicon} alt="" class="h-4 w-4 object-contain" />
   {:else}
-    <Globe size={12} class="text-dimmed" />
+    <CioBrowser size={12} class="text-dimmed" />
   {/if}
 {/snippet}
 

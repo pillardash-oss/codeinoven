@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Code, FolderOpen, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import { Code } from '@lucide/svelte'
   import type { CustomIcon } from '$shared/types'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {
@@ -134,7 +136,7 @@
           draggable="false"
         />
       {:else}
-        <FolderOpen size={22} class="text-muted" />
+        <CioFolderOpen size={22} class="text-muted" />
       {/if}
     </div>
   </div>
@@ -211,7 +213,7 @@
           title="Upload a custom image icon"
           onclick={onUploadImage}
         >
-          <FolderOpen size={12} />
+          <CioFolderOpen size={12} />
           Upload image
         </button>
       {/if}
@@ -291,7 +293,7 @@
         title="Reset appearance"
         onclick={onReset}
       >
-        <X size={12} />
+        <CioClose size={12} />
         Reset
       </button>
     </div>

@@ -1,6 +1,8 @@
+import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
 import { createSubscriber } from 'svelte/reactivity'
 import type { Component } from 'svelte'
-import { BotMessageSquare, Download, MessageSquare, Timeline } from '@lucide/svelte'
+import { BotMessageSquare, Timeline } from '@lucide/svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {
   browserDownloads,
@@ -80,7 +82,7 @@ const NO_AUDIO_ACTIVITY: ViewAudioActivity = { families: new Set(), global: fals
 /** The three families the rail's badges and labels are keyed by. */
 const FAMILY_ICONS: Record<ContentThreadFamily, Component> = {
   projects: Timeline,
-  chats: MessageSquare,
+  chats: CioMessage,
   assistant: BotMessageSquare
 }
 
@@ -397,7 +399,7 @@ function browserTransferBadge(transfers: BrowserDownloadOutstanding): ViewBadge 
     tone: transfers.running > 0 ? 'working' : 'attention',
     count,
     label: browserTransferLabel(transfers),
-    icon: Download
+    icon: CioDownload
   }
 }
 

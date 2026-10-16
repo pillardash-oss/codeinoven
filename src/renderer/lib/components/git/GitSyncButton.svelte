@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, GitCompareArrows, GitPullRequestArrow, Loader2 } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { GitCompareArrows } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitSyncDirection } from '$shared/types'
 
@@ -38,12 +41,12 @@
     aria-label="Sync this checkout with another branch or worktree"
   >
     {#if busy}
-      <Loader2 size={11} class="animate-spin" aria-hidden="true" />
+      <CioSpinner size={11} class="animate-spin" aria-hidden="true" />
     {:else}
       <GitCompareArrows size={11} aria-hidden="true" />
     {/if}
     <span class="sync-label">Sync</span>
-    <ChevronDown size={10} class="shrink-0 text-dimmed" aria-hidden="true" />
+    <CioChevronDown size={10} class="shrink-0 text-dimmed" aria-hidden="true" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
@@ -58,16 +61,16 @@
         Sync from main
       </DropdownMenu.Item>
       <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('to')}>
-        <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        <CioPullRequest size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
         Sync to main
       </DropdownMenu.Item>
       <DropdownMenu.Separator class="my-1 h-px bg-border" />
       <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onPickPeer('from')}>
-        <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        <CioPullRequest size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
         Sync from branch…
       </DropdownMenu.Item>
       <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onPickPeer('to')}>
-        <GitPullRequestArrow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        <CioPullRequest size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
         Sync to branch…
       </DropdownMenu.Item>
     </DropdownMenu.Content>

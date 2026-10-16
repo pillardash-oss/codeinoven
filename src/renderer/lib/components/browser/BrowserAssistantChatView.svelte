@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Globe } from '@lucide/svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
   import { BrowserAssistantChatController } from './BrowserAssistantChatController.svelte'
   import { threadReveal } from '$lib/components/layout/page-reveal'
@@ -92,7 +92,7 @@
             class="size-5 shrink-0 object-contain"
           />
         {:else}
-          <Globe size={18} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioBrowser size={18} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="min-w-0 truncate">{pageLabel}</span>
         <span class="text-dimmed" aria-hidden="true">?</span>

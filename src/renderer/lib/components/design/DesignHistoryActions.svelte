@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Undo2, Redo2 } from '@lucide/svelte'
+  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+
   interface Props {
     canUndo: boolean
     canRedo: boolean
@@ -23,7 +25,7 @@
   aria-label={undoTitle}
   onclick={onUndo}
 >
-  <Undo2 size={13} />
+  <CioUndo size={13} />
   {#if labelled}<span>Undo</span>{/if}
 </button>
 <button
@@ -37,6 +39,6 @@
   aria-label={redoTitle}
   onclick={onRedo}
 >
-  <Redo2 size={13} />
+  <CioRedo size={13} />
   {#if labelled}<span>Redo</span>{/if}
 </button>

@@ -1,19 +1,16 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import { onDestroy } from 'svelte'
   import { artifactThemeStyles } from './artifact-theme'
   import { artifactKeyFor } from '$lib/artifact-element-reference'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import ArtifactInspector from './ArtifactInspector.svelte'
-  import {
-    Check,
-    Code2,
-    Copy,
-    Expand,
-    Eye,
-    SquareDashedMousePointer,
-    WrapText
-  } from '@lucide/svelte'
+  import { SquareDashedMousePointer, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
@@ -269,7 +266,7 @@
           title="Show rendered {label} preview"
           onclick={() => (showSource = false)}
         >
-          <span class="flex items-center gap-1"><Eye size={12} />Preview</span>
+          <span class="flex items-center gap-1"><CioEye size={12} />Preview</span>
         </button>
         <button
           type="button"
@@ -281,7 +278,7 @@
           title="Show {label} source"
           onclick={() => (showSource = true)}
         >
-          <span class="flex items-center gap-1"><Code2 size={12} />Code</span>
+          <span class="flex items-center gap-1"><CioCode size={12} />Code</span>
         </button>
       </div>
       <button
@@ -300,9 +297,9 @@
         onclick={() => void copySource()}
       >
         {#if copied}
-          <Check size={13} class="text-success" />
+          <CioCheck size={13} class="text-success" />
         {:else}
-          <Copy size={13} />
+          <CioCopy size={13} />
         {/if}
       </button>
       <button
@@ -311,7 +308,7 @@
         title="Expand {label}"
         onclick={() => (expanded = true)}
       >
-        <Expand size={13} />
+        <CioMaximize size={13} />
       </button>
     </div>
   </div>

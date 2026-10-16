@@ -1,7 +1,10 @@
 <script lang="ts">
   import type { CioGlyphProps } from './glyph'
 
-  let { size = 16, class: className = '' }: CioGlyphProps = $props()
+  let { size = 16, class: className = '', ...rest }: CioGlyphProps = $props()
+
+  /** An icon is decoration unless the call site names it for a screen reader. */
+  let named = $derived(rest.role === 'img' || rest['aria-label'] !== undefined)
 </script>
 
 <!--
@@ -15,7 +18,8 @@
   fill="currentColor"
   stroke="none"
   class={className}
-  aria-hidden="true"
+  aria-hidden={named ? undefined : 'true'}
+  {...rest}
 >
   <path
     fill="currentColor"

@@ -1,7 +1,13 @@
 <script lang="ts">
   import { cioStrokeWidth, type CioGlyphProps } from './glyph'
 
-  let { size = 16, strokeWidth = 1.8, class: className = '' }: CioGlyphProps = $props()
+  let { size = 16, strokeWidth = 1.8, class: className = '', ...rest }: CioGlyphProps = $props()
+
+  /** An icon is decoration unless the call site names it for a screen reader. */
+  let named = $derived(rest.role === 'img' || rest['aria-label'] !== undefined)
+
+  /** The weight as a number: the prop takes a string the way Lucide's does. */
+  let weight = $derived(typeof strokeWidth === 'number' ? strokeWidth : Number(strokeWidth) || 1.8)
 </script>
 
 <!--
@@ -16,15 +22,16 @@
   height={size}
   fill="none"
   stroke="currentColor"
-  stroke-width={strokeWidth}
+  stroke-width={weight}
   stroke-linecap="round"
   stroke-linejoin="round"
   class={className}
-  aria-hidden="true"
+  aria-hidden={named ? undefined : 'true'}
+  {...rest}
 >
   <g
     transform="translate(-2.562 -3.054) scale(1.2340)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.234)}
+    stroke-width={cioStrokeWidth(weight, 1.234)}
   >
     <rect x="4.2" y="6.4" width="11" height="14" rx="2" /><path
       d="M8.2 6.4V6a2 2 0 0 1 2-2h7.2a2 2 0 0 1 2 2v10.6a2 2 0 0 1-2 2h-.4"

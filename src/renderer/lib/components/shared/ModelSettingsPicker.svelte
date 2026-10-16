@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Gauge, Settings2, Snail, Star, Zap } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
+  import CioZap from '$lib/components/icons/cio/CioZap.svelte'
+  import { Gauge, Snail } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import type { InferenceMode } from '$shared/types'
@@ -38,7 +42,7 @@
   const speeds = [
     { id: 'normal', label: 'Standard', icon: Snail },
     { id: 'fast', label: 'Fast', icon: Gauge },
-    { id: 'ultrafast', label: 'Ultrafast', icon: Zap }
+    { id: 'ultrafast', label: 'Ultrafast', icon: CioZap }
   ] satisfies { id: InferenceMode; label: string; icon: typeof Snail }[]
   let availableSpeeds = $derived(
     speeds.filter(
@@ -68,7 +72,7 @@
     title={`Model settings: ${summary}`}
     aria-label={`Model settings: ${summary}`}
   >
-    <Settings2 size={10} class="shrink-0" />
+    <CioTabSettings size={10} class="shrink-0" />
     <currentSpeed.icon size={10} class="shrink-0" />
     {#if displayedContextWindow}<span aria-hidden="true">·</span><span
         >{contextLabel(displayedContextWindow)}</span
@@ -95,7 +99,10 @@
           {#if speed.id === 'fast'}<span class="text-[0.625rem] text-muted"
               >~{fastMultiplier}× usage</span
             >{/if}
-          {#if currentSpeed.id === speed.id}<Check size={11} class="shrink-0 text-primary" />{/if}
+          {#if currentSpeed.id === speed.id}<CioCheck
+              size={11}
+              class="shrink-0 text-primary"
+            />{/if}
           <button
             type="button"
             class="flex size-5 shrink-0 items-center justify-center text-dimmed hover:bg-overlay hover:text-primary"
@@ -114,7 +121,7 @@
               modelRuntimeDefaults.toggleSpeed(speed.id)
             }}
           >
-            <Star
+            <CioStar
               size={11}
               class={modelRuntimeDefaults.settings.inferenceMode === speed.id
                 ? 'fill-primary text-primary'
@@ -133,7 +140,7 @@
             onSelect={() => onSelectContext(tokens)}
           >
             <span class="flex-1">{contextLabel(tokens)}</span>
-            {#if tokens === displayedContextWindow}<Check
+            {#if tokens === displayedContextWindow}<CioCheck
                 size={11}
                 class="shrink-0 text-primary"
               />{/if}
@@ -155,7 +162,7 @@
                 modelRuntimeDefaults.toggleContext(tokens)
               }}
             >
-              <Star
+              <CioStar
                 size={11}
                 class={modelRuntimeDefaults.settings.contextWindow === tokens
                   ? 'fill-primary text-primary'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
 
   interface Props {
     loading: boolean
@@ -17,7 +17,7 @@
 
 {#if (loading || busy) && messageCount === 0 && !liveStreamed}
   <div class="flex items-center justify-center gap-2 py-8 text-xs text-muted">
-    <Loader2 size={13} class="animate-spin text-info" />
+    <CioSpinner size={13} class="animate-spin text-info" />
     Loading sub-agent session…
   </div>
 {:else if loadError && !busy && !liveStreamed}

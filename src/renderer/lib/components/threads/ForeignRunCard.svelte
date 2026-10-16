@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { AppWindow, ArrowRightLeft } from '@lucide/svelte'
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
+  import { ArrowRightLeft } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -41,7 +42,7 @@
 
 <CardFrame placement="replace" label="Running on another instance" {stackedAbove} {joinsBelow}>
   <CardHead
-    icon={AppWindow}
+    icon={CioWindow}
     title="Running on another instance"
     chip={{ text: 'Live elsewhere', tone: 'paused' }}
     bind:folded={foldState.folded}

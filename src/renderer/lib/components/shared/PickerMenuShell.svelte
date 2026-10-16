@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import type { Snippet } from 'svelte'
-  import { Search, X } from '@lucide/svelte'
+
   let {
     query = $bindable(''),
     menuEl = $bindable<HTMLDivElement | undefined>(),
@@ -41,7 +43,7 @@
   aria-label={label}
 >
   <div class="flex items-center gap-2 border bg-elevated px-2.5 py-1.5">
-    <Search size={13} class="shrink-0 text-dimmed" />
+    <CioSearch size={13} class="shrink-0 text-dimmed" />
     <input
       {@attach searchField}
       bind:value={query}
@@ -60,7 +62,7 @@
         onclick={() => {
           query = ''
           searchInput?.focus()
-        }}><X size={12} /></button
+        }}><CioClose size={12} /></button
       >
     {/if}
   </div>

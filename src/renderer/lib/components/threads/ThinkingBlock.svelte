@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Brain, ChevronRight } from '@lucide/svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -74,7 +75,7 @@
       title={open ? 'Hide reasoning' : 'Show reasoning'}
       onclick={() => (open = !open)}
     >
-      <Brain
+      <CioMemory
         size={13}
         class="shrink-0 text-dimmed transition-colors group-hover/think:text-muted"
       />
@@ -96,7 +97,7 @@
       {#if active}
         <span class="h-1.5 w-1.5 shrink-0 bg-info animate-pulse"></span>
       {/if}
-      <ChevronRight
+      <CioForward
         size={12}
         class="shrink-0 text-dimmed transition-transform group-hover/think:text-foreground {open
           ? 'rotate-90'

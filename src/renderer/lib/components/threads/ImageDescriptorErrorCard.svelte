@@ -1,12 +1,9 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Check,
-    Eye,
-    Image as ImageIcon,
-    ImagePlus,
-    RotateCw
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import { Image as ImageIcon, ImagePlus } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -204,7 +201,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Image descriptor error" {stackedAbove} {joinsBelow}>
     <CardHead
-      icon={request.imageId ? ImageIcon : AlertTriangle}
+      icon={request.imageId ? ImageIcon : CioAttention}
       title={cardTitle}
       chip={{ text: 'Stopped', tone: 'urgent' }}
       bind:folded={foldState.folded}
@@ -286,7 +283,7 @@
           <CardButton
             label="Ignore"
             title="Ignore and continue without the description"
-            icon={Check}
+            icon={CioCheck}
             variant="ghost"
             disabled={working}
             onclick={() => void ignore()}
@@ -305,7 +302,7 @@
             <CardButton
               label="False positive"
               title="{falsePositiveTitle} so the image descriptor is skipped for it"
-              icon={Eye}
+              icon={CioEye}
               variant="secondary"
               disabled={working}
               onclick={() => void reportFalsePositive()}
@@ -322,7 +319,7 @@
                   ? 'Retry with more time'
                   : 'Retry'}
             title={retryTitle}
-            icon={working || !visionSelection ? undefined : RotateCw}
+            icon={working || !visionSelection ? undefined : CioRefresh}
             variant="primary"
             loading={working}
             disabled={working || !visionSelection}

@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ExternalLink, Globe, Loader2 } from '@lucide/svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
 
   /**
@@ -56,7 +58,7 @@
       disabled={!githubSignIn.device || githubSignIn.handingOffToAppBrowser}
       onclick={() => void githubSignIn.openInDefaultBrowser()}
     >
-      <ExternalLink size={13} />
+      <CioExternalLink size={13} />
       Open in Default Browser
     </button>
     <button
@@ -74,10 +76,10 @@
           the alternative is a click that looks like it did nothing, which is
           exactly what a user reported when the hand-off was silent.
         -->
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Opening…
       {:else}
-        <Globe size={13} />
+        <CioBrowser size={13} />
         Open in Global CIO Browser
       {/if}
     </button>

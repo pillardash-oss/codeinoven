@@ -1,4 +1,7 @@
-import { Check, CircleDot, CircleSlash, X } from '@lucide/svelte'
+import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+import CioDot from '$lib/components/icons/cio/CioDot.svelte'
 import type {
   PrAuthorAssociation,
   PrCommentKind,
@@ -830,11 +833,11 @@ export function conversationQuoteBlock(entry: ConversationEntry): string {
   return `> **@${githubDisplayLogin(entry.author)}** wrote:\n>\n${quoted}\n\n`
 }
 
-export function checkIcon(check: PullRequestCheck): typeof Check {
-  if (check.status !== 'completed') return CircleDot
-  if (check.conclusion === 'success') return Check
-  if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return CircleSlash
-  return X
+export function checkIcon(check: PullRequestCheck): typeof CioCheck {
+  if (check.status !== 'completed') return CioDot
+  if (check.conclusion === 'success') return CioCheck
+  if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return CioBan
+  return CioClose
 }
 
 export function checkClass(check: PullRequestCheck): string {

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -26,7 +28,7 @@
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
-  import { Globe, Loader2 } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
@@ -319,7 +321,7 @@
         title="Open gateway dashboard   {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
-        <Globe size={16} />
+        <CioBrowser size={16} />
       </button>
     {/if}
 
@@ -355,7 +357,7 @@
         onclick={() => workspaceState.toggleSpecStudio?.()}
       >
         {#if workspaceState.specStudioBusy}
-          <Loader2 size={15} class="animate-spin" />
+          <CioSpinner size={15} class="animate-spin" />
         {:else}
           <!-- The specification's own mark, so the toolbox a user learns here is
                the same one a spec-ready row wears. -->

@@ -1,4 +1,15 @@
 <script lang="ts">
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import {
     invalidateAgentPluginMarket,
     loadAgentPluginDetail,
@@ -13,19 +24,7 @@
     AgentPluginMarketEntry,
     InstalledAgentPlugin
   } from '$shared/types'
-  import {
-    ArrowLeft,
-    Bookmark,
-    BookOpen,
-    Download,
-    ExternalLink,
-    Loader2,
-    RefreshCw,
-    Server,
-    Sparkles,
-    Trash2,
-    TriangleAlert
-  } from '@lucide/svelte'
+
   import { onMount } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -150,7 +149,7 @@
       aria-label={backLabel}
       onclick={onBack}
     >
-      <ArrowLeft size={13} />
+      <CioArrowLeft size={13} />
       {backLabel}
     </button>
 
@@ -184,7 +183,9 @@
             title={`Update ${entry.displayName}`}
             aria-label={`Update ${entry.displayName}`}
           >
-            {#if busy}<Loader2 size={14} class="animate-spin" />{:else}<RefreshCw size={14} />{/if}
+            {#if busy}<CioSpinner size={14} class="animate-spin" />{:else}<CioRefresh
+                size={14}
+              />{/if}
             {entry.updateAvailable ? 'Update' : 'Check for update'}
           </button>
           <button
@@ -195,7 +196,7 @@
             title={`Uninstall ${entry.displayName}`}
             aria-label={`Uninstall ${entry.displayName}`}
           >
-            <Trash2 size={14} /> Uninstall
+            <CioTrash size={14} /> Uninstall
           </button>
         {:else}
           <button
@@ -206,7 +207,9 @@
             title={`Install ${entry.displayName}`}
             aria-label={`Install ${entry.displayName}`}
           >
-            {#if busy}<Loader2 size={14} class="animate-spin" />{:else}<Download size={14} />{/if}
+            {#if busy}<CioSpinner size={14} class="animate-spin" />{:else}<CioDownload
+                size={14}
+              />{/if}
             Install
           </button>
         {/if}
@@ -222,7 +225,7 @@
             : `Bookmark ${entry.displayName}`}
           aria-pressed={entry.bookmarked}
         >
-          <Bookmark size={15} fill={entry.bookmarked ? 'currentColor' : 'none'} />
+          <CioBookmark size={15} fill={entry.bookmarked ? 'currentColor' : 'none'} />
         </button>
       </div>
     {/if}
@@ -243,7 +246,7 @@
 
       <section aria-labelledby="plugin-readme-title">
         <h2 id="plugin-readme-title" class="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <BookOpen size={14} class="text-muted" /> README
+          <CioBook size={14} class="text-muted" /> README
         </h2>
         {#if loading}
           <div class="space-y-3" aria-label="Loading plugin README">
@@ -269,7 +272,7 @@
           <ul class="space-y-3">
             {#if detail && detail.skills.length > 0}
               <li class="flex gap-2.5 text-sm">
-                <Sparkles size={15} class="mt-0.5 shrink-0 text-muted" />
+                <CioSparkles size={15} class="mt-0.5 shrink-0 text-muted" />
                 <div class="min-w-0">
                   <p class="font-medium">{detail.skills.length} skills</p>
                   <p class="break-words text-xs text-muted">{detail.skills.join(', ')}</p>
@@ -278,7 +281,7 @@
             {/if}
             {#if detail && detail.mcpServers.length > 0}
               <li class="flex gap-2.5 text-sm">
-                <Server size={15} class="mt-0.5 shrink-0 text-muted" />
+                <CioServer size={15} class="mt-0.5 shrink-0 text-muted" />
                 <div class="min-w-0">
                   <p class="font-medium">{detail.mcpServers.length} tool servers</p>
                   <p class="break-words text-xs text-muted">{detail.mcpServers.join(', ')}</p>
@@ -302,7 +305,7 @@
         {#if unsupportedComponents.length > 0 || entry.unsupportedReason}
           <section class="border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
             <p class="flex items-center gap-2 font-medium text-amber-600">
-              <TriangleAlert size={14} /> Not fully supported
+              <CioAttention size={14} /> Not fully supported
             </p>
             <p class="mt-2 text-xs text-muted">
               {entry.unsupportedReason ??
@@ -321,10 +324,7 @@
           </section>
         {/if}
 
-        <section
-          aria-labelledby="plugin-source-title"
-          class="border bg-surface p-4 text-sm"
-        >
+        <section aria-labelledby="plugin-source-title" class="border bg-surface p-4 text-sm">
           <h2 id="plugin-source-title" class="mb-3 text-sm font-semibold">Source</h2>
           <dl class="space-y-2 text-xs">
             <div>
@@ -351,7 +351,7 @@
               data-external-url={`https://github.com/${entry.source.repository}`}
               onclick={() => void openInBrowser(`https://github.com/${entry.source.repository}`)}
             >
-              Repository <ExternalLink size={12} />
+              Repository <CioExternalLink size={12} />
             </button>
             {#if entry.homepage}
               <button
@@ -362,7 +362,7 @@
                 data-external-url={entry.homepage}
                 onclick={() => void openInBrowser(entry.homepage ?? '')}
               >
-                Homepage <ExternalLink size={12} />
+                Homepage <CioExternalLink size={12} />
               </button>
             {/if}
           </div>

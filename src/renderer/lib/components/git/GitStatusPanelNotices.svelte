@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { TriangleAlert, Unplug, X } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
   import type { Snippet } from 'svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
@@ -77,7 +79,7 @@
 
 {#if gitState.githubPermission && !noticeDismissals.isDismissed(permissionId, permissionCondition)}
   <div class="mx-2 mt-2 flex items-center gap-2 border border-warning/20 bg-warning/10 px-3 py-2">
-    <Unplug size={13} class="shrink-0 text-warning" />
+    <CioUnplug size={13} class="shrink-0 text-warning" />
     <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
       {gitState.githubPermission.message}
     </p>
@@ -104,7 +106,7 @@
     class="mx-2 mt-2 flex items-start gap-2 border border-danger/20 bg-danger/10 px-3 py-2 text-danger"
     role="alert"
   >
-    <TriangleAlert size={13} class="mt-0.5 shrink-0" />
+    <CioAttention size={13} class="mt-0.5 shrink-0" />
     <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed break-words">
       {gitState.error}
     </p>
@@ -115,7 +117,7 @@
       aria-label="Dismiss Git error"
       onclick={() => (gitState.error = null)}
     >
-      <X size={13} />
+      <CioClose size={13} />
     </button>
   </div>
 {:else if remoteIssue && !noticeDismissals.isDismissed(remoteIssueId, remoteIssueCondition)}
@@ -166,7 +168,7 @@
 {#if conflictState === 'rebase' && !noticeDismissals.isDismissed(rebaseId, rebaseCondition)}
   <div class="mx-2 mt-2 border border-warning/25 bg-warning/10 px-3 py-2">
     <div class="flex items-center gap-1.5">
-      <TriangleAlert size={13} class="shrink-0 text-warning" />
+      <CioAttention size={13} class="shrink-0 text-warning" />
       <p class="flex-1 text-[0.625rem] font-semibold text-warning">Rebase in progress</p>
       <NoticeDismissButton
         id={rebaseId}

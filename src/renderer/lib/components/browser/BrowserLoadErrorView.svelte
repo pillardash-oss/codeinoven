@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ArrowLeft, LoaderCircle, RotateCw } from '@lucide/svelte'
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { BrowserLoadError } from '$shared/ipc-contract'
   import {
     browserLoadErrorCopy,
@@ -83,10 +85,10 @@
         onclick={onRetry}
       >
         {#if loading}
-          <LoaderCircle size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Reloading
         {:else}
-          <RotateCw size={13} />
+          <CioRefresh size={13} />
           Reload
         {/if}
       </button>
@@ -97,7 +99,7 @@
           title="Go back to the previous page"
           onclick={onGoBack}
         >
-          <ArrowLeft size={13} />
+          <CioArrowLeft size={13} />
           Go back
         </button>
       {/if}

@@ -1,7 +1,11 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
-  import { ChevronDown, ChevronRight, Folder, FolderOpen } from '@lucide/svelte'
-  import { GitCommit, Loader2 } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
+  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type {
     GitCommitInfo,
     GitDiff,
@@ -111,11 +115,11 @@
       onclick={() => toggleCommitDir(dir.path)}
     >
       {#if dirCollapsed}
-        <ChevronRight size={12} class="shrink-0 text-dimmed" />
-        <Folder size={13} class="shrink-0 text-dimmed" />
+        <CioForward size={12} class="shrink-0 text-dimmed" />
+        <CioFolder size={13} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronDown size={12} class="shrink-0 text-dimmed" />
-        <FolderOpen size={13} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={12} class="shrink-0 text-dimmed" />
+        <CioFolderOpen size={13} class="shrink-0 text-dimmed" />
       {/if}
       <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">{dir.name}</span>
     </button>
@@ -153,12 +157,12 @@
   <div class="p-2">
     {#if loadingCommitDiff}
       <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
         Loading diff
       </div>
     {:else if commitDiffChanges.length === 0}
       <div class="flex flex-col items-center justify-center py-12 text-center">
-        <GitCommit size={22} class="mx-auto mb-2 text-dimmed" />
+        <CioCommit size={22} class="mx-auto mb-2 text-dimmed" />
         <p class="text-xs font-medium text-muted">No file changes</p>
         <p class="mt-1 text-[0.625rem] text-dimmed">This commit has no changes.</p>
       </div>
@@ -229,7 +233,7 @@
     {#if status && changes.length === 0 && status.clean}
       <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
         <div class="mb-2 flex h-10 w-10 items-center justify-center bg-success/10">
-          <Check size={18} class="text-success" />
+          <CioCheck size={18} class="text-success" />
         </div>
         <p class="text-xs font-medium text-muted">Working tree is clean</p>
         <p class="mt-1 max-w-[26ch] text-[0.625rem] leading-relaxed text-dimmed">

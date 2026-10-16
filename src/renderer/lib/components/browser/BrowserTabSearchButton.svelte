@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Search } from '@lucide/svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
 
   /**
@@ -24,5 +24,5 @@
   aria-pressed={open}
   onclick={() => globalBrowser.toggleTabSearch()}
 >
-  <Search size={15} strokeWidth={1.8} />
+  <CioSearch size={15} strokeWidth={1.8} />
 </button>

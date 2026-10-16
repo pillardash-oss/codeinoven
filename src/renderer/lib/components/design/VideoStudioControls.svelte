@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import { onMount } from 'svelte'
-  import { AudioLines, Captions, ChevronDown, SlidersHorizontal } from '@lucide/svelte'
+  import { AudioLines, Captions, SlidersHorizontal } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
@@ -263,7 +264,7 @@
                 <span class="font-medium text-foreground">Captions</span>
                 <span class="tabular-nums text-dimmed">{studio.captions.length}</span>
               </span>
-              <ChevronDown
+              <CioChevronDown
                 size={12}
                 aria-hidden="true"
                 class={captionsOpen ? 'rotate-180 transition-transform' : 'transition-transform'}
@@ -382,7 +383,7 @@
                 <span class="font-medium text-foreground">Audio tracks</span>
                 <span class="tabular-nums text-dimmed">{studio.audioTracks.length}</span>
               </span>
-              <ChevronDown
+              <CioChevronDown
                 size={12}
                 aria-hidden="true"
                 class={tracksOpen ? 'rotate-180 transition-transform' : 'transition-transform'}

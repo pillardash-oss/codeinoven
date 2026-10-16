@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Archive, GitBranch, GitMergeConflict, GitPullRequest } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import { GitMergeConflict } from '@lucide/svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { preloadGitPanelChunk } from '$lib/sidebar-panel-preload'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -78,7 +81,7 @@
   {#if gitState.activePrConflictCount > 0}
     <GitMergeConflict size={13} class="shrink-0" />
   {:else}
-    <GitBranch size={13} class="shrink-0" />
+    <CioTabGit size={13} class="shrink-0" />
   {/if}
   {#if gitState.branch}
     <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] font-medium">
@@ -99,7 +102,7 @@
       class="flex shrink-0 items-center gap-0.5 bg-danger/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-danger"
       title={`${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution`}
     >
-      <GitPullRequest size={9} class="shrink-0" />
+      <CioPullRequest size={9} class="shrink-0" />
       {gitState.activePrConflictCount}
     </span>
   {/if}
@@ -108,7 +111,7 @@
       class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 bg-info/15 px-1.5 py-0.5 text-[0.5rem] font-semibold tabular-nums text-info ring-1 ring-info/30"
       title={`${gitState.stashes.length} stashed change${gitState.stashes.length === 1 ? '' : 's'}`}
     >
-      <Archive size={8} class="shrink-0" />
+      <CioArchive size={8} class="shrink-0" />
       {gitState.stashes.length}
     </span>
   {/if}

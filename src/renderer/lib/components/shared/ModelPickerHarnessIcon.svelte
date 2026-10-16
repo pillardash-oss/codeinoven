@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SquareTerminal } from '@lucide/svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
 
   interface Props {
@@ -19,5 +19,5 @@
     style:height={`${size}px`}
   />
 {:else}
-  <SquareTerminal {size} class="shrink-0" />
+  <CioTerminal {size} class="shrink-0" />
 {/if}

@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     cachedSkillMarketLeaderboard,
@@ -9,7 +13,7 @@
   import { installedSkillState } from '$lib/stores/installed-skills.svelte'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
-  import { BookOpen, Bookmark, Flame, Loader2, Search, TrendingUp } from '@lucide/svelte'
+  import { Flame, TrendingUp } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
@@ -22,8 +26,8 @@
 
   let { onOpenSkill, onOpenBookmarks }: Props = $props()
 
-  const views: Array<{ id: SkillMarketView; label: string; icon: typeof BookOpen }> = [
-    { id: 'all-time', label: 'All Time', icon: BookOpen },
+  const views: Array<{ id: SkillMarketView; label: string; icon: typeof CioBook }> = [
+    { id: 'all-time', label: 'All Time', icon: CioBook },
     { id: 'trending', label: 'Trending', icon: TrendingUp },
     { id: 'hot', label: 'Hot', icon: Flame }
   ]
@@ -144,15 +148,13 @@
             title="Open your bookmarked skills"
             onclick={onOpenBookmarks}
           >
-            <Bookmark size={13} />
+            <CioBookmark size={13} />
             Bookmarks
             {#if skillBookmarkState.count > 0}
               <span class="tabular-nums text-dimmed">{skillBookmarkState.count}</span>
             {/if}
           </button>
-          <span
-            class="border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted"
-          >
+          <span class="border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted">
             Top 100
           </span>
         </div>
@@ -166,7 +168,7 @@
       <form class="mt-4 flex gap-2" onsubmit={searchMarketplace}>
         <label class="relative min-w-0 flex-1">
           <span class="sr-only">Search skills marketplace</span>
-          <Search
+          <CioSearch
             size={15}
             class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
           />
@@ -183,8 +185,8 @@
           type="submit"
           disabled={loading || (query.trim().length > 0 && query.trim().length < 2)}
         >
-          {#if loading && searchMode}<Loader2 size={13} class="animate-spin" />{/if}
-          Search
+          {#if loading && searchMode}<CioSpinner size={13} class="animate-spin" />{/if}
+          CioSearch
         </button>
       </form>
 
@@ -223,12 +225,12 @@
     <div class="min-h-0 flex-1 overflow-y-auto pb-24">
       {#if loading}
         <div class="mt-2 border border-dashed p-10 text-center">
-          <Loader2 size={20} class="mx-auto animate-spin text-dimmed" />
+          <CioSpinner size={20} class="mx-auto animate-spin text-dimmed" />
           <p class="mt-2 text-xs text-dimmed">Loading skills…</p>
         </div>
       {:else if entries.length === 0}
         <div class="mt-2 border border-dashed p-10 text-center">
-          <Search size={20} class="mx-auto text-dimmed" />
+          <CioSearch size={20} class="mx-auto text-dimmed" />
           <p class="mt-2 text-sm font-medium">No skills found</p>
           <p class="mt-1 text-xs text-dimmed">Try a broader search.</p>
         </div>

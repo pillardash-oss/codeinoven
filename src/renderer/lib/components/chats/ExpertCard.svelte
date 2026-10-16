@@ -1,13 +1,11 @@
 <script lang="ts">
-  import {
-    AudioLines,
-    Clapperboard,
-    Maximize2,
-    Palette,
-    PencilRuler,
-    Settings2,
-    Users
-  } from '@lucide/svelte'
+  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
+  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
+  import CioDesign from '$lib/components/icons/cio/CioDesign.svelte'
+  import type { Component } from 'svelte'
+  import { AudioLines, Users } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import { slide } from 'svelte/transition'
   import CardHead from '../shared/CardHead.svelte'
@@ -63,10 +61,10 @@
   let folded = $state(false)
 
   /** The craft's own icon, so a row reads as work rather than as a file type. */
-  const CRAFT_ICON: Record<DesignAssignmentOutput, typeof PencilRuler> = {
-    text: PencilRuler,
-    image: Palette,
-    video: Clapperboard,
+  const CRAFT_ICON: Record<DesignAssignmentOutput, Component> = {
+    text: CioDesign,
+    image: CioPalette,
+    video: CioClapper,
     audio: AudioLines
   }
 
@@ -107,7 +105,7 @@ are the shared card shape. -->
         aria-label="Open the expert list full screen"
         onclick={() => (fullscreen = true)}
       >
-        <Maximize2 size={13} />
+        <CioMaximize size={13} />
       </button>
     {/snippet}
   </CardHead>
@@ -169,7 +167,7 @@ are the shared card shape. -->
             variant="secondary"
             label="Manage experts"
             title="Open Settings, Design to change who does each craft"
-            icon={Settings2}
+            icon={CioTabSettings}
             onclick={onOpenSettings}
           />
           <span {@attach focusPrimary}>
@@ -216,7 +214,7 @@ are the shared card shape. -->
           variant="secondary"
           label="Manage experts"
           title="Open Settings, Design to change who does each craft"
-          icon={Settings2}
+          icon={CioTabSettings}
           class="ml-auto"
           onclick={onOpenSettings}
         />

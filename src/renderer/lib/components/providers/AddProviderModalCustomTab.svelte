@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Pencil, Server } from '@lucide/svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import type { BaseUrlProvider, ProviderConnectionInfo } from '$shared/types'
 
   interface Props {
@@ -28,7 +29,7 @@
       {#each customProviders as provider (provider.id)}
         <div class="flex items-center justify-between gap-2 border bg-surface px-3 py-2">
           <div class="flex min-w-0 items-center gap-2">
-            <Server size={13} class="shrink-0 text-dimmed" />
+            <CioServer size={13} class="shrink-0 text-dimmed" />
             <span class="truncate text-xs">{provider.name}</span>
             <span
               class="truncate border border-border bg-elevated px-1.5 py-0.5 font-mono text-[0.625rem] text-dimmed"
@@ -50,7 +51,7 @@
             type="button"
             onclick={() => onEditCustom(provider)}
           >
-            <Pencil size={11} /> Edit
+            <CioPencil size={11} /> Edit
           </button>
         </div>
       {/each}

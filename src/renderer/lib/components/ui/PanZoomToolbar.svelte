@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { RotateCcw, ZoomIn, ZoomOut } from '@lucide/svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import { ZoomIn, ZoomOut } from '@lucide/svelte'
   import type { PanZoom } from '$lib/pan-zoom.svelte'
 
   interface Props {
@@ -56,6 +57,6 @@
     disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}
     onclick={() => panZoom.reset()}
   >
-    <RotateCcw size={14} />
+    <CioUndo size={14} />
   </button>
 </div>

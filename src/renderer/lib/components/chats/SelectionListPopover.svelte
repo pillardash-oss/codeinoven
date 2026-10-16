@@ -1,14 +1,10 @@
 <script lang="ts">
-  import {
-    Clapperboard,
-    FileText,
-    PenLine,
-    Pencil,
-    Shapes,
-    SquareDashedMousePointer,
-    Trash2,
-    X
-  } from '@lucide/svelte'
+  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import { Shapes, SquareDashedMousePointer } from '@lucide/svelte'
   import type { PromptReference } from '$shared/types'
   import { referenceHasEditableSurface } from '$lib/stores/response-references.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
@@ -72,7 +68,7 @@
         aria-label="Delete all attached references"
         onclick={onRemoveAll}
       >
-        <X size={12} />
+        <CioClose size={12} />
       </button>
     {/if}
   </div>
@@ -98,11 +94,11 @@
             {:else if isArtifactElement}
               <Shapes size={10} class="shrink-0 text-accent" />
             {:else if isAnnotation}
-              <FileText size={10} class="shrink-0 text-accent" />
+              <CioFileText size={10} class="shrink-0 text-accent" />
             {:else if isNote}
-              <Clapperboard size={10} class="shrink-0 text-accent" />
+              <CioClapper size={10} class="shrink-0 text-accent" />
             {:else if isMark}
-              <PenLine size={10} class="shrink-0 text-accent" />
+              <CioPencil size={10} class="shrink-0 text-accent" />
             {/if}
             <span class="truncate">{reference.label}</span>
           </p>
@@ -124,7 +120,7 @@
               aria-label={editTitle(reference)}
               onclick={() => onEdit(reference.id)}
             >
-              <Pencil size={11} />
+              <CioPencil size={11} />
             </button>
           {/if}
           <button
@@ -134,7 +130,7 @@
             aria-label={`Delete ${reference.label}`}
             onclick={() => onRemove(reference.id)}
           >
-            <Trash2 size={11} />
+            <CioTrash size={11} />
           </button>
         </div>
       </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Info, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 
@@ -24,7 +25,7 @@
 
 {#if createError && createErrorIsNoCommits && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
   <div class="flex items-start gap-2 border border-border bg-elevated px-3 py-2.5" role="status">
-    <Info size={14} class="mt-0.5 shrink-0 text-dimmed" />
+    <CioTabInfo size={14} class="mt-0.5 shrink-0 text-dimmed" />
     <div class="min-w-0 flex-1">
       <p class="text-[0.625rem] font-semibold text-foreground">Nothing to merge</p>
       <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-dimmed">
@@ -42,7 +43,7 @@
 {:else if createError && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
   <div class="border border-danger/20 bg-danger/10 px-3 py-2.5" role="alert">
     <div class="flex items-start gap-2">
-      <TriangleAlert size={14} class="mt-0.5 shrink-0 text-danger" />
+      <CioAttention size={14} class="mt-0.5 shrink-0 text-danger" />
       <div class="min-w-0 flex-1">
         <p class="text-[0.625rem] font-semibold text-danger">Pull request was not created</p>
         <p

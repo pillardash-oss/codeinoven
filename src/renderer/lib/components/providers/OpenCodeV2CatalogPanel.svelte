@@ -1,8 +1,14 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type { OpenCodeV2Catalog, OpenCodeV2DiscoveryResult } from '$shared/types'
-  import { AlertTriangle, Boxes, Loader2, RefreshCw, Server, Sparkles } from '@lucide/svelte'
+
   import { onMount } from 'svelte'
 
   interface Props {
@@ -56,20 +62,20 @@
       onclick={() => void load(true)}
     >
       {#if loading}
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
       {:else}
-        <RefreshCw size={13} />
+        <CioRefresh size={13} />
       {/if}
     </button>
   </div>
 
   {#if loading && !result}
     <p class="flex items-center gap-2 text-xs text-dimmed">
-      <Loader2 size={13} class="animate-spin" /> Starting a private V2 server…
+      <CioSpinner size={13} class="animate-spin" /> Starting a private V2 server…
     </p>
   {:else if failure}
     <div class="flex items-start gap-1.5 border border-warning/30 bg-warning/10 p-2.5">
-      <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+      <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
       <div class="min-w-0">
         <p class="text-xs font-medium text-warning">
           {failure.reason === 'not-installed'
@@ -84,15 +90,15 @@
   {:else if catalog}
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-muted">
       <span class="flex items-center gap-1.5">
-        <Server size={12} class="text-dimmed" />
+        <CioServer size={12} class="text-dimmed" />
         v{catalog.server.version}
       </span>
       <span class="flex items-center gap-1.5">
-        <Boxes size={12} class="text-dimmed" />
+        <CioTabBoxes size={12} class="text-dimmed" />
         {catalog.providers.length} provider{catalog.providers.length === 1 ? '' : 's'}
       </span>
       <span class="flex items-center gap-1.5">
-        <Sparkles size={12} class="text-dimmed" />
+        <CioSparkles size={12} class="text-dimmed" />
         {catalog.models.length} model{catalog.models.length === 1 ? '' : 's'}
       </span>
       <span class="flex items-center gap-1.5">

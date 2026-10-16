@@ -1,7 +1,9 @@
 <script lang="ts">
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { ExternalLink, ShieldAlert } from '@lucide/svelte'
+
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { applyAppTypography } from '$lib/app-typography'
   import { TOAST_CARD_WIDTH } from '$shared/browser-overlay'
@@ -157,9 +159,9 @@
         aria-hidden="true"
       >
         {#if external}
-          <ExternalLink size={15} stroke-width={2.25} />
+          <CioExternalLink size={15} stroke-width={2.25} />
         {:else}
-          <ShieldAlert size={15} stroke-width={2.25} />
+          <CioShieldAlert size={15} stroke-width={2.25} />
         {/if}
       </span>
       <p

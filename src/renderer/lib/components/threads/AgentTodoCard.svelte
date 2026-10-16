@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ListChecks, TriangleAlert, X } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import { ListChecks } from '@lucide/svelte'
   import { fly } from 'svelte/transition'
   import CardStack from '../shared/CardStack.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
@@ -133,7 +135,7 @@
     <span class="sr-only">{counter.meaning}</span>
     {#if stoppedUnfinished}
       <span class="flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-warning">
-        <TriangleAlert size={12} class="shrink-0" />
+        <CioAttention size={12} class="shrink-0" />
         Agent did not finish their turn
       </span>
     {/if}
@@ -150,7 +152,7 @@
         title="Close task list"
         onclick={onClose}
       >
-        <X size={13} />
+        <CioClose size={13} />
       </button>
     {/if}
   {/snippet}

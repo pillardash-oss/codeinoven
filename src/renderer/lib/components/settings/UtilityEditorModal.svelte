@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import { Loader2 } from '@lucide/svelte'
+
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -788,7 +789,7 @@
   <Modal open {title} size="xl" {onClose}>
     {#if loadingNative}
       <div class="flex items-center justify-center p-10">
-        <Loader2 size={18} class="animate-spin text-dimmed" />
+        <CioSpinner size={18} class="animate-spin text-dimmed" />
       </div>
     {:else if !isNative && draft.id === null && setupPreset === null}
       <UtilityEditorModalCreateStep

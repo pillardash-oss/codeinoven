@@ -1,10 +1,8 @@
 <script lang="ts">
-  import {
-    GitCommit as GitCommitIcon,
-    ArrowDownToLine,
-    ArrowUpFromLine,
-    Loader2
-  } from '@lucide/svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import { GitCommit as GitCommitIcon } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'
@@ -128,9 +126,9 @@
       title={`${direction} ${ref}${at === null ? '' : ` on ${absoluteTime(at)}`}`}
     >
       {#if direction === 'Pushed to'}
-        <ArrowUpFromLine size={10} class="shrink-0" aria-hidden="true" />
+        <CioUpload size={10} class="shrink-0" aria-hidden="true" />
       {:else}
-        <ArrowDownToLine size={10} class="shrink-0" aria-hidden="true" />
+        <CioDownload size={10} class="shrink-0" aria-hidden="true" />
       {/if}
       {direction}
       {ref}{at === null ? '' : ` · ${formatCompactAge(at)}`}
@@ -141,7 +139,7 @@
 
 {#if loading}
   <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-    <Loader2 size={14} class="animate-spin" />
+    <CioSpinner size={14} class="animate-spin" />
     Loading history
   </div>
 {:else if rows.length === 0}
@@ -285,7 +283,7 @@
 
   {#if loadingMore}
     <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">
-      <Loader2 size={12} class="animate-spin" />
+      <CioSpinner size={12} class="animate-spin" />
       Loading older commits
     </div>
   {:else if !hasMore}

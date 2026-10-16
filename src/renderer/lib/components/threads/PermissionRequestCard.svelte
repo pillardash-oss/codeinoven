@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, CheckCheck, CornerDownRight, ShieldAlert } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
+  import { CheckCheck, CornerDownRight } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -105,7 +107,7 @@
   <!-- The card that takes the composer's place while the agent waits for a
      decision: what it wants to do, the risk it carries, and the three answers. -->
   <CardHead
-    icon={ShieldAlert}
+    icon={CioShieldAlert}
     title="Permission requested"
     chip={{
       text: 'Waiting',
@@ -273,7 +275,7 @@
             <CardButton
               label="Allow once"
               title="Allow this request once"
-              icon={Check}
+              icon={CioCheck}
               variant="primary"
               disabled={working}
               onclick={() => void allowOnce()}

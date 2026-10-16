@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { ProjectFileEntry } from '$shared/types'
   import type { ProjectFilesState } from '$lib/stores/project-files.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
@@ -211,11 +213,11 @@
         ></div>
         {#if entry.kind === 'directory'}
           {#if projectState.loadingDirectories[entry.path]}
-            <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
+            <CioSpinner size={12} class="shrink-0 animate-spin text-dimmed" />
           {:else if projectState.expandedDirectories[entry.path]}
-            <ChevronDown size={12} class="shrink-0 text-dimmed" />
+            <CioChevronDown size={12} class="shrink-0 text-dimmed" />
           {:else}
-            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+            <CioForward size={12} class="shrink-0 text-dimmed" />
           {/if}
           {#if projectState.expandedDirectories[entry.path]}
             <FolderTypeIcon name={entry.name} open size={13} />

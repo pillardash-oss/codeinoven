@@ -1,14 +1,13 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
-  import {
-    CircleCheck,
-    ExternalLink,
-    KeyRound,
-    Loader2,
-    RefreshCw,
-    TriangleAlert
-  } from '@lucide/svelte'
+
   import type { TypesafeCheckResult, TypesafeStatus } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -175,7 +174,7 @@
 
   {#if loading}
     <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading TypeSafe settings…
+      <CioSpinner size={14} class="animate-spin" /> Loading TypeSafe settings…
     </div>
   {:else}
     {#if loadError}
@@ -187,14 +186,14 @@
     <div class="space-y-3 border bg-surface p-4">
       {#if sourceLabel}
         <p class="flex items-center gap-1.5 text-xs text-muted">
-          <CircleCheck size={14} class="shrink-0 text-success" />
+          <CioCheckCircle size={14} class="shrink-0 text-success" />
           <span>CodeInOven is using {sourceLabel}.</span>
         </p>
       {/if}
 
       {#if lastFailure}
         <div class="flex items-start gap-1.5 text-xs text-danger" role="alert">
-          <TriangleAlert size={14} class="mt-0.5 shrink-0" />
+          <CioAttention size={14} class="mt-0.5 shrink-0" />
           <span>
             {lastFailure.detail}
             {#if lastFailure.requestId}
@@ -207,7 +206,7 @@
       <div class="flex flex-wrap items-end gap-2">
         <label class="min-w-64 flex-1 space-y-1 text-xs font-medium">
           <span class="flex items-center gap-1.5">
-            <KeyRound size={14} class="shrink-0" /> API key
+            <CioKey size={14} class="shrink-0" /> API key
           </span>
           <input
             class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
@@ -228,7 +227,7 @@
           onclick={() => void saveKey()}
         >
           {#if saving}
-            <Loader2 size={14} class="animate-spin" />
+            <CioSpinner size={14} class="animate-spin" />
           {/if}
           Save key
         </button>
@@ -253,9 +252,9 @@
           onclick={() => void check()}
         >
           {#if checking}
-            <Loader2 size={14} class="animate-spin" />
+            <CioSpinner size={14} class="animate-spin" />
           {:else}
-            <RefreshCw size={14} />
+            <CioRefresh size={14} />
           {/if}
           Check connection
         </button>
@@ -266,7 +265,7 @@
           data-external-url={TYPESAFE_CONSOLE_URL}
           onclick={() => void openInBrowser(TYPESAFE_CONSOLE_URL)}
         >
-          <ExternalLink size={14} /> TypeSafe console
+          <CioExternalLink size={14} /> TypeSafe console
         </button>
         {#if status?.keySource === 'device'}
           <button
@@ -282,12 +281,12 @@
 
       {#if checkResult?.ok}
         <p class="flex items-center gap-1.5 text-xs text-success">
-          <CircleCheck size={14} class="shrink-0" />
+          <CioCheckCircle size={14} class="shrink-0" />
           <span>{checkResult.model} answered in {checkResult.latencyMs} ms.</span>
         </p>
       {:else if checkResult}
         <p class="flex items-start gap-1.5 text-xs text-danger" role="alert">
-          <TriangleAlert size={14} class="mt-0.5 shrink-0" />
+          <CioAttention size={14} class="mt-0.5 shrink-0" />
           <span>
             {checkResult.detail}
             {#if checkResult.requestId}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'
@@ -518,7 +518,7 @@
                       aria-label="Close"
                       title="Close"
                     >
-                      <X size={16} />
+                      <CioClose size={16} />
                     </Dialog.Close>
                   </div>
                 </div>

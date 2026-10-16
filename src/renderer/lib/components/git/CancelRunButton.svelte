@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CircleStop, Loader2 } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { CircleStop } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { showToastError } from '$lib/stores/app-errors.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -73,7 +74,7 @@
     onclick={() => (confirmOpen = true)}
   >
     {#if busy}
-      <Loader2 size={11} class="animate-spin" />
+      <CioSpinner size={11} class="animate-spin" />
     {:else}
       <CircleStop size={11} />
     {/if}

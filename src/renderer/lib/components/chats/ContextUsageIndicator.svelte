@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    Archive,
-    BatteryCharging,
-    Brain,
-    ChevronDown,
-    ChevronRight,
-    Loader2
-  } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { BatteryCharging } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -201,7 +199,7 @@
               title={`Thinking level: ${model.thinkingLevel}`}
               aria-label={`Thinking level: ${model.thinkingLevel}`}
             >
-              <Brain size={9} />
+              <CioMemory size={9} />
               {model.thinkingLevel}
             </span>
           {/if}
@@ -230,9 +228,9 @@
       onclick={() => toggleHarness(key)}
     >
       {#if collapsed}
-        <ChevronRight size={13} class="shrink-0 text-dimmed" />
+        <CioForward size={13} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronDown size={13} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={13} class="shrink-0 text-dimmed" />
       {/if}
       <AgentIcon agentId={entry.harnessId} size={16} />
       <span class="min-w-0 truncate text-[0.625rem] font-medium text-foreground">{name}</span>
@@ -417,10 +415,10 @@
       onclick={onCompact}
     >
       {#if compacting}
-        <Loader2 size={12} class="animate-spin" />
+        <CioSpinner size={12} class="animate-spin" />
         Compacting…
       {:else}
-        <Archive size={12} />
+        <CioArchive size={12} />
         Compact Work
       {/if}
     </button>

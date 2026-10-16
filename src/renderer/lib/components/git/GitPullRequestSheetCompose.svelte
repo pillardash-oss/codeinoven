@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { CircleCheck, Loader2, Sparkles } from '@lucide/svelte'
+
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { modelKey } from '$lib/model-keys'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -100,13 +103,13 @@
     disabled={working}
   >
     {#if working}
-      <Loader2 size={11} class="animate-spin" />
+      <CioSpinner size={11} class="animate-spin" />
       <span>Composing…</span>
     {:else if composePhase === 'complete'}
-      <CircleCheck size={11} class="text-success" />
+      <CioCheckCircle size={11} class="text-success" />
       <span>Complete</span>
     {:else}
-      <Sparkles size={11} />
+      <CioSparkles size={11} />
       <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
     {/if}
   </DropdownMenu.Trigger>
@@ -162,11 +165,11 @@
           onclick={onCompose}
         >
           {#if working}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else if composePhase === 'complete'}
-            <CircleCheck size={12} />
+            <CioCheckCircle size={12} />
           {:else}
-            <Sparkles size={12} />
+            <CioSparkles size={12} />
           {/if}
           <span>{actionLabel}</span>
         </button>

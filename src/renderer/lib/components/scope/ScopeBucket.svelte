@@ -1,13 +1,11 @@
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronRight,
-    FolderTree,
-    GripVertical,
-    Pin,
-    Plus,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioGrip from '$lib/components/icons/cio/CioGrip.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import StageContainer from './StageContainer.svelte'
   import ScopeHealthNotice from './ScopeHealthNotice.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
@@ -143,7 +141,7 @@
       ondragstart={startScopeDrag}
       ondragend={() => (scopeDropPosition = null)}
     >
-      <GripVertical size={13} />
+      <CioGrip size={13} />
     </button>
     <button
       class="flex min-w-0 flex-1 items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-elevated"
@@ -152,9 +150,9 @@
       onclick={onToggle}
     >
       {#if bucket.collapsed}
-        <ChevronRight size={14} class="shrink-0 text-dimmed" />
+        <CioForward size={14} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronDown size={14} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={14} class="shrink-0 text-dimmed" />
       {/if}
       {#if bucket.iconType}
         <img
@@ -184,7 +182,7 @@
           aria-label="Pinned scope: threads never auto-clean and do not count toward the thread limit"
           title="Pinned scope: threads never auto-clean and do not count toward the thread limit"
         >
-          <Pin size={11} />
+          <CioPin size={11} />
         </span>
       {/if}
       {#if bucket.root.kind === 'worktree'}
@@ -192,7 +190,7 @@
           class="flex shrink-0 items-center gap-1 border border-overlay bg-overlay px-1 py-0.5 font-mono text-[0.5625rem] leading-none text-muted"
           title="Managed Git worktree scope on {bucket.root.branch}"
         >
-          <FolderTree size={9} class="text-warning" />
+          <CioFiles size={9} class="text-warning" />
           {bucket.root.branch}
         </span>
       {/if}
@@ -210,7 +208,7 @@
           if (repairable) void actions.repairWorktree(bucket)
         }}
       >
-        <TriangleAlert size={13} />
+        <CioAttention size={13} />
       </button>
     {/if}
 
@@ -220,7 +218,7 @@
       title="New thread in {bucket.name}"
       onclick={onCreateThread}
     >
-      <Plus size={14} />
+      <CioPlus size={14} />
     </button>
 
     <ScopeActionsMenu {bucket} {actions} />

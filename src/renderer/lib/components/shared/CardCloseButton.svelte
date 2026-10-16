@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
 
   /**
    * The close control a card head carries at its top right, before the fold.
@@ -26,5 +26,5 @@
   {title}
   aria-label={title}
 >
-  <X size={13} />
+  <CioClose size={13} />
 </button>

@@ -1,17 +1,17 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    Ban,
-    ChevronRight,
-    Gauge,
-    Maximize2,
-    Pencil,
-    RotateCcw
-  } from '@lucide/svelte'
+  import { Gauge } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
-  import AssistantIcon, { type AssistantIconMark } from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantIcon, {
+    type AssistantIconMark
+  } from '$lib/components/icons/cio/AssistantIcon.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
@@ -861,7 +861,7 @@
       aria-label="Open in full screen"
       onclick={() => (fullscreen = true)}
     >
-      <Maximize2 size={13} strokeWidth={1.8} />
+      <CioMaximize size={13} strokeWidth={1.8} />
     </button>
   </div>
 {/snippet}
@@ -1009,7 +1009,7 @@
                 disabled={running || !knowledgeComplete}
                 onclick={() => void runNow()}
               >
-                <RotateCcw size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
+                <CioUndo size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
                 Run now
               </button>
               <span class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
@@ -1154,7 +1154,7 @@
                         title={folded ? `Expand ${section.title}` : `Fold ${section.title}`}
                         onclick={() => toggleSection(section.id)}
                       >
-                        <ChevronRight
+                        <CioForward
                           size={12}
                           strokeWidth={1.8}
                           class="shrink-0 text-dimmed transition-transform duration-150 {folded
@@ -1173,7 +1173,7 @@
                           aria-label="Edit {section.title}"
                           onclick={() => startEdit(section)}
                         >
-                          <Pencil size={12} strokeWidth={1.8} />
+                          <CioPencil size={12} strokeWidth={1.8} />
                         </button>
                       {/if}
                     </div>
@@ -1265,7 +1265,7 @@
                   aria-label="The delivery channel needs a connection"
                   title="The delivery channel needs a connection"
                 >
-                  <AlertTriangle size={11} strokeWidth={2} />
+                  <CioAttention size={11} strokeWidth={2} />
                 </span>
               {/if}
             </div>
@@ -1436,7 +1436,7 @@
               {#each missedRuns as run (run.id)}
                 <div class="flex flex-col gap-1.5 bg-elevated p-2.5">
                   <div class="flex items-center gap-2">
-                    <AlertTriangle size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
+                    <CioAttention size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
                     <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
                       {run.title}
                     </span>
@@ -1461,7 +1461,7 @@
                       aria-label="Run the missed run {run.title} now"
                       onclick={() => void runMissedNow(run)}
                     >
-                      <RotateCcw size={12} strokeWidth={1.8} />
+                      <CioUndo size={12} strokeWidth={1.8} />
                       Run now
                     </button>
                   </div>
@@ -1491,9 +1491,9 @@
                     {#if issue.kind === 'Rate limited'}
                       <Gauge size={13} strokeWidth={1.8} />
                     {:else if issue.kind === 'Interrupted'}
-                      <Ban size={13} strokeWidth={1.8} />
+                      <CioBan size={13} strokeWidth={1.8} />
                     {:else}
-                      <AlertTriangle size={13} strokeWidth={1.8} />
+                      <CioAttention size={13} strokeWidth={1.8} />
                     {/if}
                   </span>
                   <span class="min-w-0 flex-1">

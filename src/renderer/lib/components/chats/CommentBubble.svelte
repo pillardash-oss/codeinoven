@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import AnnotationCommentForm from './AnnotationCommentForm.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -88,7 +88,7 @@
       aria-label="Close comment"
       onclick={onClose}
     >
-      <X size={13} />
+      <CioClose size={13} />
     </button>
   </div>
   <AnnotationCommentForm

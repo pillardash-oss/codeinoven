@@ -1,4 +1,21 @@
 <script lang="ts">
+  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
+  import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
+  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+  import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
+  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -26,28 +43,7 @@
     type SaveOvenInput
   } from '$shared/ovens'
   import type { CustomIcon } from '$shared/types'
-  import {
-    Activity,
-    AlertCircle,
-    Boxes,
-    Cable,
-    CheckCircle2,
-    Circle,
-    Clock,
-    Cpu,
-    HardDrive,
-    Loader2,
-    MemoryStick,
-    Monitor,
-    Pencil,
-    Plug,
-    Plus,
-    RefreshCw,
-    Settings2,
-    Star,
-    Terminal,
-    Trash2
-  } from '@lucide/svelte'
+  import { Activity, Cable } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
@@ -193,7 +189,7 @@
     const items: MenuItem[] = []
     items.push({
       label: 'Open Oven',
-      icon: Terminal,
+      icon: CioTerminal,
       disabled: Boolean(busy),
       onClick: () => (shellOven = oven)
     })
@@ -206,23 +202,23 @@
     if (ovenState?.defaultOvenId !== oven.id)
       items.push({
         label: 'Set as default',
-        icon: Star,
+        icon: CioStar,
         disabled: Boolean(busy),
         onClick: () => void setDefaultOven(oven.id)
       })
-    items.push({ label: 'Edit Oven', icon: Pencil, onClick: () => openEditor(oven) })
+    items.push({ label: 'Edit Oven', icon: CioPencil, onClick: () => openEditor(oven) })
     if (oven.id !== LOCAL_OVEN_ID) {
       items.push({ label: 'separator:clock', divider: true })
       items.push({
         label: 'Match your time zone',
-        icon: Clock,
+        icon: CioClock,
         disabled: Boolean(busy) || Boolean(timezoneBusy),
         onClick: () => void syncTimezone(oven)
       })
       items.push({ label: 'separator:remove', divider: true })
       items.push({
         label: 'Remove Oven',
-        icon: Trash2,
+        icon: CioTrash,
         danger: true,
         onClick: () => (pendingRemoval = oven)
       })
@@ -459,7 +455,7 @@
         { label: 'Not installed', header: true },
         {
           label: 'Install harness',
-          icon: Plus,
+          icon: CioPlus,
           disabled: busyNow,
           onClick: () => void installHarness(ovenId, row)
         }
@@ -475,14 +471,14 @@
           item?.updateAvailable && item.latestVersion
             ? `Update to ${item.latestVersion}`
             : `Update ${row.command}`,
-        icon: RefreshCw,
+        icon: CioRefresh,
         disabled: busyNow || item?.health !== 'healthy',
         onClick: () => void updateHarness(ovenId, row.harnessId)
       },
       { label: 'separator:harness', divider: true },
       {
         label: `Uninstall ${row.command}`,
-        icon: Trash2,
+        icon: CioTrash,
         danger: true,
         disabled: busyNow,
         onClick: () =>
@@ -500,7 +496,7 @@
     return [
       {
         label: 'Manage harnesses',
-        icon: Plug,
+        icon: CioPlug,
         onClick: onOpenHarnessSettings
       }
     ]
@@ -903,14 +899,14 @@
         class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
         onclick={() => (agentOpen = true)}
       >
-        <Terminal size={14} /> Add via agent
+        <CioTerminal size={14} /> Add via agent
       </button>
       <button
         type="button"
         class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => openEditor()}
       >
-        <Plus size={14} /> New Oven
+        <CioPlus size={14} /> New Oven
       </button>
     </div>
   </div>
@@ -919,7 +915,7 @@
     </p>{/if}
   {#if !ovenState}
     <p class="flex items-center gap-2 text-sm text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading Ovens
+      <CioSpinner size={14} class="animate-spin" /> Loading Ovens
     </p>
   {:else}
     <div class="space-y-3" role="list" {@attach revealOven(settingsUiState.ovenFocus, ovenState)}>
@@ -952,7 +948,7 @@
             <div class="grid grid-cols-1 items-center gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
               <div class="flex min-w-0 items-center gap-3">
                 {#if oven.id === LOCAL_OVEN_ID}
-                  <Monitor size={20} class="shrink-0 text-muted" />
+                  <CioDisplay size={20} class="shrink-0 text-muted" />
                 {:else}
                   <img
                     src={oven.imageDataUrl ??
@@ -986,16 +982,16 @@
                             ? 'border-danger/30 bg-danger/10 text-danger'
                             : 'border-border bg-elevated text-dimmed'}
                     >
-                      {#if checkingNow}<Loader2
+                      {#if checkingNow}<CioSpinner
                           size={12}
                           class="shrink-0 animate-spin"
-                        />{:else if state === 'connected'}<CheckCircle2
+                        />{:else if state === 'connected'}<CioCheckCircle
                           size={12}
                           class="shrink-0"
-                        />{:else if state === 'disconnected'}<AlertCircle
+                        />{:else if state === 'disconnected'}<CioAlertCircle
                           size={12}
                           class="shrink-0"
-                        />{:else}<Circle size={12} class="shrink-0" />{/if}
+                        />{:else}<CioCircle size={12} class="shrink-0" />{/if}
                     </SettingsStatusBadge>
                     <SettingsStatusBadge
                       label={configured ? 'Configured' : 'Not configured'}
@@ -1003,7 +999,7 @@
                         ? 'border-success/30 bg-success/10 text-success'
                         : 'border-border bg-elevated text-dimmed'}
                     >
-                      {#if configured}<Settings2 size={12} class="shrink-0" />{:else}<Circle
+                      {#if configured}<CioTabSettings size={12} class="shrink-0" />{:else}<CioCircle
                           size={12}
                           class="shrink-0"
                         />{/if}
@@ -1029,7 +1025,7 @@
                 </div>
               </div>
               <div class="flex items-center gap-2">
-                {#if busy === oven.id}<Loader2 size={14} class="animate-spin text-muted" />{/if}
+                {#if busy === oven.id}<CioSpinner size={14} class="animate-spin text-muted" />{/if}
                 {#if oven.id === LOCAL_OVEN_ID}
                   <button
                     type="button"
@@ -1037,7 +1033,7 @@
                     disabled={Boolean(busy)}
                     onclick={onOpenHarnessSettings}
                   >
-                    <Plug size={12} />Setup
+                    <CioPlug size={12} />Setup
                   </button>
                   {#if ovenState?.defaultOvenId !== oven.id}
                     <button
@@ -1046,7 +1042,7 @@
                       disabled={Boolean(busy)}
                       onclick={() => void setDefaultOven(oven.id)}
                     >
-                      <Star size={12} />Set as default
+                      <CioStar size={12} />Set as default
                     </button>
                   {/if}
                 {:else}
@@ -1056,7 +1052,7 @@
                     disabled={Boolean(busy)}
                     onclick={() => void openOvenSetup(oven)}
                   >
-                    <Terminal size={12} />{ovenSetupActionLabel(
+                    <CioTerminal size={12} />{ovenSetupActionLabel(
                       ovenSetupStore.completed[oven.id] || setupComplete[oven.id] || false
                     )}</button
                   >
@@ -1087,7 +1083,7 @@
                   <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Monitor size={14} />System
+                        <CioDisplay size={14} />System
                       </dt>
                       <dd class="text-sm font-medium text-foreground">
                         {ovenPlatformName(specs.platform)}
@@ -1099,7 +1095,7 @@
                     </div>
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Cpu size={14} />Processor
+                        <CioCpu size={14} />Processor
                       </dt>
                       <dd class="text-sm font-medium text-foreground">
                         {specs.cpuCount} logical cores
@@ -1110,7 +1106,7 @@
                     </div>
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <MemoryStick size={14} />Memory
+                        <CioDisk size={14} />Memory
                       </dt>
                       <dd class="text-sm font-medium text-foreground">
                         {bytes(specs.memoryBytes)}
@@ -1119,7 +1115,7 @@
                     </div>
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <HardDrive size={14} />Storage
+                        <CioDisk size={14} />Storage
                       </dt>
                       <dd class="text-sm font-medium text-foreground">{bytes(specs.diskBytes)}</dd>
                       <dd class="text-xs text-muted">
@@ -1129,10 +1125,7 @@
                         class="h-1 overflow-hidden bg-elevated"
                         title={usedPercent.toFixed(0) + '% storage used'}
                       >
-                        <div
-                          class="h-full bg-primary"
-                          style:width={usedPercent + '%'}
-                        ></div>
+                        <div class="h-full bg-primary" style:width={usedPercent + '%'}></div>
                       </dd>
                     </div>
                   </dl>
@@ -1143,7 +1136,7 @@
                 <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
                   <div class="space-y-1.5">
                     <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <Terminal size={14} />Service runtime
+                      <CioTerminal size={14} />Service runtime
                     </dt>
                     <dd class="text-sm font-medium text-foreground">
                       {nodeRuntimeLabel(probe, status)}
@@ -1167,7 +1160,7 @@
                   </div>
                   <div class="space-y-1.5">
                     <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                      <Boxes size={14} />Harnesses
+                      <CioTabBoxes size={14} />Harnesses
                     </dt>
                     <dd class="flex flex-wrap items-center gap-1.5">
                       {#if oven.kind !== 'local' && !probe && harnessInventory.length === 0}
@@ -1193,7 +1186,7 @@
                               <span class="text-[0.625rem] font-medium text-info">WSL</span>
                             {/if}
                             {#if harnessBusy === `${oven.id}:${row.harnessId}`}
-                              <Loader2 size={11} class="animate-spin text-muted" />
+                              <CioSpinner size={11} class="animate-spin text-muted" />
                             {:else}
                               <ThreadDropdown
                                 vertical
@@ -1366,10 +1359,8 @@
             placeholder="Pick or paste your SSH private-key path"
           /></label
         >
-        <button
-          type="button"
-          class="border px-3 py-2 text-sm"
-          onclick={() => void pickIdentity()}>Choose private-key file</button
+        <button type="button" class="border px-3 py-2 text-sm" onclick={() => void pickIdentity()}
+          >Choose private-key file</button
         >
         {#if identityValidation}<p class="text-xs text-muted" role="status">
             {identityValidation}
@@ -1450,7 +1441,7 @@
           class="border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
           disabled={Boolean(busy)}
           onclick={() => void testConnection()}
-          >{#if busy === 'test'}<Loader2 size={14} class="animate-spin" />{/if}Test connection</button
+          >{#if busy === 'test'}<CioSpinner size={14} class="animate-spin" />{/if}Test connection</button
         >
       </div>
       <div class="flex items-center gap-2">
@@ -1467,7 +1458,7 @@
           data-modal-primary
           class="flex items-center gap-2 bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
           disabled={Boolean(busy)}
-          >{#if busy === 'save'}<Loader2 size={14} class="animate-spin" />{/if}Save Oven</button
+          >{#if busy === 'save'}<CioSpinner size={14} class="animate-spin" />{/if}Save Oven</button
         >
       </div>
     </div>

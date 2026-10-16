@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { ProviderSignInController } from './provider-sign-in.svelte'
 
   /**
@@ -17,7 +17,7 @@
 
 <div class="space-y-2">
   <div class="flex items-center gap-2">
-    <Loader2 size={13} class="animate-spin text-primary" />
+    <CioSpinner size={13} class="animate-spin text-primary" />
     <p class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted" aria-live="polite">
       {oauth.status || 'Waiting for the provider…'}
     </p>

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { MousePointer2, X, PictureInPicture2 } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import { MousePointer2, PictureInPicture2 } from '@lucide/svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -470,7 +471,7 @@
         aria-label="Close computer-use preview"
         onclick={() => void pipState.dismiss()}
       >
-        <X size={13} />
+        <CioClose size={13} />
       </button>
     </div>
 

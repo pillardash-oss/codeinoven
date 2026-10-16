@@ -1,20 +1,17 @@
 <script lang="ts">
-  import {
-    Bot,
-    ChevronLeft,
-    ChevronRight,
-    GitMerge,
-    GitPullRequest,
-    GitPullRequestClosed,
-    GitPullRequestDraft,
-    Loader2,
-    Maximize2,
-    MessageSquare,
-    RefreshCw,
-    RotateCcw,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import { GitPullRequestClosed, GitPullRequestDraft } from '@lucide/svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -278,10 +275,10 @@
     })
   }
 
-  function icon(pr: PullRequestSummary): typeof GitPullRequest {
-    if (pr.state === 'merged') return GitMerge
+  function icon(pr: PullRequestSummary): typeof CioPullRequest {
+    if (pr.state === 'merged') return CioMerge
     if (pr.state === 'closed') return GitPullRequestClosed
-    return pr.draft ? GitPullRequestDraft : GitPullRequest
+    return pr.draft ? GitPullRequestDraft : CioPullRequest
   }
 
   function stateClass(pr: PullRequestSummary): string {
@@ -361,7 +358,7 @@
             aria-label="Open in full screen"
             onclick={onFullscreen}
           >
-            <Maximize2 size={12} />
+            <CioMaximize size={12} />
           </button>
         {/if}
         <button
@@ -371,7 +368,7 @@
           aria-label="Create pull request"
           onclick={onCreate}
         >
-          <GitPullRequest size={12} />
+          <CioPullRequest size={12} />
         </button>
         <button
           type="button"
@@ -381,7 +378,7 @@
           disabled={loading}
           onclick={() => void load(true)}
         >
-          <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
+          <CioRefresh size={12} class={loading ? 'animate-spin' : ''} />
         </button>
       </div>
     {/if}
@@ -396,7 +393,7 @@
       <div
         class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
       >
-        <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" />
+        <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" />
         <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
       </div>
     {/if}
@@ -414,7 +411,7 @@
       <div class="h-full overflow-y-auto {selectedItems.length > 0 ? 'pb-11' : ''}">
         {#if loading && items.length === 0}
           <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
             Loading pull requests…
           </div>
         {:else if accessError}
@@ -431,12 +428,12 @@
           </div>
         {:else if transientError && items.length === 0}
           <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-            <TriangleAlert size={18} class="text-warning" />
+            <CioAttention size={18} class="text-warning" />
             <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
           </div>
         {:else if items.length === 0}
           <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-            <GitPullRequest size={18} class="text-dimmed" />
+            <CioPullRequest size={18} class="text-dimmed" />
             <p class="text-[0.6875rem] leading-relaxed text-dimmed">
               No {state === 'all' ? '' : state} pull requests.
             </p>
@@ -608,7 +605,7 @@
                       class="flex shrink-0 items-center gap-0.5 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
                       title={agentAssignmentLabel(agentAssignment)}
                     >
-                      <Bot size={9} />
+                      <CioSubagent size={9} />
                       {agentAssignment.count}
                     </span>
                   {/if}
@@ -617,7 +614,7 @@
                       class="flex shrink-0 items-center gap-0.5 bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
                       title="This pull request has merge conflicts and needs resolution"
                     >
-                      <TriangleAlert size={9} />
+                      <CioAttention size={9} />
                       Conflicts
                     </span>
                   {/if}
@@ -641,7 +638,7 @@
                       class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
                       title={commentLabel(pr.comments)}
                     >
-                      <MessageSquare size={10} />
+                      <CioMessage size={10} />
                       {pr.comments}
                     </span>
                   {/if}
@@ -671,7 +668,7 @@
                 } without merging`}
                 onclick={() => onAction({ kind: 'close', targets: closableSelection })}
               >
-                <X size={11} />
+                <CioClose size={11} />
                 Close {closableSelection.length}
               </button>
             {/if}
@@ -684,7 +681,7 @@
                 }`}
                 onclick={() => onAction({ kind: 'reopen', targets: reopenableSelection })}
               >
-                <RotateCcw size={11} />
+                <CioUndo size={11} />
                 Reopen {reopenableSelection.length}
               </button>
             {/if}
@@ -709,7 +706,7 @@
           disabled={page === 1 || loading}
           onclick={() => onPageChange(page - 1)}
         >
-          <ChevronLeft size={12} />
+          <CioBack size={12} />
           Previous
         </button>
         <span class="text-[0.5625rem] tabular-nums text-dimmed">Page {page}</span>
@@ -722,7 +719,7 @@
           onclick={() => onPageChange(page + 1)}
         >
           Next
-          <ChevronRight size={12} />
+          <CioForward size={12} />
         </button>
       </div>
     {/if}

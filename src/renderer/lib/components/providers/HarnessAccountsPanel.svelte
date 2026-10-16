@@ -1,20 +1,18 @@
 <script lang="ts">
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
+  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+  import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import {
-    CheckCircle2,
-    KeyRound,
-    ListFilter,
-    Loader2,
-    LogIn,
-    Pencil,
-    RefreshCw,
-    Search,
-    Star,
-    Unplug,
-    UserRound,
-    X
-  } from '@lucide/svelte'
+  import { LogIn } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
@@ -528,7 +526,7 @@
 <div class="space-y-4">
   <div class="flex flex-wrap items-center gap-2">
     <div class="relative min-w-52 flex-1">
-      <Search
+      <CioSearch
         size={14}
         class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
       />
@@ -547,7 +545,7 @@
       disabled={loading || refreshing}
       onclick={() => void refreshAll()}
     >
-      <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} /> Refresh
+      <CioRefresh size={12} class={refreshing ? 'animate-spin' : ''} /> Refresh
     </button>
     <span class="min-w-28 text-right text-xs tabular-nums text-dimmed" aria-live="polite">
       {#if refreshing && usageHydrating}
@@ -571,7 +569,7 @@
         title="Show accounts for all harnesses"
         onclick={clearHarnessFilter}
       >
-        <ListFilter size={11} class="shrink-0" />
+        <CioFilter size={11} class="shrink-0" />
         All
       </button>
       {#each filterHarnesses as harness (harness.id)}
@@ -597,7 +595,7 @@
           title="Clear harness filter"
           onclick={clearHarnessFilter}
         >
-          <X size={11} /> Clear
+          <CioClose size={11} /> Clear
         </button>
       {/if}
     </div>
@@ -611,11 +609,11 @@
 
   {#if loading}
     <div class="flex h-32 items-center justify-center">
-      <Loader2 size={18} class="animate-spin text-dimmed" />
+      <CioSpinner size={18} class="animate-spin text-dimmed" />
     </div>
   {:else if refreshing && accounts.length === 0}
     <div class="flex h-32 flex-col items-center justify-center gap-2 text-center">
-      <Loader2 size={18} class="animate-spin text-dimmed" />
+      <CioSpinner size={18} class="animate-spin text-dimmed" />
       <p class="text-xs text-muted">Checking connected providers…</p>
       <p class="text-xs tabular-nums text-dimmed">
         {refreshCompleted} of {refreshTotal} checked
@@ -623,12 +621,12 @@
     </div>
   {:else if accounts.length === 0}
     <div class="border border-dashed p-8 text-center">
-      <UserRound size={20} class="mx-auto mb-2 text-dimmed" />
+      <CioPerson size={20} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-muted">No accounts have been created yet.</p>
     </div>
   {:else if filteredRows.length === 0}
     <div class="border border-dashed p-8 text-center">
-      <ListFilter size={18} class="mx-auto mb-2 text-dimmed" />
+      <CioFilter size={18} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-dimmed">
         {harnessFilterActive
           ? 'No accounts match the selected harnesses.'
@@ -726,7 +724,7 @@
                 aria-label={`Set ${account.label} as the default account for ${providerLabel(account)}`}
                 onclick={() => void setDefault(account)}
               >
-                <Star size={12} aria-hidden="true" />
+                <CioStar size={12} aria-hidden="true" />
                 Make default
               </button>
             {/if}
@@ -737,7 +735,7 @@
               aria-label={`Edit label for ${account.label}`}
               onclick={() => openEdit(account)}
             >
-              <Pencil size={12} aria-hidden="true" />
+              <CioPencil size={12} aria-hidden="true" />
               Edit
             </button>
             <button
@@ -747,7 +745,7 @@
               aria-label={`Disconnect ${account.label}`}
               onclick={() => (disconnectTarget = account)}
             >
-              <Unplug size={12} aria-hidden="true" />
+              <CioUnplug size={12} aria-hidden="true" />
               Disconnect
             </button>
           </div>
@@ -798,7 +796,7 @@
         <div class="flex items-center justify-between gap-2">
           <span class="text-xs font-medium">Credentials</span>
           {#if editStatusLoading}
-            <Loader2 size={13} class="animate-spin text-dimmed" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin text-dimmed" aria-hidden="true" />
           {/if}
         </div>
 
@@ -821,7 +819,7 @@
             class="flex items-start gap-1.5 border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
             role="status"
           >
-            <CheckCircle2 size={13} class="mt-0.5 shrink-0" aria-hidden="true" />
+            <CioCheckCircle size={13} class="mt-0.5 shrink-0" aria-hidden="true" />
             <span>{editNotice}</span>
           </p>
         {/if}
@@ -854,10 +852,10 @@
               onclick={() => void replaceApiKey()}
             >
               {#if replacingKey}
-                <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+                <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
                 Replacing…
               {:else}
-                <KeyRound size={13} aria-hidden="true" />
+                <CioKey size={13} aria-hidden="true" />
                 Replace API key
               {/if}
             </button>
@@ -910,13 +908,15 @@
       disabled={disconnecting}
       onclick={() => void disconnectAccount()}
     >
-      {#if disconnecting}<Loader2 size={13} class="animate-spin" />{:else}<Unplug size={13} />{/if}
+      {#if disconnecting}<CioSpinner size={13} class="animate-spin" />{:else}<CioUnplug
+          size={13}
+        />{/if}
       Disconnect
     </button>
   {/snippet}
 
   <div class="flex gap-2 text-sm text-muted">
-    <Unplug size={16} class="mt-0.5 shrink-0 text-danger" />
+    <CioUnplug size={16} class="mt-0.5 shrink-0 text-danger" />
     <p>
       Disconnect <strong class="text-foreground">{disconnectTarget?.label}</strong>? This logs the
       account out{#if disconnectTarget?.containerKind === 'managed'}

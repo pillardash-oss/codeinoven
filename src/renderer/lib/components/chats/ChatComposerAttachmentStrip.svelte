@@ -1,14 +1,12 @@
 <script lang="ts">
-  import {
-    Clapperboard,
-    Clock,
-    FileText,
-    HardDrive,
-    MessageSquare,
-    PenLine,
-    SquareDashedMousePointer,
-    X
-  } from '@lucide/svelte'
+  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import { SquareDashedMousePointer } from '@lucide/svelte'
   import AttachmentPill from './AttachmentPill.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
@@ -87,7 +85,7 @@
             <span
               class="flex shrink-0 items-center gap-1 border border-info/30 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-info uppercase"
             >
-              <HardDrive size={9} class="shrink-0" />
+              <CioDisk size={9} class="shrink-0" />
               <span>File System</span>
               <button
                 type="button"
@@ -96,7 +94,7 @@
                 aria-label="Turn off File System"
                 onclick={onToggleFileSystemMode}
               >
-                <X size={9} />
+                <CioClose size={9} />
               </button>
             </span>
           {/if}
@@ -124,7 +122,7 @@
                 else onOpenStartAfterPopover()
               }}
             >
-              <Clock size={10} class="shrink-0" />
+              <CioClock size={10} class="shrink-0" />
               <span
                 >Start after{startAfterThreads.length > 1
                   ? ` · ${startAfterThreads.length}`
@@ -138,7 +136,7 @@
               aria-label="Remove all Start after threads"
               onclick={onClearStartAfterThreads}
             >
-              <X size={10} />
+              <CioClose size={10} />
             </button>
           </div>
           {#if startAfterPopoverOpen}
@@ -164,7 +162,7 @@
                     aria-label={'Open ' + selectedStartAfterThread.title}
                     onclick={() => void onOpenStartAfterThread?.(selectedStartAfterThread.id)}
                   >
-                    <Clock size={12} class="shrink-0 text-info" />
+                    <CioClock size={12} class="shrink-0 text-info" />
                     <span class="min-w-0 flex-1 truncate">
                       {selectedStartAfterThread.title}
                     </span>
@@ -176,7 +174,7 @@
                     aria-label={`Remove ${selectedStartAfterThread.title} from Start after`}
                     onclick={() => onRemoveStartAfterThread(selectedStartAfterThread.id)}
                   >
-                    <X size={11} />
+                    <CioClose size={11} />
                   </button>
                 </div>
               {/each}
@@ -207,13 +205,13 @@
             {#if referenceSummary.noun === 'element'}
               <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
             {:else if referenceSummary.noun === 'annotation'}
-              <FileText size={11} class="shrink-0 text-accent" />
+              <CioFileText size={11} class="shrink-0 text-accent" />
             {:else if referenceSummary.noun === 'note'}
-              <Clapperboard size={11} class="shrink-0 text-accent" />
+              <CioClapper size={11} class="shrink-0 text-accent" />
             {:else if referenceSummary.noun === 'mark'}
-              <PenLine size={11} class="shrink-0 text-accent" />
+              <CioPencil size={11} class="shrink-0 text-accent" />
             {:else}
-              <MessageSquare size={11} class="shrink-0 text-accent" />
+              <CioMessage size={11} class="shrink-0 text-accent" />
             {/if}
             <span>
               {referenceSummary.label}
@@ -231,7 +229,7 @@
                 : 'Delete all attached references'}
               onclick={onRemoveAllReferences}
             >
-              <X size={11} />
+              <CioClose size={11} />
             </button>
           {/if}
         </div>

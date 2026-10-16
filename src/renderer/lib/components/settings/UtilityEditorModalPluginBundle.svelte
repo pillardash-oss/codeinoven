@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Upload } from '@lucide/svelte'
+  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
 
   interface Props {
     editorError: string
@@ -19,7 +19,7 @@
   <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
     <div>
       <div class="border border-dashed bg-elevated p-5">
-        <Upload size={20} class="mb-3 text-muted" />
+        <CioUpload size={20} class="mb-3 text-muted" />
         <p class="text-sm font-semibold">Import a plugin manifest</p>
         <p class="mt-1 text-xs leading-relaxed text-muted">
           A plugin bundle can install several MCP servers, skills, and web utilities together.

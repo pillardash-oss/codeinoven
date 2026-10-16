@@ -49,6 +49,7 @@ import CioDownload from './CioDownload.svelte'
 import CioEllipsis from './CioEllipsis.svelte'
 import CioExternalLink from './CioExternalLink.svelte'
 import CioEye from './CioEye.svelte'
+import CioEyeOff from './CioEyeOff.svelte'
 import CioFileCode from './CioFileCode.svelte'
 import CioFiles from './CioFiles.svelte'
 import CioFileText from './CioFileText.svelte'
@@ -94,6 +95,7 @@ import CioPlug from './CioPlug.svelte'
 import CioPlus from './CioPlus.svelte'
 import CioProjects from './CioProjects.svelte'
 import CioPullRequest from './CioPullRequest.svelte'
+import CioRedo from './CioRedo.svelte'
 import CioRefresh from './CioRefresh.svelte'
 import CioRocket from './CioRocket.svelte'
 import CioSave from './CioSave.svelte'
@@ -125,6 +127,7 @@ import CioThreads from './CioThreads.svelte'
 import CioTimerOff from './CioTimerOff.svelte'
 import CioTools from './CioTools.svelte'
 import CioTrash from './CioTrash.svelte'
+import CioUndo from './CioUndo.svelte'
 import CioUnplug from './CioUnplug.svelte'
 import CioUpload from './CioUpload.svelte'
 import CioVolume from './CioVolume.svelte'
@@ -132,6 +135,11 @@ import CioVolumeX from './CioVolumeX.svelte'
 import CioWindow from './CioWindow.svelte'
 import CioWrench from './CioWrench.svelte'
 import CioZap from './CioZap.svelte'
+import AssistantIcon from './AssistantIcon.svelte'
+import AssistantDefaultIcon from './AssistantDefaultIcon.svelte'
+import AssistantKnowledgeIcon from './AssistantKnowledgeIcon.svelte'
+import AssistantTaskIcon from './AssistantTaskIcon.svelte'
+import TriangleQuestionMark from './TriangleQuestionMark.svelte'
 
 /** Every glyph the set draws, by id. */
 export const CIO_ICONS = {
@@ -175,6 +183,7 @@ export const CIO_ICONS = {
   ellipsis: CioEllipsis,
   'external-link': CioExternalLink,
   eye: CioEye,
+  'eye-off': CioEyeOff,
   'file-code': CioFileCode,
   files: CioFiles,
   'file-text': CioFileText,
@@ -220,6 +229,7 @@ export const CIO_ICONS = {
   plus: CioPlus,
   projects: CioProjects,
   'pull-request': CioPullRequest,
+  redo: CioRedo,
   refresh: CioRefresh,
   rocket: CioRocket,
   save: CioSave,
@@ -251,13 +261,19 @@ export const CIO_ICONS = {
   'timer-off': CioTimerOff,
   tools: CioTools,
   trash: CioTrash,
+  undo: CioUndo,
   unplug: CioUnplug,
   upload: CioUpload,
   volume: CioVolume,
   'volume-x': CioVolumeX,
   window: CioWindow,
   wrench: CioWrench,
-  zap: CioZap
+  zap: CioZap,
+  assistant: AssistantIcon,
+  'assistant-default': AssistantDefaultIcon,
+  'assistant-knowledge': AssistantKnowledgeIcon,
+  'assistant-task': AssistantTaskIcon,
+  question: TriangleQuestionMark
 } as const satisfies Record<string, Component>
 
 /** The id of a glyph, which is also its key in {@link CIO_ICONS}. */

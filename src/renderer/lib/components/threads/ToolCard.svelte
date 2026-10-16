@@ -1,19 +1,14 @@
 <script lang="ts">
-  import {
-    BookOpenText,
-    CheckCircle2,
-    ChevronRight,
-    Clock,
-    CodeXml,
-    FilePenLine,
-    FilePlus2,
-    GlobeCode,
-    Loader2,
-    Search,
-    Terminal,
-    Wrench,
-    XCircle
-  } from '@lucide/svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
+  import { BookOpenText, FilePenLine, FilePlus2, GlobeCode } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -115,13 +110,13 @@
   const statusMeta = $derived.by(() => {
     switch (part.state.status) {
       case 'running':
-        return { icon: Loader2, class: 'text-info animate-spin' }
+        return { icon: CioSpinner, class: 'text-info animate-spin' }
       case 'completed':
-        return { icon: CheckCircle2, class: 'text-success' }
+        return { icon: CioCheckCircle, class: 'text-success' }
       case 'error':
-        return { icon: XCircle, class: 'text-danger' }
+        return { icon: CioCrossCircle, class: 'text-danger' }
       default:
-        return { icon: Clock, class: 'text-dimmed' }
+        return { icon: CioClock, class: 'text-dimmed' }
     }
   })
 
@@ -206,17 +201,17 @@
       open = !open
     }}
   >
-    {#if statusMeta.icon === Loader2}
-      <Loader2 size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === CheckCircle2}
-      <CheckCircle2 size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === XCircle}
-      <XCircle size={14} class="shrink-0 {statusMeta.class}" />
+    {#if statusMeta.icon === CioSpinner}
+      <CioSpinner size={14} class="shrink-0 {statusMeta.class}" />
+    {:else if statusMeta.icon === CioCheckCircle}
+      <CioCheckCircle size={14} class="shrink-0 {statusMeta.class}" />
+    {:else if statusMeta.icon === CioCrossCircle}
+      <CioCrossCircle size={14} class="shrink-0 {statusMeta.class}" />
     {:else}
-      <Clock size={14} class="shrink-0 {statusMeta.class}" />
+      <CioClock size={14} class="shrink-0 {statusMeta.class}" />
     {/if}
     {#if toolKind === 'code'}
-      <CodeXml size={12} class={kindIconClass} />
+      <CioCode size={12} class={kindIconClass} />
     {:else if toolKind === 'read'}
       <BookOpenText size={12} class={kindIconClass} />
     {:else if toolKind === 'edit'}
@@ -224,13 +219,13 @@
     {:else if toolKind === 'write'}
       <FilePlus2 size={12} class={kindIconClass} />
     {:else if toolKind === 'search'}
-      <Search size={12} class={kindIconClass} />
+      <CioSearch size={12} class={kindIconClass} />
     {:else if toolKind === 'web'}
       <GlobeCode size={12} class={kindIconClass} />
     {:else if toolKind === 'shell'}
-      <Terminal size={12} class={kindIconClass} />
+      <CioTerminal size={12} class={kindIconClass} />
     {:else}
-      <Wrench size={12} class={kindIconClass} />
+      <CioWrench size={12} class={kindIconClass} />
     {/if}
     <span class="shrink-0 font-mono font-medium">
       {codeModeLabel}
@@ -249,7 +244,7 @@
     {:else}
       <span class="flex-1"></span>
     {/if}
-    <ChevronRight
+    <CioForward
       size={13}
       class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
         ? 'rotate-90'

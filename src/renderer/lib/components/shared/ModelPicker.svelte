@@ -1,9 +1,14 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
   import { onMount, tick } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { Brain, Check, Cpu, Star, UserRound } from '@lucide/svelte'
+
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { isGeneratedAccountLabelFor } from '$shared/account-label'
   import { applyModelProfile, type ModelProfileSettings } from '$shared/model-profiles'
@@ -144,7 +149,7 @@
     onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes a model from the caller's recently-used history; when provided,
-     *  recent rows show a small "x" next to the favorite star. No confirmation  
+     *  recent rows show a small "x" next to the favorite star. No confirmation
      *  removing from history is trivially re-triggered by using the model. */
     onRemoveRecent?: (modelKey: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
@@ -720,7 +725,7 @@
         {:else if selectedHarnessIcon}
           <ModelPickerHarnessIcon {harnessId} />
         {:else}
-          <Cpu size={12} />
+          <CioCpu size={12} />
         {/if}
         <span class="min-w-0 flex-auto truncate text-left">{selectedLabelDisplay}</span>
         {#if selectedPeak}
@@ -745,7 +750,7 @@
             title="Thinking level"
             {disabled}
           >
-            <Brain size={10} class="shrink-0" />
+            <CioMemory size={10} class="shrink-0" />
             <span class="min-w-0 truncate capitalize">{currentThinkingLabel}</span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -769,7 +774,7 @@
                   }}
                 >
                   {#if active}
-                    <Check size={11} class="shrink-0 text-primary" />
+                    <CioCheck size={11} class="shrink-0 text-primary" />
                   {:else}
                     <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                   {/if}
@@ -811,7 +816,7 @@
             title="Account"
             {disabled}
           >
-            <UserRound size={10} class="shrink-0" />
+            <CioPerson size={10} class="shrink-0" />
             <span class="min-w-0 max-w-24 truncate">{selectedAccount?.label ?? 'Default'}</span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -838,7 +843,7 @@
                     }}
                   >
                     {#if active}
-                      <Check size={11} class="shrink-0 text-primary" />
+                      <CioCheck size={11} class="shrink-0 text-primary" />
                     {:else}
                       <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                     {/if}
@@ -861,7 +866,7 @@
                           void setDefaultAccount(account)
                         }}
                       >
-                        <Star size={11} />
+                        <CioStar size={11} />
                       </button>
                     {/if}
                   </DropdownMenu.Item>
@@ -883,7 +888,7 @@
           title={`Account: ${soleAccountLabel}`}
           aria-label={`Account: ${soleAccountLabel}`}
         >
-          <UserRound size={10} class="shrink-0" aria-hidden="true" />
+          <CioPerson size={10} class="shrink-0" aria-hidden="true" />
           <span class="min-w-0 max-w-24 truncate">{soleAccountLabel}</span>
         </span>
       {/if}

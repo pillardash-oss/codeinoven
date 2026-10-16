@@ -1,16 +1,11 @@
+import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
+import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
+import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
 import type { Component } from 'svelte'
-import {
-  Ban,
-  CircleAlert,
-  Clock,
-  FileWarning,
-  Globe,
-  PlugZap,
-  ServerCrash,
-  ShieldAlert,
-  Unplug,
-  WifiOff
-} from '@lucide/svelte'
+import { FileWarning, PlugZap, ServerCrash, WifiOff } from '@lucide/svelte'
 import type { BrowserLoadError } from '$shared/ipc-contract'
 
 /**
@@ -86,14 +81,14 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
   }
   if (code === 401) {
     return {
-      icon: ShieldAlert,
+      icon: CioShieldAlert,
       title: 'Sign in required',
       description: `Sign in to reach this page${host ? ` on ${host}` : ''} (${label}).`
     }
   }
   if (code === 403) {
     return {
-      icon: ShieldAlert,
+      icon: CioShieldAlert,
       title: 'Access denied',
       description: `Access to this page${host ? ` on ${host}` : ''} was refused (${label}).`
     }
@@ -107,14 +102,14 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
   }
   if (code === 408 || code === 504) {
     return {
-      icon: Clock,
+      icon: CioClock,
       title: 'The server timed out',
       description: `${host ? `The server at ${host} did` : 'The server did'} not answer in time (${label}). Try again in a moment.`
     }
   }
   if (code === 429) {
     return {
-      icon: Clock,
+      icon: CioClock,
       title: 'Too many requests',
       description: `${host ? `${host} is` : 'The server is'} rate limiting this address (${label}). Wait a moment, then reload.`
     }
@@ -164,7 +159,7 @@ function networkErrorCopy(code: number, host: string): BrowserLoadErrorCopy {
   }
   if (code === -105 || code === -137) {
     return {
-      icon: Globe,
+      icon: CioBrowser,
       title: 'Site not found',
       description: `The server could not be found${host ? ` for ${host}` : ''}. Check the address for typos.`
     }
@@ -178,28 +173,28 @@ function networkErrorCopy(code: number, host: string): BrowserLoadErrorCopy {
   }
   if (code === -101 || code === -117) {
     return {
-      icon: Unplug,
+      icon: CioUnplug,
       title: 'Connection reset',
       description: `The connection${host ? ` to ${host}` : ''} closed before the page arrived. Reload to try again.`
     }
   }
   if (code === -104 || code === -109) {
     return {
-      icon: Unplug,
+      icon: CioUnplug,
       title: 'Server unreachable',
       description: `The server could not be reached${host ? ` at ${host}` : ''} from this network.`
     }
   }
   if (code === -7 || code === -118) {
     return {
-      icon: Clock,
+      icon: CioClock,
       title: 'The connection timed out',
       description: `The connection${host ? ` to ${host}` : ''} timed out. Reload to try again.`
     }
   }
   if (code >= CERTIFICATE_ERROR_START && code <= CERTIFICATE_ERROR_END) {
     return {
-      icon: ShieldAlert,
+      icon: CioShieldAlert,
       title: 'Connection not secure',
       description: `A secure connection could not be established${host ? ` with ${host}` : ''}.`
     }
@@ -213,13 +208,13 @@ function networkErrorCopy(code: number, host: string): BrowserLoadErrorCopy {
   }
   if (code === -20 || code === -27) {
     return {
-      icon: Ban,
+      icon: CioBan,
       title: 'Request blocked',
       description: `The request was blocked${host ? ` for ${host}` : ''}.`
     }
   }
   return {
-    icon: CircleAlert,
+    icon: CioAlertCircle,
     title: 'This page could not load',
     description: `The page could not be reached${host ? ` at ${host}` : ''}. Reload to try again.`
   }

@@ -1,17 +1,12 @@
 <script lang="ts">
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioLink from '$lib/components/icons/cio/CioLink.svelte'
   import { SUPPORT_EMAIL } from '$shared/brand'
   import { onMount } from 'svelte'
-  import {
-    ClipboardPaste,
-    Copy,
-    Eraser,
-    ExternalLink,
-    Globe,
-    GlobeCode,
-    Link,
-    Scissors,
-    TextSelect
-  } from '@lucide/svelte'
+  import { Eraser, GlobeCode, Scissors, TextSelect } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
@@ -457,11 +452,11 @@
         disabled={!target.text}
         onclick={() => copy(target!.text, 'text')}
       >
-        <Copy class="size-3.5 shrink-0 text-text-muted" />
+        <CioCopy class="size-3.5 shrink-0 text-text-muted" />
         Copy
       </button>
       <button type="button" class={itemClass} role="menuitem" onclick={() => paste(target!)}>
-        <ClipboardPaste class="size-3.5 shrink-0 text-text-muted" />
+        <CioClipboardPaste class="size-3.5 shrink-0 text-text-muted" />
         Paste
       </button>
       <button type="button" class={itemClass} role="menuitem" onclick={() => selectAll(target!)}>
@@ -476,7 +471,7 @@
         disabled={!target.text}
         onclick={() => copy(target!.text, 'text')}
       >
-        <Copy class="size-3.5 shrink-0 text-text-muted" />
+        <CioCopy class="size-3.5 shrink-0 text-text-muted" />
         Copy
       </button>
       <button
@@ -485,7 +480,7 @@
         role="menuitem"
         onclick={() => pasteIntoTerminal(target!)}
       >
-        <ClipboardPaste class="size-3.5 shrink-0 text-text-muted" />
+        <CioClipboardPaste class="size-3.5 shrink-0 text-text-muted" />
         Paste
       </button>
       <button
@@ -514,7 +509,7 @@
           role="menuitem"
           onclick={() => copy(target!.text, 'text')}
         >
-          <Copy class="size-3.5 shrink-0 text-text-muted" />
+          <CioCopy class="size-3.5 shrink-0 text-text-muted" />
           Copy
         </button>
       {/if}
@@ -525,7 +520,7 @@
           role="menuitem"
           onclick={() => openInBrowser(target!.linkHref!)}
         >
-          <ExternalLink class="size-3.5 shrink-0 text-text-muted" />
+          <CioExternalLink class="size-3.5 shrink-0 text-text-muted" />
           {target.linkHref.startsWith('mailto:') ? 'Open in Email App' : 'Open in Default Browser'}
         </button>
         {#if !target.linkHref.startsWith('mailto:')}
@@ -537,7 +532,7 @@
               title="Open in a new tab of the app-wide browser"
               onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
             >
-              <Globe class="size-3.5 shrink-0 text-text-muted" />
+              <CioBrowser class="size-3.5 shrink-0 text-text-muted" />
               Open in New Tab
             </button>
             <button
@@ -558,7 +553,7 @@
               title="Open in the app-wide global browser"
               onclick={() => openLinkInGlobalCioBrowser(target!.linkHref!)}
             >
-              <Globe class="size-3.5 shrink-0 text-text-muted" />
+              <CioBrowser class="size-3.5 shrink-0 text-text-muted" />
               Open in Global CIO Browser
             </button>
             {#if cioBrowserAvailable}
@@ -581,7 +576,7 @@
           role="menuitem"
           onclick={() => copy(target!.linkHref!, 'link')}
         >
-          <Link class="size-3.5 shrink-0 text-text-muted" />
+          <CioLink class="size-3.5 shrink-0 text-text-muted" />
           Copy Link
         </button>
         {#if target.text}
@@ -591,7 +586,7 @@
             role="menuitem"
             onclick={() => copy(target!.text, 'text')}
           >
-            <Copy class="size-3.5 shrink-0 text-text-muted" />
+            <CioCopy class="size-3.5 shrink-0 text-text-muted" />
             Copy Text
           </button>
         {/if}

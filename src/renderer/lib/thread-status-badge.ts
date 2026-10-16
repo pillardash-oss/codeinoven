@@ -1,4 +1,4 @@
-import { Clock } from '@lucide/svelte'
+import CioClock from '$lib/components/icons/cio/CioClock.svelte'
 import {
   isThreadAwaitingUser,
   isThreadRetryPaused,
@@ -62,7 +62,7 @@ export function statusBadgeForThread(
           : 'Queued',
       tone: 'working',
       variant: 'icon',
-      icon: Clock
+      icon: CioClock
     }
   }
 

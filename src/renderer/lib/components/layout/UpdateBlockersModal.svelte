@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Loader2, Terminal } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
@@ -74,7 +75,7 @@
           <ul class="space-y-1.5">
             {#each visibleTerminals as terminal (terminal.sessionId)}
               <li class="flex items-center gap-2 text-xs text-muted">
-                <Terminal size={13} class="shrink-0 text-dimmed" />
+                <CioTerminal size={13} class="shrink-0 text-dimmed" />
                 <span class="shrink-0 font-medium text-foreground">{terminal.shell}</span>
                 <span class="min-w-0 truncate font-mono text-dimmed" title={terminal.cwd}>
                   {terminal.cwd}
@@ -122,7 +123,7 @@
       onclick={() => void updateBlockers.forceInstall()}
     >
       {#if forcing}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {/if}
       <span>{forcing ? 'Stopping work' : 'Stop work & install'}</span>
     </button>

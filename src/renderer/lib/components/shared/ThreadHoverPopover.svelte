@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { AppWindow, Clock, GitBranch } from '@lucide/svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { feature } from '$lib/feature-registry'
@@ -159,7 +161,7 @@
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Branch</dt>
       <dd class="flex min-w-0 items-center gap-1 text-muted">
-        <GitBranch size={11} class="shrink-0" aria-hidden="true" />
+        <CioTabGit size={11} class="shrink-0" aria-hidden="true" />
         <span class="min-w-0 break-words font-mono">{branch}</span>
       </dd>
     </div>
@@ -215,7 +217,7 @@
         <StatusBadge
           stage="working"
           variant="icon"
-          icon={AppWindow}
+          icon={CioWindow}
           size="sm"
           title="Running in another instance"
         />
@@ -238,7 +240,7 @@
         <StatusBadge
           stage="working"
           variant="icon"
-          icon={Clock}
+          icon={CioClock}
           size="sm"
           title="Waiting for dependencies"
         />

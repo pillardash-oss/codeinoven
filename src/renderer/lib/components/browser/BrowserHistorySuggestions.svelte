@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Clock } from '@lucide/svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
   import { browserLibraryHost, type BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { formatCompactAge } from '$shared/date-time-format'
 
@@ -43,7 +43,7 @@
   <p
     class="flex items-center gap-1.5 px-2.5 pb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
   >
-    <Clock size={10} aria-hidden="true" />
+    <CioClock size={10} aria-hidden="true" />
     History
   </p>
   <!-- A listbox driven by the field above: the arrows move the highlight, so the

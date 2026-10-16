@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import { Loader2, X } from '@lucide/svelte'
+
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
@@ -275,7 +277,7 @@
             aria-label="Show the sign-in for {targetName}"
             onclick={() => (oauth.docked = false)}
           >
-            <Loader2 size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
             <span class="flex min-w-0 flex-col">
               <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
                 Signing in to {targetName}
@@ -296,7 +298,7 @@
             title="Cancel the sign-in"
             onclick={close}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         </div>
       </DockRow>
@@ -310,12 +312,12 @@
       </p>
     {:else if verifying}
       <p class="flex items-center gap-2 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Confirming sign-in for this account…
       </p>
     {:else}
       <p class="flex items-center gap-2 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Starting sign-in…
       </p>
     {/if}
@@ -338,7 +340,7 @@
         </div>
       {:else if verifying}
         <div class="flex h-full items-center justify-center gap-2 text-sm text-muted">
-          <Loader2 size={14} class="animate-spin" />
+          <CioSpinner size={14} class="animate-spin" />
           Confirming sign-in for this account…
         </div>
       {:else}

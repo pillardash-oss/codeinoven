@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CircleAlert, ExternalLink, Eye, FileCheck2 } from '@lucide/svelte'
+  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import { FileCheck2 } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -143,7 +146,7 @@
               : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'
   )
 
-  const headIcon = $derived(failed || interrupted || partial ? CircleAlert : FileCheck2)
+  const headIcon = $derived(failed || interrupted || partial ? CioAlertCircle : FileCheck2)
   const headTone = $derived(failed || interrupted || partial ? 'warn' : 'default')
 
   const chip = $derived.by<CardChipData>(() => {
@@ -274,7 +277,7 @@
               <CardButton
                 label="View report"
                 title="Open this report in Audit Studio"
-                icon={ExternalLink}
+                icon={CioExternalLink}
                 variant="primary"
                 onclick={onViewReport}
               />
@@ -282,7 +285,7 @@
               <CardButton
                 label="View trace"
                 title="Open the durable auditor thread and its live working trace"
-                icon={Eye}
+                icon={CioEye}
                 variant="secondary"
                 onclick={onViewTrace}
               />
@@ -292,7 +295,7 @@
                 title={reworking
                   ? 'Open the source audit report'
                   : 'Open this report in Audit Studio'}
-                icon={ExternalLink}
+                icon={CioExternalLink}
                 variant="primary"
                 onclick={onViewReport}
               />

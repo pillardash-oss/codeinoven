@@ -1,16 +1,15 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioPaperclip from '$lib/components/icons/cio/CioPaperclip.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import {
-    Check,
-    FileText,
-    MessageSquareText,
-    Paperclip,
-    Plus,
-    Search,
-    ShieldCheck,
-    Upload,
-    X
-  } from '@lucide/svelte'
+
   import type {
     CapturableSpecContextType,
     SpecContextReference,
@@ -132,7 +131,7 @@
     aria-label="Drop files into specification context"
   >
     <div class="flex flex-col items-center gap-2 text-primary">
-      <Upload size={32} />
+      <CioUpload size={32} />
       <span class="text-base font-medium">Drop files into specification context</span>
     </div>
   </div>
@@ -146,7 +145,7 @@
         class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] hover:bg-overlay"
         title="Add context to this specification"
       >
-        <Plus size={11} />
+        <CioPlus size={11} />
         Add context
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -172,11 +171,11 @@
               }}
             >
               {#if item.type === 'project_file'}
-                <Search size={13} class="mt-0.5 shrink-0 text-muted" />
+                <CioSearch size={13} class="mt-0.5 shrink-0 text-muted" />
               {:else if item.type === 'project_rule'}
-                <ShieldCheck size={13} class="mt-0.5 shrink-0 text-muted" />
+                <CioShieldCheck size={13} class="mt-0.5 shrink-0 text-muted" />
               {:else}
-                <Paperclip size={13} class="mt-0.5 shrink-0 text-muted" />
+                <CioPaperclip size={13} class="mt-0.5 shrink-0 text-muted" />
               {/if}
               <span class="min-w-0">
                 <span class="block text-xs font-medium">{item.label}</span>
@@ -209,12 +208,12 @@
           aria-label="Close context search"
           onclick={() => picker.close()}
         >
-          <X size={13} />
+          <CioClose size={13} />
         </button>
       </div>
       <label class="relative mt-3 block">
         <span class="sr-only">Search project files</span>
-        <Search
+        <CioSearch
           size={13}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -249,10 +248,10 @@
               disabled={selected || busy}
               onclick={() => void selectContextPath(activeContextPickerType, entry.path)}
             >
-              <FileText size={12} class="shrink-0 text-muted" />
+              <CioFileText size={12} class="shrink-0 text-muted" />
               <span class="min-w-0 flex-1 truncate">{entry.path}</span>
               {#if selected}
-                <Check size={12} class="shrink-0 text-success" />
+                <CioCheck size={12} class="shrink-0 text-success" />
               {/if}
             </button>
           {/each}
@@ -275,7 +274,7 @@
           title={`Remove ${reference.label}`}
           onclick={() => void onRemoveContext(reference.id)}
         >
-          <X size={12} />
+          <CioClose size={12} />
         </button>
       </div>
     {:else}
@@ -287,7 +286,7 @@
   </div>
   <div class="mt-6 border-t pt-4">
     <div class="flex items-center gap-1.5 border-b border-border pb-1.5">
-      <MessageSquareText size={13} class="text-muted" />
+      <CioMessage size={13} class="text-muted" />
       <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
         Previous comments
       </h3>

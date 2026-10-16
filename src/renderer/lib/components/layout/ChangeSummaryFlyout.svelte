@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { File, FileDiff } from '@lucide/svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import { File } from '@lucide/svelte'
   import { threadChangesState } from '$lib/stores/thread-changes.svelte'
 
   const current = $derived(threadChangesState.current)
@@ -29,7 +30,7 @@
       {:else}
         <span class="text-dimmed">Counting…</span>
       {/if}
-      <FileDiff size={12} class="shrink-0 text-dimmed" />
+      <CioDiff size={12} class="shrink-0 text-dimmed" />
     </div>
     <div
       class="mt-1 flex items-center gap-1.5 text-[0.6875rem] font-medium tabular-nums text-muted"

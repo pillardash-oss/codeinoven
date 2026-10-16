@@ -1,11 +1,9 @@
 <script lang="ts">
-  import {
-    Check,
-    MessageSquare,
-    MessageSquarePlus,
-    Plus,
-    X
-  } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
@@ -32,10 +30,7 @@
   import StudioPendingAnnotationPopover from './StudioPendingAnnotationPopover.svelte'
   import StudioAnnotationDetailPopover from './StudioAnnotationDetailPopover.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
-  import {
-    StudioAnnotationOverlay,
-    clampPendingPosition
-  } from './studio-annotation-overlay.svelte'
+  import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
   import { offsetsForQuote as offsetsForQuoteIn, offsetsForRange } from '$lib/selection-anchors'
   import { onDestroy, onMount, tick } from 'svelte'
 
@@ -533,7 +528,8 @@
     if (!updated) return
     speechController.observeSent(`audit-annotation-edit-${annotation.id}`, body)
     applyReport(updated)
-    overlay.editing = updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
+    overlay.editing =
+      updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
     overlay.editingBody = overlay.editing?.body ?? ''
     overlay.editMode = false
   }
@@ -579,6 +575,7 @@
     return 'text-muted'
   }
 </script>
+
 <StudioShell
   ariaLabel="Audit studio"
   scrollerLabel="Audit report"
@@ -589,7 +586,8 @@
   bind:selectedSection
   bind:sectionsOpen
   bind:scroller={documentScroller}
-  openAnnotationCount={draft.annotations.filter((annotation) => annotation.status === 'open').length}
+  openAnnotationCount={draft.annotations.filter((annotation) => annotation.status === 'open')
+    .length}
   annotationsTitle="Section annotations"
   annotationsEmptyLabel="Select text or click a section heading to annotate."
   sectionAnnotations={(section) => (section === 'verification' ? [] : annotations(section))}
@@ -625,8 +623,8 @@
         .map((version) => ({ version: version.version }))}
       currentVersion={draft.version}
       updatedAt={draft.updatedAt}
-      statusLabel={statusLabel}
-      statusClass={statusClass}
+      {statusLabel}
+      {statusClass}
       {dirty}
       canUndo={history.canUndo}
       canRedo={history.canRedo}
@@ -659,7 +657,7 @@
           title="Complete this audit without rework notes"
           onclick={onComplete}
         >
-          Complete <Check size={13} />
+          Complete <CioCheck size={13} />
         </button>
       {/if}
     {/if}
@@ -713,7 +711,9 @@
         )}
         {#if severityFindings.length}
           <div class="py-0.5">
-            <div class="flex items-center gap-1.5 px-2 py-1 text-[0.625rem] font-semibold capitalize">
+            <div
+              class="flex items-center gap-1.5 px-2 py-1 text-[0.625rem] font-semibold capitalize"
+            >
               <span class="h-1.5 w-1.5 {severityDotClass(severity)}"></span>
               <span class={severityTextClass(severity)}>{severity}</span>
               <span class="ml-auto text-dimmed">{severityFindings.length}</span>
@@ -757,321 +757,311 @@
         aria-label={`Open annotation: ${marker.annotation.body}`}
         onclick={() => void openAnnotation(marker.annotation)}
       >
-        <MessageSquare size={13} />
+        <CioMessage size={13} />
       </button>
     {/each}
   {/snippet}
 
-      <article class="space-y-12 px-6 py-6 text-sm leading-7 md:px-14 md:py-8">
-        {#if draft.evidenceValidation === 'partial'}
-          <div
-            class="border border-warning/40 bg-warning/10 p-4"
-            role="alert"
-            aria-label="Evidence partially validated"
-          >
-            <p class="text-xs font-semibold text-warning">
-              Report generated, evidence incomplete
-            </p>
-            <p class="mt-1 text-xs leading-relaxed text-muted">
-              Some verification facts in this report could not be matched to executed commands in
-              the auditor transcript. Read the report with that in mind, ask the auditor to
-              validate its facts, or change the auditor model.
-            </p>
-            {#if draft.evidenceIssues?.length}
-              <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted">
-                {#each draft.evidenceIssues as issue (issue)}
-                  <li>{issue}</li>
-                {/each}
-              </ul>
-            {/if}
-          </div>
+  <article class="space-y-12 px-6 py-6 text-sm leading-7 md:px-14 md:py-8">
+    {#if draft.evidenceValidation === 'partial'}
+      <div
+        class="border border-warning/40 bg-warning/10 p-4"
+        role="alert"
+        aria-label="Evidence partially validated"
+      >
+        <p class="text-xs font-semibold text-warning">Report generated, evidence incomplete</p>
+        <p class="mt-1 text-xs leading-relaxed text-muted">
+          Some verification facts in this report could not be matched to executed commands in the
+          auditor transcript. Read the report with that in mind, ask the auditor to validate its
+          facts, or change the auditor model.
+        </p>
+        {#if draft.evidenceIssues?.length}
+          <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-muted">
+            {#each draft.evidenceIssues as issue (issue)}
+              <li>{issue}</li>
+            {/each}
+          </ul>
         {/if}
-        {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
+      </div>
+    {/if}
+    {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
 
-        <section id="audit-section-findings" data-audit-section="findings" class="scroll-mt-5">
-          {@render sectionHeading('findings', 'Findings', auditEvidence.findings)}
-          <ol class="mt-3 divide-y divide-border">
-            {#each draft.content.findings as finding, index (finding.id)}
-              <li
-                id={`audit-finding-${finding.id}`}
-                class="scroll-mt-20 space-y-3 py-5 first:pt-2 last:pb-2"
-              >
-                <div class="flex items-start gap-2">
-                  <span class="mt-0.5 text-xs font-semibold tabular-nums text-dimmed">
-                    {index + 1}.
-                  </span>
-                  <EditableMarkdown
-                    text={finding.title}
-                    readOnly={!workflowActionsVisible}
-                    class="min-w-0 flex-1 px-1 text-base font-semibold outline-none focus:bg-surface"
-                    ariaLabel={`Finding ${index + 1} title`}
-                    onChange={(value) => {
-                      finding.title = value
-                      changed()
-                    }}
-                  />
-                  {#if auditEvidence.findingIds.has(finding.id)}
-                    <StatusPill
-                      tone="warning"
-                      title="The verification check backing this finding could not be matched to executed evidence"
-                    >
-                      Not Validated
-                    </StatusPill>
-                  {/if}
-                  {#if workflowActionsVisible && severityEditingId === finding.id}
-                    <select
-                      class="border border-border bg-elevated px-2 py-1 text-xs"
-                      bind:value={finding.severity}
-                      onchange={() => {
-                        changed()
-                        severityEditingId = null
-                      }}
-                      onblur={() => (severityEditingId = null)}
-                      aria-label={`Finding ${index + 1} severity`}
-                    >
-                      {#each findingSeverities as severity (severity)}
-                        <option value={severity}>{severity}</option>
-                      {/each}
-                    </select>
-                  {:else if workflowActionsVisible}
-                    <button
-                      class="px-2 py-1 text-xs font-medium capitalize hover:opacity-80 {severityClass(
-                        finding.severity
-                      )}"
-                      title={`Edit finding severity: ${finding.severity}`}
-                      onclick={() => (severityEditingId = finding.id)}
-                    >
-                      {finding.severity}
-                    </button>
-                  {:else}
-                    <!-- Read-only views (older versions, review-complete reports) still show the
+    <section id="audit-section-findings" data-audit-section="findings" class="scroll-mt-5">
+      {@render sectionHeading('findings', 'Findings', auditEvidence.findings)}
+      <ol class="mt-3 divide-y divide-border">
+        {#each draft.content.findings as finding, index (finding.id)}
+          <li
+            id={`audit-finding-${finding.id}`}
+            class="scroll-mt-20 space-y-3 py-5 first:pt-2 last:pb-2"
+          >
+            <div class="flex items-start gap-2">
+              <span class="mt-0.5 text-xs font-semibold tabular-nums text-dimmed">
+                {index + 1}.
+              </span>
+              <EditableMarkdown
+                text={finding.title}
+                readOnly={!workflowActionsVisible}
+                class="min-w-0 flex-1 px-1 text-base font-semibold outline-none focus:bg-surface"
+                ariaLabel={`Finding ${index + 1} title`}
+                onChange={(value) => {
+                  finding.title = value
+                  changed()
+                }}
+              />
+              {#if auditEvidence.findingIds.has(finding.id)}
+                <StatusPill
+                  tone="warning"
+                  title="The verification check backing this finding could not be matched to executed evidence"
+                >
+                  Not Validated
+                </StatusPill>
+              {/if}
+              {#if workflowActionsVisible && severityEditingId === finding.id}
+                <select
+                  class="border border-border bg-elevated px-2 py-1 text-xs"
+                  bind:value={finding.severity}
+                  onchange={() => {
+                    changed()
+                    severityEditingId = null
+                  }}
+                  onblur={() => (severityEditingId = null)}
+                  aria-label={`Finding ${index + 1} severity`}
+                >
+                  {#each findingSeverities as severity (severity)}
+                    <option value={severity}>{severity}</option>
+                  {/each}
+                </select>
+              {:else if workflowActionsVisible}
+                <button
+                  class="px-2 py-1 text-xs font-medium capitalize hover:opacity-80 {severityClass(
+                    finding.severity
+                  )}"
+                  title={`Edit finding severity: ${finding.severity}`}
+                  onclick={() => (severityEditingId = finding.id)}
+                >
+                  {finding.severity}
+                </button>
+              {:else}
+                <!-- Read-only views (older versions, review-complete reports) still show the
                         severity badge; only the edit affordance is gated on workflow actions. -->
-                    <span
-                      class="px-2 py-1 text-xs font-medium capitalize {severityClass(
-                        finding.severity
-                      )}"
-                      title={`Finding severity: ${finding.severity}`}
-                    >
-                      {finding.severity}
-                    </span>
-                  {/if}
-                  {#if workflowActionsVisible}
-                    <button
-                      class="p-1 text-muted hover:bg-danger/10 hover:text-danger"
-                      title={`Remove finding ${index + 1}`}
-                      aria-label={`Remove finding ${index + 1}`}
-                      onclick={() => {
-                        draft.content.findings.splice(index, 1)
-                        changed()
-                      }}
-                    >
-                      <X size={13} />
-                    </button>
-                  {/if}
-                </div>
-                <EditableMarkdown
-                  text={finding.description}
-                  readOnly={!workflowActionsVisible}
-                  class="audit-markdown w-full whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-                  ariaLabel={`Finding ${index + 1} description`}
-                  onChange={(value) => {
-                    finding.description = value
+                <span
+                  class="px-2 py-1 text-xs font-medium capitalize {severityClass(finding.severity)}"
+                  title={`Finding severity: ${finding.severity}`}
+                >
+                  {finding.severity}
+                </span>
+              {/if}
+              {#if workflowActionsVisible}
+                <button
+                  class="p-1 text-muted hover:bg-danger/10 hover:text-danger"
+                  title={`Remove finding ${index + 1}`}
+                  aria-label={`Remove finding ${index + 1}`}
+                  onclick={() => {
+                    draft.content.findings.splice(index, 1)
                     changed()
                   }}
-                />
-                <div class="mt-4 border-l-2 border-border pl-4">
-                  <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-dimmed">
-                    Evidence
-                  </p>
-                  <EditableMarkdown
-                    text={finding.evidence}
-                    readOnly={!workflowActionsVisible}
-                    class="audit-markdown whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-                    ariaLabel={`Finding ${index + 1} evidence`}
-                    onChange={(value) => {
-                      finding.evidence = value
-                      changed()
-                    }}
-                  />
-                </div>
-              </li>
-            {/each}
-          </ol>
-          {#if workflowActionsVisible}
-            <div class="mt-3">
-              <button
-                class="flex items-center gap-1 border border-border bg-elevated px-3 py-2 text-xs"
-                onclick={addFinding}
-              >
-                <Plus size={13} /> Add finding
-              </button>
-            </div>
-          {/if}
-          {@render AnnotationBubbles({
-            annotations: annotations('findings'),
-            onOpen: openAnnotation
-          })}
-        </section>
-
-        {#if draft.content.auditedFiles?.length || draft.content.verification}
-          <section
-            id="audit-section-verification"
-            class="scroll-mt-5"
-            aria-labelledby="audit-verification-heading"
-          >
-            <h2
-              id="audit-verification-heading"
-              class="flex items-center gap-2 text-xl font-semibold tracking-tight"
-            >
-              Verification evidence
-              {#if auditEvidence.verification}
-                {@render notValidatedBadge()}
+                >
+                  <CioClose size={13} />
+                </button>
               {/if}
-            </h2>
+            </div>
+            <EditableMarkdown
+              text={finding.description}
+              readOnly={!workflowActionsVisible}
+              class="audit-markdown w-full whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+              ariaLabel={`Finding ${index + 1} description`}
+              onChange={(value) => {
+                finding.description = value
+                changed()
+              }}
+            />
+            <div class="mt-4 border-l-2 border-border pl-4">
+              <p class="mb-1 text-xs font-semibold uppercase tracking-wide text-dimmed">Evidence</p>
+              <EditableMarkdown
+                text={finding.evidence}
+                readOnly={!workflowActionsVisible}
+                class="audit-markdown whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+                ariaLabel={`Finding ${index + 1} evidence`}
+                onChange={(value) => {
+                  finding.evidence = value
+                  changed()
+                }}
+              />
+            </div>
+          </li>
+        {/each}
+      </ol>
+      {#if workflowActionsVisible}
+        <div class="mt-3">
+          <button
+            class="flex items-center gap-1 border border-border bg-elevated px-3 py-2 text-xs"
+            onclick={addFinding}
+          >
+            <CioPlus size={13} /> Add finding
+          </button>
+        </div>
+      {/if}
+      {@render AnnotationBubbles({
+        annotations: annotations('findings'),
+        onOpen: openAnnotation
+      })}
+    </section>
 
-            {#if draft.content.auditedFiles?.length}
-              <div class="mt-4">
+    {#if draft.content.auditedFiles?.length || draft.content.verification}
+      <section
+        id="audit-section-verification"
+        class="scroll-mt-5"
+        aria-labelledby="audit-verification-heading"
+      >
+        <h2
+          id="audit-verification-heading"
+          class="flex items-center gap-2 text-xl font-semibold tracking-tight"
+        >
+          Verification evidence
+          {#if auditEvidence.verification}
+            {@render notValidatedBadge()}
+          {/if}
+        </h2>
+
+        {#if draft.content.auditedFiles?.length}
+          <div class="mt-4">
+            <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">Audited files</h3>
+            <ul class="mt-2 divide-y divide-border border-y">
+              {#each draft.content.auditedFiles as file (file.path)}
+                <li class="grid gap-1 py-2.5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                  <code class="break-all text-xs text-foreground">{file.path}</code>
+                  <span class="text-xs leading-5 text-muted">{file.reason}</span>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
+
+        {#if draft.content.verification}
+          <div class="mt-5 space-y-5">
+            <div class="grid gap-1 text-xs md:grid-cols-[8rem_minmax(0,1fr)]">
+              <span class="font-semibold text-dimmed">Repository state</span>
+              <code class="break-all text-foreground">
+                {draft.content.verification.repositoryRevision}
+              </code>
+              <span class="font-semibold text-dimmed">Audit scope</span>
+              <span class="text-muted">{draft.content.verification.scope}</span>
+            </div>
+
+            <div>
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                Scoped checks
+              </h3>
+              <div class="mt-2 divide-y divide-border border-y">
+                {#each draft.content.verification.checks as check (check.id)}
+                  <div class="space-y-1.5 py-3">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <span class="text-xs font-semibold capitalize text-foreground">
+                        {check.kind}
+                      </span>
+                      <span
+                        class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
+                      >
+                        {check.status.replace('_', ' ')}
+                      </span>
+                      {#if checkIssuesFor(check.id).length}
+                        <StatusPill tone="warning" title={NOT_VALIDATED_HINT}>
+                          Not Validated
+                        </StatusPill>
+                      {/if}
+                      {#if check.exitCode !== undefined}
+                        <span class="text-[0.625rem] tabular-nums text-dimmed">
+                          Exit {check.exitCode}
+                        </span>
+                      {/if}
+                    </div>
+                    {#if check.command}
+                      <code class="block overflow-x-auto whitespace-pre text-xs text-foreground">
+                        {check.command}
+                      </code>
+                    {/if}
+                    <p class="text-xs leading-5 text-muted">{check.evidence}</p>
+                    {#if check.justification}
+                      <p class="text-xs leading-5 text-warning">
+                        Not executed: {check.justification}
+                      </p>
+                    {/if}
+                    {#if check.files.length}
+                      <p class="break-all text-[0.625rem] leading-4 text-dimmed">
+                        {check.files.join(', ')}
+                      </p>
+                    {/if}
+                    {#if checkIssuesFor(check.id).length}
+                      <ul
+                        class="list-disc space-y-1 pl-5 text-[0.625rem] leading-4 text-warning"
+                        aria-label="Why this check is not validated"
+                      >
+                        {#each checkIssuesFor(check.id) as issue (issue)}
+                          <li>{auditEvidenceIssueDetail(issue)}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+
+            <div>
+              <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                Utilities and MCPs
+              </h3>
+              <ul class="mt-2 space-y-2">
+                {#each draft.content.verification.utilities as utility (utility.name)}
+                  <li class="space-y-1 text-xs leading-5 text-muted">
+                    <span class="flex flex-wrap items-center gap-2">
+                      <span class="font-semibold text-foreground">{utility.name}</span>
+                      <span class="text-dimmed">· {utility.status.replace('_', ' ')}</span>
+                      {#if utilityIssuesFor(utility.name).length}
+                        <StatusPill tone="warning" title={NOT_VALIDATED_HINT}>
+                          Not Validated
+                        </StatusPill>
+                      {/if}
+                    </span>
+                    <span class="block">{utility.evidence}</span>
+                    {#if utilityIssuesFor(utility.name).length}
+                      <ul
+                        class="list-disc space-y-1 pl-5 text-[0.625rem] leading-4 text-warning"
+                        aria-label="Why this utility is not validated"
+                      >
+                        {#each utilityIssuesFor(utility.name) as issue (issue)}
+                          <li>{auditEvidenceIssueDetail(issue)}</li>
+                        {/each}
+                      </ul>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            </div>
+
+            {#if draft.content.verification.limitations.length}
+              <div>
                 <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
-                  Audited files
+                  Limitations
                 </h3>
-                <ul class="mt-2 divide-y divide-border border-y">
-                  {#each draft.content.auditedFiles as file (file.path)}
-                    <li class="grid gap-1 py-2.5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-                      <code class="break-all text-xs text-foreground">{file.path}</code>
-                      <span class="text-xs leading-5 text-muted">{file.reason}</span>
-                    </li>
+                <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-muted">
+                  {#each draft.content.verification.limitations as limitation (limitation)}
+                    <li>{limitation}</li>
                   {/each}
                 </ul>
               </div>
             {/if}
-
-            {#if draft.content.verification}
-              <div class="mt-5 space-y-5">
-                <div class="grid gap-1 text-xs md:grid-cols-[8rem_minmax(0,1fr)]">
-                  <span class="font-semibold text-dimmed">Repository state</span>
-                  <code class="break-all text-foreground">
-                    {draft.content.verification.repositoryRevision}
-                  </code>
-                  <span class="font-semibold text-dimmed">Audit scope</span>
-                  <span class="text-muted">{draft.content.verification.scope}</span>
-                </div>
-
-                <div>
-                  <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
-                    Scoped checks
-                  </h3>
-                  <div class="mt-2 divide-y divide-border border-y">
-                    {#each draft.content.verification.checks as check (check.id)}
-                      <div class="space-y-1.5 py-3">
-                        <div class="flex flex-wrap items-center gap-2">
-                          <span class="text-xs font-semibold capitalize text-foreground">
-                            {check.kind}
-                          </span>
-                          <span
-                            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
-                          >
-                            {check.status.replace('_', ' ')}
-                          </span>
-                          {#if checkIssuesFor(check.id).length}
-                            <StatusPill tone="warning" title={NOT_VALIDATED_HINT}>
-                              Not Validated
-                            </StatusPill>
-                          {/if}
-                          {#if check.exitCode !== undefined}
-                            <span class="text-[0.625rem] tabular-nums text-dimmed">
-                              Exit {check.exitCode}
-                            </span>
-                          {/if}
-                        </div>
-                        {#if check.command}
-                          <code
-                            class="block overflow-x-auto whitespace-pre text-xs text-foreground"
-                          >
-                            {check.command}
-                          </code>
-                        {/if}
-                        <p class="text-xs leading-5 text-muted">{check.evidence}</p>
-                        {#if check.justification}
-                          <p class="text-xs leading-5 text-warning">
-                            Not executed: {check.justification}
-                          </p>
-                        {/if}
-                        {#if check.files.length}
-                          <p class="break-all text-[0.625rem] leading-4 text-dimmed">
-                            {check.files.join(', ')}
-                          </p>
-                        {/if}
-                        {#if checkIssuesFor(check.id).length}
-                          <ul
-                            class="list-disc space-y-1 pl-5 text-[0.625rem] leading-4 text-warning"
-                            aria-label="Why this check is not validated"
-                          >
-                            {#each checkIssuesFor(check.id) as issue (issue)}
-                              <li>{auditEvidenceIssueDetail(issue)}</li>
-                            {/each}
-                          </ul>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                </div>
-
-                <div>
-                  <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
-                    Utilities and MCPs
-                  </h3>
-                  <ul class="mt-2 space-y-2">
-                    {#each draft.content.verification.utilities as utility (utility.name)}
-                      <li class="space-y-1 text-xs leading-5 text-muted">
-                        <span class="flex flex-wrap items-center gap-2">
-                          <span class="font-semibold text-foreground">{utility.name}</span>
-                          <span class="text-dimmed">· {utility.status.replace('_', ' ')}</span>
-                          {#if utilityIssuesFor(utility.name).length}
-                            <StatusPill tone="warning" title={NOT_VALIDATED_HINT}>
-                              Not Validated
-                            </StatusPill>
-                          {/if}
-                        </span>
-                        <span class="block">{utility.evidence}</span>
-                        {#if utilityIssuesFor(utility.name).length}
-                          <ul
-                            class="list-disc space-y-1 pl-5 text-[0.625rem] leading-4 text-warning"
-                            aria-label="Why this utility is not validated"
-                          >
-                            {#each utilityIssuesFor(utility.name) as issue (issue)}
-                              <li>{auditEvidenceIssueDetail(issue)}</li>
-                            {/each}
-                          </ul>
-                        {/if}
-                      </li>
-                    {/each}
-                  </ul>
-                </div>
-
-                {#if draft.content.verification.limitations.length}
-                  <div>
-                    <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
-                      Limitations
-                    </h3>
-                    <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-muted">
-                      {#each draft.content.verification.limitations as limitation (limitation)}
-                        <li>{limitation}</li>
-                      {/each}
-                    </ul>
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          </section>
+          </div>
         {/if}
+      </section>
+    {/if}
 
-        {@render textSection(
-          'resolution_recommendation',
-          'Resolution & recommendation',
-          'resolutionRecommendation'
-        )}
-        {@render textSection('conclusion', 'Conclusion', 'conclusion')}
-      </article>
+    {@render textSection(
+      'resolution_recommendation',
+      'Resolution & recommendation',
+      'resolutionRecommendation'
+    )}
+    {@render textSection('conclusion', 'Conclusion', 'conclusion')}
+  </article>
 </StudioShell>
 
 {#if pendingAnnotation}
@@ -1123,7 +1113,6 @@
   />
 {/if}
 
-
 {#snippet sectionHeading(section: AuditSectionId, title: string, notValidated = false)}
   {#if workflowActionsVisible}
     <button
@@ -1135,7 +1124,7 @@
       {#if notValidated}
         {@render notValidatedBadge()}
       {/if}
-      <MessageSquarePlus
+      <CioMessagePlus
         size={14}
         class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
       />

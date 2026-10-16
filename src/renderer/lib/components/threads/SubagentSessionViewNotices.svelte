@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CheckCircle2, X } from '@lucide/svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
@@ -51,7 +52,7 @@
     role="status"
     aria-live="polite"
   >
-    <CheckCircle2 size={14} class="mt-0.5 shrink-0 text-success" />
+    <CioCheckCircle size={14} class="mt-0.5 shrink-0 text-success" />
     <div class="min-w-0 flex-1">
       <p class="text-xs font-semibold text-foreground">Sub-agent connection recovered</p>
       <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
@@ -68,7 +69,7 @@
       title="Dismiss sub-agent recovery notice"
       onclick={onDismissRecovery}
     >
-      <X size={13} />
+      <CioClose size={13} />
     </button>
   </div>
 {/if}

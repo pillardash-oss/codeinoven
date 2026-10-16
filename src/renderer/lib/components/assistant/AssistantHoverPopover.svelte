@@ -1,13 +1,10 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    CalendarClock,
-    CalendarPlus,
-    Clock,
-    Link2,
-    RotateCcw,
-    Sparkles
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioLink from '$lib/components/icons/cio/CioLink.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import { CalendarClock, CalendarPlus } from '@lucide/svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import { describeSchedule, assistantIsScheduled, type Assistant } from '$shared/types'
   import { assistantGap } from './assistant-view'
@@ -88,7 +85,7 @@
     <dt class="w-16 shrink-0 text-dimmed">Status</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
       {#if incomplete || missed || attention}
-        <AlertTriangle size={12} style="color: {statusColor}" />
+        <CioAttention size={12} style="color: {statusColor}" />
       {:else}
         <span class="h-1.5 w-1.5 shrink-0" style="background: {statusColor}"></span>
       {/if}
@@ -98,7 +95,7 @@
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Type</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
-      <Clock size={12} class="shrink-0" />
+      <CioClock size={12} class="shrink-0" />
       <span class="min-w-0 break-words">{scheduleLabel}</span>
     </dd>
   </div>
@@ -106,7 +103,7 @@
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Next run</dt>
       <dd class="flex min-w-0 items-center gap-1 text-muted">
-        <Sparkles size={12} class="shrink-0" />
+        <CioSparkles size={12} class="shrink-0" />
         <span class="min-w-0 break-words">{scheduleAt}</span>
       </dd>
     </div>
@@ -114,14 +111,14 @@
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Runs</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
-      <RotateCcw size={12} class="shrink-0" />
+      <CioUndo size={12} class="shrink-0" />
       <span>{runCount === 1 ? '1 run' : `${runCount} runs`}</span>
     </dd>
   </div>
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Knows</dt>
     <dd class="flex min-w-0 items-start gap-1 text-muted">
-      <Link2 size={12} class="mt-0.5 shrink-0" />
+      <CioLink size={12} class="mt-0.5 shrink-0" />
       <span class="min-w-0 break-words">{knowledgePreview}</span>
     </dd>
   </div>

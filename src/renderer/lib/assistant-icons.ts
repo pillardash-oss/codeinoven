@@ -1,6 +1,6 @@
 import { getIconSvgDataUrl } from './project-svg-icons'
 import { getCustomSvgDataUrl } from '../../lib/custom-svg-tint'
-import AssistantIcon from './components/icons/AssistantIcon.svelte'
+import AssistantIcon from './components/icons/cio/AssistantIcon.svelte'
 
 /** Muted tint used when an assistant declares no accent colour of its own. */
 export const ASSISTANT_ICON_FALLBACK_COLOR = '#8b95a5'

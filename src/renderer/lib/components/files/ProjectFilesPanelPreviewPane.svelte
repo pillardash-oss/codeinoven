@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { FileQuestion, Loader2 } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { FileQuestion } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
@@ -61,7 +62,7 @@
   <div class="min-h-0 flex-1 overflow-auto bg-surface">
     {#if documentLoading}
       <div class="flex h-full items-center justify-center gap-2 text-dimmed" role="status">
-        <Loader2 size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         <span class="sr-only">Loading document preview</span>
       </div>
     {:else if documentHtml}

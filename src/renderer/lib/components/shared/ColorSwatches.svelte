@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, Palette, X } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import Modal from '../ui/Modal.svelte'
   import ColorPicker from './ColorPicker.svelte'
@@ -35,8 +37,7 @@
 <div class="flex flex-wrap items-center gap-1.5">
   <!-- Live current-colour indicator so the selection is always obvious. -->
   <span
-    class="flex {swatchClass} shrink-0 items-center justify-center border-2 {value ===
-    null
+    class="flex {swatchClass} shrink-0 items-center justify-center border-2 {value === null
       ? 'border-border'
       : 'border-foreground'}"
     style="background-color: {value ?? 'transparent'}"
@@ -44,7 +45,7 @@
     aria-hidden="true"
   >
     {#if value === null}
-      <X size={chipIcon} class="text-muted" />
+      <CioClose size={chipIcon} class="text-muted" />
     {/if}
   </span>
   {#if allowNone}
@@ -59,7 +60,7 @@
       aria-pressed={value === null}
       onclick={() => oncolorchange(null)}
     >
-      <X size={size === 'sm' ? 11 : 12} class="text-muted" />
+      <CioClose size={size === 'sm' ? 11 : 12} class="text-muted" />
     </button>
   {/if}
   {#each PROJECT_COLORS as option (option.value)}
@@ -79,7 +80,7 @@
         <span
           class="absolute inset-0 m-auto flex {chipInner} items-center justify-center bg-white/90 shadow-sm"
         >
-          <Check size={checkSize} class="text-black/70" />
+          <CioCheck size={checkSize} class="text-black/70" />
         </span>
       {/if}
     </button>
@@ -95,7 +96,10 @@
     aria-pressed={isCustomColor}
     onclick={() => (showPicker = true)}
   >
-    <Palette size={size === 'sm' ? 10 : 12} class="text-muted {isCustomColor ? 'opacity-0' : ''}" />
+    <CioPalette
+      size={size === 'sm' ? 10 : 12}
+      class="text-muted {isCustomColor ? 'opacity-0' : ''}"
+    />
   </button>
 </div>
 

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Bot, User } from '@lucide/svelte'
+  import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import type { RepositoryMentionUser } from '$shared/types'
   import { mentionHandle } from './pr-mentions'
 
@@ -75,9 +76,9 @@
         onclick={() => onSelect(entry)}
       >
         {#if entry.bot}
-          <Bot size={13} class="shrink-0 text-primary" aria-hidden="true" />
+          <CioSubagent size={13} class="shrink-0 text-primary" aria-hidden="true" />
         {:else}
-          <User size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioPerson size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="min-w-0 flex-1">
           <span class="block truncate font-mono">@{mentionHandle(entry)}</span>

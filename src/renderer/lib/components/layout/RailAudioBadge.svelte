@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Volume2 } from '@lucide/svelte'
+  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
 
   let { label }: { label: string } = $props()
 </script>
@@ -10,5 +10,5 @@
   aria-label={`${label} is playing audio`}
   title={`${label} is playing audio`}
 >
-  <Volume2 size={9} strokeWidth={2.6} aria-hidden="true" />
+  <CioVolume size={9} strokeWidth={2.6} aria-hidden="true" />
 </span>

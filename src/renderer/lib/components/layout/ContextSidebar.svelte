@@ -17,10 +17,15 @@
 </script>
 
 <script lang="ts">
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioActions from '$lib/components/icons/cio/CioActions.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
@@ -51,16 +56,7 @@
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import {
-    ChevronDown,
-    GlobeCode,
-    Maximize2,
-    Network,
-    PanelBottom,
-    PanelRight,
-    Plus,
-    X
-  } from '@lucide/svelte'
+  import { GlobeCode, PanelBottom, PanelRight } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
@@ -504,7 +500,7 @@
     {:else if tab.kind === 'extensions'}
       <CioTabExtensions size={12} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
-      <Network size={12} class="shrink-0 text-primary" />
+      <CioNetwork size={12} class="shrink-0 text-primary" />
     {:else if tab.kind === 'oven'}
       <CioTerminal size={12} class="shrink-0" />
     {:else if tab.kind === 'assistant-knowledge'}
@@ -627,7 +623,7 @@
         title={closeLabel(tab)}
         onclick={() => onClose(tab.id)}
       >
-        <X size={11} />
+        <CioClose size={11} />
       </button>
       {#if indicators.length > 0}
         <!-- Painted over the tab's own icon slot. A sibling of the
@@ -682,7 +678,7 @@
                 title="Switch open panel"
               >
                 <span class="text-[0.625rem] font-medium">{siblingTabs.length}</span>
-                <ChevronDown size={11} />
+                <CioChevronDown size={11} />
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
@@ -724,7 +720,7 @@
                 title="New browser tab"
                 onclick={() => onNewBrowser?.()}
               >
-                <Plus size={13} />
+                <CioPlus size={13} />
               </button>
             {/if}
             <button
@@ -734,7 +730,7 @@
               title="Fullscreen"
               onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
             >
-              <Maximize2 size={13} />
+              <CioMaximize size={13} />
             </button>
           {:else if terminalMode}
             {#if onNewTerminal}
@@ -745,7 +741,7 @@
                 title="New terminal"
                 onclick={onNewTerminal}
               >
-                <Plus size={13} />
+                <CioPlus size={13} />
               </button>
             {/if}
             {#if placement === 'bottom' && onTerminalDockToggle}
@@ -756,7 +752,7 @@
                 title="Hide terminal dock"
                 onclick={onTerminalDockToggle}
               >
-                <ChevronDown size={13} />
+                <CioChevronDown size={13} />
               </button>
             {/if}
             <button
@@ -766,7 +762,7 @@
               title="Fullscreen"
               onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
             >
-              <Maximize2 size={13} />
+              <CioMaximize size={13} />
             </button>
             <button
               type="button"
@@ -793,7 +789,7 @@
               title={popupMode ? 'Close all popup windows' : 'Close panel'}
               onclick={() => (popupMode ? onClosePopups?.() : onClose(activeTab.id))}
             >
-              <X size={13} />
+              <CioClose size={13} />
             </button>
           {/if}
         </div>

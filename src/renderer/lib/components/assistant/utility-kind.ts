@@ -1,4 +1,10 @@
-import { Cpu, Globe, Image, MonitorCog, Plug, Search, Sparkles } from '@lucide/svelte'
+import CioActions from '$lib/components/icons/cio/CioActions.svelte'
+import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
+import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+import { Image } from '@lucide/svelte'
 import type { Component } from 'svelte'
 import type { UtilityKind } from '$shared/types'
 
@@ -7,12 +13,12 @@ import type { UtilityKind } from '$shared/types'
  * picker so a kind always reads the same wherever a connection is shown.
  */
 export const UTILITY_KIND_ICONS: Readonly<Record<UtilityKind, Component>> = {
-  mcp: Plug,
-  skill: Sparkles,
-  web_search: Search,
-  web_fetch: Globe,
-  computer_use: MonitorCog,
-  provider: Cpu,
+  mcp: CioPlug,
+  skill: CioSparkles,
+  web_search: CioSearch,
+  web_fetch: CioBrowser,
+  computer_use: CioActions,
+  provider: CioCpu,
   image_descriptor: Image
 }
 
@@ -34,6 +40,6 @@ export function utilityKindLabel(kind: string | undefined): string {
 
 /** Glyph for a utility kind, falling back to the generic connection icon. */
 export function utilityKindIcon(kind: string | undefined): Component {
-  if (!kind) return Plug
-  return UTILITY_KIND_ICONS[kind as UtilityKind] ?? Plug
+  if (!kind) return CioPlug
+  return UTILITY_KIND_ICONS[kind as UtilityKind] ?? CioPlug
 }

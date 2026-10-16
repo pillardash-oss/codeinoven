@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Pencil, Plus, Trash2, X } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { permissionLevelLabel } from '$lib/actions'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import {
@@ -239,7 +243,7 @@
     aria-label={copy.cancel}
     onclick={cancelNaming}
   >
-    <X size={11} />
+    <CioClose size={11} />
   </button>
 {/snippet}
 
@@ -271,7 +275,7 @@
         disabled={atCapacity}
         onclick={beginNaming}
       >
-        <Plus size={11} class="shrink-0" />
+        <CioPlus size={11} class="shrink-0" />
         <span>Save current profile</span>
       </button>
     {/if}
@@ -331,7 +335,7 @@
                     </StatusPill>
                   {/if}
                   {#if isActive}
-                    <Check
+                    <CioCheck
                       size={10}
                       class="ml-auto shrink-0 text-primary"
                       aria-label="Profile in force"
@@ -353,7 +357,7 @@
               aria-label={`Rename the ${profile.name} profile`}
               onclick={() => beginRename(profile)}
             >
-              <Pencil size={11} />
+              <CioPencil size={11} />
             </button>
             <!--
               Delete only asks. The picker runs the shared confirmation, so a
@@ -367,7 +371,7 @@
               aria-label={`Delete the ${profile.name} profile`}
               onclick={() => onRequestDelete(profile)}
             >
-              <Trash2 size={11} />
+              <CioTrash size={11} />
             </button>
           {/if}
         </li>
@@ -388,7 +392,7 @@
         disabled={atCapacity}
         onclick={beginNaming}
       >
-        <Plus size={12} />
+        <CioPlus size={12} />
         Add profile
       </button>
     </div>

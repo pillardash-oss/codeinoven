@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { GlobeCode, Loader2, SquareTerminal } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import { GlobeCode } from '@lucide/svelte'
   import type { AgentRunningProcess } from '$shared/types'
   import { processName, processStartedAt } from './sources-panel-helpers'
 
@@ -36,7 +38,7 @@
       {#if isAppWide}
         <GlobeCode size={15} />
       {:else}
-        <SquareTerminal size={15} />
+        <CioTerminal size={15} />
       {/if}
     </span>
     <div class="min-w-0 flex-1">
@@ -76,7 +78,7 @@
       onclick={() => onStop(runningProcess.pid)}
     >
       {#if stopping}
-        <Loader2 size={12} class="animate-spin" />
+        <CioSpinner size={12} class="animate-spin" />
       {/if}
       Stop
     </button>

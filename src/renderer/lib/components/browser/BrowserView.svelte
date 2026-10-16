@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
   import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
@@ -21,7 +25,7 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
-  import { AppWindow, Bookmark, Clock, Download } from '@lucide/svelte'
+
   import { onDestroy, onMount } from 'svelte'
   import {
     browserAppearanceAccent,
@@ -130,7 +134,7 @@
           unfinishedDownloadCount > 0
             ? `Downloads (${unfinishedDownloadCount} unfinished)`
             : 'Downloads',
-        icon: Download,
+        icon: CioDownload,
         active: globalBrowser.downloadsSidebarShown,
         countBadge: unfinishedDownloadCount > 0 ? String(unfinishedDownloadCount) : undefined,
         onSelect: () => globalBrowser.toggleDownloadsSidebar()
@@ -141,7 +145,7 @@
       {
         id: 'history',
         label: 'History',
-        icon: Clock,
+        icon: CioClock,
         active: globalBrowser.historySidebarShown,
         onSelect: () => globalBrowser.toggleHistorySidebar()
       },
@@ -151,7 +155,7 @@
       {
         id: 'bookmarks',
         label: 'Bookmarks',
-        icon: Bookmark,
+        icon: CioBookmark,
         active: globalBrowser.bookmarksSidebarShown,
         onSelect: () => globalBrowser.toggleBookmarksSidebar()
       },
@@ -198,7 +202,7 @@
                 popupWindows.length === 1
                   ? 'Popup window'
                   : `Popup windows (${popupWindows.length})`,
-              icon: AppWindow,
+              icon: CioWindow,
               active: globalBrowser.popupsSidebarShown,
               onSelect: () => globalBrowser.togglePopupsSidebar()
             }

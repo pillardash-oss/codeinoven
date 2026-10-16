@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ExternalLink, Globe } from '@lucide/svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { openInBrowser } from '$lib/open-in-browser'
 
@@ -29,7 +30,7 @@
     data-external-url={urls[0]}
     onclick={() => void openInBrowser(urls[0])}
   >
-    <ExternalLink {size} />
+    <CioExternalLink {size} />
   </button>
 {:else}
   <DropdownMenu.Root>
@@ -38,7 +39,7 @@
       {title}
       aria-label={title}
     >
-      <ExternalLink {size} />
+      <CioExternalLink {size} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -59,7 +60,7 @@
             data-external-url={url}
             onSelect={() => void openInBrowser(url)}
           >
-            <Globe size={13} class="shrink-0 text-muted" />
+            <CioBrowser size={13} class="shrink-0 text-muted" />
             <span class="truncate font-mono text-[0.625rem]">{linkLabel(url)}</span>
           </DropdownMenu.Item>
         {/each}

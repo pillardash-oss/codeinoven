@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BrainCircuit } from '@lucide/svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
 
   /**
    * The memory proposal's card icon, as svelte-sonner draws it.
@@ -12,4 +12,4 @@
    */
 </script>
 
-<BrainCircuit size={18} />
+<CioMemory size={18} />

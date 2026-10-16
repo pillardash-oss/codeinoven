@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { FolderOpen, LoaderCircle, RotateCcw } from '@lucide/svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
@@ -155,7 +157,7 @@
   {#each ROWS as row (row.kind)}
     <form class="mt-4" onsubmit={(event) => submitRow(row.kind, event)}>
       <label class="flex items-center gap-1.5 text-sm font-medium" for={`work-root-${row.kind}`}>
-        <FolderOpen size={13} class="text-dimmed" />
+        <CioFolderOpen size={13} class="text-dimmed" />
         {row.label}
       </label>
       <p class="mt-0.5 text-xs leading-relaxed text-dimmed">{row.description}</p>
@@ -178,7 +180,7 @@
           title={`Save the ${row.label.toLowerCase()}`}
         >
           {#if busy === row.kind}
-            <LoaderCircle size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           Save
         </button>
@@ -189,7 +191,7 @@
           title={`Put new ${row.label.toLowerCase().replace(' folder', 's')} back in ${DEFAULT_WORK_ROOTS[row.kind]}, in this project`}
           onclick={() => void applyRoot(row.kind, DEFAULT_WORK_ROOTS[row.kind])}
         >
-          <RotateCcw size={12} />
+          <CioUndo size={12} />
           Reset
         </button>
       </div>

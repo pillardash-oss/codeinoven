@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Minimize2, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import { Minimize2 } from '@lucide/svelte'
 
   import Modal from '../ui/Modal.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -70,7 +71,7 @@
         if (active) standaloneFiles.requestClose(active.path)
       }}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
 

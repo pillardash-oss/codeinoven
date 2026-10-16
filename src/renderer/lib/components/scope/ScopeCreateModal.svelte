@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { GitBranch, Loader2, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ScopeSetupCommandsEditor from './ScopeSetupCommandsEditor.svelte'
@@ -187,7 +189,7 @@
       {#if isolated}
         <div class="pl-11 pt-2">
           <div class="flex items-center gap-1.5 text-xs text-muted">
-            <GitBranch size={13} />
+            <CioTabGit size={13} />
             <code>{previewBranch()}</code>
           </div>
           <div class="mt-1.5 flex items-center gap-1.5 text-xs text-muted">
@@ -216,7 +218,7 @@
                 {/if}
               </select>
               {#if branchesLoading}
-                <Loader2
+                <CioSpinner
                   size={12}
                   class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 animate-spin text-dimmed"
                 />
@@ -246,7 +248,7 @@
                 class="mt-1.5 flex items-start gap-1.5 border border-warning/30 bg-warning/10 p-2 text-xs text-warning"
                 role="status"
               >
-                <TriangleAlert size={13} class="mt-0.5 shrink-0" />
+                <CioAttention size={13} class="mt-0.5 shrink-0" />
                 <span>
                   {sourceInfo.dirtyFiles.length} uncommitted change{sourceInfo.dirtyFiles.length ===
                   1

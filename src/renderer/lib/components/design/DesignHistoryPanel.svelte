@@ -1,9 +1,13 @@
 <script lang="ts">
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import DesignHistoryActions from './DesignHistoryActions.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import { onMount } from 'svelte'
-  import { GitBranch, History, LoaderCircle, X } from '@lucide/svelte'
+
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
@@ -265,7 +269,7 @@
   aria-label={`${noun} history`}
 >
   <header class="flex shrink-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5">
-    <History size={12} class="shrink-0 text-accent" />
+    <CioHistory size={12} class="shrink-0 text-accent" />
     <span class="text-[0.6875rem] shrink-0 font-semibold tracking-wide text-dimmed uppercase"
       >History</span
     >
@@ -286,7 +290,7 @@
       />
     {:else}<span class="min-w-0 flex-1"></span>{/if}
     {#if loading}
-      <LoaderCircle size={11} class="shrink-0 animate-spin text-dimmed" aria-hidden="true" />
+      <CioSpinner size={11} class="shrink-0 animate-spin text-dimmed" aria-hidden="true" />
     {/if}
     <DesignHistoryActions
       {canUndo}
@@ -305,7 +309,7 @@
       aria-label="Close the history"
       onclick={onClose}
     >
-      <X size={12} />
+      <CioClose size={12} />
     </button>
   </header>
 
@@ -321,7 +325,7 @@
 
     {#if history?.gitBacked}
       <div class="flex h-full flex-col items-center justify-center gap-1.5 px-3 text-center">
-        <GitBranch size={16} class="text-dimmed" />
+        <CioTabGit size={16} class="text-dimmed" />
         <p class="text-[0.6875rem] text-muted">Git already versions this {noun}.</p>
         <p class="text-[0.625rem] text-dimmed">
           This folder lives in your repository, so its history belongs to Git. Use your repository
@@ -330,7 +334,7 @@
       </div>
     {:else if revisions.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-1.5 px-3 text-center">
-        <History size={16} class="text-dimmed" />
+        <CioHistory size={16} class="text-dimmed" />
         <p class="text-[0.6875rem] text-muted">
           {loading ? 'Reading the history…' : `No history for this ${noun} yet.`}
         </p>
@@ -393,7 +397,7 @@
                     </span>
                   {/if}
                   {#if restoring === revision.id}
-                    <LoaderCircle size={10} class="shrink-0 animate-spin text-accent" />
+                    <CioSpinner size={10} class="shrink-0 animate-spin text-accent" />
                   {/if}
                 </span>
                 <span class="flex items-center gap-1.5 text-[0.625rem] text-dimmed">

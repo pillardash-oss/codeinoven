@@ -1,34 +1,34 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
+  import CioImageOff from '$lib/components/icons/cio/CioImageOff.svelte'
+  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
+  import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
   import { onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import {
     ArrowUpDown,
-    Check,
-    ChevronDown,
-    ChevronRight,
-    Copy,
-    Download,
-    Ellipsis,
     Film,
-    FolderTree,
     Frame,
     GlobeCode,
-    History,
-    ImageOff,
     Inspect,
     ListClock,
-    LoaderCircle,
-    Palette,
-    Pencil,
     PlayingCardsFan,
     Presentation,
-    RefreshCw,
-    Store,
-    Target,
-    Trash2,
-    Volume2,
-    VolumeX
+    Store
   } from '@lucide/svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
@@ -1347,7 +1347,7 @@
       -->
       <div class="mb-2 shrink-0 border border-border bg-surface p-3">
         <div class="flex items-center gap-1.5">
-          <Download size={13} class="text-accent" aria-hidden="true" />
+          <CioDownload size={13} class="text-accent" aria-hidden="true" />
           <span class="text-xs font-semibold text-foreground">
             Install the video pack to edit here
           </span>
@@ -1392,7 +1392,7 @@
       <div
         class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
       >
-        <ImageOff size={16} />
+        <CioImageOff size={16} />
         <span class="px-4 text-center text-[0.6875rem]">
           {`This ${noun} has no entry page yet, so there is nothing to play. The agent writes one when it starts the ${noun}.`}
         </span>
@@ -1430,10 +1430,10 @@
         {:else}
           <div class="flex min-h-0 flex-1 items-center justify-center gap-1.5 text-dimmed">
             {#if galleryBusy}
-              <LoaderCircle size={14} class="animate-spin" />
+              <CioSpinner size={14} class="animate-spin" />
               <span class="text-[0.625rem]">Capturing…</span>
             {:else}
-              <ImageOff size={14} />
+              <CioImageOff size={14} />
               <span class="text-[0.625rem]">No frame captured yet.</span>
             {/if}
           </div>
@@ -1495,10 +1495,10 @@
               class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
             >
               {#if galleryBusy}
-                <LoaderCircle size={14} class="animate-spin" />
+                <CioSpinner size={14} class="animate-spin" />
                 <span class="text-[0.625rem]">Capturing…</span>
               {:else}
-                <ImageOff size={14} />
+                <CioImageOff size={14} />
                 <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
               {/if}
             </span>
@@ -1525,7 +1525,7 @@
             class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
             onSelect={() => void copyDesignPath(selected.directory, screen.entry)}
           >
-            <Copy size={13} class="shrink-0 text-muted" />
+            <CioCopy size={13} class="shrink-0 text-muted" />
             {copyLabel}
           </ContextMenu.Item>
           {#if !video}
@@ -1533,9 +1533,9 @@
               <ContextMenu.SubTrigger
                 class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated"
               >
-                <Download size={13} class="shrink-0 text-muted" />
+                <CioDownload size={13} class="shrink-0 text-muted" />
                 Export
-                <ChevronRight size={13} class="ml-auto text-muted" />
+                <CioForward size={13} class="ml-auto text-muted" />
               </ContextMenu.SubTrigger>
               <ContextMenu.Portal>
                 <ContextMenu.SubContent
@@ -1587,7 +1587,7 @@
           class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
         >
           {#if input.busy}
-            <LoaderCircle size={14} class="animate-spin" />
+            <CioSpinner size={14} class="animate-spin" />
           {:else}
             <Icon size={16} />
           {/if}
@@ -1643,7 +1643,7 @@
               class="flex shrink-0 items-center gap-0.5 pl-0.5 text-[0.625rem] font-medium text-dimmed transition-colors group-hover:text-foreground"
             >
               Others
-              <ChevronDown size={10} class="shrink-0" />
+              <CioChevronDown size={10} class="shrink-0" />
             </span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -1691,7 +1691,7 @@
                           {stamp}
                         </span>
                       {/if}
-                      <Check
+                      <CioCheck
                         size={12}
                         class={[
                           'shrink-0',
@@ -1711,7 +1711,7 @@
                         void copyDesignPath(item.directory)
                       }}
                     >
-                      <Copy size={11} />
+                      <CioCopy size={11} />
                     </button>
                   </div>
                 {/each}
@@ -1749,9 +1749,9 @@
             onclick={() => contextSidebarState.toggleBrowserTabMute(tabId)}
           >
             {#if tabRuntime.muted}
-              <VolumeX size={12} />
+              <CioVolumeX size={12} />
             {:else}
-              <Volume2 size={12} />
+              <CioVolume size={12} />
             {/if}
           </button>
         {/if}
@@ -1763,7 +1763,7 @@
           aria-label={revealLabel}
           onclick={() => void revealCreator()}
         >
-          <Target size={12} />
+          <CioTarget size={12} />
         </button>
         {#if historyActions && selected.directory !== '' && !selectedMissing}
           <DesignHistoryActions
@@ -1786,7 +1786,7 @@
           aria-label={`${nounTitle} history`}
           onclick={() => (historyOpen = !historyOpen)}
         >
-          <History size={12} />
+          <CioHistory size={12} />
         </button>
         {#if !video && designScreens.length > 1}
           <!--
@@ -1824,7 +1824,7 @@
                       class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                     >
                       <span class="min-w-0 flex-1 truncate">{SCREEN_ORDER_LABELS[order]}</span>
-                      <Check
+                      <CioCheck
                         size={12}
                         class={['shrink-0', order === screenOrder ? 'text-primary' : 'invisible']}
                         aria-hidden="true"
@@ -1845,9 +1845,9 @@
           onclick={refreshBoard}
         >
           {#if galleryBusy}
-            <LoaderCircle size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <RefreshCw size={12} />
+            <CioRefresh size={12} />
           {/if}
         </button>
         <DropdownMenu.Root bind:open={menus.options}>
@@ -1856,7 +1856,7 @@
             title={`${nounTitle} options`}
             aria-label={`${nounTitle} options`}
           >
-            <Ellipsis size={13} />
+            <CioEllipsis size={13} />
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -1870,7 +1870,7 @@
                 class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={refreshBoard}
               >
-                <RefreshCw size={13} class="shrink-0 text-muted" />
+                <CioRefresh size={13} class="shrink-0 text-muted" />
                 {refreshLabel}
               </DropdownMenu.Item>
               <DropdownMenu.Item
@@ -1878,7 +1878,7 @@
                 disabled={selected.directory === ''}
                 onSelect={() => void copyDesignPath(selected.directory)}
               >
-                <Copy size={13} class="shrink-0 text-muted" />
+                <CioCopy size={13} class="shrink-0 text-muted" />
                 Copy path
               </DropdownMenu.Item>
               <DropdownMenu.Item
@@ -1886,7 +1886,7 @@
                 disabled={selected.directory === ''}
                 onSelect={() => void revealDesignPath(selected.directory)}
               >
-                <FolderTree size={13} class="shrink-0 text-muted" />
+                <CioFiles size={13} class="shrink-0 text-muted" />
                 Reveal path
               </DropdownMenu.Item>
               <DropdownMenu.Sub>
@@ -1894,9 +1894,9 @@
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={selected.directory === ''}
                 >
-                  <Download size={13} class="shrink-0 text-muted" />
+                  <CioDownload size={13} class="shrink-0 text-muted" />
                   Export
-                  <ChevronRight size={13} class="ml-auto text-muted" />
+                  <CioForward size={13} class="ml-auto text-muted" />
                 </DropdownMenu.SubTrigger>
                 <DropdownMenu.Portal>
                   <DropdownMenu.SubContent
@@ -1931,7 +1931,7 @@
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('contract')}
                 >
-                  <Pencil size={13} class="shrink-0 text-muted" />
+                  <CioPencil size={13} class="shrink-0 text-muted" />
                   Generate DESIGN.md
                 </DropdownMenu.Item>
                 <DropdownMenu.Sub>
@@ -1939,9 +1939,9 @@
                     class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                     disabled={canvasBusy !== '' || selected.directory === ''}
                   >
-                    <Palette size={13} class="shrink-0 text-muted" />
+                    <CioPalette size={13} class="shrink-0 text-muted" />
                     Review Design
-                    <ChevronRight size={13} class="ml-auto text-muted" />
+                    <CioForward size={13} class="ml-auto text-muted" />
                   </DropdownMenu.SubTrigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.SubContent
@@ -1952,7 +1952,7 @@
                         class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                         disabled={canvasBusy !== '' || selected.directory === ''}
                         onSelect={() => void requestDesignAction('critique')}
-                        ><Palette size={13} class="shrink-0 text-muted" />Review design quality</DropdownMenu.Item
+                        ><CioPalette size={13} class="shrink-0 text-muted" />Review design quality</DropdownMenu.Item
                       >
                       <DropdownMenu.Item
                         class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
@@ -2010,7 +2010,7 @@
                 disabled={selected.directory === '' || selectedMissing}
                 onSelect={() => (historyOpen = !historyOpen)}
               >
-                <History size={13} class="shrink-0 text-muted" />
+                <CioHistory size={13} class="shrink-0 text-muted" />
                 {historyOpen ? 'Hide history' : 'Show history'}
               </DropdownMenu.Item>
               <DropdownMenu.Sub>
@@ -2018,9 +2018,9 @@
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   disabled={selected.directory === '' || selectedMissing}
                 >
-                  <Pencil size={13} class="shrink-0 text-muted" />
+                  <CioPencil size={13} class="shrink-0 text-muted" />
                   Update {noun} details
-                  <ChevronRight size={12} class="ml-auto" />
+                  <CioForward size={12} class="ml-auto" />
                 </DropdownMenu.SubTrigger>
                 <DropdownMenu.SubContent
                   class="z-50 min-w-48 border border-border bg-surface p-1 shadow-xl"
@@ -2053,7 +2053,7 @@
           onclick={() => void openPreview(selected.entry)}
         >
           {#if opening}
-            <LoaderCircle size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else}
             <GlobeCode size={12} />
           {/if}
@@ -2083,7 +2083,7 @@
           onclick={() => void requestCanvas('update')}
         >
           {#if canvasBusy === 'update'}
-            <LoaderCircle size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else}
             <ListClock size={12} />
           {/if}
@@ -2105,7 +2105,7 @@
 
     {#if selectedMissing}
       <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-center">
-        <ImageOff size={20} class="text-warning" />
+        <CioImageOff size={20} class="text-warning" />
         <p class="text-sm font-medium">{nounTitle} not found</p>
         <p class="break-all font-mono text-xs text-muted">{selected.directory}</p>
         <p class="text-xs text-muted">
@@ -2115,7 +2115,7 @@
           type="button"
           class="flex items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
           onclick={() => (removeRequested = selectedItem)}
-          ><Trash2 size={13} />Remove from panel</button
+          ><CioTrash size={13} />Remove from panel</button
         >
       </div>
     {:else if video && selected.directory !== ''}
@@ -2152,7 +2152,7 @@
           <div
             class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
           >
-            <ImageOff size={16} />
+            <CioImageOff size={16} />
             <span class="px-4 text-center text-[0.6875rem]">
               {`The agent has not written a ${noun} yet. It will appear here when it does.`}
             </span>
@@ -2162,10 +2162,10 @@
             class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
           >
             {#if galleryBusy}
-              <LoaderCircle size={16} class="animate-spin" />
+              <CioSpinner size={16} class="animate-spin" />
               <span class="text-[0.6875rem]">Capturing the {noun}…</span>
             {:else}
-              <ImageOff size={16} />
+              <CioImageOff size={16} />
               <span class="px-4 text-center text-[0.6875rem]">
                 {items.length === 0
                   ? `The agent has not written a ${noun} yet. It will appear here when it does.`
@@ -2204,7 +2204,7 @@
           {#if !video && designScreens.length === 0}
             {#if galleryBusy}
               <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
-                <LoaderCircle size={12} class="animate-spin" />
+                <CioSpinner size={12} class="animate-spin" />
                 Capturing the {noun}…
               </p>
             {:else}

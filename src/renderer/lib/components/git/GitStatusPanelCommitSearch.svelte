@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Loader2, Search } from '@lucide/svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { GitCommitInfo } from '$shared/types'
   import FindInBar from '../files/FindInBar.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
@@ -57,7 +58,7 @@
       >
         {#if loading}
           <div class="flex items-center justify-center gap-2 px-3 py-6 text-xs text-dimmed">
-            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Searching commits…
           </div>
         {:else if results.length === 0}
@@ -76,7 +77,7 @@
               onclick={() => onSelectResult(commit)}
               onmouseenter={() => (activeIndex = index)}
             >
-              <Search size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
+              <CioSearch size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-[0.6875rem] leading-snug">
                   {commit.message.split('\n')[0]}

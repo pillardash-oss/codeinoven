@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ChevronRight, Loader2, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { parseJobLogSections, type JobLogLine, type JobLogSection } from '$shared/github-job-log'
   import type { GitHubDeploymentJobLog } from '$shared/types'
 
@@ -86,7 +88,7 @@
 <div class="max-h-[min(60dvh,36rem)] overflow-auto {paneClass}">
   {#if loading}
     <div class="flex items-center gap-2 text-[0.625rem] text-dimmed">
-      <Loader2 size={11} class="shrink-0 animate-spin" />
+      <CioSpinner size={11} class="shrink-0 animate-spin" />
       Loading log…
     </div>
   {:else if error}
@@ -111,12 +113,12 @@
             aria-expanded={open}
             onclick={() => toggle(section)}
           >
-            <ChevronRight
+            <CioForward
               size={11}
               class="shrink-0 text-dimmed transition-transform {open ? 'rotate-90' : ''}"
             />
             {#if section.failed}
-              <TriangleAlert size={11} class="shrink-0 text-danger" />
+              <CioAttention size={11} class="shrink-0 text-danger" />
             {/if}
             <span
               class="min-w-0 flex-1 truncate text-[0.625rem] {section.failed

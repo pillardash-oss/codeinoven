@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, Loader2, Plus, Server } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { invoke } from '$lib/ipc.svelte'
   import { ovenMarkUrl } from '$lib/stores/ovens.svelte'
@@ -160,12 +163,12 @@
     <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{loadError}</p>
   {:else if loadingOvens || !ovenState}
     <p class="flex items-center gap-2 py-6 text-sm text-muted">
-      <Loader2 size={15} class="animate-spin" />
+      <CioSpinner size={15} class="animate-spin" />
       Loading Ovens…
     </p>
   {:else if remoteOvens.length === 0}
     <EmptyState
-      icon={Server}
+      icon={CioServer}
       title="No Ovens yet"
       description="An Oven is a machine CodeInOven runs agents on over SSH. Add one to start a project there."
     >
@@ -176,7 +179,7 @@
           title="Add a new Oven in Settings"
           onclick={requestNewOven}
         >
-          <Plus size={15} />
+          <CioPlus size={15} />
           Create a New Oven
         </button>
       {/snippet}
@@ -198,14 +201,14 @@
               {#if ovenMarkUrl(selectedOven)}
                 <img class="h-4 w-4 shrink-0" alt="" src={ovenMarkUrl(selectedOven)} />
               {:else}
-                <Server size={14} class="shrink-0 text-muted" />
+                <CioServer size={14} class="shrink-0 text-muted" />
               {/if}
               <span class="min-w-0 flex-1 truncate">{selectedOven.name}</span>
             {:else}
-              <Server size={14} class="shrink-0 text-muted" />
+              <CioServer size={14} class="shrink-0 text-muted" />
               <span class="min-w-0 flex-1 truncate text-muted">Choose an Oven</span>
             {/if}
-            <ChevronDown size={14} class="shrink-0 text-muted" />
+            <CioChevronDown size={14} class="shrink-0 text-muted" />
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -224,7 +227,7 @@
                   {#if ovenMarkUrl(oven)}
                     <img class="h-4 w-4 shrink-0" alt="" src={ovenMarkUrl(oven)} />
                   {:else}
-                    <Server size={14} class="shrink-0 text-muted" />
+                    <CioServer size={14} class="shrink-0 text-muted" />
                   {/if}
                   <span class="min-w-0 flex-1 truncate">{oven.name}</span>
                   {#if oven.id === ovenState?.defaultOvenId}
@@ -239,7 +242,7 @@
 
       {#if probing}
         <p class="flex items-center gap-2 py-2 text-sm text-muted">
-          <Loader2 size={15} class="animate-spin" />
+          <CioSpinner size={15} class="animate-spin" />
           Connecting to {selectedOven?.name ?? 'the Oven'}…
         </p>
       {:else if probeError}
@@ -279,7 +282,7 @@
         onclick={() => void addProject()}
       >
         {#if adding}
-          <Loader2 size={15} class="animate-spin" />
+          <CioSpinner size={15} class="animate-spin" />
         {/if}
         Use This Folder
       </button>

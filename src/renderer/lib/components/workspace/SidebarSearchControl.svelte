@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Search, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { Popover } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
 
@@ -49,7 +50,7 @@
 
 <Popover.Root {open} {onOpenChange}>
   <Popover.Trigger class={triggerClass} aria-label={ariaLabel} {title}>
-    <Search size={size === 'md' ? 15 : 12} strokeWidth={size === 'md' ? 1.8 : undefined} />
+    <CioSearch size={size === 'md' ? 15 : 12} strokeWidth={size === 'md' ? 1.8 : undefined} />
   </Popover.Trigger>
 
   <Popover.Portal>
@@ -63,7 +64,7 @@
       aria-label={ariaLabel}
     >
       <div class="flex items-center gap-1.5">
-        <Search size={14} class="shrink-0 text-dimmed" />
+        <CioSearch size={14} class="shrink-0 text-dimmed" />
         <input
           {@attach focusSearchInput}
           type="text"
@@ -83,7 +84,7 @@
               searchInput?.focus()
             }}
           >
-            <X size={13} />
+            <CioClose size={13} />
           </button>
         {/if}
         <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
@@ -92,7 +93,7 @@
           aria-label="Close search"
           title="Close search"
         >
-          <X size={13} />
+          <CioClose size={13} />
         </Popover.Close>
       </div>
     </Popover.Content>

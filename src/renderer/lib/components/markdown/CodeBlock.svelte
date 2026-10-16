@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import { onMount } from 'svelte'
-  import { Check, Copy, WrapText } from '@lucide/svelte'
+  import { WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
 
@@ -76,9 +78,9 @@
           onclick={() => void copy()}
         >
           {#if copied}
-            <Check size={12} class="text-success" />
+            <CioCheck size={12} class="text-success" />
           {:else}
-            <Copy size={12} />
+            <CioCopy size={12} />
           {/if}
         </button>
       </div>

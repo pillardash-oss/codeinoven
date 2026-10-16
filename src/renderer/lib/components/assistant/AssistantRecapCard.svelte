@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Clock, ListChecks, Plug, Signature, Sparkles } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import { ListChecks, Signature } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -168,7 +172,7 @@
               class="flex shrink-0 items-center gap-1.5 text-dimmed"
               title="How it behaves and sounds"
             >
-              <Sparkles size={12} strokeWidth={1.8} />
+              <CioSparkles size={12} strokeWidth={1.8} />
               <span>Personality</span>
             </dt>
             <dd class="min-w-0 flex-1 text-foreground">{plan.personality}</dd>
@@ -179,7 +183,7 @@
             class="flex shrink-0 items-center gap-1.5 text-dimmed"
             title="When the assistant runs"
           >
-            <Clock size={12} strokeWidth={1.8} />
+            <CioClock size={12} strokeWidth={1.8} />
             <span>Schedule</span>
           </dt>
           <dd class="min-w-0 flex-1 text-foreground">{scheduleLabel}</dd>
@@ -189,7 +193,7 @@
             class="flex shrink-0 items-center gap-1.5 text-dimmed"
             title="Utilities the assistant needs"
           >
-            <Plug size={12} strokeWidth={1.8} />
+            <CioPlug size={12} strokeWidth={1.8} />
             <span>Connections</span>
           </dt>
           <dd class="min-w-0 flex-1 text-foreground">
@@ -202,7 +206,7 @@
         </div>
         <div class="flex items-start gap-2">
           <dt class="flex shrink-0 items-center gap-1.5 text-dimmed" title="The saved instructions">
-            <Check size={12} strokeWidth={1.8} />
+            <CioCheck size={12} strokeWidth={1.8} />
             <span>Instructions</span>
           </dt>
           <dd class="min-w-0 flex-1 text-foreground">
@@ -228,7 +232,7 @@
         <CardButton
           label={update ? 'Save changes' : 'Save assistant'}
           title={saveTitle}
-          icon={saving ? undefined : Check}
+          icon={saving ? undefined : CioCheck}
           variant="primary"
           loading={saving}
           disabled={saving}

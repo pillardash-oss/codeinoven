@@ -1,13 +1,20 @@
 <script lang="ts">
   import { cioStrokeWidth, type CioGlyphProps } from './glyph'
 
-  let { size = 16, strokeWidth = 1.8, class: className = '' }: CioGlyphProps = $props()
+  let { size = 16, strokeWidth = 1.8, class: className = '', ...rest }: CioGlyphProps = $props()
+
+  /** An icon is decoration unless the call site names it for a screen reader. */
+  let named = $derived(rest.role === 'img' || rest['aria-label'] !== undefined)
+
+  /** The weight as a number: the prop takes a string the way Lucide's does. */
+  let weight = $derived(typeof strokeWidth === 'number' ? strokeWidth : Number(strokeWidth) || 1.8)
 </script>
 
 <!--
   CIO · Refresh
-  Refresh: a ring broken by a corner, so the direction is the stroke and not a
-  second mark.
+  Refresh: one ring made of two arcs, each carrying its own corner, so the
+  mark reads as a cycle. A single arc with one corner is the redo mark, and
+  the two were the same drawing until this one took the second head.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -15,16 +22,19 @@
   height={size}
   fill="none"
   stroke="currentColor"
-  stroke-width={strokeWidth}
+  stroke-width={weight}
   stroke-linecap="round"
   stroke-linejoin="round"
   class={className}
-  aria-hidden="true"
+  aria-hidden={named ? undefined : 'true'}
+  {...rest}
 >
   <g
-    transform="translate(-3.795 -3.826) scale(1.3162)"
-    stroke-width={cioStrokeWidth(strokeWidth, 1.3162)}
+    transform="translate(-1.805 -1.805) scale(1.1504)"
+    stroke-width={cioStrokeWidth(weight, 1.1504)}
   >
-    <path d="M19.6 12a7.6 7.6 0 1 1-2.3-5.4" /><path d="M19.6 4.4v4.4h-4.4" />
+    <path d="M19.4 9.6a7.5 7.5 0 0 0-12.8-4.2" /><path d="M4.6 14.4a7.5 7.5 0 0 0 12.8 4.2" /><path
+      d="M19.4 4.8v4.8h-4.8"
+    /><path d="M4.6 19.2v-4.8h4.8" />
   </g>
 </svg>

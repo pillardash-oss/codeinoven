@@ -1,7 +1,9 @@
 <script lang="ts">
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { Star, X } from '@lucide/svelte'
+
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { BROWSER_HISTORY_GLOBAL_SCOPE, browserHistory } from '$lib/stores/browser-history.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -89,7 +91,7 @@
       title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
       onclick={() => browserBookmarks.toggle(entry.url, entry.title, null, bookmarkBoxId)}
     >
-      <Star size={12} class={bookmarked ? 'fill-current' : ''} />
+      <CioStar size={12} class={bookmarked ? 'fill-current' : ''} />
     </button>
     <button
       type="button"
@@ -98,7 +100,7 @@
       title="Forget this page"
       onclick={() => (forgettingUrl = entry.url)}
     >
-      <X size={12} />
+      <CioClose size={12} />
     </button>
   {/snippet}
 </BrowserHistoryList>

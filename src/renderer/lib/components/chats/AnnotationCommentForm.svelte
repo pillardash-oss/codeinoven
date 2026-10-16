@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Trash2 } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { plainTextEditorTarget } from '../../speech/editor-target'
@@ -119,7 +120,7 @@
     title={removeTitle}
     onclick={onRemove}
   >
-    <Trash2 size={12} />
+    <CioTrash size={12} />
     Remove
   </button>
   <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} triggerPriority={6} />
@@ -129,7 +130,7 @@
     title={doneTitle}
     onclick={submit}
   >
-    <Check size={12} />
+    <CioCheck size={12} />
     Done
   </button>
 </div>

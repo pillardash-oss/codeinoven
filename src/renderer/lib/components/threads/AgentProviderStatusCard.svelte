@@ -1,16 +1,11 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Check,
-    Clock3,
-    Code2,
-    Copy,
-    LogIn,
-    RotateCcw,
-    Square,
-    TimerReset,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import { Clock3, LogIn, Square, TimerReset } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
@@ -300,7 +295,7 @@ card, the way it did before the head moved onto the shared primitives. -->
 <div role={waiting ? 'status' : 'alert'} aria-live="polite">
   <CardFrame placement="top" label="Provider status" {stackedAbove} {joinsBelow}>
     <CardHead
-      icon={waiting || autoResume ? Clock3 : AlertTriangle}
+      icon={waiting || autoResume ? Clock3 : CioAttention}
       title={sourceLabel ? 'Worker output error' : title}
       {chip}
       bind:folded={foldState.folded}
@@ -374,7 +369,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label="Dismiss"
               title="Dismiss provider error"
-              icon={X}
+              icon={CioClose}
               variant="ghost"
               onclick={onDismiss}
             />
@@ -393,7 +388,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label="Raw Error"
               title="Show the raw provider error"
-              icon={Code2}
+              icon={CioCode}
               variant="ghost"
               onclick={() => (showRawError = true)}
             />
@@ -430,7 +425,7 @@ card, the way it did before the head moved onto the shared primitives. -->
               <CardButton
                 label={retryLabel}
                 title={retryLabel}
-                icon={retrying ? undefined : RotateCcw}
+                icon={retrying ? undefined : CioUndo}
                 variant="secondary"
                 loading={retrying}
                 disabled={retrying}
@@ -448,7 +443,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label="Retry now"
               title="Retry the request now"
-              icon={retrying ? undefined : RotateCcw}
+              icon={retrying ? undefined : CioUndo}
               variant="primary"
               loading={retrying}
               disabled={retrying}
@@ -458,7 +453,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label={retryLabel}
               title={retryLabel}
-              icon={retrying ? undefined : RotateCcw}
+              icon={retrying ? undefined : CioUndo}
               variant="primary"
               loading={retrying}
               disabled={retrying}
@@ -484,10 +479,10 @@ card, the way it did before the head moved onto the shared primitives. -->
       onclick={() => void copyRawError()}
     >
       {#if copiedRawError}
-        <Check size={13} class="text-success" />
+        <CioCheck size={13} class="text-success" />
         Copied
       {:else}
-        <Copy size={13} />
+        <CioCopy size={13} />
         Copy
       {/if}
     </button>

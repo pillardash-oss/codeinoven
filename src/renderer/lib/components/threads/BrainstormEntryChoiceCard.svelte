@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { FileText, Lightbulb, Sparkles, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import { Lightbulb } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -90,7 +93,13 @@
 
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Choose planning path">
-    <CardHead icon={Sparkles} title="Plan your work" {chip} bind:folded foldLabel="planning choice">
+    <CardHead
+      icon={CioSparkles}
+      title="Plan your work"
+      {chip}
+      bind:folded
+      foldLabel="planning choice"
+    >
       {#snippet controls()}
         {#if onClose}
           <button
@@ -101,7 +110,7 @@
             disabled={busy}
             onclick={() => void onClose()}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         {/if}
       {/snippet}
@@ -167,7 +176,7 @@
                 title={retryChoice === 'brainstorm'
                   ? 'Retry generating the brainstorm'
                   : 'Retry generating the specification'}
-                icon={busy ? undefined : retryChoice === 'brainstorm' ? Lightbulb : FileText}
+                icon={busy ? undefined : retryChoice === 'brainstorm' ? Lightbulb : CioFileText}
                 variant="primary"
                 disabled={busy}
                 loading={busy}

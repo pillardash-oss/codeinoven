@@ -1,25 +1,25 @@
+import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
+import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+import CioLock from '$lib/components/icons/cio/CioLock.svelte'
+import CioLockOpen from '$lib/components/icons/cio/CioLockOpen.svelte'
+import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
+import CioMilestone from '$lib/components/icons/cio/CioMilestone.svelte'
+import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+import CioPersonPlus from '$lib/components/icons/cio/CioPersonPlus.svelte'
+import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+import CioTag from '$lib/components/icons/cio/CioTag.svelte'
+import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
 import {
   ArrowRightLeft,
-  CircleSlash,
-  Copy,
-  Eye,
-  GitBranch,
-  GitCommitHorizontal,
-  GitMerge,
   GitPullRequestDraft,
-  Lock,
-  LockOpen,
-  Milestone,
-  Pencil,
-  Pin,
   PinOff,
-  RotateCcw,
   Scissors,
   SlidersHorizontal,
-  Tag,
   UserCheck,
-  UserMinus,
-  UserPlus
+  UserMinus
 } from '@lucide/svelte'
 import type { IssueTimelineEvent } from '$shared/types'
 
@@ -35,55 +35,55 @@ import type { IssueTimelineEvent } from '$shared/types'
  * The icon is decoration: the sentence beside it already says what happened, so
  * the row hides it from assistive technology instead of announcing the kind twice.
  */
-export function timelineEventIcon(event: Pick<IssueTimelineEvent, 'kind'>): typeof Tag {
+export function timelineEventIcon(event: Pick<IssueTimelineEvent, 'kind'>): typeof CioTag {
   switch (event.kind) {
     case 'labeled':
     case 'unlabeled':
-      return Tag
+      return CioTag
     case 'assigned':
-      return UserPlus
+      return CioPersonPlus
     case 'unassigned':
       return UserMinus
     case 'closed':
-      return CircleSlash
+      return CioBan
     case 'reopened':
-      return RotateCcw
+      return CioUndo
     case 'renamed':
-      return Pencil
+      return CioPencil
     case 'milestoned':
     case 'demilestoned':
-      return Milestone
+      return CioMilestone
     case 'locked':
-      return Lock
+      return CioLock
     case 'unlocked':
-      return LockOpen
+      return CioLockOpen
     case 'pinned':
-      return Pin
+      return CioPin
     case 'unpinned':
       return PinOff
     case 'referenced':
-      return GitCommitHorizontal
+      return CioCommit
     case 'cross-referenced':
       return ArrowRightLeft
     case 'marked_as_duplicate':
-      return Copy
+      return CioCopy
     case 'connected':
-      return GitBranch
+      return CioTabGit
     case 'fields':
       return SlidersHorizontal
     case 'merged':
-      return GitMerge
+      return CioMerge
     case 'review_requested':
     case 'review_request_removed':
       return UserCheck
     case 'ready_for_review':
-      return Eye
+      return CioEye
     case 'converted_to_draft':
       return GitPullRequestDraft
     case 'head_ref_deleted':
       return Scissors
     default:
-      return Tag
+      return CioTag
   }
 }
 

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Folder, ChevronRight } from '@lucide/svelte'
+  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import type { Project } from '$shared/types'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
@@ -180,14 +181,14 @@
             onerror={projectIconOnError(project)}
           />
         {:else}
-          <Folder size={14} class="text-muted" />
+          <CioFolder size={14} class="text-muted" />
         {/if}
       </span>
       <span
         class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100"
         aria-hidden="true"
       >
-        <ChevronRight
+        <CioForward
           size={13}
           class="text-dimmed transition-transform duration-150 {expanded ? 'rotate-90' : ''}"
         />

@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Braces, File, FileCode2, FileJson, FileText, Hash } from '@lucide/svelte'
+  import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
+  import CioFileCode from '$lib/components/icons/cio/CioFileCode.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import { File, FileJson, Hash } from '@lucide/svelte'
   import { getFileTypeIconDataUri } from './file-type-icons'
 
   interface Props {
@@ -45,15 +48,15 @@
 {:else if kind === 'json'}
   <FileJson {size} class="shrink-0 text-accent {className}" />
 {:else if kind === 'code'}
-  <FileCode2 {size} class="shrink-0 text-info {className}" />
+  <CioFileCode {size} class="shrink-0 text-info {className}" />
 {:else if kind === 'markup'}
-  <Braces {size} class="shrink-0 text-danger {className}" />
+  <CioBraces {size} class="shrink-0 text-danger {className}" />
 {:else if kind === 'systems'}
   <Hash {size} class="shrink-0 text-success {className}" />
 {:else if kind === 'config'}
-  <Braces {size} class="shrink-0 text-primary {className}" />
+  <CioBraces {size} class="shrink-0 text-primary {className}" />
 {:else if kind === 'text'}
-  <FileText {size} class="shrink-0 text-muted {className}" />
+  <CioFileText {size} class="shrink-0 text-muted {className}" />
 {:else}
   <File {size} class="shrink-0 text-dimmed {className}" />
 {/if}

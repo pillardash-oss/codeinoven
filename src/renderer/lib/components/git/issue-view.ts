@@ -6,7 +6,11 @@
  * the reader both draw these, and a label or an ordering that exists in one and
  * not the other is exactly the drift this module prevents.
  */
-import { CircleCheck, CircleDot, CircleSlash, CircleX } from '@lucide/svelte'
+
+import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+import CioDot from '$lib/components/icons/cio/CioDot.svelte'
 import type { PrMetadataMode } from './pr-view'
 import type {
   IssueListFilter,
@@ -65,13 +69,11 @@ export function issueListSortLabel(sort: IssueListSort): string {
  * a slash for one dismissed as not planned, with a plain cross when the payload
  * carried no reason at all.
  */
-export function issueStateIcon(
-  issue: Pick<IssueSummary, 'state' | 'stateReason'>
-): typeof CircleDot {
-  if (issue.state === 'open') return CircleDot
-  if (issue.stateReason === 'not_planned') return CircleSlash
-  if (issue.stateReason === 'reopened') return CircleDot
-  return issue.stateReason === 'completed' ? CircleCheck : CircleX
+export function issueStateIcon(issue: Pick<IssueSummary, 'state' | 'stateReason'>): typeof CioDot {
+  if (issue.state === 'open') return CioDot
+  if (issue.stateReason === 'not_planned') return CioBan
+  if (issue.stateReason === 'reopened') return CioDot
+  return issue.stateReason === 'completed' ? CioCheckCircle : CioCrossCircle
 }
 
 /** Badge colour for an issue's state pill. */

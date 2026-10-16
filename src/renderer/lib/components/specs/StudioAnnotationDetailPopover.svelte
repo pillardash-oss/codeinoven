@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, Pencil, X } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import type { Snippet } from 'svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
@@ -82,7 +84,7 @@
       class="p-1 text-muted hover:bg-overlay hover:text-foreground"
       title="Close annotation"
       aria-label="Close annotation"
-      onclick={onClose}><X size={13} /></button
+      onclick={onClose}><CioClose size={13} /></button
     >
   </div>
   {#if annotation.quote}
@@ -115,7 +117,7 @@
         title="Resolve annotation"
         onclick={onResolve}
       >
-        <Check size={12} />
+        <CioCheck size={12} />
         Resolve
       </button>
     {:else}
@@ -130,11 +132,7 @@
             onclick={onCancelEdit}>Cancel</button
           >
         {/if}
-        <VoiceInputButton
-          targetId={speechTargetId}
-          getTarget={speechTarget}
-          {scope}
-        />
+        <VoiceInputButton targetId={speechTargetId} getTarget={speechTarget} {scope} />
         {#if onSave}
           <button
             class="bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
@@ -147,7 +145,7 @@
         <button
           class="flex items-center gap-1 border border-border bg-elevated px-2.5 py-1.5 text-xs font-semibold hover:bg-overlay"
           title="Edit annotation"
-          onclick={onEditClick}><Pencil size={12} /> Edit</button
+          onclick={onEditClick}><CioPencil size={12} /> Edit</button
         >
       {/if}
     </div>

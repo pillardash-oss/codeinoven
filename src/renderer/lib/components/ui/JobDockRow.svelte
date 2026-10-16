@@ -6,7 +6,10 @@
    * projects can never stack on top of each other. Presentational: the owner maps
    * its jobs to `JobDockEntry`s and says what expanding one means.
    */
-  import { CircleCheck, Loader2, TriangleAlert } from '@lucide/svelte'
+
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { JobDockEntry } from './job-view'
   import DockRow from './DockRow.svelte'
 
@@ -43,11 +46,11 @@
           onclick={() => onExpand(job.id)}
         >
           {#if job.status === 'running'}
-            <Loader2 size={13} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner size={13} class="shrink-0 animate-spin text-info" aria-hidden="true" />
           {:else if job.status === 'succeeded'}
-            <CircleCheck size={13} class="shrink-0 text-success" aria-hidden="true" />
+            <CioCheckCircle size={13} class="shrink-0 text-success" aria-hidden="true" />
           {:else}
-            <TriangleAlert size={13} class="shrink-0 text-danger" aria-hidden="true" />
+            <CioAttention size={13} class="shrink-0 text-danger" aria-hidden="true" />
           {/if}
           <span class="flex min-w-0 flex-col">
             {#if job.project}

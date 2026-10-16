@@ -1,4 +1,7 @@
 <script module lang="ts">
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+
   /**
    * Sibling navigation for a fullscreen preview opened over several files.
    *
@@ -15,8 +18,6 @@
 </script>
 
 <script lang="ts">
-  import { ChevronLeft, ChevronRight } from '@lucide/svelte'
-
   interface Props {
     pager: PreviewPagerState
     class?: string
@@ -52,7 +53,7 @@
     disabled={atStart}
     onclick={(event) => step(event, pager.onPrevious)}
   >
-    <ChevronLeft size={14} />
+    <CioBack size={14} />
   </button>
   <span class="min-w-11 text-center font-mono text-[0.625rem] text-dimmed">{position}</span>
   <button
@@ -63,6 +64,6 @@
     disabled={atEnd}
     onclick={(event) => step(event, pager.onNext)}
   >
-    <ChevronRight size={14} />
+    <CioForward size={14} />
   </button>
 </div>

@@ -1,17 +1,15 @@
 <script lang="ts">
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount, tick } from 'svelte'
   import { Portal } from 'bits-ui'
-  import {
-    ArrowLeft,
-    ArrowRight,
-    Download,
-    FolderInput,
-    FolderKanban,
-    Loader2,
-    MessageSquare,
-    PanelRight,
-    X
-  } from '@lucide/svelte'
+  import { PanelRight } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -177,14 +175,14 @@
 
       <div class="grid gap-2 sm:grid-cols-3">
         <div class="border bg-elevated p-3">
-          <FolderKanban size={17} class="text-primary" />
+          <CioProjects size={17} class="text-primary" />
           <p class="mt-2 text-sm font-medium">Import your work</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             Start with a folder already on your computer.
           </p>
         </div>
         <div class="border bg-elevated p-3">
-          <MessageSquare size={17} class="text-primary" />
+          <CioMessage size={17} class="text-primary" />
           <p class="mt-2 text-sm font-medium">Prompt the agent</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             Describe a task and review what the agent does.
@@ -213,7 +211,7 @@
           data-modal-primary
           onclick={() => onStepChange(1)}
         >
-          Show me around <ArrowRight size={15} />
+          Show me around <CioArrowRight size={15} />
         </button>
       </div>
     </div>
@@ -278,7 +276,7 @@
             aria-label="Skip setup"
             onclick={onFinish}
           >
-            <X size={15} />
+            <CioClose size={15} />
           </button>
         </div>
         <p class="mt-2 text-sm leading-relaxed text-muted">{activeSpotlight.description}</p>
@@ -314,7 +312,7 @@
                 class="flex h-8 items-center gap-1 border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 onclick={previousStep}
               >
-                <ArrowLeft size={13} /> Back
+                <CioArrowLeft size={13} /> Back
               </button>
             {/if}
             <button
@@ -324,7 +322,7 @@
               onclick={nextStep}
             >
               {step === 5 ? 'Set up' : 'Next'}
-              <ArrowRight size={13} />
+              <CioArrowRight size={13} />
             </button>
           </div>
         </div>
@@ -336,7 +334,7 @@
     <div class="space-y-5">
       <div class="flex items-start gap-4">
         <div class="flex h-11 w-11 shrink-0 items-center justify-center bg-elevated text-primary">
-          <FolderInput size={20} />
+          <CioFolderInput size={20} />
         </div>
         <div>
           <p class="mt-1 text-sm leading-relaxed text-muted">
@@ -366,7 +364,7 @@
           data-modal-primary
           onclick={onChooseProject}
         >
-          <FolderInput size={15} /> Add a Project
+          <CioFolderInput size={15} /> Add a Project
         </button>
       </div>
     </div>
@@ -422,9 +420,9 @@
               onclick={() => void openPiInstall()}
             >
               {#if installBusy}
-                <Loader2 size={15} class="animate-spin" />
+                <CioSpinner size={15} class="animate-spin" />
               {:else}
-                <Download size={15} />
+                <CioDownload size={15} />
               {/if}
               {installOpened ? 'Open install guide again' : 'Install Pi'}
             </button>
@@ -434,7 +432,7 @@
               disabled={piChecking}
               onclick={() => void checkPi()}
             >
-              {#if piChecking}<Loader2 size={14} class="animate-spin" />{/if}
+              {#if piChecking}<CioSpinner size={14} class="animate-spin" />{/if}
               Check again
             </button>
           </div>

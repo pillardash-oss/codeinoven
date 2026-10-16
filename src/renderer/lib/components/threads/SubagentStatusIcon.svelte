@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CheckCircle2, CircleSlash2, Clock, XCircle } from '@lucide/svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+  import { CircleSlash2 } from '@lucide/svelte'
   import type { AgentToolStatus } from '$shared/types'
   import { SUBAGENT_STATUS_TONE, subagentStatusLabel } from '$lib/subagent-presentation'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -42,7 +45,7 @@
     <StatusBadge tone="working" size={workingDotSize} decorative />
   </span>
 {:else if status === 'completed'}
-  <CheckCircle2
+  <CioCheckCircle
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.completed}"
     role="img"
@@ -50,7 +53,7 @@
     title={label}
   />
 {:else if status === 'error'}
-  <XCircle
+  <CioCrossCircle
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.error}"
     role="img"
@@ -66,7 +69,7 @@
     title={label}
   />
 {:else}
-  <Clock
+  <CioClock
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.pending}"
     role="img"
