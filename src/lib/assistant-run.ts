@@ -111,7 +111,10 @@ export function assistantRunContext(
     }
   }
 
-  lines.push(ASSISTANT_BRIEF_REPLY_INSTRUCTION)
+  lines.push(
+    ASSISTANT_BRIEF_REPLY_INSTRUCTION,
+    'Wrap only your final user-facing update in <assistant_result> and </assistant_result>, with at most 80 words inside. End-of-message also closes the result. Everything outside that boundary is internal and is not delivered. If the user explicitly requests a longer answer, use <assistant_detail> and </assistant_detail> instead. Never put drafts, self-talk or a second translated version inside either result. These boundaries are application transport, not text to show the user.'
+  )
   return lines.join('\n')
 }
 

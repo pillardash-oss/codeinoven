@@ -154,20 +154,27 @@ describe('concise assistant delivery', () => {
     undefined,
     { channel: 'in-app' as const },
     { channel: 'email' as const, target: 'reports@example.com' }
-  ])('keeps the brief-output rule last for every delivery route: %j', (delivery) => {
-    const context = assistantRunContext({
-      name: 'Judge',
-      connections: [connection({ setup: 'Verify the source account.' })],
-      delivery,
-      priority: { timeliness: 'today', impact: 'company' }
-    })
-    expect(context.endsWith(ASSISTANT_BRIEF_REPLY_INSTRUCTION)).toBe(true)
-    expect(context).not.toContain('complete report itself')
-    expect(context).toContain('at most 80 words')
-    expect(context).toContain('Keep planning, self-talk, drafts')
-    expect(context).toContain('Never append a translation')
-    expect(context).toContain('Expand only when the user explicitly asks for detail')
-  })
+  ])(
+    'keeps brevity and result delivery after connection instructions for every delivery route: %j',
+    (delivery) => {
+      const context = assistantRunContext({
+        name: 'Judge',
+        connections: [connection({ setup: 'Verify the source account.' })],
+        delivery,
+        priority: { timeliness: 'today', impact: 'company' }
+      })
+      expect(context.indexOf(ASSISTANT_BRIEF_REPLY_INSTRUCTION)).toBeGreaterThan(
+        context.indexOf('Verify the source account.')
+      )
+      expect(context).toContain('<assistant_result>')
+      expect(context).toContain('<assistant_detail>')
+      expect(context).not.toContain('complete report itself')
+      expect(context).toContain('at most 80 words')
+      expect(context).toContain('Keep planning, self-talk, drafts')
+      expect(context).toContain('Never append a translation')
+      expect(context).toContain('Expand only when the user explicitly asks for detail')
+    }
+  )
   it('applies the same brevity rule to setup and follow-up persona layers', () => {
     expect(ASSISTANT_VOICE_INSTRUCTION).toContain(ASSISTANT_BRIEF_REPLY_INSTRUCTION)
   })

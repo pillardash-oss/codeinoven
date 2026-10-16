@@ -181,6 +181,7 @@
     latestAssistantRecap,
     assistantSetupRecapIssue
   } from '$lib/components/assistant/assistant-recap'
+  import { assistantResultText } from '$shared/assistant-result'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
@@ -13430,6 +13431,14 @@
                         isTransparentTurnMessage
                       )}
                       {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
+                      {@const deliveredClosingText = assistantMode
+                        ? assistantSetupThread
+                          ? assistantDisplayText(turnClosingText?.text ?? messageText(msg))
+                          : assistantResultText(
+                              turnClosingText?.text ?? messageText(msg),
+                              !msg.completedAt
+                            )
+                        : (turnClosingText?.text ?? messageText(msg))}
                       {#if turnClosingVisible && turnClosingText}
                         {@const isReadingThisTurn =
                           'messageId' in speechController.playback &&
@@ -13464,9 +13473,7 @@
                                  document rather than a code block, so it is shown as
                                  the finished markdown it is. -->
                             <MarkdownView
-                              text={assistantMode
-                                ? assistantDisplayText(turnClosingText.text)
-                                : turnClosingText.text}
+                              text={deliveredClosingText}
                               citationThread={citationThreadContext}
                               annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                               onCiteFile={openFileCitation}
@@ -13500,7 +13507,7 @@
                                 class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
-                                onclick={() => copyMessage(msg, turnClosingText?.text)}
+                                onclick={() => copyMessage(msg, deliveredClosingText)}
                               >
                                 {#if copiedMessageId === msg.id}
                                   <Check size={12} class="text-success" />
@@ -13510,7 +13517,7 @@
                               </button>
                               <SpeechPlaybackButton
                                 messageId={msg.id}
-                                markdown={turnClosingText?.text ?? messageText(msg)}
+                                markdown={deliveredClosingText}
                                 scope={{
                                   kind: 'project',
                                   projectId: thread.projectId,

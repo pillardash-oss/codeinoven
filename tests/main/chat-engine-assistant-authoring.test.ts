@@ -162,7 +162,7 @@ describe('assistant run threads', () => {
     const contract = internals(engine).assistantRunHiddenContext(run)
     expect(contract).toContain('Slack latest info')
     expect(contract).toContain('Its knowledge is your instruction set')
-    expect(contract?.endsWith(ASSISTANT_BRIEF_REPLY_INSTRUCTION)).toBe(true)
+    expect(contract?.includes(ASSISTANT_BRIEF_REPLY_INSTRUCTION)).toBe(true)
     // A run is never an authoring turn: the interview contract must not apply.
     expect(
       await internals(engine).assistantAuthoringInstruction(ASSISTANT_SPACE_ID, run.id, run)
