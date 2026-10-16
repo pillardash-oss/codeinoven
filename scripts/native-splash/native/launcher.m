@@ -53,14 +53,17 @@ static char handoff_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
 
 - (void)drawRect:(NSRect)dirtyRect {
   (void)dirtyRect;
-  [[NSColor blackColor] setFill];
+  [[NSColor colorWithRed:11.0 / 255.0
+                   green:11.0 / 255.0
+                    blue:13.0 / 255.0
+                   alpha:1.0] setFill];
   NSRectFill(self.bounds);
   if (self.icon != nil) {
     const NSRect iconRect = NSMakeRect(
-        (NSWidth(self.bounds) - 200.0) / 2.0,
-        (NSHeight(self.bounds) - 200.0) / 2.0,
-        200.0,
-        200.0);
+        (NSWidth(self.bounds) - 184.0) / 2.0,
+        (NSHeight(self.bounds) - 184.0) / 2.0,
+        184.0,
+        184.0);
     [self.icon drawInRect:iconRect
                  fromRect:NSZeroRect
                 operation:NSCompositingOperationSourceOver
@@ -153,7 +156,10 @@ static int run_helper(int endpoint_pipe) {
                 styleMask:NSWindowStyleMaskBorderless
                   backing:NSBackingStoreBuffered
                     defer:NO];
-  placeholder_window.backgroundColor = NSColor.blackColor;
+  placeholder_window.backgroundColor = [NSColor colorWithRed:11.0 / 255.0
+                                                       green:11.0 / 255.0
+                                                        blue:13.0 / 255.0
+                                                       alpha:1.0];
   placeholder_window.opaque = YES;
   placeholder_window.hasShadow = YES;
   placeholder_window.level = NSFloatingWindowLevel;

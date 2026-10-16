@@ -11,11 +11,12 @@ import {
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { flipFuses, FuseVersion, FuseV1Options } from '@electron/fuses'
+import { Resvg } from '@resvg/resvg-js'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = resolve(scriptDirectory, '../..')
 const sourceDirectory = join(scriptDirectory, 'native')
-const staticIcon = join(repositoryRoot, 'src/renderer/static/icon.png')
+const staticIcon = join(repositoryRoot, 'src/renderer/static/icon-macos.svg')
 
 function report(message) {
   process.stdout.write(`[native-splash] ${message}\n`)
@@ -35,8 +36,22 @@ function run(command, args, options = {}) {
   return result.stdout.trim()
 }
 
+function renderNativeSplashIcon() {
+  const source = readFileSync(staticIcon, 'utf8')
+  const openTagEnd = source.indexOf('>', source.indexOf('<svg'))
+  const closeTagStart = source.lastIndexOf('</svg>')
+  if (openTagEnd < 0 || closeTagStart < openTagEnd) {
+    throw new Error(`Invalid native splash icon SVG: ${staticIcon}`)
+  }
+  const artwork = source.slice(openTagEnd + 1, closeTagStart)
+  const roundedTile = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 1024 1024"><defs><clipPath id="splash-tile"><rect width="1024" height="1024" rx="210"/></clipPath></defs><g clip-path="url(#splash-tile)">${artwork}</g></svg>`
+  return Buffer.from(
+    new Resvg(roundedTile, { fitTo: { mode: 'width', value: 512 } }).render().asPng()
+  )
+}
+
 function writeEmbeddedHeader(headerPath, version) {
-  const bytes = readFileSync(staticIcon)
+  const bytes = renderNativeSplashIcon()
   const lines = []
   for (let offset = 0; offset < bytes.length; offset += 20) {
     lines.push(

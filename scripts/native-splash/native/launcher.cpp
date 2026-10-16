@@ -193,12 +193,11 @@ static LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM wpara
     HDC device = BeginPaint(window, &paint);
     RECT client = {};
     GetClientRect(window, &client);
-    HBRUSH black = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    FillRect(device, &client, black);
     Graphics graphics(device);
+    graphics.Clear(Gdiplus::Color(255, 11, 11, 13));
     if (icon_bitmap != nullptr) {
       graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-      graphics.DrawImage(icon_bitmap, (client.right - 200) / 2, (client.bottom - 200) / 2, 200, 200);
+      graphics.DrawImage(icon_bitmap, (client.right - 184) / 2, (client.bottom - 184) / 2, 184, 184);
     }
     static wchar_t version_by_line[256];
     swprintf_s(version_by_line, L"%ls - By", CODEINOVEN_VERSION_WIDE);

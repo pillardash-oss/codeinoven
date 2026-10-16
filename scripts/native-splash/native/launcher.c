@@ -59,7 +59,7 @@ static gboolean draw_placeholder(GtkWidget *widget, cairo_t *context, gpointer d
   (void)data;
   GtkAllocation allocation;
   gtk_widget_get_allocation(widget, &allocation);
-  cairo_set_source_rgb(context, 0.0, 0.0, 0.0);
+  cairo_set_source_rgb(context, 11.0 / 255.0, 11.0 / 255.0, 13.0 / 255.0);
   cairo_paint(context);
   if (icon_pixbuf != NULL) {
     const int x = (allocation.width - gdk_pixbuf_get_width(icon_pixbuf)) / 2;
@@ -174,7 +174,7 @@ static int run_helper(int argc, char **argv, int endpoint_pipe) {
       gdk_pixbuf_loader_write(loader, CODEINOVEN_ICON_PNG, CODEINOVEN_ICON_PNG_SIZE, NULL) &&
       gdk_pixbuf_loader_close(loader, NULL)) {
     GdkPixbuf *source = gdk_pixbuf_loader_get_pixbuf(loader);
-    if (source != NULL) icon_pixbuf = gdk_pixbuf_scale_simple(source, 200, 200, GDK_INTERP_BILINEAR);
+    if (source != NULL) icon_pixbuf = gdk_pixbuf_scale_simple(source, 184, 184, GDK_INTERP_HYPER);
   }
   if (loader != NULL) g_object_unref(loader);
   gtk_widget_queue_draw(drawing_area);
