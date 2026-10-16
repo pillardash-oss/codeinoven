@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { requireString } from '../ipc/handlers/shared'
 import { NotificationInboxStore } from './notification-inbox-store'
-import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { APP_ID, APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -339,7 +339,7 @@ export class NotificationService {
 
     const notification = new Notification({
       id: `${APP_SLUG}-permission-verify`,
-      groupId: `${APP_SLUG}-system`,
+      groupId: APP_ID,
       title: `${APP_NAME} notifications`,
       body: 'You will be notified when an agent finishes, has a specification ready, needs attention, or encounters an error.',
       silent: true
@@ -758,7 +758,8 @@ export class NotificationService {
     try {
       const notification = new Notification({
         id: compactNotificationId(options.id),
-        groupId: compactNotificationId(options.id),
+        // A unique group per notification prevents Notification Center from stacking alerts.
+        groupId: APP_ID,
         title: options.title,
         ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
         body: options.body,
@@ -931,7 +932,7 @@ export class NotificationService {
     return new Promise((resolve) => {
       const notification = new Notification({
         id: `${APP_SLUG}-notification-test`,
-        groupId: `${APP_SLUG}-system`,
+        groupId: APP_ID,
         title: `${APP_NAME} notifications`,
         body: 'You will be notified when an agent finishes, needs attention, or encounters an error.',
         silent
