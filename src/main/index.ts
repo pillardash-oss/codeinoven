@@ -294,13 +294,6 @@ function getAppIconPath(): string {
     : join(mainBundleDirectory, '../renderer/icon.png')
 }
 
-/** macOS-specific icon artwork, sized per Apple guidelines. */
-function getMacIconPath(): string {
-  return !isProduction && is.dev
-    ? join(app.getAppPath(), 'src/renderer/static/macos/AppIcon512.png')
-    : join(mainBundleDirectory, '../renderer/macos/AppIcon512.png')
-}
-
 /**
  * Menu bar template art. macOS derives the tint from the alpha channel of a
  * `...Template.png` file, so the attention variant is a second asset rather
@@ -789,16 +782,6 @@ void app
 
     if (isProduction) {
       installProductionApplicationMenu(APP_NAME)
-    }
-
-    // In dev the raw Electron binary lacks a bundled icon   set it explicitly.
-    // Cosmetic: must never abort the startup chain if the artwork is missing.
-    if (process.platform === 'darwin' && app.dock) {
-      try {
-        app.dock.setIcon(getMacIconPath())
-      } catch (error) {
-        Logger.error('dock icon setup failed (non-fatal):', error)
-      }
     }
 
     // Storage and database warm-up are independent   run them concurrently.
