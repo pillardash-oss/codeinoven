@@ -59,11 +59,7 @@ static char handoff_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
                    alpha:1.0] setFill];
   NSRectFill(self.bounds);
   if (self.icon != nil) {
-    const NSRect iconRect = NSMakeRect(
-        (NSWidth(self.bounds) - 184.0) / 2.0,
-        (NSHeight(self.bounds) - 184.0) / 2.0,
-        184.0,
-        184.0);
+    const NSRect iconRect = self.bounds;
     [self.icon drawInRect:iconRect
                  fromRect:NSZeroRect
                 operation:NSCompositingOperationSourceOver
@@ -71,20 +67,6 @@ static char handoff_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
            respectFlipped:YES
                     hints:@{NSImageHintInterpolation : @(NSImageInterpolationHigh)}];
   }
-
-  NSDictionary *versionAttributes = @{
-    NSFontAttributeName : [NSFont systemFontOfSize:11.0 weight:NSFontWeightRegular],
-    NSForegroundColorAttributeName : [NSColor colorWithWhite:1.0 alpha:0.72]
-  };
-  NSString *versionLine =
-      [NSString stringWithFormat:@"%@ - By", [NSString stringWithUTF8String:CODEINOVEN_VERSION]];
-  NSString *company = [NSString stringWithUTF8String:CODEINOVEN_COMPANY];
-  NSSize versionLineSize = [versionLine sizeWithAttributes:versionAttributes];
-  NSSize companySize = [company sizeWithAttributes:versionAttributes];
-  [versionLine drawAtPoint:NSMakePoint((NSWidth(self.bounds) - versionLineSize.width) / 2.0, 24.0)
-            withAttributes:versionAttributes];
-  [company drawAtPoint:NSMakePoint((NSWidth(self.bounds) - companySize.width) / 2.0, 10.0)
-        withAttributes:versionAttributes];
 }
 @end
 
