@@ -3,7 +3,9 @@
   import type { ProjectFileTab, ProjectFileView } from '$lib/stores/project-files.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
+  import type { DocumentReadAloud } from './project-files-panel-read-aloud'
 
   interface DiffStats {
     additions: number
@@ -21,6 +23,11 @@
     showAnnotateToggle: boolean
     /** Annotate is refused while no conversation is open to attach to. */
     annotateDisabled: boolean
+    /** The active document as a read-aloud target, or null when the viewer
+     *  cannot hand this file to the speech model. Same documents as the
+     *  annotation toggle, and the control itself stays hidden until a
+     *  text-to-speech model is installed. */
+    readAloud: DocumentReadAloud | null
     deletedAtCheckpoint: boolean
     showUndoRedo: boolean
     reloadDisabled: boolean
@@ -61,6 +68,7 @@
     showPreviewToggle,
     showAnnotateToggle,
     annotateDisabled,
+    readAloud,
     deletedAtCheckpoint,
     showUndoRedo,
     reloadDisabled,
@@ -126,6 +134,15 @@
     >
       <MessageSquarePlus size={12} />
     </button>
+  {/if}
+  {#if readAloud}
+    <SpeechPlaybackButton
+      messageId={readAloud.messageId}
+      markdown={readAloud.markdown}
+      disabled={readAloud.disabled}
+      scope={readAloud.scope}
+      spokenSubject="document"
+    />
   {/if}
   {#if showPreviewToggle}
     <button

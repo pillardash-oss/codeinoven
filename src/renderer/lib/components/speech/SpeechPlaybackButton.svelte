@@ -12,9 +12,19 @@
     disabled?: boolean
     /** Lets thread rows show the "Speaking" indicator for this playback. */
     scope?: SpeechScope
+    /** What this playback speaks aloud. The tooltip names it, so a surface that
+     *  reads something other than a response   a document, for instance   does
+     *  not call it one. */
+    spokenSubject?: 'response' | 'document'
   }
 
-  let { messageId, markdown, disabled = false, scope = undefined }: Props = $props()
+  let {
+    messageId,
+    markdown,
+    disabled = false,
+    scope = undefined,
+    spokenSubject = 'response'
+  }: Props = $props()
   const playbackState = $derived(speechController.playback)
   const ownsSession = $derived(
     'messageId' in playbackState && playbackState.messageId === messageId
@@ -36,12 +46,13 @@
   let scrubbing = $state(false)
   let scrubValue = $state(0)
   const title = $derived.by(() => {
-    if (!ownsSession) return 'Read response aloud'
-    if (playbackState.state === 'preparing') return 'Preparing spoken response'
-    if (playbackState.state === 'playing') return 'Pause spoken response'
-    if (playbackState.state === 'paused') return 'Resume spoken response'
-    if (playbackState.state === 'failed') return 'Retry spoken response'
-    return 'Read response aloud'
+    const subject = spokenSubject
+    if (!ownsSession) return `Read ${subject} aloud`
+    if (playbackState.state === 'preparing') return `Preparing spoken ${subject}`
+    if (playbackState.state === 'playing') return `Pause spoken ${subject}`
+    if (playbackState.state === 'paused') return `Resume spoken ${subject}`
+    if (playbackState.state === 'failed') return `Retry spoken ${subject}`
+    return `Read ${subject} aloud`
   })
 
   let hasInstalledTts = $state(null as boolean | null)

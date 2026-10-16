@@ -58,6 +58,7 @@
   import ProjectFilesPanelAnnotator from './ProjectFilesPanelAnnotator.svelte'
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
+  import ProjectFilesPanelReadAlong from './ProjectFilesPanelReadAlong.svelte'
   import { ProjectFilesPanelSvgPreview } from './project-files-panel-svg-preview.svelte'
   import { ProjectFilesPanelFind } from './project-files-panel-find.svelte'
   import { ProjectFilesPanelDocumentPreview } from './project-files-panel-document-preview.svelte'
@@ -67,10 +68,16 @@
     hasAnyPreview,
     previewKindLabel as previewKindLabelFor
   } from './project-files-panel-preview'
+  import {
+    documentReadAloudId,
+    hasSpeakableText,
+    type DocumentReadAloud
+  } from './project-files-panel-read-aloud'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
   import { ovenRootThread } from '$lib/oven-root-target'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { usesThreadWorkspaceMount } from '$shared/types'
 
   interface Props {
@@ -321,6 +328,30 @@
   /** An annotation is a composer reference, so there has to be a conversation
    *  open for it to attach to; the toolbar explains that instead of hiding. */
   let annotateDisabled = $derived(!activeThreadId || deletedAtCheckpoint)
+  /** The active document as a read-aloud target. Read-aloud is offered for
+   *  exactly the documents that carry annotations, the rendered Markdown whose
+   *  text the viewer holds as plain source; the speaker control then hides
+   *  itself while no text-to-speech model is installed. */
+  let documentReadAloud = $derived.by<DocumentReadAloud | null>(() => {
+    if (!activeTab || !showAnnotateToggle) return null
+    return {
+      messageId: documentReadAloudId(projectId, activeTab.path),
+      markdown: visibleContent,
+      scope: { kind: 'project', projectId, threadId: activeThreadId ?? undefined },
+      disabled: !hasSpeakableText(visibleContent)
+    }
+  })
+  /** Segments of this document's read-aloud while the read-along is up, so the
+   *  body shows the lines being read instead of the file itself; null whenever
+   *  the file belongs on screen. */
+  let readAlongSegments = $derived(
+    documentReadAloud !== null &&
+      'messageId' in speechController.playback &&
+      speechController.playback.messageId === documentReadAloud.messageId &&
+      speechController.readingOverlayActive
+      ? speechController.activeSegments
+      : null
+  )
   let fullscreenOpen = $derived(projectState.fullscreenActive)
   // The browser's native view floats above every DOM overlay, so a full-window
   // editor must register itself as a fullscreen surface while it is up. The
@@ -922,6 +953,7 @@
           showPreviewToggle={hasAnyPreview(previewFlags)}
           {showAnnotateToggle}
           {annotateDisabled}
+          readAloud={documentReadAloud}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
           {reloadDisabled}
@@ -991,7 +1023,13 @@
         />
       {/if}
 
-      {#if !activeTab}
+      {#if readAlongSegments}
+        <ProjectFilesPanelReadAlong
+          segments={readAlongSegments}
+          activeIndex={speechController.visibleSegmentIndex}
+          spokenProgress={speechController.activeSegmentProgress}
+        />
+      {:else if !activeTab}
         <div class="flex min-h-0 flex-1 items-center justify-center px-6">
           <div class="text-center">
             <FolderOpen size={24} class="mx-auto mb-2 text-dimmed" />
@@ -1294,6 +1332,7 @@
           showPreviewToggle={hasAnyPreview(previewFlags)}
           {showAnnotateToggle}
           {annotateDisabled}
+          readAloud={documentReadAloud}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
           {reloadDisabled}
@@ -1354,7 +1393,13 @@
             onClose={() => (goToLineOpen = false)}
           />
         {/if}
-        {#if activeTab?.view === 'diff' && checkpointDiff}
+        {#if readAlongSegments}
+          <ProjectFilesPanelReadAlong
+            segments={readAlongSegments}
+            activeIndex={speechController.visibleSegmentIndex}
+            spokenProgress={speechController.activeSegmentProgress}
+          />
+        {:else if activeTab?.view === 'diff' && checkpointDiff}
           <FileDiffView diff={checkpointDiff} />
         {:else if activeTab?.view === 'annotate' && showAnnotateToggle && activeThreadId}
           <ProjectFilesPanelAnnotator
