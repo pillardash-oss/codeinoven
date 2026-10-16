@@ -13,6 +13,7 @@
     GlobeCode,
     History,
     ImageOff,
+    Inspect,
     ListClock,
     LoaderCircle,
     Pencil,
@@ -1542,24 +1543,43 @@
                   <Pencil size={13} class="shrink-0 text-muted" />
                   Generate DESIGN.md
                 </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
-                  disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestDesignAction('critique')}
-                  >Review design quality</DropdownMenu.Item
-                >
+                <DropdownMenu.Sub>
+                  <DropdownMenu.SubTrigger
+                    class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                    disabled={canvasBusy !== '' || selected.directory === ''}
+                  >
+                    Review Design
+                    <ChevronRight size={13} class="ml-auto text-muted" />
+                  </DropdownMenu.SubTrigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.SubContent
+                      class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
+                      sideOffset={4}
+                    >
+                      <DropdownMenu.Item
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                        disabled={canvasBusy !== '' || selected.directory === ''}
+                        onSelect={() => void requestDesignAction('critique')}
+                        >Review design quality</DropdownMenu.Item
+                      >
+                      <DropdownMenu.Item
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                        disabled={canvasBusy !== '' || selected.directory === ''}
+                        onSelect={() => void requestDesignAction('tweaks')}
+                      >
+                        <Inspect size={13} class="shrink-0 text-muted" />
+                        Inspect Designs
+                      </DropdownMenu.Item>
+                    </DropdownMenu.SubContent>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Sub>
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('reference')}
                   >Extract brand from reference</DropdownMenu.Item
                 >
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
-                  disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestDesignAction('tweaks')}
-                  >Add live controls</DropdownMenu.Item
-                >
+
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   data-external-url="https://github.com/nexu-io/open-design/tree/main/design-templates"
