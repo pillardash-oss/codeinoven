@@ -1214,6 +1214,15 @@ CREATE TABLE IF NOT EXISTS design_history_heads (
 
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS work_path_notices (
+    project_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    PRIMARY KEY(project_id, thread_id, directory)
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_path_notices_thread ON work_path_notices(thread_id);`,
   `CREATE TABLE IF NOT EXISTS work_folder_relocations (
     project_id TEXT NOT NULL,
     directory TEXT NOT NULL,

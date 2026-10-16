@@ -1,4 +1,5 @@
 import { DEFAULT_WORK_ROOTS } from '../../../lib/design/work-roots'
+import { workPathNoticeStatements } from '../../design/work-path-notices'
 import { projectWorkRootPaths } from '../../design/work-roots-state'
 import { dirname } from 'node:path'
 import type { Database } from '../database'
@@ -183,6 +184,7 @@ export class DesignRepo {
   }
 
   deleteThread(threadId: string): void {
+    this.db.run('DELETE FROM work_path_notices WHERE thread_id = ?', threadId)
     this.db.run('DELETE FROM thread_designs WHERE thread_id = ?', threadId)
   }
 
@@ -215,6 +217,16 @@ export class DesignRepo {
       sql: 'UPDATE thread_designs SET directory = ? WHERE thread_id = ?',
       params: [`${input.to}${row.directory.slice(input.from.length)}`, row.thread_id]
     }))
+    for (const row of matching) {
+      statements.push(
+        ...workPathNoticeStatements(
+          input.projectId,
+          row.thread_id,
+          row.directory,
+          `${input.to}${row.directory.slice(input.from.length)}`
+        )
+      )
+    }
     statements.push(
       {
         sql: 'DELETE FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
@@ -252,6 +264,7 @@ export class DesignRepo {
   }
 
   deleteProject(projectId: string): void {
+    this.db.run('DELETE FROM work_path_notices WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM work_folder_relocations WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM authored_work_folders WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM thread_designs WHERE project_id = ?', projectId)

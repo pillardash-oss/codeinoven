@@ -1,3 +1,4 @@
+import { deliverWithWorkPathNotices } from '../design/work-path-notices'
 import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { validateModelRuntimeSettings } from '../../lib/model-runtime-settings'
 import { BrowserWindow, net, powerMonitor } from 'electron'
@@ -9018,11 +9019,14 @@ export class ChatEngine {
     ) => Promise<void>
     const deliverNow = async (): Promise<void> => {
       try {
-        if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
-          await steer(projectPath, steerOptions, activeBrainstorm.isolated)
-        } else {
-          await steer(projectPath, steerOptions)
-        }
+        await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+          const options = { ...steerOptions, text }
+          if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
+            await steer(projectPath, options, activeBrainstorm.isolated)
+          } else {
+            await steer(projectPath, options)
+          }
+        })
       } catch (error) {
         if (error instanceof SteerDeliveryFailedError) throw error
         // The turn can settle inside the race window between the working check
@@ -9974,12 +9978,20 @@ export class ChatEngine {
       const deliverFallbackSteer = (): Promise<void> => {
         const steer = driver.steerPrompt
         if (!steer) return Promise.reject(new Error('steer unavailable'))
-        return steer.call(driver, projectPath, {
-          sessionId,
-          text: driverText,
-          attachments,
-          userMessageId: messageId
-        })
+        return this.deliverWorkPrompt(
+          projectId,
+          threadId,
+          userMessage,
+          driverText,
+          async (text) => {
+            await steer.call(driver, projectPath, {
+              sessionId,
+              text,
+              attachments,
+              userMessageId: messageId
+            })
+          }
+        )
       }
       // Same undo window as steerPrompt: hold while a tool call is in flight.
       if (this.hasInFlightTool(sessionId)) {
@@ -10508,7 +10520,9 @@ export class ChatEngine {
           ...(historyRecap ? { historyRecap } : {}),
           userMessageId: messageId
         }
-        await driver.sendPrompt(projectPath, prompt)
+        await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+          await driver.sendPrompt(projectPath, { ...prompt, text })
+        })
         this.sessionModelIds.set(sessionId, {
           providerId: settings.providerId,
           modelId: settings.modelId,
@@ -10574,44 +10588,46 @@ export class ChatEngine {
       // browser chatbot: no file-system tools, internet-first answers. File
       // operations are granted only when the user explicitly enables the
       // File System mode for the thread.
-      await driver.sendPrompt(projectPath, {
-        sessionId,
-        settings,
-        text: driverText,
-        attachments,
-        readOnly: isChatThread && !chatFileSystemEnabled,
-        systemPrompt:
-          composeTurnSystemPrompt({
-            chatPrompt: chatSystemPrompt,
-            memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
-            imageDescriptorNote,
-            assignmentCoordinatorSystemPrompt,
-            behaviorPrompt,
-            utilityInstructions,
-            assistantInstruction,
-            behaviorMode
-          }) || undefined,
-        allowedTools:
-          isChatThread &&
-          !chatFileSystemEnabled &&
-          (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
-            ? [
-                ...CHAT_WEB_ONLY_TOOLS,
-                ...chatGatewayAllowedTools(driverId),
-                ...(projectId === GLOBAL_BROWSER_PROJECT_ID
-                  ? ['read', 'write', 'edit', 'glob', 'grep']
-                  : [])
-              ]
-            : undefined,
-        agent: utilitySetupRequested
-          ? leanAgentNameForMode('utility-setup')
-          : isAssistantTask
-            ? leanAgentNameForMode('assistant')
-            : isChatThread
-              ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+      await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+        await driver.sendPrompt(projectPath, {
+          sessionId,
+          settings,
+          text,
+          attachments,
+          readOnly: isChatThread && !chatFileSystemEnabled,
+          systemPrompt:
+            composeTurnSystemPrompt({
+              chatPrompt: chatSystemPrompt,
+              memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
+              imageDescriptorNote,
+              assignmentCoordinatorSystemPrompt,
+              behaviorPrompt,
+              utilityInstructions,
+              assistantInstruction,
+              behaviorMode
+            }) || undefined,
+          allowedTools:
+            isChatThread &&
+            !chatFileSystemEnabled &&
+            (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
+              ? [
+                  ...CHAT_WEB_ONLY_TOOLS,
+                  ...chatGatewayAllowedTools(driverId),
+                  ...(projectId === GLOBAL_BROWSER_PROJECT_ID
+                    ? ['read', 'write', 'edit', 'glob', 'grep']
+                    : [])
+                ]
               : undefined,
-        ...(historyRecap ? { historyRecap } : {}),
-        userMessageId: messageId
+          agent: utilitySetupRequested
+            ? leanAgentNameForMode('utility-setup')
+            : isAssistantTask
+              ? leanAgentNameForMode('assistant')
+              : isChatThread
+                ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+                : undefined,
+          ...(historyRecap ? { historyRecap } : {}),
+          userMessageId: messageId
+        })
       })
       if (utilitySetupRequested || isChatThread || isAssistantTask) {
         traceLeanAgent(
@@ -12424,6 +12440,30 @@ export class ChatEngine {
         }
       }
     }
+  }
+
+  /** Add pending relocation updates only when a message reaches its harness. */
+  private async deliverWorkPrompt(
+    projectId: string,
+    threadId: string,
+    userMessage: AgentMessage,
+    text: string,
+    deliver: (text: string) => Promise<void>
+  ): Promise<void> {
+    await deliverWithWorkPathNotices({
+      database: this.database,
+      projectId,
+      threadId,
+      text,
+      deliver,
+      recordTransport: async (transportText) => {
+        const part = userMessage.transportParts?.find((part) => part.type === 'text')
+        if (part?.type !== 'text') throw new Error('Outbound message has no transport text')
+        part.text = transportText
+        userMessage.transportOrigin = 'orchestrator'
+        await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
+      }
+    })
   }
 
   /**

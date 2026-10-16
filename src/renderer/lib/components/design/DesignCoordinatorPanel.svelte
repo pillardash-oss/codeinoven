@@ -2,6 +2,7 @@
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
@@ -2079,7 +2080,7 @@
           {#if opening}
             <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <CioBrowser size={ICON_SIZE.inline} />
+            <CioThreadBrowser size={ICON_SIZE.inline} />
           {/if}
         </button>
       </span>
