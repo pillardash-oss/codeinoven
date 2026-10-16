@@ -204,6 +204,14 @@ export interface DesignScreenShot {
   /** Picture size in CSS pixels, for the board's aspect ratio. 0 with no picture. */
   width: number
   height: number
+  /**
+   * Latest modification time of the file (ms).
+   *
+   * Carried so the board can order its screens by what moved last, with the
+   * newest at the top, without a second read of the folder. It is the same stamp
+   * the picture is cached against.
+   */
+  updatedAt: number
 }
 
 /** A capture of a design, for the coordinator's preview. */

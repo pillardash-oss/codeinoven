@@ -3,6 +3,7 @@
   import type { Attachment } from 'svelte/attachments'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import {
+    ArrowUpDown,
     Check,
     ChevronDown,
     ChevronRight,
@@ -157,6 +158,50 @@
    */
   const LIVE_PREVIEW_ENTRY = 'index.html'
 
+  /**
+   * The orders the board can show a design's screens in.
+   *
+   * Latest is where the board starts, because a design is iterated and the screen
+   * that moved last is usually the one the user came to look at. The other three
+   * are what a person reaches for when they know a screen's name instead.
+   */
+  const SCREEN_ORDERS = ['latest', 'name', 'name-desc', 'oldest'] as const
+  type ScreenOrder = (typeof SCREEN_ORDERS)[number]
+
+  /** What each order is called in the Sort menu. */
+  const SCREEN_ORDER_LABELS: Record<ScreenOrder, string> = {
+    latest: 'Latest',
+    name: 'Name A-Z',
+    'name-desc': 'Name Z-A',
+    oldest: 'Oldest'
+  }
+
+  /** Whether the menu's own string is one of the board's orders. */
+  function isScreenOrder(value: string): value is ScreenOrder {
+    return SCREEN_ORDERS.some((order) => order === value)
+  }
+
+  /**
+   * The screens of one design in the order the user picked.
+   *
+   * "Latest" is the file's own modification time, stamped when the agent writes
+   * the screen, so the top of the grid is the part of the design that moved last.
+   * Name is the card's label rather than the file path, because the label is what
+   * the user reads, and the entry path settles ties so two screens never swap
+   * places between paints.
+   */
+  function orderScreens(screens: DesignScreenShot[], order: ScreenOrder): DesignScreenShot[] {
+    const byName = (left: DesignScreenShot, right: DesignScreenShot): number =>
+      left.name.localeCompare(right.name) || left.entry.localeCompare(right.entry)
+    if (order === 'name') return screens.toSorted(byName)
+    if (order === 'name-desc') return screens.toSorted((left, right) => byName(right, left))
+    const byAge = (left: DesignScreenShot, right: DesignScreenShot): number =>
+      left.updatedAt - right.updatedAt || byName(left, right)
+    return order === 'latest'
+      ? screens.toSorted((left, right) => byAge(right, left))
+      : screens.toSorted(byAge)
+  }
+
   // Seeded from whatever the workspace already fetched, so the panel paints on
   // its first frame instead of flashing a spinner.
   // svelte-ignore state_referenced_locally
@@ -165,6 +210,21 @@
   )
   let gallery = $state<DesignScreenShot[]>([])
   let galleryBusy = $state(false)
+  /**
+   * The order the screens grid is shown in.
+   *
+   * A view setting of the board rather than of the design: switching designs keeps
+   * it, and a board opened again starts at the default, newest first.
+   */
+  let screenOrder = $state<ScreenOrder>('latest')
+  /**
+   * Whether a turn settled while the board was off screen.
+   *
+   * A board the user is not looking at has nothing to show, so its screens are not
+   * re-pictured behind their back; the flag is what the effect below reads when the
+   * board comes back. Deliberately not reactive: nothing renders it.
+   */
+  let settleMissed = false
   /** The design preview in flight, so its own button shows the wait. */
   let opening = $state(false)
   /** The canvas open in flight, kept apart from the design preview so opening one
@@ -411,14 +471,22 @@
   })
 
   /**
-   * The two entries that are not screens, and the screens themselves.
+   * The two entries that are not screens, and the screens themselves, in the order
+   * the user picked.
    *
    * The canvas is swept with the screens so its entry has a picture like any other,
    * and the live preview is the design's entry page pictured once more. Both are
-   * split out of the grid's screens rather than listed twice.
+   * split out of the grid's screens rather than listed twice, and both keep the
+   * first two cells of the grid whatever the order is: they are the design's own
+   * doors rather than screens of it.
    */
   let canvasShot = $derived(gallery.find((screen) => isScreenCanvasEntry(screen.entry)) ?? null)
-  let designScreens = $derived(gallery.filter((screen) => !isScreenCanvasEntry(screen.entry)))
+  let designScreens = $derived(
+    orderScreens(
+      gallery.filter((screen) => !isScreenCanvasEntry(screen.entry)),
+      screenOrder
+    )
+  )
   let liveShot = $derived(
     designScreens.find((screen) => screen.entry === LIVE_PREVIEW_ENTRY) ?? null
   )
@@ -561,7 +629,8 @@
             name: selectedName,
             dataUrl: shot.dataUrl,
             width: shot.width,
-            height: shot.height
+            height: shot.height,
+            updatedAt: selectedItem?.updatedAt ?? 0
           }
         ]
         tabId = shot.tabId ?? ''
@@ -601,6 +670,11 @@
   /** Pick a design from the dropdown, which the radio group reports as a string. */
   function handleDesignChange(directory: string): void {
     selectDesign(directory)
+  }
+
+  /** The Sort menu reports a string too, so it is checked before it becomes the order. */
+  function handleScreenOrderChange(value: string): void {
+    if (isScreenOrder(value)) screenOrder = value
   }
 
   /**
@@ -837,14 +911,23 @@
       })
   }
 
-  /** Re-read the canvas once the agent settles, and picture it when it appeared. */
-  async function refreshCanvas(): Promise<void> {
-    const before = canvasState
+  /**
+   * Catch the board up with what a settled turn wrote.
+   *
+   * The canvas state decides whether the canvas entry is behind, and the sweep
+   * behind `loadGallery` is what pictures a screen the turn just wrote, so a design
+   * that gained a screen shows it without the user pressing Refresh. The sweep is
+   * cached against each file's own stamp, so a settle that changed nothing loads no
+   * page at all.
+   *
+   * A composition is read for its canvas state only: its picture comes from the
+   * thread's own tab, and re-picturing it would move a page the user may be
+   * watching.
+   */
+  async function refreshSettledWork(): Promise<void> {
     await loadCanvas()
-    const appeared = before === null && canvasState !== null
-    const rewritten =
-      before !== null && canvasState !== null && canvasState.updatedAt !== before.updatedAt
-    if (appeared || rewritten) await loadGallery()
+    if (video) return
+    await loadGallery()
   }
 
   /**
@@ -987,14 +1070,26 @@
   }
 
   onMount(() => {
-    // The agent writes the canvas inside a turn, so the board re-reads when that
-    // turn settles. Nothing polls: a canvas that appeared is read then, and one
-    // that was rewritten is read again then.
+    // The agent writes the work inside a turn, so the board catches up when that
+    // turn settles. Nothing polls. A board that is off screen waits rather than
+    // loading pages in the thread's tab, and the effect below reads then.
     return subscribe('thread:updated', (thread) => {
       if (thread.id !== threadId || thread.projectId !== projectId) return
       if (isThreadBusyStatus(thread.status)) return
-      void refreshCanvas()
+      if (!active) {
+        settleMissed = true
+        return
+      }
+      void refreshSettledWork()
     })
+  })
+
+  // Bringing the board back on screen reads what settled while it was away, so a
+  // screen the agent wrote in the meantime is already there.
+  $effect(() => {
+    if (!active || !settleMissed) return
+    settleMissed = false
+    void refreshSettledWork()
   })
 
   onMount(() => {
@@ -1507,6 +1602,54 @@
         >
           <History size={12} />
         </button>
+        {#if !video && designScreens.length > 1}
+          <!--
+            The order of the screens grid, one click from the grid itself.
+
+            A design is a folder of screens, and the one that moved last is
+            usually the one the user came for, so the board starts there. It is a
+            dropdown rather than a row of buttons because the header has one line
+            to give, and the tooltip names the order in use.
+          -->
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+              title={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
+              aria-label={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
+            >
+              <ArrowUpDown size={12} />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="end"
+                sideOffset={4}
+                collisionPadding={8}
+                class="z-50 w-44 border border-border bg-surface p-1 shadow-lg"
+              >
+                <DropdownMenu.RadioGroup
+                  value={screenOrder}
+                  onValueChange={handleScreenOrderChange}
+                  aria-label="Order the screens"
+                >
+                  {#each SCREEN_ORDERS as order (order)}
+                    <DropdownMenu.RadioItem
+                      value={order}
+                      class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    >
+                      <span class="min-w-0 flex-1 truncate">{SCREEN_ORDER_LABELS[order]}</span>
+                      <Check
+                        size={12}
+                        class={['shrink-0', order === screenOrder ? 'text-primary' : 'invisible']}
+                        aria-hidden="true"
+                      />
+                    </DropdownMenu.RadioItem>
+                  {/each}
+                </DropdownMenu.RadioGroup>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        {/if}
         <button
           type="button"
           class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"

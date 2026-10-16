@@ -164,7 +164,14 @@ function requirePath(value: unknown): string {
  * picture in.
  */
 function emptyScreenShot(screen: DesignScreen): DesignScreenShot {
-  return { entry: screen.entry, name: screen.name, dataUrl: null, width: 0, height: 0 }
+  return {
+    entry: screen.entry,
+    name: screen.name,
+    dataUrl: null,
+    width: 0,
+    height: 0,
+    updatedAt: screen.updatedAt
+  }
 }
 
 /**
@@ -904,6 +911,12 @@ export class DesignService {
    * supersedes the first instead of driving the same tab alongside it. And it
    * leaves the tab where it found it, because a board opened over a design must
    * not change what the user is looking at.
+   *
+   * A sweep whose every screen is already pictured navigates nothing: pictures
+   * are cached against each file's own stamp, and a sweep that never navigated
+   * has nothing to put back. That is what makes this cheap enough for the board
+   * to re-read its screens whenever a turn settles, which is how a screen the
+   * agent has just written appears on its own.
    */
   async screens(
     projectId: string,
@@ -937,6 +950,8 @@ export class DesignService {
     const before = await this.designs.forThreadViaWorker(threadId)
     const shots: DesignScreenShot[] = []
     const startedAt = Date.now()
+    /** Whether this sweep navigated the thread's tab, so it must put it back. */
+    let moved = false
     this.sweepingThreads.set(threadId, generation)
     try {
       for (const screen of screens) {
@@ -954,6 +969,7 @@ export class DesignService {
           shots.push(emptyScreenShot(screen))
           continue
         }
+        moved = true
         const shot = await this.captureScreen({
           projectId,
           threadId,
@@ -975,7 +991,7 @@ export class DesignService {
       return shots
     } finally {
       try {
-        if (this.screenSweeps.get(threadId) === generation && before?.kind === 'design') {
+        if (this.screenSweeps.get(threadId) === generation && moved && before?.kind === 'design') {
           await this.restoreTab({
             projectId,
             threadId,
@@ -1212,7 +1228,12 @@ export class DesignService {
       await browser.waitForTabLoad(result.tabId, SCREEN_LOAD_TIMEOUT_MS)
       const captured = await browser.captureThumbnail(result.tabId, input.width)
       if (captured === null) return emptyScreenShot(input.screen)
-      return { entry: input.screen.entry, name: input.screen.name, ...captured }
+      return {
+        entry: input.screen.entry,
+        name: input.screen.name,
+        updatedAt: input.screen.updatedAt,
+        ...captured
+      }
     } catch (error) {
       Logger.dev('A design screen could not be pictured:', error)
       return emptyScreenShot(input.screen)
