@@ -43,6 +43,7 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadChangesState } from '$lib/stores/thread-changes.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
@@ -145,6 +146,7 @@
   import type { NewAssistantDraft } from '../assistant/assistant-create'
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
@@ -881,6 +883,21 @@
     if (!isThreadBusy(thread)) void projectWorkState.refresh(thread.projectId)
   })
 
+  /**
+   * Keep the Changes rail indicator on the on-screen conversation. The store is
+   * event-driven, so tracking a thread also starts (and stops) its updates; the
+   * Changes panel itself is only mounted while it is open, so this is what keeps
+   * the rail's summary current either way.
+   */
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread) {
+      threadChangesState.untrack()
+      return
+    }
+    threadChangesState.track(thread.projectId, thread.id)
+  })
+
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
    *  children stay out of the visible thread list but land in the scope store
    *  through their broadcast updates, so the rail can mirror their state. */
@@ -1205,6 +1222,20 @@
       })
     }
     if (!isConversation && projectToolsAvailable) {
+      const changeFileCount = threadChangesState.fileCount
+      const changeTotals = threadChangesState.totals
+      const hasRecordedChanges = threadChangesState.current !== null && changeFileCount > 0
+      // The stored label doubles as the rail's tooltip, so it carries the same
+      // summary the hover flyout draws when a change set exists.
+      const changeLabel = hasRecordedChanges
+        ? [
+            'Changes',
+            changeTotals ? `+${changeTotals.additions} −${changeTotals.deletions}` : null,
+            `${changeFileCount} ${changeFileCount === 1 ? 'file' : 'files'}`
+          ]
+            .filter((part): part is string => part !== null)
+            .join(' · ')
+        : 'Changes'
       workspaceTools.push(
         {
           id: 'files',
@@ -1215,9 +1246,10 @@
         },
         {
           id: 'diff',
-          label: 'Changes',
+          label: changeLabel,
           icon: FileDiff,
           active: dockKindActive('diff'),
+          ...(hasRecordedChanges ? { flyout: changeSummaryFlyout } : {}),
           onSelect: () => toggleDockPanel('diff', openDiff)
         }
       )
@@ -5192,6 +5224,12 @@
   {#await import('./WorkspaceBrowserMenu.svelte') then { default: WorkspaceBrowserMenu }}
     <WorkspaceBrowserMenu {browser} />
   {/await}
+{/snippet}
+
+<!-- The Changes rail item's hover preview: the current change set's line totals
+     and file count. The store tracked for the on-screen thread feeds it. -->
+{#snippet changeSummaryFlyout()}
+  <ChangeSummaryFlyout />
 {/snippet}
 
 <!-- Global-browser surfaces wait for `browserStore()` so their chunks are not

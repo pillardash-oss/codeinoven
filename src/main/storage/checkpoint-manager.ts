@@ -725,7 +725,38 @@ export class CheckpointManager {
   }
 
   async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
-    return (await this.list(projectId, threadId)).map((checkpoint) => ({
+    return (await this.list(projectId, threadId)).map((checkpoint) => this.toSummary(checkpoint))
+  }
+
+  /**
+   * The newest finished turn's summary, or null.
+   *
+   * A single-row read for readers that only need to know what the last turn
+   * changed (the Changes rail indicator), so they never pay for the whole
+   * per-thread history the Changes panel itself reads.
+   */
+  async latestSummary(projectId: string, threadId: string): Promise<TurnCheckpointSummary | null> {
+    assertId(projectId)
+    assertId(threadId)
+    const rows = await this.queryRows(
+      `SELECT data FROM turn_checkpoints
+       WHERE project_id = ? AND thread_id = ?
+         AND json_extract(data, '$.status') != 'active'
+       ORDER BY created_at DESC LIMIT 1`,
+      [projectId, threadId],
+      1
+    )
+    const row = rows[0]
+    if (!row) return null
+    const checkpoint = this.recoverUnfilteredChanges(
+      projectId,
+      JSON.parse(String(row['data'])) as TurnCheckpoint
+    )
+    return this.toSummary(checkpoint)
+  }
+
+  private toSummary(checkpoint: TurnCheckpoint): TurnCheckpointSummary {
+    return {
       id: checkpoint.id,
       projectId: checkpoint.projectId,
       threadId: checkpoint.threadId,
@@ -756,7 +787,7 @@ export class CheckpointManager {
         ? { skippedFiles: checkpoint.after.skippedFiles }
         : {}),
       gitHead: checkpoint.before.git?.head
-    }))
+    }
   }
 
   async getFileDiff(

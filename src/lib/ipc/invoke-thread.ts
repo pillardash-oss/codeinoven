@@ -57,6 +57,10 @@ export const invokeThreadContract = {
     [projectId: string, threadId: string],
     TurnCheckpointSummary | null
   >,
+  'checkpoint:latestSummary': {} as Contract<
+    [projectId: string, threadId: string],
+    TurnCheckpointSummary | null
+  >,
   'checkpoint:liveDiff': {} as Contract<
     [projectId: string, threadId: string, checkpointId: string, path: string],
     TurnCheckpointFileDiff

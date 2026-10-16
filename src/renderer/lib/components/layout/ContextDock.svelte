@@ -49,6 +49,13 @@
      * positioning (typically `right-full` to dock to the left of the rail).
      */
     menu?: Snippet
+    /**
+     * Preview shown to the left of the item after a short hover, e.g. the
+     * Changes summary. It is informational only   it never captures the click
+     * and it hides as soon as the pointer leaves the icon (its own wrapper is
+     * `pointer-events-none`), so it can never get stuck open.
+     */
+    flyout?: Snippet
     onSelect: () => void
     onContextMenu?: (event: MouseEvent) => void
   }
@@ -56,6 +63,7 @@
 
 <script lang="ts">
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { onDestroy } from 'svelte'
   import RailHighlight from './RailHighlight.svelte'
   import RailAudioBadge from './RailAudioBadge.svelte'
 
@@ -67,6 +75,39 @@
   let { groups }: Props = $props()
 
   let visibleGroups = $derived(groups.filter((group) => group.length > 0))
+
+  /**
+   * The item whose hover preview is showing, or null.
+   *
+   * A short delay before showing keeps a pointer crossing the rail on its way
+   * somewhere else from flashing a preview on every icon it passes. Hiding is
+   * immediate: the preview is not interactive, so there is nothing to keep it
+   * open for.
+   */
+  let hoveredId = $state<string | null>(null)
+  let hoverTimer: ReturnType<typeof setTimeout> | null = null
+
+  function showFlyout(id: string): void {
+    cancelHoverTimer()
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null
+      hoveredId = id
+    }, 220)
+  }
+
+  function hideFlyout(id: string): void {
+    cancelHoverTimer()
+    if (hoveredId === id) hoveredId = null
+  }
+
+  function cancelHoverTimer(): void {
+    if (hoverTimer) {
+      clearTimeout(hoverTimer)
+      hoverTimer = null
+    }
+  }
+
+  onDestroy(cancelHoverTimer)
 
   /** Identity of every item and which one is current, both of which move the
    *  shared highlight. The dock's own box never resizes when a tool takes over,
@@ -115,6 +156,8 @@
           aria-label={item.label}
           aria-current={item.active ? 'true' : undefined}
           title={item.label}
+          onpointerenter={item.flyout ? () => showFlyout(item.id) : undefined}
+          onpointerleave={item.flyout ? () => hideFlyout(item.id) : undefined}
           onclick={item.onSelect}
           oncontextmenu={item.onContextMenu}
         >
@@ -157,6 +200,11 @@
             </span>
           {/if}
         </button>
+        {#if item.flyout && hoveredId === item.id}
+          <div class="pointer-events-none absolute top-1/2 right-full z-50 mr-1.5 -translate-y-1/2">
+            {@render item.flyout()}
+          </div>
+        {/if}
         {@render item.menu?.()}
       </div>
     {/each}
