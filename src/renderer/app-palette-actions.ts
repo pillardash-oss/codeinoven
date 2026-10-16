@@ -31,7 +31,7 @@ import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
 import type { ActionDefinition, ActionSource } from '$lib/actions'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
 import type { MainView, SettingsSection } from '$lib/stores/renderer-recovery'
-import { workspaceTourViewFor, VIEW_TOURS } from '$lib/components/onboarding/onboarding-tour-steps'
+import { VIEW_GUIDES, workspaceTourViewFor } from '$lib/guide/guide-stops'
 
 export function actionId(value: string): ActionDefinition['id'] {
   return value as ActionDefinition['id']
@@ -197,7 +197,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       ? [
           {
             id: 'app:tour-view',
-            title: `Learn what the ${VIEW_TOURS[tourView].name} view can do`,
+            title: `Learn what the ${VIEW_GUIDES[tourView].viewName} view can do`,
             description: 'Walk through this view with pointers, one step at a time',
             category: 'navigation',
             source: applicationSource,

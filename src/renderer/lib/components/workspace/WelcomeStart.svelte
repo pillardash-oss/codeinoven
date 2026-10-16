@@ -9,7 +9,7 @@
   } from '@lucide/svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
-  import type { WorkspaceTourView } from '../onboarding/onboarding-tour-steps'
+  import type { WorkspaceTourView } from '$lib/guide/guide-stops'
   import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
 
@@ -214,7 +214,11 @@
   <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">CodeInOven</h1>
   <p class="mt-1 text-[0.8125rem] text-muted">{subtitles[variant]}</p>
 
-  <div class="mt-8 flex w-full max-w-sm flex-col gap-1" data-onboarding="empty-state-actions">
+  <div
+    class="mt-8 flex w-full max-w-sm flex-col gap-1"
+    data-onboarding="empty-state-actions"
+    data-guide="empty-state-actions"
+  >
     {#each actions as action (action.id)}
       <button
         type="button"

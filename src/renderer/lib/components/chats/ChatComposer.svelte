@@ -1878,6 +1878,7 @@
     ? 'border-t border-dashed border-border-strong'
     : ''} {expansion.maximized ? 'composer-maximized' : ''}"
   data-onboarding="composer"
+  data-guide="composer"
   data-voice-trigger-root
   {@attach captureComposerRoot}
 >

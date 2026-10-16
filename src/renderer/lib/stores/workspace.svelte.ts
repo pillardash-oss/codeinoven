@@ -20,7 +20,7 @@ import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { recentVisits, threadVisitKey } from './recent-visits.svelte'
-import type { WorkspaceTourView } from '$lib/components/onboarding/onboarding-tour-steps'
+import type { WorkspaceTourView } from '$lib/guide/guide-stops'
 
 // Thread navigation history is shared with the browser tab visits so the Ctrl+Tab
 // switcher can interleave both kinds of surface in one recency order. The keys

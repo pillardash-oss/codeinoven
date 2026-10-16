@@ -26,6 +26,7 @@
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
+  import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { startAppControlResponder } from '$lib/app-control/app-control-responder'
   import { registerShellNavigationActions } from '$lib/app-control/app-control-actions'
   import {
@@ -141,10 +142,8 @@
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
-  import {
-    workspaceTourViewFor,
-    type WorkspaceTourView
-  } from '$lib/components/onboarding/onboarding-tour-steps'
+  import { workspaceTourViewFor, type GuideActionKind } from '$lib/guide/guide-stops'
+  import { guideState } from '$lib/guide/guide-state.svelte'
 
   type View = MainView
 
@@ -189,9 +188,6 @@
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
-  /** A content view's own tour, running on its own step counter. */
-  let viewTourView = $state<WorkspaceTourView | null>(null)
-  let viewTourStep = $state(0)
   let onboardingInitialized = false
   let onboardingProjectPickerActive = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
@@ -500,12 +496,45 @@
     }
   })
 
-  /** A view's empty state, or the palette, can request that view's own tour. */
+  /** A view's empty state, or the palette, can request that view's own guide. */
   $effect(() => {
     const view = workspaceState.consumeViewTourRequest()
     if (!view) return
-    viewTourView = view
-    viewTourStep = 0
+    guideState.start(view)
+  })
+
+  /**
+   * A guide only says what the next step is. The app performs it, because the
+   * app is the only thing that knows how to add a project, open the settings
+   * page that connects a provider, or put the caret in the composer.
+   */
+  function runGuideAction(action: GuideActionKind): void {
+    if (action.kind === 'add-project') {
+      openNewProjectSpotlight()
+      return
+    }
+    if (action.kind === 'focus-composer') {
+      focusVisibleComposer()
+      return
+    }
+    navigate(settingsViewForSection(action.section))
+  }
+
+  /** The dock's own button asks for the step the stop is about. */
+  $effect(() => {
+    const action = guideState.consumeActionRequest()
+    if (!action) return
+    runGuideAction(action.run)
+    guideState.completeAction()
+  })
+
+  /**
+   * A guide explains one view's own app, so it may only run while that view is
+   * the one on screen. Leaving the view ends it right here, which is what keeps
+   * a tip from ever pointing at something the user is no longer looking at.
+   */
+  $effect(() => {
+    guideState.syncView(activeView)
   })
 
   async function loadConfig(): Promise<void> {
@@ -1995,7 +2024,23 @@
         {/await}
       {/if}
     </main>
+
+    <!-- A guide's words, in a column beside the app rather than over it: the app
+         reflows beside the dock, so nothing a guide explains is ever covered. -->
+    {#if guideState.visible}
+      {#await import('$lib/components/guide/GuideDock.svelte') then { default: GuideDock }}
+        <GuideDock />
+      {/await}
+    {/if}
   </div>
+
+  <!-- The marker a guide draws inside the app: one element, a rule to the dock,
+       and the notch where it lands. Fixed to the window, and never in the way. -->
+  {#if guideState.visible}
+    {#await import('$lib/components/guide/GuideMarks.svelte') then { default: GuideMarks }}
+      <GuideMarks />
+    {/await}
+  {/if}
 
   <!-- The instance-role notice sits at the very bottom as a status bar: it is a
        standing condition, so it reads as chrome rather than as content above
@@ -2024,21 +2069,6 @@
         onExisting={handleSpotlightExistingProject}
       />
     {/await}
-  {/if}
-  {#if viewTourView}
-    <!-- A view's own tour: the same spotlight presentation as the setup tour,
-         over that view's steps. Remounted per step so each target is measured
-         once it is on screen. -->
-    {#key viewTourStep}
-      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
-        <OnboardingTour
-          tour={viewTourView}
-          step={viewTourStep}
-          onStepChange={(step) => (viewTourStep = step)}
-          onFinish={() => (viewTourView = null)}
-        />
-      {/await}
-    {/key}
   {/if}
   {#if onboardingOpen}
     {#key onboardingStep}

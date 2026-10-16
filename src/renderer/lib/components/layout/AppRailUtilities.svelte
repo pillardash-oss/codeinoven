@@ -225,14 +225,16 @@
     onSelect={() => navigate('settings-utilities')}
   />
 
-  <AppRailButton
-    label={feature('settings').name}
-    icon={feature('settings').icon}
-    active={isSettingsView(activeView)}
-    shortcut={settingsShortcut}
-    onHover={preloadSettingsChunk}
-    onSelect={() => navigate('settings')}
-  />
+  <div data-guide="rail-settings">
+    <AppRailButton
+      label={feature('settings').name}
+      icon={feature('settings').icon}
+      active={isSettingsView(activeView)}
+      shortcut={settingsShortcut}
+      onHover={preloadSettingsChunk}
+      onSelect={() => navigate('settings')}
+    />
+  </div>
 </div>
 
 <!-- The process list is a secondary surface behind one rail button, so its

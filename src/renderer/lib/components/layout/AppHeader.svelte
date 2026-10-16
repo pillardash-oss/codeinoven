@@ -413,6 +413,7 @@
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
       title="Open notifications"
       data-onboarding="notifications"
+      data-guide="notifications"
       onclick={() => contextSidebarState.toggleNotifications()}
     >
       <Bell size={16} />

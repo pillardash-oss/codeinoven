@@ -9,9 +9,12 @@
   app header now that the view switcher itself lives on the left rail, so the
   active view's own controls stay next to the project/thread title.
 -->
-<div class="actions-stack min-w-7" data-onboarding="view-actions">
+<div class="actions-stack min-w-7" data-onboarding="view-actions" data-guide="view-actions">
   {#key viewActions.view}
-    <div class="action-layer flex items-center gap-0.5" transition:fade={{ duration: motionDuration(180) }}>
+    <div
+      class="action-layer flex items-center gap-0.5"
+      transition:fade={{ duration: motionDuration(180) }}
+    >
       {#each viewActions.items as item (item.id)}
         {@render actionControl(item)}
       {/each}

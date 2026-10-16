@@ -1,12 +1,12 @@
 /**
- * The spotlight step data behind every tour.
+ * The spotlight step data behind the first-run setup tour.
  *
- * The getting-started tour and each content view's own tour are the same
- * presentation over different step lists, so the copy lives here, in one plain
- * module, and `OnboardingTour.svelte` only renders whichever list it is given.
- * A step names the element it points at by `data-onboarding` value: when that
- * element is not on screen the tour falls back to a centered callout, so a step
- * never breaks, it only stops pointing.
+ * A view's own walk moved to the guide dock, which talks beside the app instead
+ * of over it ($lib/guide/guide-stops.ts). This module keeps what only first-run
+ * setup still needs: the workspace as a whole, before any view has content to
+ * explain. A step names the element it points at by `data-onboarding` value:
+ * when that element is not on screen the tour falls back to a centered callout,
+ * so a step never breaks, it only stops pointing.
  */
 
 /** One keyboard row rendered inside a step's callout. */
@@ -25,28 +25,10 @@ export interface SpotlightStep {
   shortcuts?: readonly SpotlightShortcut[]
 }
 
-/** The content views that own an empty state and, with it, a tour. */
-export type WorkspaceTourView = 'projects' | 'threads' | 'chats' | 'assistant'
+import { isMacPlatform } from '$lib/shortcut-display'
 
-export interface ViewTour {
-  /** The view's name, as the palette entry and the step counter say it. */
-  name: string
-  steps: readonly SpotlightStep[]
-}
-
-/** The tour a shell view owns, or null for a view without an empty state. */
-export function workspaceTourViewFor(view: string): WorkspaceTourView | null {
-  if (view === 'projects-scope') return 'projects'
-  return view === 'projects' || view === 'threads' || view === 'chats' || view === 'assistant'
-    ? view
-    : null
-}
-
-export function viewTourLabel(view: WorkspaceTourView): string {
-  return `${VIEW_TOURS[view].name} tour`
-}
-
-const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC')
+/** The short tours' key rows need the same platform as the keymap itself. */
+const isMac = isMacPlatform()
 
 /** A chord as this machine writes it (`⌘N` on macOS, `Ctrl+N` elsewhere). */
 export function shortcutKey(key: string): string {
@@ -106,149 +88,3 @@ export const SETUP_SPOTLIGHT_STEPS: readonly SpotlightStep[] = [
       'Notifications, files, Git changes, terminals, sources, and memory open in the right sidebar. The bell collects completed work and anything that needs you.'
   }
 ]
-
-/**
- * Each view's own tour, pointed at the anchors that view actually paints while
- * its empty state is on screen: the rail, the view's header actions, the empty
- * state's own actions, the chat composer, and the notification bell. A view
- * whose sidebar content is what makes the sidebar appear never points at the
- * sidebar itself, because the tour runs exactly when that sidebar is hidden.
- */
-export const VIEW_TOURS: Record<WorkspaceTourView, ViewTour> = {
-  projects: {
-    name: 'Projects',
-    steps: [
-      {
-        selector: '[data-onboarding="view-switcher"]',
-        eyebrow: 'View rail',
-        title: 'Projects groups work by folder',
-        description:
-          'A project is a folder on this computer, and every conversation about it lives inside its row. The rail switches to Threads, Chats and the Assistant from here.'
-      },
-      {
-        selector: '[data-onboarding="view-actions"]',
-        eyebrow: 'Header actions',
-        title: 'The view runs from the header',
-        description:
-          'These actions belong to the view you are in: search every project conversation, or add another project without leaving the view.'
-      },
-      {
-        selector: '[data-onboarding="empty-state-actions"]',
-        eyebrow: 'Start here',
-        title: 'Add your first project',
-        description:
-          'Pick a folder already on this computer, or clone a repository. CodeInOven opens the project’s first thread as soon as it is added.'
-      },
-      {
-        selector: '[data-onboarding="notifications"]',
-        eyebrow: 'Context and alerts',
-        title: 'Everything that needs you lands here',
-        description:
-          'Finished threads, spec approvals and parked questions collect on the bell. Every entry opens the conversation it came from.'
-      }
-    ]
-  },
-  threads: {
-    name: 'Threads',
-    steps: [
-      {
-        selector: '[data-onboarding="view-switcher"]',
-        eyebrow: 'View rail',
-        title: 'One timeline for every conversation',
-        description:
-          'Threads lists the conversations of all your projects together, most recent activity first, so you never have to remember which folder a conversation belonged to.'
-      },
-      {
-        selector: '[data-onboarding="view-actions"]',
-        eyebrow: 'Header actions',
-        title: 'Search, filter, and start threads',
-        description:
-          'Search every conversation, narrow the timeline to the projects you care about, and start a thread in the active project.'
-      },
-      {
-        selector: '[data-onboarding="empty-state-actions"]',
-        eyebrow: 'Start here',
-        title: 'A conversation needs a project',
-        description:
-          'Add a folder as a project and its conversations appear in this timeline as you work. A chat needs no project, so it lives in Chats instead.'
-      },
-      {
-        selector: '[data-onboarding="notifications"]',
-        eyebrow: 'Context and alerts',
-        title: 'Follow work without watching it',
-        description:
-          'The bell collects completed threads and anything waiting on you, so you can leave a long run and come back to exactly what changed.'
-      }
-    ]
-  },
-  chats: {
-    name: 'Chats',
-    steps: [
-      {
-        selector: '[data-onboarding="view-switcher"]',
-        eyebrow: 'View rail',
-        title: 'Chats need no project',
-        description:
-          'A chat is a real thread with its own history, model and attachments, but it belongs to no folder. Everything you ask for here stays out of your project threads.'
-      },
-      {
-        selector: '[data-onboarding="composer"]',
-        eyebrow: 'Composer',
-        title: 'Type what you want done',
-        description:
-          'Send plain instructions with any file attached. The chat becomes a thread in the sidebar the moment it holds something, so a draft is never lost.',
-        shortcuts: [{ label: 'Send a message', keys: sendShortcut }]
-      },
-      {
-        selector: '[data-onboarding="view-actions"]',
-        eyebrow: 'Header actions',
-        title: 'Find any chat',
-        description:
-          'Search every chat, or start another one, from the actions beside the view name. Each chat keeps its own place in the list.'
-      },
-      {
-        selector: '[data-onboarding="notifications"]',
-        eyebrow: 'Context and alerts',
-        title: 'Answers come back to you',
-        description:
-          'A finished answer raises its own entry on the bell, so a long reply never passes unnoticed while you work on something else.'
-      }
-    ]
-  },
-  assistant: {
-    name: 'Assistant',
-    steps: [
-      {
-        selector: '[data-onboarding="view-switcher"]',
-        eyebrow: 'View rail',
-        title: 'The Assistant is its own view',
-        description: `Assistants and tasks live here, apart from your project threads, so scheduled work never mixes with the work you are doing by hand. Open it from the rail with ${shortcutKey('9')}.`
-      },
-      {
-        selector: '[data-onboarding="view-actions"]',
-        eyebrow: 'Header actions',
-        title: 'Assistants and tasks start here',
-        description:
-          'An assistant takes something off your hands for good and remembers everything you tell it. A task is one piece of work inside an assistant. Search runs, and start either one from here.',
-        shortcuts: [
-          { label: 'New task', keys: shortcutKey('N') },
-          { label: 'New assistant', keys: isMac ? '⌘⇧N' : 'Ctrl+Shift+N' }
-        ]
-      },
-      {
-        selector: '[data-onboarding="empty-state-actions"]',
-        eyebrow: 'Start here',
-        title: 'Begin with an assistant',
-        description:
-          'A new assistant opens its first conversation. It asks what it needs, one thing at a time, and writes down what it learns so every run follows it.'
-      },
-      {
-        selector: '[data-onboarding="notifications"]',
-        eyebrow: 'Context and alerts',
-        title: 'Runs report back',
-        description:
-          'Every run lands in the sidebar under its assistant and raises its own notice naming that assistant, so a scheduled job never finishes silently.'
-      }
-    ]
-  }
-}

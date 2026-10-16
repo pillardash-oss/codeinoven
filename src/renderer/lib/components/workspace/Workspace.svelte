@@ -4,6 +4,7 @@
   import { feature } from '$lib/feature-registry'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { guideState } from '$lib/guide/guide-state.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
   import { motionDuration } from '$lib/motion'
@@ -1737,8 +1738,19 @@
    * frame by frame and the thread beside it follows, the same motion the left
    * sidebar gets from `slideWidth`.
    */
+  /**
+   * While a guide runs, its dock is a column at the right edge, so the tool
+   * panel gets out of the way rather than letting the thread take the squeeze.
+   *
+   * It is hidden, never closed: the track collapses to nothing and the panel
+   * stops painting, while its tabs, width, scroll and open terminal all stay
+   * exactly as they were. Tearing it down would be a different thing entirely
+   * (a coordinator or editor inside it is not always safe to unmount), and the
+   * user asked for a guide, not for their panel to be closed.
+   */
+  let guideHidesToolPanel = $derived(guideState.visible)
   let railTrackWidth = $derived(
-    sidebarVisible ? `${Math.round(contextSidebarState.width)}px` : '0px'
+    sidebarVisible && !guideHidesToolPanel ? `${Math.round(contextSidebarState.width)}px` : '0px'
   )
   /**
    * True while the user drags the rail's edge. A drag has to track the pointer
@@ -5169,6 +5181,7 @@
           class="min-h-0 min-w-0 {rightSidebarFlushes ? 'border-l border-border' : ''}"
           style:grid-column="2"
           style:grid-row="1"
+          style:visibility={guideHidesToolPanel ? 'hidden' : 'visible'}
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
           out:fly={{
             x: contextSidebarState.width,
