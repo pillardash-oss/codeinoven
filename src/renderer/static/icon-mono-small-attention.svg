@@ -1,7 +1,8 @@
-<!-- Attention cue sits outside the mark so its geometry stays unchanged. -->
-<svg width="100%" height="100%" viewBox="10 8 86 84" xmlns="http://www.w3.org/2000/svg" style="color:#000000">
+<!-- The bold exclamation sits beside the mark so its geometry stays unchanged. -->
+<svg width="100%" height="100%" viewBox="10 10 88 76" xmlns="http://www.w3.org/2000/svg" style="color:#000000">
   <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="square" stroke-linejoin="miter"/>
   <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="8" stroke-linejoin="miter"/>
   <rect x="58" y="45" width="29" height="6" fill="currentColor"/>
-  <circle cx="92" cy="10" r="4" fill="currentColor"/>
+  <path d="M94 19v15" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="square"/>
+  <circle cx="94" cy="41" r="2.8" fill="currentColor"/>
 </svg>
