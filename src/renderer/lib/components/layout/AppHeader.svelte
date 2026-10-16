@@ -265,8 +265,8 @@
     </div>
 
     <div class="flex shrink-0 items-center gap-1.5 pl-1.5" aria-label="CodeInOven">
-      <VendorIcon name="CodeInOven" size={20} class="text-foreground" />
-      <span class="whitespace-nowrap text-[0.75rem] font-semibold tracking-tight text-foreground">
+      <VendorIcon name="CodeInOven" size={20} class="text-muted" />
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight text-muted">
         CodeInOven
       </span>
     </div>
