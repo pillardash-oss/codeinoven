@@ -47,7 +47,7 @@
     onSaveAuthenticatedAccount: () => void
     onBackToList: () => void
     onConnectWithKey: () => void
-    onLoginExit: (exitCode: number) => void
+    onLoginExit: (exitCode: number, output: string) => void
     onRequestDisconnect: (account: HarnessAccount | null) => void
     onToggleHidden: (providerId: string, hidden: boolean) => void
   }
@@ -236,7 +236,7 @@
           args={loginHandoff.args}
           environment={loginHandoff.environment}
           startingLabel="Starting sign-in…"
-          onExit={(exitCode) => onLoginExit(exitCode)}
+          onExit={(exitCode, output) => onLoginExit(exitCode, output)}
         />
       </div>
       <p class="font-mono text-[0.625rem] text-dimmed">

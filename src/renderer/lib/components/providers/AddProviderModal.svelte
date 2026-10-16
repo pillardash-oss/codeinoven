@@ -27,6 +27,7 @@
   import {
     type AddTab,
     type ConnectStep,
+    loginFailureDetail,
     providerMatchesSearch
   } from './add-provider-modal-helpers'
 
@@ -479,7 +480,7 @@
     void discardPendingAccount()
   }
 
-  async function handleLoginExit(exitCode: number): Promise<void> {
+  async function handleLoginExit(exitCode: number, output: string): Promise<void> {
     const attemptedProvider = selectedProvider
     const providerName = selectedProvider?.name ?? 'Provider'
     loginHandoff = null
@@ -508,7 +509,12 @@
             : `${providerName} sign-in could not be verified.`
       }
     } else {
-      actionWarning = `${providerName} sign-in exited with code ${exitCode}.`
+      // The CLI named the reason in the terminal the user was just watching, so
+      // it belongs in the notice instead of an exit code on its own.
+      const detail = loginFailureDetail(output)
+      actionWarning = `${providerName} sign-in exited with code ${exitCode}.${
+        detail ? ` ${detail}` : ''
+      }`
       await discardPendingAccount()
     }
   }
@@ -722,7 +728,7 @@
       onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
       onBackToList={backToList}
       onConnectWithKey={() => void connectWithKey()}
-      onLoginExit={(exitCode) => void handleLoginExit(exitCode)}
+      onLoginExit={(exitCode, output) => void handleLoginExit(exitCode, output)}
       onRequestDisconnect={(account) => (disconnectTarget = account)}
       onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}
     />

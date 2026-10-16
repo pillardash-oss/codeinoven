@@ -16,6 +16,7 @@
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import ProviderSignInProgress from './ProviderSignInProgress.svelte'
+  import { loginFailureDetail } from './add-provider-modal-helpers'
   import { ProviderSignInController } from './provider-sign-in.svelte'
 
   /**
@@ -140,9 +141,12 @@
     }
   }
 
-  async function finishTerminal(exitCode: number): Promise<void> {
+  async function finishTerminal(exitCode: number, output: string): Promise<void> {
     if (exitCode !== 0) {
-      error = `Sign-in exited with code ${exitCode}.`
+      // The CLI's own last lines carry the reason, which an exit code alone does
+      // not, and the terminal they were printed in is about to be replaced.
+      const detail = loginFailureDetail(output)
+      error = `Sign-in exited with code ${exitCode}.${detail ? ` ${detail}` : ''}`
       return
     }
     // The process is gone; drop the terminal before confirming so the panel
@@ -326,7 +330,7 @@
           args={handoff.args}
           environment={handoff.environment}
           startingLabel="Starting sign-in…"
-          onExit={(exitCode) => void finishTerminal(exitCode)}
+          onExit={(exitCode, output) => void finishTerminal(exitCode, output)}
         />
       {:else if error}
         <div class="flex h-full items-center justify-center p-6">
