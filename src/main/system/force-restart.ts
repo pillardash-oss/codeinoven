@@ -2,6 +2,7 @@ import { app, dialog, Menu, MenuItem, type MenuItemConstructorOptions } from 'el
 import { Worker } from 'node:worker_threads'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
+import { queueAppRelaunch } from './app-relaunch'
 
 const RESTART_GRACE_MS = 15_000
 let restartPending = false
@@ -39,7 +40,7 @@ async function requestRestart(quitApp: () => void): Promise<void> {
     // Queue exactly one replacement before starting the normal shutdown. This
     // independent deadline survives a shutdown already in progress and never
     // waits on renderer IPC, storage flushes or service disposal.
-    app.relaunch()
+    queueAppRelaunch()
     setTimeout(() => app.exit(0), RESTART_GRACE_MS)
     // A timer on the main thread cannot fire if cleanup blocks that thread.
     // This one-shot worker gives Electron one extra second to exit, then kills
