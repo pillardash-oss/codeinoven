@@ -2,8 +2,11 @@
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import {
+    CheckCircle2,
+    KeyRound,
     ListFilter,
     Loader2,
+    LogIn,
     Pencil,
     RefreshCw,
     Search,
@@ -18,11 +21,17 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import type { HarnessAccount, ProviderConnectionInfo } from '$shared/types'
+  import type {
+    HarnessAccount,
+    ProviderAccountAuthEntry,
+    ProviderAccountAuthStatus,
+    ProviderConnectionInfo
+  } from '$shared/types'
   import { bankedResetSummary, creditsLabel } from '$lib/format/usage'
   import { formatCompactAge, formatDateTimeWithWeekday } from '$shared/date-time-format'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import HarnessAccountUsageCell from './HarnessAccountUsageCell.svelte'
+  import ProviderSignInPanel from './ProviderSignInPanel.svelte'
   import Modal from '../ui/Modal.svelte'
 
   interface Props {
@@ -43,6 +52,23 @@
   let saving = $state(false)
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
+
+  /**
+   * Credential state of the account the edit modal is showing.
+   *
+   * Replacing a credential never changes the account row, so the label the user
+   * already chose survives: the modal reads the account's own auth status to
+   * learn how it is authenticated, then either writes a new API key into that
+   * account's credential home or re-runs the harness's own sign-in against it.
+   */
+  let editStatus = $state<ProviderAccountAuthStatus | null>(null)
+  let editStatusLoading = $state(false)
+  let editError = $state('')
+  let editNotice = $state('')
+  let newApiKey = $state('')
+  let replacingKey = $state(false)
+  /** Account whose credential is being re-authenticated through the sign-in panel. */
+  let signInTarget = $state<HarnessAccount | null>(null)
 
   /**
    * A custom base-URL provider is not an authenticated account, so the account
@@ -306,27 +332,147 @@
     if (ids) harnessAccountUsageCache.schedule(customProviderRows)
   })
 
+  /** The auth entry describing the account being edited, when the harness reports one. */
+  const editAuthEntry = $derived.by((): ProviderAccountAuthEntry | undefined => {
+    if (!editTarget || !editStatus) return undefined
+    return (
+      editStatus.accounts.find((entry) => entry.providerId === editTarget?.providerId) ??
+      editStatus.accounts.find((entry) => entry.active !== false)
+    )
+  })
+
+  /** OAuth accounts are re-authenticated; API-key accounts get a replaced key. */
+  const editIsOauth = $derived(editAuthEntry?.method?.toLowerCase() === 'oauth')
+
+  const editCapabilities = $derived(editStatus?.capabilities ?? null)
+
+  /** A pasted key can only replace a key-backed account the harness can store keys for. */
+  const canReplaceApiKey = $derived(
+    !!editTarget?.providerId && editCapabilities?.apiKeyEntry === true && !editIsOauth
+  )
+
+  /**
+   * Whether this account can be signed in again from here.
+   *
+   * An OAuth account has no key to paste, so re-running the harness's own
+   * sign-in is the only way to refresh it. The same action is offered for an
+   * API-key account on a harness that also supports sign-in, so a stale key can
+   * be swapped for a fresh sign-in without disconnecting the account.
+   */
+  const canSignInAgain = $derived(
+    editCapabilities !== null && (editCapabilities.inAppLogin || editCapabilities.loginHandoff)
+  )
+
+  /** Human label for the credential method an account's auth entry reports. */
+  function credentialMethodLabel(method: string | undefined): string {
+    if (!method) return 'stored credentials'
+    const normalized = method.toLowerCase()
+    if (normalized === 'oauth') return 'an OAuth sign-in'
+    if (normalized === 'api-key' || normalized === 'api_key') return 'an API key'
+    return method
+  }
+
   function openEdit(account: HarnessAccount): void {
     editTarget = account
     editLabel = account.label
+    editStatus = null
+    editError = ''
+    editNotice = ''
+    newApiKey = ''
+    void loadEditStatus(account)
+  }
+
+  function closeEdit(): void {
+    editTarget = null
+    editStatus = null
+    editError = ''
+    editNotice = ''
+    newApiKey = ''
+  }
+
+  /** Read how the account is authenticated against its own credential home. */
+  async function loadEditStatus(account: HarnessAccount): Promise<void> {
+    editStatusLoading = true
+    editError = ''
+    try {
+      editStatus = await invoke(
+        'providerAccounts:getAuthStatus',
+        account.harnessId,
+        undefined,
+        account.id
+      )
+    } catch (statusError) {
+      editStatus = null
+      editError =
+        statusError instanceof Error ? statusError.message : 'The account status could not be read.'
+    } finally {
+      editStatusLoading = false
+    }
+  }
+
+  /** Write a new key into the account's own credential home, keeping its label. */
+  async function replaceApiKey(): Promise<void> {
+    if (!editTarget || replacingKey) return
+    const account = editTarget
+    const key = newApiKey.trim()
+    if (!key) {
+      editError = 'Enter the new API key.'
+      return
+    }
+    replacingKey = true
+    editError = ''
+    editNotice = ''
+    try {
+      await invoke(
+        'providerAccounts:setApiKey',
+        account.harnessId,
+        account.providerId,
+        key,
+        account.id
+      )
+      newApiKey = ''
+      harnessAccountCache.invalidate(account.harnessId)
+      await loadEditStatus(account)
+      editNotice = `The API key for ${account.label} was replaced.`
+      harnessAccountUsageCache.schedule([account], { force: true })
+    } catch (replaceError) {
+      editError =
+        replaceError instanceof Error ? replaceError.message : 'The API key was not replaced.'
+    } finally {
+      replacingKey = false
+    }
+  }
+
+  /** Hand the account to the shared sign-in panel, which re-runs the harness's own flow. */
+  function startSignIn(account: HarnessAccount): void {
+    closeEdit()
+    signInTarget = account
+  }
+
+  async function completeSignIn(account: HarnessAccount): Promise<void> {
+    signInTarget = null
+    harnessAccountCache.invalidate(account.harnessId)
+    await loadStoredAccounts()
+    harnessAccountUsageCache.schedule(rows, { force: true })
   }
 
   async function saveLabel(): Promise<void> {
     if (!editTarget || saving) return
     const label = editLabel.trim()
     if (!label || label === editTarget.label) {
-      editTarget = null
+      closeEdit()
       return
     }
     saving = true
-    error = ''
+    editError = ''
     try {
       const updated = await invoke('providerAccounts:rename', editTarget.id, label)
       harnessAccountCache.invalidate(updated.harnessId)
       replaceAccount(updated)
-      editTarget = null
+      closeEdit()
     } catch (saveError) {
-      error = saveError instanceof Error ? saveError.message : 'The account label was not saved.'
+      editError =
+        saveError instanceof Error ? saveError.message : 'The account label was not saved.'
     } finally {
       saving = false
     }
@@ -611,12 +757,12 @@
   {/if}
 </div>
 
-<Modal open={editTarget !== null} title="Edit account label" onClose={() => (editTarget = null)}>
+<Modal open={editTarget !== null} title="Edit account" onClose={closeEdit}>
   {#snippet footer()}
     <button
       type="button"
       class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-      onclick={() => (editTarget = null)}
+      onclick={closeEdit}
     >
       Cancel
     </button>
@@ -630,20 +776,119 @@
     </button>
   {/snippet}
 
-  <label class="block space-y-1.5">
-    <span class="text-xs font-medium">Label</span>
-    <!-- svelte-ignore a11y_autofocus -->
-    <input
-      bind:value={editLabel}
-      maxlength="80"
-      autocomplete="off"
-      autofocus
-      class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
-      onkeydown={(event: KeyboardEvent) => {
-        if (event.key === 'Enter') void saveLabel()
-      }}
-    />
-  </label>
+  {#if editTarget}
+    {@const account = editTarget}
+    <div class="space-y-4">
+      <label class="block space-y-1.5">
+        <span class="text-xs font-medium">Label</span>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          bind:value={editLabel}
+          maxlength="80"
+          autocomplete="off"
+          autofocus
+          class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'Enter') void saveLabel()
+          }}
+        />
+      </label>
+
+      <div class="space-y-3 border-t pt-4">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-medium">Credentials</span>
+          {#if editStatusLoading}
+            <Loader2 size={13} class="animate-spin text-dimmed" aria-hidden="true" />
+          {/if}
+        </div>
+
+        <p class="text-[0.6875rem] text-muted">
+          {account.label} is connected to {providerLabel(account)} with {credentialMethodLabel(
+            editAuthEntry?.method
+          )}. Replacing it keeps this account and its label.
+        </p>
+
+        {#if editError}
+          <p
+            class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+            role="alert"
+          >
+            {editError}
+          </p>
+        {/if}
+        {#if editNotice}
+          <p
+            class="flex items-start gap-1.5 border border-success/30 bg-success/10 px-3 py-2 text-xs text-success"
+            role="status"
+          >
+            <CheckCircle2 size={13} class="mt-0.5 shrink-0" aria-hidden="true" />
+            <span>{editNotice}</span>
+          </p>
+        {/if}
+
+        {#if canReplaceApiKey}
+          <div class="space-y-1.5">
+            <label
+              class="block text-[0.6875rem] font-medium text-foreground"
+              for="account-replacement-key"
+            >
+              New API key
+            </label>
+            <input
+              id="account-replacement-key"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste the replacement key"
+              class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
+              bind:value={newApiKey}
+              onkeydown={(event: KeyboardEvent) => {
+                if (event.key === 'Enter') void replaceApiKey()
+              }}
+            />
+            <button
+              type="button"
+              class="flex h-9 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              disabled={replacingKey || newApiKey.trim() === ''}
+              title={`Replace the API key for ${account.label}`}
+              onclick={() => void replaceApiKey()}
+            >
+              {#if replacingKey}
+                <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+                Replacing…
+              {:else}
+                <KeyRound size={13} aria-hidden="true" />
+                Replace API key
+              {/if}
+            </button>
+          </div>
+        {/if}
+
+        {#if canReplaceApiKey && canSignInAgain}
+          <p class="text-center text-[0.625rem] text-dimmed">or</p>
+        {/if}
+
+        {#if canSignInAgain}
+          <button
+            type="button"
+            class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+            title={`Sign in to ${providerLabel(account)} again for ${account.label}`}
+            onclick={() => startSignIn(account)}
+          >
+            <LogIn size={13} aria-hidden="true" />
+            Sign in again
+          </button>
+        {/if}
+
+        {#if !editStatusLoading && !canReplaceApiKey && !canSignInAgain}
+          <p class="text-[0.6875rem] text-dimmed">
+            {providerLabel(account)} does not let CodeInOven replace this account's credentials from here.
+            Disconnect and connect again to change them.
+          </p>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </Modal>
 
 <Modal
@@ -679,3 +924,16 @@
     </p>
   </div>
 </Modal>
+
+{#if signInTarget}
+  {@const signInAccount = signInTarget}
+  <ProviderSignInPanel
+    harnessId={signInAccount.harnessId}
+    harnessName={harnessFor(signInAccount.harnessId)?.name ?? signInAccount.harnessId}
+    providerId={signInAccount.providerId || undefined}
+    providerName={signInAccount.label}
+    accountId={signInAccount.id}
+    onClose={() => (signInTarget = null)}
+    onComplete={() => void completeSignIn(signInAccount)}
+  />
+{/if}
