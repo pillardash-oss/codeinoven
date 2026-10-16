@@ -12,8 +12,11 @@
 
 <!--
   CIO · Open folder
-  Open folder: the folder with its front swung forward on a solid lip, so it
-  is the same object in a second state.
+  Open folder: the same folder as the closed mark, tab inked and all, with the
+  front panel swung forward and wider than the back. The first drawing carried
+  a band floating across the open front, which is the fault the closed folder
+  was cured of, and its back panel was a stray hook rather than the folder it
+  belongs to.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -29,11 +32,17 @@
   {...rest}
 >
   <g
-    transform="translate(-2.415 -1.820) scale(1.1816)"
-    stroke-width={cioStrokeWidth(weight, 1.1816)}
+    transform="translate(-2.070 -1.498) scale(1.1348)"
+    stroke-width={cioStrokeWidth(weight, 1.1348)}
   >
-    <path d="M6.6 5.8h2l2.2 2.8h8.4a1.6 1.6 0 0 1 1.6 1.6v1.4" /><path
-      d="M3.6 17.6 5.8 10h14.8l-2.4 7.6Z"
-    /><rect x="7.4" y="10.6" width="9.6" height="2.2" rx="1.1" fill="currentColor" stroke="none" />
+    <path d="M3.6 13.6V7.2a1.8 1.8 0 0 1 1.8-1.8h3.5l2.2 2.8h8.5a1.8 1.8 0 0 1 1.8 1.8v1.6" /><rect
+      x="3.4"
+      y="5.3"
+      width="8.4"
+      height="2.6"
+      rx="1.7"
+      fill="currentColor"
+      stroke="none"
+    /><path d="M3.4 18.4 6 11.8h14.4l-2.6 6.6Z" />
   </g>
 </svg>

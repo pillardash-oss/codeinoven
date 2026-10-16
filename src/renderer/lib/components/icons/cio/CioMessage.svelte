@@ -11,9 +11,12 @@
 </script>
 
 <!--
-  CIO · Message
-  Message: a squared bubble with two solid lines and no tail. The chat mark
-  carries the tail, which is what keeps the two apart.
+  CIO · Comment
+  Comment: a bubble with a tail at the lower right and one solid line in it,
+  which is something said about what it points at. It was a rounded rectangle
+  carrying two bars, which is the silhouette the diff mark wore, so the two
+  were the same shape with different content; the chats mark keeps the squared
+  bubble and the tail on the other side.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -29,17 +32,11 @@
   {...rest}
 >
   <g
-    transform="translate(-2.487 -2.487) scale(1.2072)"
+    transform="translate(-2.487 -3.448) scale(1.2072)"
     stroke-width={cioStrokeWidth(weight, 1.2072)}
   >
-    <rect x="3.6" y="4.8" width="16.8" height="14.4" rx="2.6" /><rect
-      x="7.2"
-      y="9.6"
-      width="9.6"
-      height="2.4"
-      rx="1.2"
-      fill="currentColor"
-      stroke="none"
-    /><rect x="7.2" y="13.6" width="6" height="2.4" rx="1.2" fill="currentColor" stroke="none" />
+    <path
+      d="M3.6 7.4a2.4 2.4 0 0 1 2.4-2.4h12a2.4 2.4 0 0 1 2.4 2.4v7.2a2.4 2.4 0 0 1-2.4 2.4h-1.2v3.6l-4.6-3.6H6a2.4 2.4 0 0 1-2.4-2.4Z"
+    /><rect x="7.2" y="9.9" width="9.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" />
   </g>
 </svg>

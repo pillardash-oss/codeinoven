@@ -1,8 +1,8 @@
 import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
 import { createSubscriber } from 'svelte/reactivity'
 import type { Component } from 'svelte'
-import { BotMessageSquare, Timeline } from '@lucide/svelte'
+import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {
   browserDownloads,
@@ -80,10 +80,12 @@ export interface ViewAudioActivity {
 const NO_AUDIO_ACTIVITY: ViewAudioActivity = { families: new Set(), global: false }
 
 /** The three families the rail's badges and labels are keyed by. */
+// Each family wears the mark its own view wears, from the one place that holds a
+// family's mark, so a badge and the view it counts can never disagree.
 const FAMILY_ICONS: Record<ContentThreadFamily, Component> = {
-  projects: Timeline,
-  chats: CioMessage,
-  assistant: BotMessageSquare
+  projects: CioProjects,
+  chats: CONTENT_FAMILY_ICONS.chats,
+  assistant: CONTENT_FAMILY_ICONS.assistant
 }
 
 const FAMILY_NOUN: Record<ContentThreadFamily, string> = {

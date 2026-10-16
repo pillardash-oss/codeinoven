@@ -12,9 +12,11 @@
 
 <!--
   CIO · Workspace files
-  Workspace files: a folder with a child panel hanging off it, which is the
-  tree. Two equal panels were tried first and read as two files, not as a
-  tree.
+  Workspace files: the folder with its tab inked, open at the bottom, with one
+  child panel hanging off a short connector below and to the right of it. Two
+  equal panels were tried first and read as two files rather than as a tree; a
+  first attempt at this one let the child overlap the folder and read as one
+  smudged block.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -30,19 +32,23 @@
   {...rest}
 >
   <g
-    transform="translate(-2.189 -2.189) scale(1.1824)"
+    transform="translate(-2.189 -2.771) scale(1.1824)"
     stroke-width={cioStrokeWidth(weight, 1.1824)}
   >
-    <rect x="3.4" y="4.2" width="10" height="6.8" rx="2" /><path
-      d="M8.4 11v3.2a2 2 0 0 0 2 2h1.4"
-    /><rect x="11.8" y="13" width="8.8" height="6.8" rx="2" /><rect
-      x="5.6"
-      y="6.4"
-      width="5.6"
-      height="2.4"
-      rx="1.2"
+    <path d="M3.4 11.6V6.6a1.6 1.6 0 0 1 1.6-1.6h2.9l1.9 2.4h5.2a1.6 1.6 0 0 1 1.6 1.6v2.6" /><rect
+      x="3.3"
+      y="4.8"
+      width="6.4"
+      height="2.2"
+      rx="1.4"
       fill="currentColor"
       stroke="none"
+    /><path d="M7.4 11.6v2.4a2 2 0 0 0 2 2h2.2" /><rect
+      x="11.6"
+      y="12.6"
+      width="9"
+      height="7.4"
+      rx="2"
     />
   </g>
 </svg>

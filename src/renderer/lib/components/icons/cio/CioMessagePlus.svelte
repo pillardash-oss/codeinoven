@@ -11,8 +11,9 @@
 </script>
 
 <!--
-  CIO · New message
-  New message: the same bubble with a solid plus where the lines were.
+  CIO · New comment
+  New comment: the same bubble with a solid plus where the line was, so a
+  reader who knows one knows the other.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -28,17 +29,19 @@
   {...rest}
 >
   <g
-    transform="translate(-2.487 -2.487) scale(1.2072)"
+    transform="translate(-2.487 -3.448) scale(1.2072)"
     stroke-width={cioStrokeWidth(weight, 1.2072)}
   >
-    <rect x="3.6" y="4.8" width="16.8" height="14.4" rx="2.6" /><rect
+    <path
+      d="M3.6 7.4a2.4 2.4 0 0 1 2.4-2.4h12a2.4 2.4 0 0 1 2.4 2.4v7.2a2.4 2.4 0 0 1-2.4 2.4h-1.2v3.6l-4.6-3.6H6a2.4 2.4 0 0 1-2.4-2.4Z"
+    /><rect
       x="10.9"
-      y="7.6"
+      y="6.6"
       width="2.2"
-      height="7.6"
+      height="7"
       rx="1.1"
       fill="currentColor"
       stroke="none"
-    /><rect x="8.2" y="10.3" width="7.6" height="2.2" rx="1.1" fill="currentColor" stroke="none" />
+    /><rect x="8.5" y="9" width="7" height="2.2" rx="1.1" fill="currentColor" stroke="none" />
   </g>
 </svg>

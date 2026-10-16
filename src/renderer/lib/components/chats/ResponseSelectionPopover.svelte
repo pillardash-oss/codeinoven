@@ -1,7 +1,8 @@
 <script lang="ts">
   import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
-  import { MessageCirclePlus } from '@lucide/svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
 
   interface Props {
     text: string
@@ -53,7 +54,7 @@
     title="Reference this selection in your next message"
     onclick={onAdd}
   >
-    <MessageCirclePlus size={13} />
+    <CioMessagePlus size={ICON_SIZE.inline} />
     Comment
   </button>
   {#if onElaborate}

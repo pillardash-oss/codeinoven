@@ -18,6 +18,7 @@
    * not left wondering where the action went.
    */
   import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioLink from '$lib/components/icons/cio/CioLink.svelte'
   import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
@@ -26,7 +27,7 @@
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { Flag, MessageSquareQuote } from '@lucide/svelte'
+  import { Flag } from '@lucide/svelte'
   import { DropdownMenu as Menu } from 'bits-ui'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import type { PrMinimizeReason } from '$shared/types'
@@ -169,7 +170,7 @@
   Copy Markdown
 </Menu.Item>
 <Menu.Item class={itemClass} onSelect={onQuote} disabled={busy}>
-  <MessageSquareQuote size={12} class="shrink-0 text-dimmed" />
+  <CioMessage size={ICON_SIZE.inline} class="shrink-0 text-dimmed" />
   Quote reply
 </Menu.Item>
 {#if onReply}

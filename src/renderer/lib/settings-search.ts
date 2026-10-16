@@ -1,4 +1,5 @@
 import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
 import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
 import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
 import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
@@ -15,7 +16,6 @@ import {
   ChartColumn,
   HeartPulse,
   Keyboard,
-  MessageSquareCode,
   MonitorUp,
   Router,
   SlidersHorizontal,
@@ -172,7 +172,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'CIO Prompts',
     description: 'Prompts CodeInOven injects into agent sessions.',
     keywords: ['prompts', 'instructions'],
-    icon: MessageSquareCode
+    icon: CioMessage
   },
   {
     id: 'heartbeat',

@@ -400,8 +400,8 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     title: 'Changes',
     glyph: {
       kind: 'drawn',
-      note: 'Changes: a page carrying a solid plus. The plus is two crossed solid bars rather than a stroked cross, because a stroked cross at 16px reads as a tick.',
-      shapes: `<path d="M4.6 5.4h8.6l4.6 4.6v9.2a2.2 2.2 0 0 1-2.2 2.2H4.6a2.2 2.2 0 0 1-2.2-2.2V7.6a2.2 2.2 0 0 1 2.2-2.2Z" />${solid(6.4, 12.8, 8, 2.4, 1.2)}${solid(9.2, 10, 2.4, 8, 1.2)}`
+      note: 'Changes: the page carries both signs now, a solid plus above a solid minus on the same axis, which is what a change set is. It carried only the plus before, which made it the comment mark with different content, and carried no minus at all.',
+      shapes: `<path d="M4.6 5.4h8.6l4.6 4.6v9.2a2.2 2.2 0 0 1-2.2 2.2H4.6a2.2 2.2 0 0 1-2.2-2.2V7.6a2.2 2.2 0 0 1 2.2-2.2Z" />${solid(8.5, 9.8, 2.2, 4.6, 1.1)}${solid(7.3, 11, 4.6, 2.2, 1.1)}${solid(7.3, 15.4, 4.6, 2.2, 1.1)}`
     }
   },
   {
@@ -509,8 +509,8 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     title: 'Workspace files',
     glyph: {
       kind: 'drawn',
-      note: 'Workspace files: a folder with a child panel hanging off it, which is the tree. Two equal panels were tried first and read as two files, not as a tree.',
-      shapes: `<rect x="3.4" y="4.2" width="10" height="6.8" rx="2" /><path d="M8.4 11v3.2a2 2 0 0 0 2 2h1.4" /><rect x="11.8" y="13" width="8.8" height="6.8" rx="2" />${solid(5.6, 6.4, 5.6, 2.4, 1.2)}`
+      note: 'Workspace files: the folder with its tab inked, open at the bottom, with one child panel hanging off a short connector below and to the right of it. Two equal panels were tried first and read as two files rather than as a tree; a first attempt at this one let the child overlap the folder and read as one smudged block.',
+      shapes: `<path d="M3.4 11.6V6.6a1.6 1.6 0 0 1 1.6-1.6h2.9l1.9 2.4h5.2a1.6 1.6 0 0 1 1.6 1.6v2.6" />${solid(3.3, 4.8, 6.4, 2.2, 1.4)}<path d="M7.4 11.6v2.4a2 2 0 0 0 2 2h2.2" /><rect x="11.6" y="12.6" width="9" height="7.4" rx="2" />`
     }
   },
   {
@@ -563,8 +563,8 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     title: 'Open folder',
     glyph: {
       kind: 'drawn',
-      note: 'Open folder: the folder with its front swung forward on a solid lip, so it is the same object in a second state.',
-      shapes: `<path d="M6.6 5.8h2l2.2 2.8h8.4a1.6 1.6 0 0 1 1.6 1.6v1.4" /><path d="M3.6 17.6 5.8 10h14.8l-2.4 7.6Z" />${solid(7.4, 10.6, 9.6, 2.2, 1.1)}`
+      note: 'Open folder: the same folder as the closed mark, tab inked and all, with the front panel swung forward and wider than the back. The first drawing carried a band floating across the open front, which is the fault the closed folder was cured of, and its back panel was a stray hook rather than the folder it belongs to.',
+      shapes: `<path d="M3.6 13.6V7.2a1.8 1.8 0 0 1 1.8-1.8h3.5l2.2 2.8h8.5a1.8 1.8 0 0 1 1.8 1.8v1.6" />${solid(3.4, 5.3, 8.4, 2.6, 1.7)}<path d="M3.4 18.4 6 11.8h14.4l-2.6 6.6Z" />`
     }
   },
   {
@@ -732,20 +732,20 @@ export const CIO_GLYPHS: GlyphEntry[] = [
   },
   {
     id: 'message',
-    title: 'Message',
+    title: 'Comment',
     glyph: {
       kind: 'drawn',
-      note: 'Message: a squared bubble with two solid lines and no tail. The chat mark carries the tail, which is what keeps the two apart.',
-      shapes: `<rect x="3.6" y="4.8" width="16.8" height="14.4" rx="2.6" />${solid(7.2, 9.6, 9.6, 2.4, 1.2)}${solid(7.2, 13.6, 6, 2.4, 1.2)}`
+      note: 'Comment: a bubble with a tail at the lower right and one solid line in it, which is something said about what it points at. It was a rounded rectangle carrying two bars, which is the silhouette the diff mark wore, so the two were the same shape with different content; the chats mark keeps the squared bubble and the tail on the other side.',
+      shapes: `<path d="M3.6 7.4a2.4 2.4 0 0 1 2.4-2.4h12a2.4 2.4 0 0 1 2.4 2.4v7.2a2.4 2.4 0 0 1-2.4 2.4h-1.2v3.6l-4.6-3.6H6a2.4 2.4 0 0 1-2.4-2.4Z" />${solid(7.2, 9.9, 9.6, 2.4, 1.2)}`
     }
   },
   {
     id: 'message-plus',
-    title: 'New message',
+    title: 'New comment',
     glyph: {
       kind: 'drawn',
-      note: 'New message: the same bubble with a solid plus where the lines were.',
-      shapes: `<rect x="3.6" y="4.8" width="16.8" height="14.4" rx="2.6" />${solid(10.9, 7.6, 2.2, 7.6, 1.1)}${solid(8.2, 10.3, 7.6, 2.2, 1.1)}`
+      note: 'New comment: the same bubble with a solid plus where the line was, so a reader who knows one knows the other.',
+      shapes: `<path d="M3.6 7.4a2.4 2.4 0 0 1 2.4-2.4h12a2.4 2.4 0 0 1 2.4 2.4v7.2a2.4 2.4 0 0 1-2.4 2.4h-1.2v3.6l-4.6-3.6H6a2.4 2.4 0 0 1-2.4-2.4Z" />${solid(10.9, 6.6, 2.2, 7, 1.1)}${solid(8.5, 9, 7, 2.2, 1.1)}`
     }
   },
   {
