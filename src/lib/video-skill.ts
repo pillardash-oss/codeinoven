@@ -96,6 +96,7 @@ ${workRootGuidance(videoRoot)} Do not write into \`.cio/specs/<feature>/prototyp
 - \`duration\`, in seconds.
 - \`background\`, optional \`#rrggbb\`, default black.
 - \`audio\`, optional list of project-relative sound files, in the order they layer.
+- \`audioPolicy\`, optional \`"required"\` or \`"silent"\`. Write it when the film is meant to be heard, or when silence is deliberate; without it the export infers the policy from whether any sound files exist.
 
 Common frames: landscape 1920x1080, portrait 1080x1920, square 1080x1080.
 
@@ -134,6 +135,12 @@ Your soundtrack stops with the picture. A play is refused while the player is pa
 
 The page plays the files named in \`audio\` for a viewing. The app reads the same list from the manifest to mux them into an exported file, because a page cannot hand back its own mixed audio. Name them in the order they should layer, and keep speech above music by a wide margin.
 
+A film is usually meant to be heard, so treat silence as a decision rather than a default. When the piece wants music or an accent and the user has not asked for silence, produce it: the audio craft in this app, a supplied or licensed file, or something you synthesize into the composition folder yourself. Never reference a file you did not write, never point at an invented URL, and never hand back a silent film as finished. If the soundtrack cannot be produced, report what blocked it. A request for "no voiceover" removes speech only, not music and effects.
+
+Declare the intent in the manifest with \`audioPolicy\`: \`"required"\` for a film that must be heard, \`"silent"\` where silence is the choice. The export enforces it, so a film declared audible that carries no audible audio fails the export instead of arriving as a quiet surprise.
+
+Timing inside sound is measurable, so measure it. \`waveform\` and \`listen\` read the audio you are actually placing, which lets a cut land on a real beat instead of a guessed one. Do not present a pulse you invented as analysis of the music, and keep any beat-dependent drawing in the render function, where the playhead can reach it.
+
 ## Footage, captions and delivery
 
 Use \`probe\` before editing source media. \`filmstrip\` extracts up to 24 small frames at reported timestamps; open those pictures. \`waveform\` returns a waveform PNG, and \`listen\` returns a mono WAV excerpt. \`cut\` saves a trimmed clip with its audio into a new folder. Sources are project-relative files and originals are kept.
@@ -144,7 +151,7 @@ Use \`studio\` to read the composition's \`studio.json\` and revision. Write bac
 
 Install the CIO-authored helper script with \`runtime\`, then include \`<script src="./cio-video.js"></script>\` before your own script. Await \`CIOVideo.bind(draw)\` to load saved parameters, audio tracks and fonts before defining the render function. Read \`CIOVideo.parameters\` in your draw function and call \`CIOVideo.drawCaptions(ctx, seconds, width, height)\` after the scene. Do not echo the document or tool instructions onto the stage.
 
-The helpers expose progress, interpolation and easing; SVG path reveals and animated dashed strokes through \`strokePath\`; polygons, matching-command path morphs and fixed group pivots; and \`trackingAt\` for interpolating a tracked position. Canvas supplies ellipse and conic-gradient drawing. Always save and restore the drawing context around a group transform.
+The helpers expose \`progress\` and \`interpolate\`, and the curves in \`CIOVideo.easings\` (\`linear\`, \`inCubic\`, \`outCubic\`, \`inOutCubic\`, \`inQuint\`, \`outQuint\`, \`inExpo\`, \`outExpo\`, \`inOutExpo\`, \`outBack\`), with \`ease\` kept as the cubic out it always was; \`strokePath\` for SVG path reveals and animated dashed strokes; \`polygon\`, \`morphPath\` for matching-command path morphs and \`pivot\` for a fixed group pivot; and \`trackingAt\` for interpolating a tracked position. Canvas supplies ellipse and conic-gradient drawing. Always save and restore the drawing context around a group transform.
 
 Name your output canvas with \`CIOVideo.useCanvas(canvas)\`. The export encodes that canvas inside the renderer, so no full frame crosses into the app's main process and a long export never competes with the rest of the window. Draw everything the video should contain into that canvas: a composition that draws only with DOM and CSS has no canvas to encode and exports by capturing the window frame by frame instead, which is slower and costs the main process.
 
@@ -178,6 +185,28 @@ Then use operation \`capture\` to look at an exact frame: give it \`time\` in se
 
 Never reason about a frame you have not captured, and never report a composition as done on the strength of its code.
 
+## Design the film before you build it
+
+Timing is the last thing to get right, not the first. These decisions are what separate a launch film from a slideshow.
+
+Resolve one representative frame before building scenes. Choose the moment that carries the idea and design it completely: the real hierarchy, the crop, the type, the palette, the texture, the focal object. Later motion grows out of that frame, and nothing added afterwards rescues a frame that says nothing. When the request is a plan rather than a film, describe this frame instead of building it.
+
+Choose a premise and a material. "Premium", "cinematic" and "modern" are not premises. Say what fills the frame, where attention rests, and what the picture is made of: editorial ink, a precision instrument, folded paper, tactile collage, vector geometry, a painterly field. Pick one world and carry its edges, light and texture through every scene. A small palette with one deliberate contrast beats five colours spread evenly, and a gradient that belongs to no subject belongs in no film.
+
+Dress the type. Type is a graphic object, not a caption layer. Compose with scale, alignment, line breaks and negative space: one display size for a title, a clearly smaller body, and nothing in between by accident.
+
+Write the beat map before the timeline. Six columns per beat, one idea per beat: time, what the viewer takes away, the focal object, what transforms, the copy and audio, and how it exits. The time budget includes entrances, reading holds and exits. Keep the map compact enough to live in the plan rather than in a second document.
+
+Choose a grammar for the piece:
+
+- A launch or product film builds around one real benefit and one concrete action. Show the actual product and isolate what changes. A slow move over a static screen is supporting footage, never the demonstration.
+- Kinetic typography lets words carry meaning through weight, tracking, direction and transformation. Keep a stable reading window, do not rotate or scatter every line, and animate a phrase as a unit when word-by-word entry would slow comprehension. A word revealed is not a word read.
+- An explainer or data film shows the object before transforming it, keeps labels while relationships change, and reveals axes before values when the scale matters. It adds no decoration to cover an explanation that is not there.
+
+Choreograph attention. Choose the lead action and let the supporting motion answer it. Offset separate objects where that clarifies reading, and move them together where collective motion is the point. Do not stagger every word, and do not keep a fixed share of the frame moving.
+
+Close on purpose. Resolve the motif and hold the final message long enough to read. A loop needs matching start and end state and matching velocity, with no duplicated pause at the seam.
+
 ## The edit pass
 
 Video is not a stack of slides. Work in this order.
@@ -189,7 +218,7 @@ Video is not a stack of slides. Work in this order.
 5. Type: a display size for a title, a clearly smaller body, and nothing in between by accident. Text must be legible at the phone size the video will be watched at, which is much smaller than the frame you are looking at.
 6. Contrast: white on a mid-grey, or thin type over busy footage, will fail. Give text a solid backing or a scrim, and keep body text at least 4.5:1 against it.
 7. Motion has a reason: an entrance, a transition, a reveal that shows a change. Everything easing in on every scene is noise. Keep a move between 200ms and 500ms, and hold a still frame long enough to be seen.
-8. Ease. Nothing in a real edit moves at a constant speed from a standing start; a linear move reads as cheap, and an ease-out reads as deliberate.
+8. Ease, and choose the curve on purpose. Nothing in a real edit moves at a constant speed from a standing start. An entrance arrives: \`easings.outQuint\` or \`easings.outExpo\` for a decisive one, \`easings.outCubic\` for a calm one. A pop that overshoots is \`easings.outBack\`. A shape or camera move that crosses the frame is \`easings.inOutCubic\` or \`easings.inOutExpo\`, because a move that eases in and out reads as intended while one that only eases out reads as cut short. \`easings.linear\` is for a clock, a scrub and a progress bar, and nothing else.
 9. Sound carries as much as picture. Speech forward and clean, music well under it, and a level change at a cut unless the cut is meant to be invisible.
 10. Real content, always. Real names, real numbers, real copy. A placeholder frame or a lorem ipsum caption hides exactly the layout problems it pretends to expose.
 11. Accessibility: caption anything spoken, never carry meaning in colour alone, and keep a burned-in caption inside the safe area.

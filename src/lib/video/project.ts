@@ -94,7 +94,19 @@ export interface VideoProjectManifest {
    * back its own mixed audio.
    */
   audio: string[]
+  /**
+   * Whether the composition is meant to be heard, declared rather than inferred.
+   *
+   * An empty `audio` list cannot say which of two things it means: a film that is
+   * deliberately silent, or a film whose author never got to the soundtrack. Laying
+   * the intent down lets the export refuse a silent file for a film that was meant
+   * to be heard, and lets `"silent"` record a choice instead of an omission.
+   */
+  audioPolicy: VideoAudioPolicy | null
 }
+
+/** What the author says about the film's sound. */
+export type VideoAudioPolicy = 'required' | 'silent'
 
 const HEX_COLOUR_PATTERN = /^#[0-9a-f]{6}$/iu
 
@@ -187,7 +199,27 @@ export function describeVideoProjectManifest(value: unknown): VideoProjectManife
     }
     audio = rawAudio.map((entry, index) => projectRelativePath(entry, `audio[${index}]`))
   }
-  return { version: VIDEO_PROJECT_VERSION, width, height, fps, duration, background, audio }
+  const rawPolicy = value['audioPolicy']
+  let audioPolicy: VideoAudioPolicy | null = null
+  if (rawPolicy !== undefined) {
+    if (rawPolicy !== 'required' && rawPolicy !== 'silent') {
+      fail('audioPolicy must be "required" or "silent"')
+    }
+    if (rawPolicy === 'silent' && audio.length) {
+      fail('audioPolicy is "silent" but the manifest lists soundtrack files')
+    }
+    audioPolicy = rawPolicy
+  }
+  return {
+    version: VIDEO_PROJECT_VERSION,
+    width,
+    height,
+    fps,
+    duration,
+    background,
+    audio,
+    audioPolicy
+  }
 }
 
 /**

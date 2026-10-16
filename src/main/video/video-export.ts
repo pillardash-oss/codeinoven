@@ -322,7 +322,7 @@ export async function exportVideo(
           height: manifest.height,
           fps: manifest.fps,
           duration: manifest.duration,
-          audio: tracks.length ? 'required' : 'silent',
+          audio: manifest.audioPolicy ?? (tracks.length ? 'required' : 'silent'),
           audioFrom: tracks.length ? Math.min(...tracks.map((track) => track.start)) : 0
         },
         context.signal
