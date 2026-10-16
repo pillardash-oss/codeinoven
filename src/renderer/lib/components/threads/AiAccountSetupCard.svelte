@@ -4,6 +4,7 @@
   import { harnessCatalogs, harnessHasProvider } from '$lib/ai-account'
   import { withModelSelection } from '../chats/chat-composer-settings'
   import { APP_NAME } from '$shared/brand'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type { ProviderCatalog, ThinkingLevel, ThreadSettings } from '$shared/types'
   import CardButton from '../shared/CardButton.svelte'
   import CardCloseButton from '../shared/CardCloseButton.svelte'
@@ -33,6 +34,13 @@
     onModelChange: (settings: ThreadSettings) => void
     onConnect: () => void
     onDismiss: () => void
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
+    /** Thread the card belongs to, so its fold state is remembered per thread. */
+    threadId?: string
   }
 
   let {
@@ -47,7 +55,10 @@
     onReorderFavorite,
     onModelChange,
     onConnect,
-    onDismiss
+    onDismiss,
+    stackedAbove = false,
+    joinsBelow = false,
+    threadId
   }: Props = $props()
 
   /** True once the harness reports a provider it can run a turn on. */
@@ -59,7 +70,18 @@
       .map((provider) => provider.name)
       .join(', ')
   )
-  let folded = $state(false)
+  /** The fold control writes a per-thread preference, so a card the reader folded
+   *  stays folded when the thread is reopened. */
+  let localFolded = $state(false)
+  const foldState = {
+    get folded(): boolean {
+      return threadId === undefined ? localFolded : threadCardFold.isFolded(threadId, 'account')
+    },
+    set folded(value: boolean) {
+      if (threadId === undefined) localFolded = value
+      else threadCardFold.setFolded(threadId, 'account', value)
+    }
+  }
 
   function chooseModel(
     providerId: string,
@@ -87,12 +109,12 @@
 </script>
 
 <div out:slide={dismissSlide()} role="status" aria-live="polite">
-  <CardFrame placement="replace" label="AI account setup">
+  <CardFrame placement="replace" label="AI account setup" {stackedAbove} {joinsBelow}>
     <CardHead
       icon={connected ? Sparkles : Plug}
       title={connected ? 'Choose the model for this thread' : 'Connect your AI account'}
       chip={connected ? { text: 'Ready' } : { text: 'Waiting', tone: 'paused' }}
-      bind:folded
+      bind:folded={foldState.folded}
       foldLabel="AI account setup"
     >
       {#snippet meta()}
@@ -107,7 +129,7 @@
       {/snippet}
     </CardHead>
 
-    {#if !folded}
+    {#if !foldState.folded}
       <div
         transition:slide={foldSlide()}
         class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
@@ -154,7 +176,7 @@
       </div>
     {/if}
 
-    {#if !folded && !connected}
+    {#if !foldState.folded && !connected}
       <CardFoot>
         {#snippet right()}
           <CardButton

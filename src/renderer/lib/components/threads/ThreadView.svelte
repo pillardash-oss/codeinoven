@@ -213,6 +213,7 @@
   } from '$lib/stores/response-references.svelte'
   import { isTodoToolPart, latestAgentTodo, todoSnapshotMatchesTurn } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
@@ -6569,9 +6570,6 @@
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
-  /** Folds the queued-message card down to its header so the conversation above
-   *  the composer stays readable while a message waits in the queue. */
-  let queuedFolded = $state(false)
   /** Count of messages waiting in the thread's FIFO queue (from the store). */
   const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
   /** The rest of the queue behind the head entry, listed inside its card, with
@@ -6584,16 +6582,60 @@
   )
 
   /**
-   * True when a stack sits on the composer's top edge: the task list renders
-   * immediately above it, and the queued-message card renders above that. Each
-   * boundary between those surfaces is a broken line, and the composer carries
-   * the last one with its dashed top rule, which is the design's composer-edge
-   * rule.
+   * The cards that stack on the composer's top edge, top to bottom. Each drops
+   * its own bottom rule so the surface below carries the join: another card's
+   * broken top rule, or the composer's dashed one. They render flush, so the
+   * whole stack reads as one surface with a broken line at every boundary.
    */
+  type ComposerStackSlot =
+    | 'worker'
+    | 'provider'
+    | 'compaction'
+    | 'queued'
+    | 'account'
+    | 'foreign-run'
+    | 'image-descriptor'
+    | 'assistant-recap'
+    | 'todo'
   let queuedCardVisible = $derived(
     (queuedMessage !== '' || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread
   )
-  let composerStackedAbove = $derived(visibleTodo !== null || queuedCardVisible)
+  let composerStackSlots = $derived.by((): ComposerStackSlot[] => {
+    const slots: ComposerStackSlot[] = []
+    if (assignmentWorkerAttentionItems.length > 0) slots.push('worker')
+    if (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) {
+      slots.push('provider')
+    }
+    if (compactionInterruptedNotice !== '') slots.push('compaction')
+    if (queuedCardVisible) slots.push('queued')
+    if (aiAccountPromptVisible) slots.push('account')
+    if (assistantForeignRunThreadId) slots.push('foreign-run')
+    if (pendingImageDescriptorError !== null && !achievementAutonomous) {
+      slots.push('image-descriptor')
+    }
+    if (assistantRecapVisible && assistantDraft) slots.push('assistant-recap')
+    if (visibleTodo !== null && !failureRetryVisible) slots.push('todo')
+    return slots
+  })
+  /** True when any card sits on the composer's top edge, so the composer's top
+   *  rule breaks into the dashed line that carries the join and it stops opening
+   *  a gap above itself. */
+  let composerStackedAbove = $derived(composerStackSlots.length > 0)
+  /** Whether a card sits above the named slot, so its own top rule is the broken
+   *  join rather than a solid edge. */
+  function stackedAboveSlot(slot: ComposerStackSlot): boolean {
+    return composerStackSlots.indexOf(slot) > 0
+  }
+  /** The compaction notice owns no card component, so its fold preference is read
+   *  and written here, per thread, like every other stack card. */
+  const compactionFold = {
+    get folded(): boolean {
+      return threadCardFold.isFolded(thread.id, 'compaction')
+    },
+    set folded(value: boolean) {
+      threadCardFold.setFolded(thread.id, 'compaction', value)
+    }
+  }
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -6611,22 +6653,13 @@
     }
   })
   /** Where the scroll-to-latest button floats within the bottom-chrome wrapper.
-   *  The button is 1.75rem tall, so the first two spots centre it on the edge it
-   *  perches on: a fixed gutter (worker/provider/compaction card, no top padding)
-   *  puts that edge at the stack top, and the queued message card and the
-   *  in-composer image-descriptor card both start 8px below it (pt-2). With
-   *  nothing above the composer it floats clear of the top rule, its lower edge
-   *  0.5rem above it. Change the button's height and these three move with it. */
-  const scrollButtonTop = $derived(
-    assignmentWorkerAttentionItems.length > 0 ||
-      (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) ||
-      compactionInterruptedNotice !== ''
-      ? '-0.875rem'
-      : ((queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread) ||
-          (pendingImageDescriptorError !== null && !achievementAutonomous)
-        ? '-0.375rem'
-        : '-2.25rem'
-  )
+   *  The button is 1.75rem tall. A stack on the composer starts at the wrapper's
+   *  top edge (the cards are flush, with no top padding), so the button centres
+   *  on that edge at half its own height: -0.875rem. With nothing above the
+   *  composer the wrapper's top edge *is* the composer's top rule, so the button
+   *  floats clear of it, its lower edge 0.5rem above: -(1.75rem + 0.5rem).
+   *  Change the button's height and both spots move with it. */
+  const scrollButtonTop = $derived(composerStackedAbove ? '-0.875rem' : '-2.25rem')
 
   /** The mounted composer, used to focus the editor in place (no remount). */
   let composer: ChatComposer | undefined = $state(undefined)
@@ -13725,8 +13758,8 @@
       <div class="flex min-w-0 flex-col">
         <!-- Assignment worker failures stay visible on the coordinator, but their
          actions target the owning durable worker rather than this thread. -->
-        {#each assignmentWorkerAttentionItems as item (item.task.id)}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+        {#each assignmentWorkerAttentionItems as item, index (item.task.id)}
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={assignmentWorkerAttentionStatus(item.task, item.worker)}
@@ -13741,6 +13774,10 @@
                 sourceDetail={item.task.title}
                 retryLabel="Retry worker"
                 retrying={assignmentWorkerRetryingId === item.worker.id}
+                stackedAbove={index > 0}
+                joinsBelow
+                threadId={thread.id}
+                foldKey={`worker:${item.worker.id}`}
                 onModelChange={(selected) =>
                   void changeAssignmentWorkerModel(item.worker, selected)}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -13756,10 +13793,13 @@
         <!-- Provider status   between messages and composer, always visible. A
          matching bubbled worker error is replaced by the attributed card above. -->
         {#if visibleProviderStatus && !coordinatorErrorMatchesAssignmentWorker}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={visibleProviderStatus}
+                stackedAbove={stackedAboveSlot('provider')}
+                joinsBelow
+                threadId={thread.id}
                 providerName={statusCardProviderName}
                 settings={statusCardSettings ??
                   (chatMode
@@ -13816,10 +13856,15 @@
        stopped before it saved a summary. A top-of-thread card: it reports, it
        never blocks the composer. -->
         {#if compactionInterruptedNotice}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <div out:slide={dismissSlide()} role="status" aria-live="polite">
-                <CardFrame placement="top" label="Compaction interrupted">
+                <CardFrame
+                  placement="top"
+                  label="Compaction interrupted"
+                  stackedAbove={stackedAboveSlot('compaction')}
+                  joinsBelow
+                >
                   <CardHead
                     icon={TriangleAlert}
                     title="Compaction interrupted"
@@ -13828,23 +13873,26 @@
                       tone: 'urgent',
                       title: 'The summary was never saved'
                     }}
+                    bind:folded={compactionFold.folded}
                     foldLabel="compaction notice"
                   />
-                  <div class="space-y-2 px-3 py-2.5">
-                    <CardNotice icon={TriangleAlert} tone="warn">
-                      {compactionInterruptedNotice}
-                    </CardNotice>
-                  </div>
-                  <CardFoot>
-                    {#snippet left()}
-                      <CardButton
-                        label="Dismiss"
-                        title="Dismiss the compaction notice"
-                        variant="ghost"
-                        onclick={() => (compactionInterruptedNotice = '')}
-                      />
-                    {/snippet}
-                  </CardFoot>
+                  {#if !compactionFold.folded}
+                    <div class="space-y-2 px-3 py-2.5">
+                      <CardNotice icon={TriangleAlert} tone="warn">
+                        {compactionInterruptedNotice}
+                      </CardNotice>
+                    </div>
+                    <CardFoot>
+                      {#snippet left()}
+                        <CardButton
+                          label="Dismiss"
+                          title="Dismiss the compaction notice"
+                          variant="ghost"
+                          onclick={() => (compactionInterruptedNotice = '')}
+                        />
+                      {/snippet}
+                    </CardFoot>
+                  {/if}
                 </CardFrame>
               </div>
             </div>
@@ -13857,7 +13905,7 @@
        follows, the composer's dashed top rule when the composer is. The head names
        what waits, and Send now (the steer key) is a head control. -->
         {#if queuedCardVisible}
-          <div class="conversation-gutter shrink-0 px-6 pt-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <ComposerQueuedCard
                 text={queuedMessage}
@@ -13870,7 +13918,8 @@
                 presentation={queuedPresentation}
                 startAfterThreads={queuedStartAfterThreads}
                 {steerModifierLabel}
-                bind:folded={queuedFolded}
+                threadId={thread.id}
+                stackedAbove={stackedAboveSlot('queued')}
                 onPreviewAttachment={openQueuedAttachment}
                 onSteer={() => void steerQueuedMessage()}
                 onEdit={editQueuedMessage}
@@ -13890,7 +13939,7 @@
        whatever this slot shows, so it keeps its own top spacing and gives up the
        padding here rather than opening a gap in the middle of the stack. -->
         <div
-          class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 {queuedCardVisible
+          class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 {composerStackedAbove
             ? 'pt-0'
             : 'pt-2'}"
         >
@@ -13946,12 +13995,15 @@
               {/if}
             {/if}
             {#if aiAccountPromptVisible}
-              <div class="mb-2">
+              <div>
                 <AiAccountSetupCard
                   harnessName={harnessDisplayName(settings.harnessId)}
                   {providers}
                   {settings}
                   projectId={thread.projectId}
+                  stackedAbove={stackedAboveSlot('account')}
+                  joinsBelow
+                  threadId={thread.id}
                   favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
                   recentModels={rendererRecovery.modelRecentsFor(modelScope())}
                   onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
@@ -13974,10 +14026,12 @@
               </div>
             {/if}
             {#if assistantForeignRunThreadId}
-              <div class="mb-3">
+              <div>
                 <ForeignRunCard
                   projectId={thread.projectId}
                   threadId={assistantForeignRunThreadId}
+                  stackedAbove={stackedAboveSlot('foreign-run')}
+                  joinsBelow
                 />
               </div>
             {/if}
@@ -14008,6 +14062,9 @@
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  stackedAbove={stackedAboveSlot('image-descriptor')}
+                  joinsBelow
+                  threadId={thread.id}
                 />
               {/key}
             {/if}
@@ -14032,20 +14089,21 @@
               />
             {/if}
             {#if assistantRecapVisible && assistantDraft}
-              <div class="conversation-gutter shrink-0 px-6 pb-2">
-                <div class="mx-auto max-w-3xl">
-                  <AssistantRecapCard
-                    assistantName={assistant?.name ?? assistantName ?? thread.title}
-                    knowledge={assistantDraft.knowledge}
-                    plan={assistantDraft.plan}
-                    update={assistantKnowledgeComplete}
-                    scheduled={assistant ? assistantIsScheduled(assistant) : true}
-                    existingConnections={existingAssistantConnections}
-                    saving={assistantSaving}
-                    onSave={() => void confirmAssistantSave()}
-                    onKeepEditing={keepEditingAssistant}
-                  />
-                </div>
+              <div>
+                <AssistantRecapCard
+                  assistantName={assistant?.name ?? assistantName ?? thread.title}
+                  knowledge={assistantDraft.knowledge}
+                  plan={assistantDraft.plan}
+                  update={assistantKnowledgeComplete}
+                  scheduled={assistant ? assistantIsScheduled(assistant) : true}
+                  existingConnections={existingAssistantConnections}
+                  saving={assistantSaving}
+                  onSave={() => void confirmAssistantSave()}
+                  onKeepEditing={keepEditingAssistant}
+                  stackedAbove={stackedAboveSlot('assistant-recap')}
+                  joinsBelow
+                  threadId={thread.id}
+                />
               </div>
             {/if}
             {#if isAssignmentAuditorThread}
@@ -14405,7 +14463,8 @@
                     {busy}
                     stopped={todoRunStopped}
                     foreign={foreignRunActive}
-                    stackedAbove={queuedCardVisible}
+                    stackedAbove={stackedAboveSlot('todo')}
+                    threadId={thread.id}
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}

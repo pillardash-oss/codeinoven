@@ -7,15 +7,30 @@
   import CardHead from '../shared/CardHead.svelte'
   import { foldSlide } from '../shared/card-motion'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
 
   interface Props {
     projectId: string
     threadId: string
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
   }
 
-  let { projectId, threadId }: Props = $props()
+  let { projectId, threadId, stackedAbove = false, joinsBelow = false }: Props = $props()
 
-  let folded = $state(false)
+  /** The fold control writes a per-thread preference, so the card stays folded or
+   *  unfolded when the thread is reopened. */
+  const foldState = {
+    get folded(): boolean {
+      return threadCardFold.isFolded(threadId, 'foreign-run')
+    },
+    set folded(value: boolean) {
+      threadCardFold.setFolded(threadId, 'foreign-run', value)
+    }
+  }
   const transfer = $derived(foreignRuns.transferState(projectId, threadId))
   const workflow = $derived(foreignRuns.isWorkflow(projectId, threadId))
 
@@ -24,16 +39,16 @@
   }
 </script>
 
-<CardFrame placement="replace" label="Running on another instance">
+<CardFrame placement="replace" label="Running on another instance" {stackedAbove} {joinsBelow}>
   <CardHead
     icon={AppWindow}
     title="Running on another instance"
     chip={{ text: 'Live elsewhere', tone: 'paused' }}
-    bind:folded
+    bind:folded={foldState.folded}
     foldLabel="foreign run"
   />
 
-  {#if !folded}
+  {#if !foldState.folded}
     <div
       transition:slide={foldSlide()}
       class="flex flex-col gap-1.5 px-3 py-2.5 text-xs leading-relaxed text-muted"
@@ -55,7 +70,7 @@
     </div>
   {/if}
 
-  {#if !folded}
+  {#if !foldState.folded}
     <CardFoot>
       {#snippet right()}
         <CardButton

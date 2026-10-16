@@ -7,6 +7,7 @@
   import CardHead from '../shared/CardHead.svelte'
   import { foldSlide } from '../shared/card-motion'
   import { describeSchedule } from '$shared/types'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { parseKnowledgeSections, type AssistantPlanDraft } from './assistant-view'
 
   /**
@@ -43,6 +44,13 @@
     saving: boolean
     onSave: () => void
     onKeepEditing: () => void
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
+    /** Thread the card belongs to, so its fold state is remembered per thread. */
+    threadId?: string
   }
 
   let {
@@ -54,10 +62,26 @@
     existingConnections = [],
     saving,
     onSave,
-    onKeepEditing
+    onKeepEditing,
+    stackedAbove = false,
+    joinsBelow = false,
+    threadId
   }: Props = $props()
 
-  let folded = $state(false)
+  /** The fold control writes a per-thread preference, so the card stays folded or
+   *  unfolded when the thread is reopened. */
+  let localFolded = $state(false)
+  const foldState = {
+    get folded(): boolean {
+      return threadId === undefined
+        ? localFolded
+        : threadCardFold.isFolded(threadId, 'assistant-recap')
+    },
+    set folded(value: boolean) {
+      if (threadId === undefined) localFolded = value
+      else threadCardFold.setFolded(threadId, 'assistant-recap', value)
+    }
+  }
 
   /**
    * Whether the assistant ends up on a clock. The conversation settles that as
@@ -100,16 +124,21 @@
   )
 </script>
 
-<CardFrame placement="replace" label="Review the assistant the agent drafted">
+<CardFrame
+  placement="replace"
+  label="Review the assistant the agent drafted"
+  {stackedAbove}
+  {joinsBelow}
+>
   <CardHead
     icon={ListChecks}
     title={cardTitle}
     chip={{ text: 'Draft', tone: 'paused' }}
-    bind:folded
+    bind:folded={foldState.folded}
     foldLabel="assistant recap"
   />
 
-  {#if !folded}
+  {#if !foldState.folded}
     <div
       transition:slide={foldSlide()}
       class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
@@ -184,7 +213,7 @@
     </div>
   {/if}
 
-  {#if !folded}
+  {#if !foldState.folded}
     <CardFoot>
       {#snippet left()}
         <CardButton

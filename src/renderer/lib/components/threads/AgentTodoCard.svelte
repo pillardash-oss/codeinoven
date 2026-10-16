@@ -2,6 +2,7 @@
   import { ListChecks, TriangleAlert, X } from '@lucide/svelte'
   import { fly } from 'svelte/transition'
   import CardStack from '../shared/CardStack.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { rowArrive } from '../shared/card-motion'
   import { activeAgentTodoIndex, agentTodoCounter, type AgentTodoItem } from '$lib/agent-todos'
 
@@ -20,6 +21,8 @@
     /** Another card sits directly above the list, so its top rule is the broken
      *  line that separates two stacked surfaces. */
     stackedAbove?: boolean
+    /** Thread the task list belongs to, so the reader's fold choice is remembered. */
+    threadId: string
     /** Dismiss the card after the thread stopped working. */
     onClose: () => void
   }
@@ -31,11 +34,18 @@
     stopped,
     foreign = false,
     stackedAbove = false,
+    threadId,
     onClose
   }: Props = $props()
 
-  let open = $state(false)
-  let userPinnedOpen = $state(false)
+  /** The reader's own fold choice for this thread's task list, if they made one.
+   *  Without it the card keeps its transient behaviour: it opens on new activity
+   *  and folds itself again after a moment. */
+  // svelte-ignore state_referenced_locally
+  const foldPreference = threadCardFold.preferenceFor(threadId, 'todo')
+  let open = $state(foldPreference === undefined ? false : !foldPreference)
+  let userPinnedOpen = $state(foldPreference === false)
+  let userPinnedClosed = $state(foldPreference === true)
   let lastSignature = $state('')
 
   /**
@@ -78,6 +88,8 @@
     set folded(value: boolean) {
       open = !value
       userPinnedOpen = !value
+      userPinnedClosed = value
+      threadCardFold.setFolded(threadId, 'todo', value)
     }
   }
 
@@ -85,6 +97,10 @@
     const currentSignature = signature
     if (currentSignature === lastSignature) return
     lastSignature = currentSignature
+    if (userPinnedClosed) {
+      open = false
+      return
+    }
     if (userPinnedOpen) {
       open = true
       return

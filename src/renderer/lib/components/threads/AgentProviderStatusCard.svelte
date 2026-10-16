@@ -28,6 +28,7 @@
     ThreadSettings
   } from '$shared/types'
   import { copyText } from '$lib/copy-text'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
@@ -65,6 +66,16 @@
     retrying?: boolean
     /** Whether the app auto-resumes this thread once the reset time passes. */
     autoRetryEnabled?: boolean
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
+    /** Thread the card reports on, so its fold state is remembered per thread. */
+    threadId?: string
+    /** Card key within the thread when one component serves more than one card
+     *  (the thread's own provider status, and an attributed worker error). */
+    foldKey?: string
   }
 
   let {
@@ -87,9 +98,24 @@
     sourceDetail,
     retryLabel = 'Retry',
     retrying = false,
-    autoRetryEnabled = true
+    autoRetryEnabled = true,
+    stackedAbove = false,
+    joinsBelow = false,
+    threadId,
+    foldKey = 'provider'
   }: Props = $props()
-  let folded = $state(false)
+  /** The card's fold control writes a per-thread preference, so a card folded or
+   *  unfolded by the reader stays that way when the thread is reopened. */
+  let localFolded = $state(false)
+  const foldState = {
+    get folded(): boolean {
+      return threadId === undefined ? localFolded : threadCardFold.isFolded(threadId, foldKey)
+    },
+    set folded(value: boolean) {
+      if (threadId === undefined) localFolded = value
+      else threadCardFold.setFolded(threadId, foldKey, value)
+    }
+  }
   let showRawError = $state(false)
   let copiedRawError = $state(false)
   let signInOpen = $state(false)
@@ -272,12 +298,12 @@
 <!-- The live region wraps the frame so a status change still announces the whole
 card, the way it did before the head moved onto the shared primitives. -->
 <div role={waiting ? 'status' : 'alert'} aria-live="polite">
-  <CardFrame placement="top" label="Provider status">
+  <CardFrame placement="top" label="Provider status" {stackedAbove} {joinsBelow}>
     <CardHead
       icon={waiting || autoResume ? Clock3 : AlertTriangle}
       title={sourceLabel ? 'Worker output error' : title}
       {chip}
-      bind:folded
+      bind:folded={foldState.folded}
       foldLabel="provider status"
     >
       {#snippet meta()}
@@ -288,7 +314,7 @@ card, the way it did before the head moved onto the shared primitives. -->
       {/snippet}
     </CardHead>
 
-    {#if !folded}
+    {#if !foldState.folded}
       <div
         transition:slide={foldSlide()}
         class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
@@ -341,7 +367,7 @@ card, the way it did before the head moved onto the shared primitives. -->
       </div>
     {/if}
 
-    {#if !folded}
+    {#if !foldState.folded}
       <CardFoot>
         {#snippet left()}
           {#if !waiting && onDismiss}

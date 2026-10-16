@@ -14,6 +14,7 @@
   import CardButton from '../shared/CardButton.svelte'
   import CardStack from '../shared/CardStack.svelte'
   import CardTag from '../shared/CardTag.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
   import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
   import type { PromptAttachment, UserMessagePresentation } from '$shared/types'
@@ -40,8 +41,11 @@
     startAfterThreads: StartAfterThreadReference[]
     /** The steer combo, so the send-now action names the key that does it. */
     steerModifierLabel: string
-    /** Folds the card down to its head while a message waits. */
-    folded?: boolean
+    /** Thread the queued message belongs to, so its fold state is remembered. */
+    threadId: string
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
     /** Opens one of the queued message's files fullscreen. */
     onPreviewAttachment?: (attachment: PromptAttachment) => void
     onSteer: () => void
@@ -65,7 +69,8 @@
     presentation,
     startAfterThreads,
     steerModifierLabel,
-    folded = $bindable(false),
+    threadId,
+    stackedAbove = false,
     onPreviewAttachment,
     onSteer,
     onEdit,
@@ -79,6 +84,16 @@
 
   let queueMenuOpen = $state(false)
   let hasQueuedPayload = $derived(text.trim().length > 0 || hasContent)
+  /** The fold control writes a per-thread preference, so a queued card the
+   *  reader folded down stays folded when the thread is reopened. */
+  const foldState = {
+    get folded(): boolean {
+      return threadCardFold.isFolded(threadId, 'queued')
+    },
+    set folded(value: boolean) {
+      threadCardFold.setFolded(threadId, 'queued', value)
+    }
+  }
 
   /** The head names what is waiting: a count, a dependency, or one message. */
   const title = $derived(
@@ -118,8 +133,9 @@ the head's menu. -->
   icon={Clock}
   {title}
   {chip}
+  {stackedAbove}
   foldLabel="queued message"
-  bind:folded
+  bind:folded={foldState.folded}
 >
   {#snippet meta()}
     {#if startAfterThreads.length === 0}
