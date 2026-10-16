@@ -2353,7 +2353,8 @@
 
   // ── runtime.getContexts repair ──────────────────────────────────────────────
   // Electron never calls `extensions::SetViewType` anywhere in its shell (measured
-  // on v44.7.0, and the v44.7.0 to v44.7.2 shell diff adds no call site), so every
+  // on v44.7.0; the v44.7.0 to v44.7.2 and v44.7.2 to v44.8.0 shell diffs each add
+  // no call site), so every
   // WebContents it hosts reports
   // `mojom::ViewType::kInvalid` (0). Chromium's
   // `RuntimeGetContextsFunction::GetFrameContexts` treats that value as a bug

@@ -38,7 +38,7 @@
  * version and their own declared files, not for their permissions.
  *
  * Measured, not assumed: `RUNTIME_UNKNOWN_EXTENSION_PERMISSIONS` below is what
- * Electron 44.7.2 (Chromium 152.0.7977.149) answered when one manifest declared
+ * Electron 44.8.0 (Chromium 152.0.7977.167) answered when one manifest declared
  * every permission name this Chromium can carry. Chromium refuses `socket` and
  * `usbDevices` without a value, which is itself proof that it knows them, so those
  * two never appear in it. Two names that warn for reasons of their own are
