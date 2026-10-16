@@ -10,6 +10,7 @@ import { getAgentIcon } from '$lib/agent-icons/registry'
 import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
 import { generatedTokens, type LiveGenerationRate } from '$lib/token-rate.svelte'
+import { recordedTokenRate } from '$shared/usage-rate'
 import type {
   AgentMessage,
   AgentPart,
@@ -245,11 +246,13 @@ export interface MessageTokenRateSource {
  *  at turn end when this view observed the turn live, otherwise the message's
  *  generated tokens over its accumulated model-active generation window.
  *
- *  `generationMs` is the only honest denominator: it sums the streaming time of
- *  every request in the message and excludes tool waits. A message whose
- *  generation window was never recorded shows no rate rather than dividing its
- *  tokens by wall-clock time, which counts tool execution as generation.
- *  `null` also when the harness reported no tokens. */
+ *  `generationMs` is the only honest denominator: it sums the measured streaming
+ *  time of every request in the message and excludes tool waits and any output a
+ *  coalesced transport never streamed. A message whose generation window was
+ *  never recorded shows no rate rather than dividing its tokens by wall-clock
+ *  time, which counts tool execution as generation.
+ *  `null` also when the harness reported no tokens, and when the recorded window
+ *  would imply a pace no model reaches (`recordedTokenRate`). */
 export function messageTokenRate(msg: AgentMessage, source: MessageTokenRateSource): number | null {
   const finalized = source.finalizedTokenRates[msg.id]
   if (finalized !== undefined && finalized > 0) return finalized
@@ -257,7 +260,7 @@ export function messageTokenRate(msg: AgentMessage, source: MessageTokenRateSour
   if (generated <= 0) return null
   if (msg.id === source.liveTokenRate.messageId) return source.liveTokenRate.rate()
   if (msg.generationMs !== undefined && msg.generationMs > 0) {
-    return generated / (msg.generationMs / 1000)
+    return recordedTokenRate(generated, msg.generationMs)
   }
   return null
 }

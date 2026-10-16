@@ -5927,9 +5927,15 @@
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
         // Record what the harness reported before closing the window, so this
-        // request's own count teaches the characters-per-token calibration.
+        // request's own count teaches the characters-per-token calibration, and
+        // in the scope the harness declared: a per-request count is summed
+        // across the message's requests instead of keeping the largest.
         if (event.tokens && generatedTokens(event.tokens) > 0) {
-          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+          liveTokenRate.noteReported(
+            event.messageId,
+            generatedTokens(event.tokens),
+            event.tokenUsageScope ?? 'message'
+          )
         }
         // The request's generation window ends here, so the next request starts
         // a fresh one and the tool wait between them is never counted.
@@ -5957,7 +5963,11 @@
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
         if (event.tokens && generatedTokens(event.tokens) > 0) {
-          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+          liveTokenRate.noteReported(
+            event.messageId,
+            generatedTokens(event.tokens),
+            event.tokenUsageScope ?? 'message'
+          )
         }
         break
       }

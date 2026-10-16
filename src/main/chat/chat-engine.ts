@@ -475,7 +475,7 @@ import {
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
-import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
+import { GenerationClock, generatedTokens, windowCoversOutput } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   LEGACY_CHATS_ARTIFACTS_DIRECTORY,
@@ -23221,6 +23221,12 @@ export class ChatEngine {
       // reported by the thread's current harness and provider, so an
       // unattributed row is invisible to it for the whole run.
       event.harnessId ??= driverId
+      // What one reported count covers, declared by the owning driver. A count
+      // that spans a turn or the whole harness session must never be divided by
+      // one message's generation window, so consumers need to know its scope.
+      event.tokenUsageScope ??=
+        this.driverForRuntime(driverId, eventOwner.accountId)?.capabilities.tokenUsageScope ??
+        'message'
       if (selection) event.providerId ??= selection.providerId
       if (event.contextWindow === undefined && selection) {
         const contextWindow = this.modelContextWindow(
@@ -23280,6 +23286,17 @@ export class ChatEngine {
         Date.now(),
         event.partId,
         event.delta.length
+      )
+    }
+    // A harness that reports accounting before its turn closes (opencode's
+    // per-step totals) teaches the clock the same way the renderer already
+    // learns it, so the two processes keep one view of the message.
+    if (event.type === 'usage.updated' && generatedTokens(event.tokens) > 0) {
+      this.generationClock.noteReported(
+        GenerationClock.key(event.sessionId, event.messageId),
+        generatedTokens(event.tokens),
+        Date.now(),
+        event.tokenUsageScope ?? 'message'
       )
     }
     if (
@@ -23627,7 +23644,12 @@ export class ChatEngine {
       if (event.type === 'message.completed') {
         const clockKey = GenerationClock.key(event.sessionId, event.messageId)
         if ((event.tokens?.output ?? 0) > 0) {
-          this.generationClock.noteReported(clockKey, generatedTokens(event.tokens), now)
+          this.generationClock.noteReported(
+            clockKey,
+            generatedTokens(event.tokens),
+            now,
+            event.tokenUsageScope ?? 'message'
+          )
         }
         this.generationClock.completeRequest(clockKey, now)
       } else {
@@ -29299,12 +29321,19 @@ export class ChatEngine {
   /**
    * Apply the accumulated generation window to loaded assistant messages,
    * persisting the model-active duration as `generationMs`.
+   *
+   * A message whose output mostly arrived as buffered flushes is left without a
+   * window: the clock measured no generation to divide its tokens by, and a
+   * stamped window would outlive this process as a rate nobody can read
+   * correctly. The renderer withholds a rate for exactly the same samples, so the
+   * live figure and the reopened figure agree.
    */
   private applyGenerationStamps(sessionId: string, messages: AgentMessage[]): void {
     for (const msg of messages) {
       if (msg.role !== 'assistant' || msg.generationMs !== undefined) continue
       const sample = this.generationClock.sample(GenerationClock.key(sessionId, msg.id))
       if (!sample || sample.activeMs <= 0) continue
+      if (!windowCoversOutput(sample)) continue
       msg.generationMs = Math.round(sample.activeMs)
     }
   }

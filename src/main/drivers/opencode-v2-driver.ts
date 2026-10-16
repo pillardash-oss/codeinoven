@@ -166,6 +166,9 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
+    // Token accounting arrives per `session.step.ended`, and one assistant
+    // message can span several steps, so the count is per request.
+    tokenUsageScope: 'request',
     compaction: true,
     // V2 reports a delegated child agent as a `subagent` tool call whose result
     // carries the child session id (`metadata.sessionID`), and announces the

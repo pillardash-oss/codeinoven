@@ -461,17 +461,26 @@ export function mapClaudeCodeRecord(
   if (type === 'result') {
     const latest = latestAssistant(context)
     const modelUsage = aggregateModelUsage(entry['modelUsage'] ?? entry['model_usage'])
-    const tokens = preserveReasoningUsage(
+    // `result.usage` is cumulative for the whole turn (every request and tool
+    // iteration), so it describes the turn, not the assistant message it would
+    // otherwise be stamped on. It is still the right figure for the ledger and
+    // for the reasoning alignment below, but it must never become the message's
+    // own generated-token count.
+    const turnTokens = preserveReasoningUsage(
       tokenUsage(entry['usage']) ?? modelUsage.tokens,
       latest?.tokens
     )
     // The streamed delta can report thinking tokens the final result usage
-    // omits; keep the normalized reasoning aligned with the preserved display
+    // omits; keep the normalized reasoning aligned with the preserved turn
     // count so the ledger records what the turn actually spent.
     const normalizedUsage = preserveNormalizedReasoning(
       mapClaudeNormalizedUsage(entry['usage']) ?? modelUsage.normalizedUsage,
-      tokens
+      turnTokens
     )
+    // The message's own count is whatever per-message usage the harness
+    // reported for it (its `message_delta`/`assistant` record). A message with
+    // no per-message count carries none rather than borrowing the turn total.
+    const messageTokens = latest?.tokens
     const cost = numberProperty(entry, 'total_cost_usd', 'totalCostUsd') ?? modelUsage.cost
     const contextWindow =
       numberProperty(entry, 'context_window', 'contextWindow') ?? modelUsage.contextWindow
@@ -511,7 +520,7 @@ export function mapClaudeCodeRecord(
       events: latest
         ? [
             ...terminalSubagentEvents,
-            ...(tokens ||
+            ...(messageTokens ||
             normalizedUsage ||
             cost !== undefined ||
             contextWindow !== undefined ||
@@ -522,7 +531,7 @@ export function mapClaudeCodeRecord(
                     type: 'usage.updated' as const,
                     sessionId: context.sessionId,
                     messageId: latest.id,
-                    ...(tokens ? { tokens } : {}),
+                    ...(messageTokens ? { tokens: messageTokens } : {}),
                     ...(normalizedUsage ? { normalizedUsage } : {}),
                     ...(cost === undefined ? {} : { cost }),
                     ...(contextWindow === undefined ? {} : { contextWindow }),
@@ -536,7 +545,7 @@ export function mapClaudeCodeRecord(
               sessionId: context.sessionId,
               messageId: latest.id,
               error,
-              ...(tokens ? { tokens } : {}),
+              ...(messageTokens ? { tokens: messageTokens } : {}),
               ...(normalizedUsage ? { normalizedUsage } : {}),
               ...(contextWindow === undefined ? {} : { contextWindow }),
               ...(contextUsed === undefined ? {} : { contextUsed }),
