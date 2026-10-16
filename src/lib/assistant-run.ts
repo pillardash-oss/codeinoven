@@ -1,3 +1,4 @@
+import { ASSISTANT_BRIEF_REPLY_INSTRUCTION } from './assistant-voice'
 import { CIO_ASK_USER_TOOL_NAME } from './core-tools'
 import { formatDateTime } from './date-time-format'
 import {
@@ -110,6 +111,7 @@ export function assistantRunContext(
     }
   }
 
+  lines.push(ASSISTANT_BRIEF_REPLY_INSTRUCTION)
   return lines.join('\n')
 }
 
@@ -145,18 +147,18 @@ function reportingLines(assistant: Pick<Assistant, 'delivery' | 'priority'>): st
     }
     if (delivery.note) lines.push(`Delivery note from the agreement: ${delivery.note}`)
     lines.push(
-      `However this assistant delivers, make your final answer the complete report itself, never a pointer to it: the app saves that answer verbatim to a dated Markdown file under reports/ in this assistant's workspace, so the full report survives even after the thread is gone.`
+      `However this assistant delivers, make your final answer the concise result the user needs, never an exhaustive research report or a transcript of your work. The app archives that same concise answer automatically; archiving does not require you to write more.`
     )
   }
 
   const priority = assistant.priority
   if (priority) {
     lines.push(
-      `The agreed urgency for this assistant is ${assistantPriorityLabel(priority)}. Label the report with the bracket it actually falls in, and move it when what you found is more or less urgent than the agreed default. Time-based brackets (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based brackets (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. State both brackets and one line of why.`
+      `The agreed urgency for this assistant is ${assistantPriorityLabel(priority)}. Label the report with the bracket it actually falls in, and move it when what you found is more or less urgent than the agreed default. Time-based brackets (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based brackets (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. If the urgency needs mentioning, fold both brackets into the opening sentence without a separate justification paragraph.`
     )
   } else if (delivery) {
     lines.push(
-      `Label the report with its urgency on two brackets, decided from what you actually found rather than assumed. Time-based (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. State both brackets and one line of why.`
+      `Label the report with its urgency on two brackets, decided from what you actually found rather than assumed. Time-based (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. If the urgency needs mentioning, fold both brackets into the opening sentence without a separate justification paragraph.`
     )
   }
 

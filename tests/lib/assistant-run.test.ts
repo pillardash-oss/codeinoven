@@ -9,6 +9,10 @@ import {
   assistantRunPrompt
 } from '$shared/assistant-run'
 import type { AssistantConnection } from '$shared/types'
+import {
+  ASSISTANT_BRIEF_REPLY_INSTRUCTION,
+  ASSISTANT_VOICE_INSTRUCTION
+} from '$shared/assistant-voice'
 
 function connection(overrides: Partial<AssistantConnection> = {}): AssistantConnection {
   return {
@@ -142,5 +146,29 @@ describe('isAssistantNextStepsPrompt', () => {
     expect(isAssistantNextStepsPrompt(ASSISTANT_NEXT_STEPS_PROMPT)).toBe(true)
     expect(isAssistantNextStepsPrompt('Run this scheduled task now: Getting started')).toBe(false)
     expect(isAssistantNextStepsPrompt(`${ASSISTANT_NEXT_STEPS_PROMPT} `)).toBe(false)
+  })
+})
+
+describe('concise assistant delivery', () => {
+  it.each([
+    undefined,
+    { channel: 'in-app' as const },
+    { channel: 'email' as const, target: 'reports@example.com' }
+  ])('keeps the brief-output rule last for every delivery route: %j', (delivery) => {
+    const context = assistantRunContext({
+      name: 'Judge',
+      connections: [connection({ setup: 'Verify the source account.' })],
+      delivery,
+      priority: { timeliness: 'today', impact: 'company' }
+    })
+    expect(context.endsWith(ASSISTANT_BRIEF_REPLY_INSTRUCTION)).toBe(true)
+    expect(context).not.toContain('complete report itself')
+    expect(context).toContain('at most 80 words')
+    expect(context).toContain('Keep planning, self-talk, drafts')
+    expect(context).toContain('Never append a translation')
+    expect(context).toContain('Expand only when the user explicitly asks for detail')
+  })
+  it('applies the same brevity rule to setup and follow-up persona layers', () => {
+    expect(ASSISTANT_VOICE_INSTRUCTION).toContain(ASSISTANT_BRIEF_REPLY_INSTRUCTION)
   })
 })
