@@ -104,6 +104,17 @@
 </script>
 
 <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
+  <!-- Read-aloud leads the row, away from the view toggles: it is an action,
+       and sitting between annotate and preview it was tapped by mistake. -->
+  {#if readAloud}
+    <SpeechPlaybackButton
+      messageId={readAloud.messageId}
+      markdown={readAloud.markdown}
+      disabled={readAloud.disabled}
+      scope={readAloud.scope}
+      spokenSubject="document"
+    />
+  {/if}
   <button
     type="button"
     class={[
@@ -139,15 +150,6 @@
     >
       <CioMessagePlus size={12} />
     </button>
-  {/if}
-  {#if readAloud}
-    <SpeechPlaybackButton
-      messageId={readAloud.messageId}
-      markdown={readAloud.markdown}
-      disabled={readAloud.disabled}
-      scope={readAloud.scope}
-      spokenSubject="document"
-    />
   {/if}
   {#if showPreviewToggle}
     <button
