@@ -158,6 +158,25 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **Agents answer like they are briefing an executive, and diagrams stop being
+  decoration.** Long, meandering replies were normal, because nothing told an
+  agent how much prose to write, and the Mermaid instruction only asked for a
+  diagram "when materially clearer", so answers arrived with illustrations of
+  what the surrounding text already said. Every turn now carries an app-owned
+  reply budget: lead with the outcome, fit the whole answer into at most two
+  short paragraphs, no preamble, no restating the request, no closing summary,
+  and no narration of the agent's own process. A reported problem is exactly
+  three things (what happened, what caused it, what changed), long-form detail
+  belongs in a document the reply points at, and the agent expands only when the
+  user asks for the full explanation. The diagram rule is now exception-first: a
+  diagram only when the flow or relationship is genuinely hard to follow in
+  text, or when the user asks for one, at most one per reply, never decorative.
+  Both rules are app-owned and injected by the turn composers, so no customized
+  prompt can drop them, and the shared diagram wording also replaces the older
+  sentence in the editable prompt defaults in Settings. The budget governs the
+  reply, never the work: specifications, documents, reports, structured output,
+  and evidence keep their full required detail.
+
 - **Looking into an issue no longer needs a tag.** Read-only app diagnostics
   (`cio_util_diagnose`: thread lookup by id or title, mirrored conversation
   pages, log tails, the SQLite schema, and read-only SELECTs) was granted only on

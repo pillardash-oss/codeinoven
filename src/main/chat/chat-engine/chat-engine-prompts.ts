@@ -4,7 +4,11 @@ import type { HarnessCapabilities } from '../../drivers/driver.interface'
 import { IMAGE_DESCRIPTOR_PROMPT } from '../../providers/image-descriptor-provider'
 import { APP_NAME } from '../../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
-import { registerCioPromptDefault, SKILL_OUTPUT_INSTRUCTION } from '../../../lib/cio-prompts'
+import {
+  registerCioPromptDefault,
+  DIAGRAM_OUTPUT_RULE,
+  SKILL_OUTPUT_INSTRUCTION
+} from '../../../lib/cio-prompts'
 import {
   BRAINSTORM_DOCUMENT_TOOL_NAME,
   ENGINEERING_SPEC_TOOL_NAME,
@@ -143,13 +147,28 @@ export const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
   'Return only the requested structured audit report.'
 ].join(' ')
 
+/**
+ * Reply budget for every user-facing answer. Injected by the turn composers for
+ * every mode, and deliberately app-owned: the editable Agent behavior prompt can
+ * neither drop it nor shorten it, and the user can always ask for more.
+ */
+export const RESPONSE_STYLE_INSTRUCTION = [
+  'Write to the user the way a senior engineer briefs an executive: the outcome first, then only what the user has to know, decide, or do.',
+  'Keep the whole reply to at most two short paragraphs and fit every concept into them. Prefer plain sentences; when a few short bullets are clearer than prose, use bullets instead of longer paragraphs.',
+  'No preamble, no restating the request, no filler, no hedging, no closing summary, and no narration of your process or your tool calls. Reporting a problem means exactly three things: what happened, what actually caused it, and what you changed to fix it.',
+  'Keep the detail out of the reply. Put long-form and technical breakdowns into the artifacts the task requires, or into a document in the scratch path you are allowed to write to, and point the user at that path so they can read more.',
+  'This budget governs the reply you write for the user, never the content the work itself requires: specifications, documents, reports, structured output, and evidence keep their full required detail.',
+  'Exceed it only when the user explicitly asks for the full explanation, a walkthrough, or the underlying reasoning.'
+].join(' ')
+
+/** Diagram discipline plus the two rules the renderer and validator add on top of
+ *  it. `DIAGRAM_OUTPUT_RULE` carries the shared text the editable templates also
+ *  embed, so the app instruction and the Settings default cannot drift apart. */
 export const MERMAID_OUTPUT_INSTRUCTION = [
-  'Use a fenced `mermaid` block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram.',
-  'Keep diagrams concise and parse-valid.',
+  DIAGRAM_OUTPUT_RULE,
   'In flowcharts, wrap every human-readable node label in double quotes, especially labels containing punctuation, parentheses, paths, or code.',
   'The application validates completed Mermaid blocks and rejects an invalid answer for one automatic correction attempt.',
-  'A diagram supplements the required explanation and specification detail; it never replaces them.',
-  'Do not add decorative diagrams.'
+  'A diagram supplements the required explanation and specification detail; it never replaces them.'
 ].join(' ')
 
 export const ARTIFACT_OUTPUT_INSTRUCTION = [
@@ -306,7 +325,8 @@ export const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.',
   'Do not ask to broaden the task. Respond only to the user request in this temporary chat.',
   CITATION_SYSTEM_INSTRUCTION,
-  MERMAID_OUTPUT_INSTRUCTION
+  MERMAID_OUTPUT_INSTRUCTION,
+  RESPONSE_STYLE_INSTRUCTION
 ].join(' ')
 
 export const TEMPORARY_CHAT_ALLOWED_TOOLS = [
@@ -653,9 +673,10 @@ export function formatOpenAnnotations(
 /**
  * Final composition of the per-turn system prompt for the implement/chat path.
  * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
- * planning or implementation instruction exactly once; mermaid, artifact and question
- * instructions are injected here for the conversational modes (`chat` and
- * `assistant`), where no app layer supplies them.
+ * planning or implementation instruction exactly once; the reply budget is injected
+ * for every mode here, and mermaid, artifact and question instructions are injected
+ * here for the conversational modes (`chat` and `assistant`), where no app layer
+ * supplies them.
  *
  * The restored history recap is deliberately NOT a layer here: it rides the
  * user channel through `SendPromptOptions.historyRecap`, so the system role is
@@ -689,6 +710,7 @@ export function composeTurnSystemPrompt(input: {
     input.behaviorPrompt,
     input.utilityInstructions,
     input.assistantInstruction,
+    RESPONSE_STYLE_INSTRUCTION,
     conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
     conversational ? ARTIFACT_OUTPUT_INSTRUCTION : undefined,
     conversational ? QUESTION_TOOL_INSTRUCTION : undefined
@@ -735,6 +757,7 @@ export function composeBrainstormSystemPrompt(input: {
     input.behaviorPrompt,
     input.utilityInstructions,
     input.assistantInstruction,
+    RESPONSE_STYLE_INSTRUCTION,
     ARTIFACT_OUTPUT_INSTRUCTION,
     'In studio output, keep artifact fences inside the appropriate Markdown string field and preserve the required structured output contract.'
   ]
