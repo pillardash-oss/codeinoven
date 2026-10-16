@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FileDiff, Files } from '@lucide/svelte'
+  import { File, FileDiff } from '@lucide/svelte'
   import { threadChangesState } from '$lib/stores/thread-changes.svelte'
 
   const current = $derived(threadChangesState.current)
@@ -8,15 +8,6 @@
   const heading = $derived(threadChangesState.working ? 'This turn' : 'Last turn')
   /** Files past nine read as "9+" so the count never grows past two glyphs. */
   const fileLabel = $derived(fileCount > 9 ? '9+' : String(fileCount))
-
-  // A live turn's line totals are counted on demand, so the bounded live-diff
-  // pass runs only while this flyout is on screen. Reading the summary makes
-  // the effect re-run (and recount) when the turn's change set moves under it;
-  // the store's own shape key keeps an unchanged set from re-scanning.
-  $effect(() => {
-    const summary = threadChangesState.current
-    if (summary?.status === 'active') void threadChangesState.ensureLiveTotals()
-  })
 </script>
 
 {#if current && fileCount > 0}
@@ -43,7 +34,7 @@
     <div
       class="mt-1 flex items-center gap-1.5 text-[0.6875rem] font-medium tabular-nums text-muted"
     >
-      <Files size={12} class="shrink-0 text-dimmed" />
+      <File size={12} class="shrink-0 text-dimmed" />
       {fileLabel}
     </div>
   </div>

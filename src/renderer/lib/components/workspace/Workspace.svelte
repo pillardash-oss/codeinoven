@@ -1236,6 +1236,19 @@
             .filter((part): part is string => part !== null)
             .join(' · ')
         : 'Changes'
+      // While the turn runs, the icon itself carries the running insertions and
+      // deletions, colour-coded, so the change is visible without a hover.
+      const changeBadges =
+        threadChangesState.working && changeTotals
+          ? [
+              ...(changeTotals.additions > 0
+                ? [{ text: `+${changeTotals.additions}`, tone: 'success' as const }]
+                : []),
+              ...(changeTotals.deletions > 0
+                ? [{ text: `−${changeTotals.deletions}`, tone: 'danger' as const }]
+                : [])
+            ]
+          : []
       workspaceTools.push(
         {
           id: 'files',
@@ -1250,6 +1263,7 @@
           icon: FileDiff,
           active: dockKindActive('diff'),
           ...(hasRecordedChanges ? { flyout: changeSummaryFlyout } : {}),
+          ...(changeBadges.length > 0 ? { countBadges: changeBadges } : {}),
           onSelect: () => toggleDockPanel('diff', openDiff)
         }
       )

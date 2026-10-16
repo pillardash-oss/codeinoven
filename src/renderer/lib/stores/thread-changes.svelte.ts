@@ -2,7 +2,7 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import { LatestRequestGuard } from '$lib/refresh-guard'
 import { diffDetails } from '$lib/components/files/file-diff'
 import { appQuitState } from './app-quit.svelte'
-import type { AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
+import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
 
 /** Line totals the Changes indicator shows for a change set. */
 export interface ChangeLineTotals {
@@ -12,10 +12,11 @@ export interface ChangeLineTotals {
   partial: boolean
 }
 
-/** The live line-count pass is bounded to this many files; more than this is
- *  reported as a partial count instead of scanning the whole change set on a
- *  hover. */
+/** The live line-count pass is bounded to this many files, and runs at most
+ *  this many diffs at once, so a large change set is counted in small batches
+ *  rather than hammering disk and IPC. */
 const MAX_LIVE_STAT_FILES = 24
+const LIVE_STAT_CONCURRENCY = 6
 
 /**
  * The change set the Changes rail icon summarizes for the conversation on
@@ -103,11 +104,12 @@ class ThreadChangesState {
   /**
    * Count the live turn's line totals, once per change-set shape.
    *
-   * Called by the flyout when it opens, so the bounded live-diff fan-out never
-   * runs in the background. A no-op for a finished change set, whose totals are
-   * already stored.
+   * Runs while a turn is active, so the rail icon can carry the +/- badge
+   * without waiting for a hover; the flyout calls it too, as a safety net. The
+   * bounded live-diff fan-out never runs once the turn ends, and an unchanged
+   * change set is never recounted.
    */
-  async ensureLiveTotals(): Promise<void> {
+  async countLiveTotals(): Promise<void> {
     const live = this.live
     if (!live || live.changes.length === 0) return
     const key = liveTotalsKeyFor(live)
@@ -118,32 +120,40 @@ class ThreadChangesState {
     this.liveTotalsKey = key
     const request = this.totalsGuard.begin()
     const generation = this.generation
+    const stillCurrent = (): boolean =>
+      generation === this.generation && this.totalsGuard.isCurrent(request)
     const countable = live.changes.filter((change) => !change.binary)
     const sample = countable.slice(0, MAX_LIVE_STAT_FILES)
-    const results = await Promise.allSettled(
-      sample.map((change) =>
-        invoke('checkpoint:liveDiff', projectId, threadId, live.id, change.path)
-      )
-    )
-    if (generation !== this.generation || !this.totalsGuard.isCurrent(request)) return
     let additions = 0
     let deletions = 0
     let partial = countable.length > sample.length || live.changes.length !== countable.length
-    for (const result of results) {
-      if (result.status !== 'fulfilled') {
-        partial = true
-        continue
-      }
-      const diff: TurnCheckpointFileDiff = result.value
-      if (diff.binary) {
-        partial = true
-        continue
-      }
-      if (diff.truncated) partial = true
-      const details = diffDetails(diff.before, diff.after)
-      additions += details.additions
-      deletions += details.deletions
-    }
+    await forEachLimited(
+      sample,
+      LIVE_STAT_CONCURRENCY,
+      async (change) => {
+        try {
+          const diff = await invoke(
+            'checkpoint:liveDiff',
+            projectId,
+            threadId,
+            live.id,
+            change.path
+          )
+          if (diff.binary) {
+            partial = true
+            return
+          }
+          if (diff.truncated) partial = true
+          const details = diffDetails(diff.before, diff.after)
+          additions += details.additions
+          deletions += details.deletions
+        } catch {
+          partial = true
+        }
+      },
+      stillCurrent
+    )
+    if (!stillCurrent()) return
     this.liveTotals = { additions, deletions, partial }
   }
 
@@ -194,7 +204,10 @@ class ThreadChangesState {
       this.liveTotalsKey = null
       // A running turn already carries the freshest record; the finished history
       // is unchanged until it settles.
-      if (live) return
+      if (live) {
+        void this.countLiveTotals()
+        return
+      }
       const latest = await invoke('checkpoint:latestSummary', projectId, threadId)
       if (generation !== this.generation || !this.summaryGuard.isCurrent(request)) return
       this.latest = latest && latest.status !== 'rolled_back' ? latest : null
@@ -218,6 +231,7 @@ class ThreadChangesState {
       this.live = live
       this.liveTotals = null
       this.liveTotalsKey = null
+      void this.countLiveTotals()
     } catch {
       // Supplementary.
     }
@@ -229,6 +243,30 @@ class ThreadChangesState {
 function liveTotalsKeyFor(summary: TurnCheckpointSummary): string {
   const shape = summary.changes.map((change) => `${change.kind}:${change.path}`).join('|')
   return `${summary.id}:${shape}`
+}
+
+/**
+ * Run `worker` over `items` with a bounded number in flight, stopping early once
+ * `shouldContinue` turns false. Keeps the live line-count pass from firing every
+ * diff at once on a wide change set.
+ */
+async function forEachLimited<T>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+  shouldContinue: () => boolean
+): Promise<void> {
+  let index = 0
+  const run = async (): Promise<void> => {
+    while (index < items.length) {
+      if (!shouldContinue()) return
+      const item = items[index]
+      index += 1
+      await worker(item)
+    }
+  }
+  const runners = Math.min(limit, items.length)
+  await Promise.all(Array.from({ length: runners }, run))
 }
 
 export const threadChangesState = new ThreadChangesState()

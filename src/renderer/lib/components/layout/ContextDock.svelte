@@ -10,6 +10,11 @@
     iconUrl?: string | null
   }
 
+  export interface ContextDockCountBadge {
+    text: string
+    tone: 'neutral' | 'success' | 'danger'
+  }
+
   export interface ContextDockItem {
     id: string
     /** Used for both the tooltip and the accessible name. */
@@ -37,6 +42,12 @@
     /** Renders a compact neutral count badge above the tool icon. */
     countBadge?: string
     countBadgeTone?: 'working'
+    /**
+     * A stack of compact count badges at the icon's top-right, each with its
+     * own tone. Used where one count cannot carry the whole story, e.g. a live
+     * turn's insertions and deletions.
+     */
+    countBadges?: ContextDockCountBadge[]
     /** Coloured emphasis: amber for attention-worthy tools (e.g. a thread note),
      *  and nothing else   blue on the rail means work in progress, never the
      *  kind of tool an icon stands for. */
@@ -126,6 +137,14 @@
     if (item.tone === 'warning') return 'text-warning hover:bg-elevated'
     return item.active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
   }
+
+  /** Tone for a stacked count badge; the surface base keeps it legible over
+   *  whatever part of the icon it overlaps. */
+  function countBadgeClass(tone: ContextDockCountBadge['tone']): string {
+    if (tone === 'success') return 'bg-surface text-success ring-success/40'
+    if (tone === 'danger') return 'bg-surface text-danger ring-danger/40'
+    return 'bg-raised text-muted ring-border'
+  }
 </script>
 
 <!--
@@ -197,6 +216,20 @@
               aria-hidden="true"
             >
               {item.countBadge}
+            </span>
+          {/if}
+          {#if item.countBadges && item.countBadges.length > 0}
+            <span class="absolute -top-1 -right-1 flex flex-col items-end gap-0.5">
+              {#each item.countBadges as badge, badgeIndex (badgeIndex)}
+                <span
+                  class="flex h-3.5 min-w-3.5 items-center justify-center px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {countBadgeClass(
+                    badge.tone
+                  )}"
+                  aria-hidden="true"
+                >
+                  {badge.text}
+                </span>
+              {/each}
             </span>
           {/if}
         </button>
