@@ -28,8 +28,8 @@
   {...rest}
 >
   <g
-    transform="translate(-5.617 -5.617) scale(1.4681)"
-    stroke-width={cioStrokeWidth(weight, 1.4681)}
+    transform="translate(-5.328 -4.619) scale(1.4083)"
+    stroke-width={cioStrokeWidth(weight, 1.4083)}
   >
     <path d="M5.4 7.2v9.6" />
     <rect x="8.6" y="5.9" width="11.5" height="2.6" rx="1.3" fill="currentColor" stroke="none" />

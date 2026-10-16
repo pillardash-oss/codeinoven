@@ -28,7 +28,7 @@
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
-  <g transform="translate(0.516 0.516) scale(0.9570)" stroke-width={cioStrokeWidth(weight, 0.957)}>
+  <g transform="translate(1.887 1.887) scale(0.8427)" stroke-width={cioStrokeWidth(weight, 0.8427)}>
     <path d="M4.6 9.2h13" /><path d="M14.6 5.6 18.2 9.2l-3.6 3.6" /><path d="M19.4 14.8h-13" /><path
       d="M9.4 11.2 5.8 14.8l3.6 3.6"
     />

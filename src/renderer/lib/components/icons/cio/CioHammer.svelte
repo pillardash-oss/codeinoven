@@ -30,8 +30,8 @@
   {...rest}
 >
   <g
-    transform="translate(-3.229 -3.229) scale(1.3425)"
-    stroke-width={cioStrokeWidth(weight, 1.3425)}
+    transform="translate(-2.909 -2.909) scale(1.3143)"
+    stroke-width={cioStrokeWidth(weight, 1.3143)}
   >
     <g transform="rotate(-45 8.6 8.6)"
       ><rect x="3.4" y="6.2" width="10.4" height="4.8" rx="1.6" /><rect

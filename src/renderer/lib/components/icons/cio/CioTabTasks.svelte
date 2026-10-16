@@ -32,8 +32,8 @@
   {...rest}
 >
   <g
-    transform="translate(-3.4286 -3.4286) scale(1.2857)"
-    stroke-width={cioStrokeWidth(weight, 1.2857)}
+    transform="translate(-3.302 -1.085) scale(1.2284)"
+    stroke-width={cioStrokeWidth(weight, 1.2284)}
   >
     <rect x="7.8" y="3.8" width="12.7" height="7.8" rx="1.8" />
     <rect x="3.5" y="9.6" width="12.7" height="8.8" rx="1.8" fill="currentColor" stroke="none" />

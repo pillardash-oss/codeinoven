@@ -29,8 +29,8 @@
   {...rest}
 >
   <g
-    transform="translate(-3.795 -3.826) scale(1.3162)"
-    stroke-width={cioStrokeWidth(weight, 1.3162)}
+    transform="translate(-3.465 -3.495) scale(1.2887)"
+    stroke-width={cioStrokeWidth(weight, 1.2887)}
   >
     <path d="M4.4 12a7.6 7.6 0 1 0 2.3-5.4" /><path d="M4.4 4.4v4.4h4.4" />
   </g>

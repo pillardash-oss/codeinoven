@@ -28,10 +28,7 @@
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
-  <g
-    transform="translate(0.759 -0.183) scale(0.9451)"
-    stroke-width={cioStrokeWidth(weight, 0.9451)}
-  >
+  <g transform="translate(2.098 1.270) scale(0.8316)" stroke-width={cioStrokeWidth(weight, 0.8316)}>
     <path d="M18.4 5.4v8.4a2.8 2.8 0 0 1-2.8 2.8H5.6" /><path d="M9.6 12.8 5.4 16.6l4.2 3.8" />
   </g>
 </svg>

@@ -29,7 +29,10 @@
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
-  <g transform="translate(-3.869 0.946) scale(1.1910)" stroke-width={cioStrokeWidth(weight, 1.191)}>
+  <g
+    transform="translate(-3.561 1.207) scale(1.1658)"
+    stroke-width={cioStrokeWidth(weight, 1.1658)}
+  >
     <path d="M6.4 5.2h3.2a3 3 0 1 1 5 0h3.2v12.4H6.4Z" /><circle
       cx="18.4"
       cy="11.4"

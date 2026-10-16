@@ -3,16 +3,17 @@
  *
  * The language, read off pass F's own drawings rather than invented:
  *
- *   light      shape outlines stroked at an effective 1.9 units, under Lucide's 2
+ *   light      shape outlines stroked at the weight the call site asks, the same
+ *              law Lucide follows: a surface asking for 1.8 gets 1.8
  *   anchor     one or two solid masses per glyph, filled with no stroke, because
  *              mass is what reads at 16px where an outline needs more extent
  *   radii      2 units on the shape, 1 to 1.3 on the anchors
  *   floor      nothing drawn thinner or closer than 1.5 units, one device pixel
  *              at 16px
- *   box        every glyph fills a 22.6-unit box, and a direction such as a
- *              chevron fills a 16-unit indicator box instead, because a direction
- *              that fills the picture box reads as a much larger control than the
- *              glyphs beside it
+ *   box        every glyph fills a 22-unit box, and a direction such as a
+ *              chevron fills a 14-unit indicator box instead, which is the size
+ *              Lucide's own chevron measures at, because a direction that fills the
+ *              picture box reads as a much larger control than the glyphs beside it
  *
  * Nothing here is Lucide geometry. A drawing is written in a local box of roughly
  * 3.4 to 20.6 and fitted to the 22.6-unit box by `build-icons.ts`, so proportions

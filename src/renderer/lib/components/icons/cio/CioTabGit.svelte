@@ -30,8 +30,8 @@
   {...rest}
 >
   <g
-    transform="translate(-2.540 -3.146) scale(1.2622)"
-    stroke-width={cioStrokeWidth(weight, 1.2622)}
+    transform="translate(-2.238 -2.802) scale(1.2335)"
+    stroke-width={cioStrokeWidth(weight, 1.2335)}
   >
     <circle cx="7" cy="6.4" r="2.4" /><circle cx="7" cy="17.6" r="2.4" /><circle
       cx="17"

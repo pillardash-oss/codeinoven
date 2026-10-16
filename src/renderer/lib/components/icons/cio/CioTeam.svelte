@@ -29,8 +29,8 @@
   {...rest}
 >
   <g
-    transform="translate(-2.255 -2.977) scale(1.2080)"
-    stroke-width={cioStrokeWidth(weight, 1.208)}
+    transform="translate(-1.934 -2.639) scale(1.1807)"
+    stroke-width={cioStrokeWidth(weight, 1.1807)}
   >
     <circle cx="16.6" cy="8" r="2.8" /><path d="M14.4 19.6a5.6 5.6 0 0 1 5.8-5.4" /><circle
       cx="9"
