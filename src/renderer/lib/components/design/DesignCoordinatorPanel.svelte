@@ -16,6 +16,7 @@
     Inspect,
     ListClock,
     LoaderCircle,
+    Palette,
     Pencil,
     PlayingCardsFan,
     Presentation,
@@ -1585,6 +1586,7 @@
                     class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                     disabled={canvasBusy !== '' || selected.directory === ''}
                   >
+                    <Palette size={13} class="shrink-0 text-muted" />
                     Review Design
                     <ChevronRight size={13} class="ml-auto text-muted" />
                   </DropdownMenu.SubTrigger>
@@ -1597,7 +1599,7 @@
                         class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                         disabled={canvasBusy !== '' || selected.directory === ''}
                         onSelect={() => void requestDesignAction('critique')}
-                        >Review design quality</DropdownMenu.Item
+                        ><Palette size={13} class="shrink-0 text-muted" />Review design quality</DropdownMenu.Item
                       >
                       <DropdownMenu.Item
                         class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
@@ -1614,7 +1616,7 @@
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={openReferencePrompt}
-                  >Extract brand from reference</DropdownMenu.Item
+                  ><GlobeCode size={13} class="shrink-0 text-muted" />Extract brand from reference</DropdownMenu.Item
                 >
 
                 <DropdownMenu.Item
