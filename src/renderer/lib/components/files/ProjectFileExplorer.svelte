@@ -482,16 +482,10 @@
     if (index !== undefined) scrollTreeIndexIntoView(index)
   }
 
-  async function focusRevealedTreePath(path: string, focusRequest: number): Promise<void> {
+  async function scrollRevealedTreePath(path: string, focusRequest: number): Promise<void> {
     await tick()
     if (projectState.focusRequest !== focusRequest) return
     scrollTreePathIntoView(path)
-    await tick()
-    if (projectState.focusRequest !== focusRequest) return
-    const row = [...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])].find(
-      (element) => element.dataset.treePath === path
-    )
-    row?.focus()
   }
 
   /** The active file tab this tree has already located. The first run starts
@@ -572,7 +566,10 @@
     // still lands when the directory listing and the pointer turn settle.
     consumedFocusRequest = focusRequest
     projectFilesWorkspace.acknowledgeReveal(projectId, focusRequest)
-    void focusRevealedTreePath(path, focusRequest)
+    // Revealing a path updates the viewport, never keyboard ownership. Passive
+    // refreshes and remounts must leave the composer or modal in control.
+    // Direct row interaction and tree keyboard navigation own focus instead.
+    void scrollRevealedTreePath(path, focusRequest)
   })
 
   /** Suppress the auto-reveal scroll for the rest of the current pointer
