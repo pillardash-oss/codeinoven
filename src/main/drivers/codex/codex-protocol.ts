@@ -18,6 +18,7 @@ export interface CodexAppServerHost {
   pending: Map<
     number,
     {
+      method: string
       resolve: (value: Record<string, unknown>) => void
       reject: (error: Error) => void
       timer: ReturnType<typeof setTimeout>

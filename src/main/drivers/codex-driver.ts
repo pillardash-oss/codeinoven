@@ -945,19 +945,27 @@ export class CodexDriver extends PersistentCliDriver {
     options: { ignoreOwnTurn?: boolean } = {}
   ): string | null {
     if (!options.ignoreOwnTurn && this.activeTurns.has(sessionId)) {
-      return 'This Codex thread still has an active turn.'
+      return `Codex session ${sessionId} still has an active turn on the app-server.`
     }
-    const hostBusy =
-      [...this.activeTurns.entries()].some(
-        ([turnSessionId, active]) => active.host === host && turnSessionId !== sessionId
-      ) ||
-      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
-      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
-      [...this.serverRequests.values()].some(
-        (request) => request.host === host && request.sessionId !== sessionId
-      ) ||
-      host.pending.size > 0
-    return hostBusy ? 'Another Codex operation is still using this app-server.' : null
+    const blockers = new Set<string>()
+    for (const [turnSessionId, active] of this.activeTurns) {
+      if (active.host !== host || turnSessionId === sessionId) continue
+      blockers.add(`active turn for session ${turnSessionId}`)
+    }
+    for (const [threadId, compaction] of this.compactionsByThreadId) {
+      if (compaction.host === host) blockers.add(`compaction for native thread ${threadId}`)
+    }
+    for (const [threadId, waiter] of this.contextUsageByThreadId) {
+      if (waiter.host === host) blockers.add(`context-usage request for native thread ${threadId}`)
+    }
+    for (const request of this.serverRequests.values()) {
+      if (request.host === host && request.sessionId !== sessionId) {
+        blockers.add(`${request.method} server request for session ${request.sessionId}`)
+      }
+    }
+    for (const pending of host.pending.values()) blockers.add(`pending ${pending.method} request`)
+    if (blockers.size === 0) return null
+    return `This Codex thread cannot move yet; its app-server is still handling ${[...blockers].join('; ')}.`
   }
 
   override dispose(): void {
@@ -1829,7 +1837,7 @@ export class CodexDriver extends PersistentCliDriver {
         host.pending.delete(id)
         reject(new Error(`Codex app-server ${method} request timed out`))
       }, CODEX_APP_SERVER_REQUEST_TIMEOUT_MS)
-      host.pending.set(id, { resolve, reject, timer })
+      host.pending.set(id, { method, resolve, reject, timer })
       host.child.stdin?.write(`${JSON.stringify({ id, method, ...(params ? { params } : {}) })}\n`)
     })
   }
