@@ -1,6 +1,6 @@
 import type { Thread } from '$shared/types'
-import { MessagesCircle } from '@lucide/svelte'
 import type { Component } from 'svelte'
+import CioChat from './components/icons/cio/CioChat.svelte'
 import { contentThreadFamily, type ContentThreadFamily } from './content-view-threads'
 import AssistantIcon from './components/icons/AssistantIcon.svelte'
 
@@ -15,10 +15,12 @@ import AssistantIcon from './components/icons/AssistantIcon.svelte'
  *
  * The assistant uses its own mark rather than a Lucide glyph, so the assistant
  * is recognisable from the icon alone wherever its container is named, and that
- * mark is the same one every assistant surface falls back to.
+ * mark is the same one every assistant surface falls back to. The chats inbox
+ * carries the CIO chat drawing for the same reason: it is the mark the view
+ * switcher wears, so the family reads the same wherever it is named.
  */
 export const CONTENT_FAMILY_ICONS: Record<Exclude<ContentThreadFamily, 'projects'>, Component> = {
-  chats: MessagesCircle,
+  chats: CioChat,
   assistant: AssistantIcon
 }
 

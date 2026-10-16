@@ -19,17 +19,14 @@
   import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioNotes from '$lib/components/icons/cio/CioNotes.svelte'
+  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
-  import {
-    Bell,
-    ChevronLeft,
-    ChevronRight,
-    Globe,
-    Loader2,
-    Search,
-    StickyNotes,
-    Toolbox
-  } from '@lucide/svelte'
+  import { Globe, Loader2 } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
@@ -265,7 +262,7 @@
         disabled={!navigationHistoryState.canGoBack}
         onclick={goBack}
       >
-        <ChevronLeft size={16} strokeWidth={1.8} />
+        <CioBack size={16} />
       </button>
       <button
         class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
@@ -274,7 +271,7 @@
         disabled={!navigationHistoryState.canGoForward}
         onclick={goForward}
       >
-        <ChevronRight size={16} strokeWidth={1.8} />
+        <CioForward size={16} />
       </button>
     </div>
 
@@ -289,7 +286,7 @@
         title="Search settings"
         onclick={() => (settingsUiState.searchOpen = true)}
       >
-        <Search size={15} strokeWidth={1.8} />
+        <CioSearch size={15} />
       </button>
     {:else}
       <AppHeaderViewActions />
@@ -362,7 +359,7 @@
         {:else}
           <!-- The specification's own mark, so the toolbox a user learns here is
                the same one a spec-ready row wears. -->
-          <Toolbox size={15} />
+          <CioTools size={15} />
         {/if}
         <span class="header-control-label text-[0.6875rem] font-medium">
           {workspaceState.specStudioBusy
@@ -403,7 +400,7 @@
       title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
       onclick={() => void toggleStickyNotes()}
     >
-      <StickyNotes size={16} />
+      <CioNotes size={16} />
     </button>
 
     <button
@@ -416,7 +413,7 @@
       data-guide="notifications"
       onclick={() => contextSidebarState.toggleNotifications()}
     >
-      <Bell size={16} />
+      <CioNotifications size={16} />
       {#if notificationPanelState.totalCount > 0 || notificationPanelState.hasAssistant}
         <!-- One dot per waiting kind, each in the app's own status colour, so a
              glance at the bell says what is waiting: a project message, a chat

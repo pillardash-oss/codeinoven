@@ -111,23 +111,17 @@
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
-  import {
-    Bot,
-    BrainCircuit,
-    Bug,
-    Cloud,
-    FileDiff,
-    FolderTree,
-    GlobeCode,
-    History,
-    Info,
-    MessageCircleDashed,
-    MonitorCog,
-    Plus,
-    SquarePen,
-    SquareTerminal,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
+  import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import { GlobeCode, History, Info, Plus, SquarePen } from '@lucide/svelte'
   import { tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
@@ -1198,7 +1192,7 @@
       workspaceTools.push({
         id: 'oven',
         label: identity?.name ?? 'Oven',
-        icon: SquareTerminal,
+        icon: CioTerminal,
         ...(identity && !identity.local
           ? { appearance: { color: identity.color, iconUrl: identity.iconUrl } }
           : {}),
@@ -1217,7 +1211,7 @@
       workspaceTools.push({
         id: 'files',
         label: isChatThread ? 'Artifacts' : 'Workspace files',
-        icon: FolderTree,
+        icon: CioFiles,
         active: dockKindActive('files'),
         onSelect: () => toggleDockPanel('files', () => void openFiles())
       })
@@ -1258,14 +1252,14 @@
         {
           id: 'files',
           label: 'Files',
-          icon: FolderTree,
+          icon: CioFiles,
           active: dockKindActive('files'),
           onSelect: () => toggleDockPanel('files', () => void openFiles())
         },
         {
           id: 'diff',
           label: changeLabel,
-          icon: FileDiff,
+          icon: CioDiff,
           active: dockKindActive('diff'),
           ...(hasRecordedChanges ? { flyout: changeSummaryFlyout } : {}),
           ...(changeText.length > 0 ? { countText: changeText } : {}),
@@ -1278,7 +1272,7 @@
         workspaceTools.push({
           id: 'terminal',
           label: terminalOpen ? 'Hide terminal' : 'Show terminal',
-          icon: SquareTerminal,
+          icon: CioTerminal,
           active: terminalOpen,
           onSelect: toggleTerminal
         })
@@ -1286,7 +1280,7 @@
       workspaceTools.push({
         id: 'actions',
         label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
-        icon: MonitorCog,
+        icon: CioActions,
         active: dockKindActive('actions'),
         countBadge: runningActions > 0 ? String(runningActions) : undefined,
         countBadgeTone: runningActions > 0 ? 'working' : undefined,
@@ -1312,7 +1306,7 @@
       {
         id: 'memory',
         label: 'Memory',
-        icon: BrainCircuit,
+        icon: CioMemory,
         active: dockKindActive('memory'),
         badge: memoryProposalState.hasPending ? 'attention' : undefined,
         badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
@@ -1323,7 +1317,7 @@
       sessionTools.push({
         id: 'cloud-deployment',
         label: 'Cloud deployments',
-        icon: Cloud,
+        icon: CioCloud,
         active: dockKindActive('cloud-deployment'),
         onSelect: () => toggleDockPanel('cloud-deployment', openCloudDeploymentsTab)
       })
@@ -1332,7 +1326,7 @@
       sessionTools.push({
         id: 'debugger',
         label: 'Debugger',
-        icon: Bug,
+        icon: CioDebugger,
         active: dockKindActive('debugger'),
         onSelect: () => toggleDockPanel('debugger', openDebugger)
       })
@@ -1351,7 +1345,7 @@
       temporaryChats.push({
         id: 'temporary-chat',
         label: dockKindActive('temporary-chat') ? `Hide ${name}` : `Show ${name}`,
-        icon: MessageCircleDashed,
+        icon: CioTemporaryChat,
         active: dockKindActive('temporary-chat'),
         onSelect: () => toggleDockPanel('temporary-chat', focusTemporaryChat)
       })
@@ -1454,7 +1448,7 @@
       subagents.push({
         id: 'subagent',
         label: dockKindActive('subagent') ? `Hide ${name}` : `Show ${name}`,
-        icon: Bot,
+        icon: CioSubagent,
         active: dockKindActive('subagent'),
         onSelect: () => toggleDockPanel('subagent', focusSubagent)
       })
@@ -1482,7 +1476,7 @@
             {
               id: 'attention',
               label: 'Decisions made for you',
-              icon: TriangleAlert,
+              icon: CioAttention,
               tone: 'warning',
               countBadge: String(attentionItems.length),
               active: dockKindActive('attention'),

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Globe, Loader2, Mic, Volume2, VolumeX } from '@lucide/svelte'
+  import { Loader2, Mic, Volume2, VolumeX } from '@lucide/svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
 
@@ -30,7 +31,7 @@
         {:else if tab.favicon}
           <img src={tab.favicon} alt="" class="h-4 w-4 object-contain" />
         {:else}
-          <Globe size={13} class="text-dimmed" />
+          <CioBrowser size={13} class="text-dimmed" />
         {/if}
       </span>
       <h1
