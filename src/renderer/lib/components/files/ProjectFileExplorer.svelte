@@ -680,6 +680,9 @@
   }
 
   function handleRowClick(entry: ProjectFileEntry, event: MouseEvent): void {
+    // A clicked row owns keyboard navigation, including on platforms where
+    // clicking a button does not give it DOM focus.
+    if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
     if (event.metaKey || event.ctrlKey) {
       projectFilesWorkspace.toggleSelection(projectId, entry.path)
       projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
@@ -715,6 +718,18 @@
     })
   }
 
+  function selectKeyboardRow(entry: ProjectFileEntry): void {
+    if (entry.kind === 'file') {
+      void selectEntry(entry, 'preview')
+    } else {
+      // Moving onto a folder selects it without toggling its expansion.
+      projectFilesWorkspace.setRevealedPath(projectId, entry.path)
+      projectFilesWorkspace.setSelection(projectId, [entry.path])
+      projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
+    }
+    focusRow(entry.path)
+  }
+
   /** Directory a newly created file should land in, based on the focused row. */
   function createTargetDirectory(target: EventTarget | null): string {
     const row =
@@ -738,6 +753,7 @@
     if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'ArrowRight' && key !== 'ArrowLeft') {
       return
     }
+    event.stopPropagation()
     if (visibleRows.length === 0) return
 
     let currentIndex = -1
@@ -763,11 +779,10 @@
       if (!entry) return
       if (event.shiftKey) {
         extendSelectionTo(entry.path)
+        focusRow(entry.path)
       } else {
-        projectFilesWorkspace.setSelection(projectId, [entry.path])
-        projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
+        selectKeyboardRow(entry)
       }
-      focusRow(entry.path)
       return
     }
 
@@ -780,10 +795,8 @@
           void toggleDirectoryRow(entry)
         } else {
           const child = visibleRows[currentIndex + 1]
-          if (child) {
-            projectFilesWorkspace.setSelection(projectId, [child.path])
-            projectFilesWorkspace.setSelectionAnchor(projectId, child.path)
-            focusRow(child.path)
+          if (child && parentDirectory(child.path) === entry.path) {
+            selectKeyboardRow(child)
           }
         }
       }
@@ -798,9 +811,7 @@
         const parentIndex = parent ? rowIndexByPath.get(parent) : undefined
         if (parentIndex !== undefined) {
           const parentEntry = visibleRows[parentIndex]
-          projectFilesWorkspace.setSelection(projectId, [parentEntry.path])
-          projectFilesWorkspace.setSelectionAnchor(projectId, parentEntry.path)
-          focusRow(parentEntry.path)
+          selectKeyboardRow(parentEntry)
         }
       }
     }
