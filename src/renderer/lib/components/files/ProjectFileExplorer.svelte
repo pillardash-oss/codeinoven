@@ -652,9 +652,9 @@
   }
 
   function isRowActive(path: string): boolean {
+    if (projectState.selectedPaths.length > 0) return projectState.selectedPaths.includes(path)
     if (revealedSearchPath === path) return true
     if (selectedPath) return selectedPath === path
-    if (projectState.selectedPaths.includes(path)) return true
     return projectState.revealedPath === path
   }
 
@@ -741,6 +741,18 @@
       return
     }
     const key = event.key
+    if (keymapState.matches('files-delete', event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat || operationPending || deleteTarget) return
+      const paths = [...projectState.selectedPaths]
+      if (paths.length === 0) return
+      deleteTarget = {
+        paths,
+        label: paths.length === 1 ? paths[0] : `${paths.length} items`
+      }
+      return
+    }
     if (keymapState.matches('nav-new-thread', event)) {
       event.preventDefault()
       void startCreate(createTargetDirectory(event.target), 'untitled.txt')
@@ -955,8 +967,10 @@
     }
   }
 
-  function handleFilePointerDown(entry: ProjectFileEntry): void {
+  function handleFilePointerDown(entry: ProjectFileEntry, event: PointerEvent): void {
     suppressScrollForPointer()
+    // Modified clicks must see the previous selection and range anchor.
+    if (event.metaKey || event.ctrlKey || event.shiftKey) return
     const paths = selectionPathsFor(entry, projectState.selectedPaths)
     if (!projectState.selectedPaths.includes(entry.path)) {
       projectFilesWorkspace.setSelection(projectId, paths)

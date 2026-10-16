@@ -44,7 +44,7 @@
     onRowClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowDoubleClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowContextMenu: (entry: ProjectFileEntry) => void
-    onRowPointerDown: (entry: ProjectFileEntry) => void
+    onRowPointerDown: (entry: ProjectFileEntry, event: PointerEvent) => void
     onRowDragStart: (entry: ProjectFileEntry, event: DragEvent) => void
   }
 
@@ -194,7 +194,7 @@
         onclick={(event: MouseEvent) => onRowClick(entry, event)}
         ondblclick={(event: MouseEvent) => onRowDoubleClick(entry, event)}
         oncontextmenu={() => onRowContextMenu(entry)}
-        onpointerdown={() => onRowPointerDown(entry)}
+        onpointerdown={(event) => onRowPointerDown(entry, event)}
         ondragstart={(event: DragEvent) => onRowDragStart(entry, event)}
       >
         <div

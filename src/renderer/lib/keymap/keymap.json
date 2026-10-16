@@ -727,6 +727,14 @@
           "scenario": "File tree inline input."
         },
         {
+          "id": "files-delete",
+          "keys": ["mod", "backspace"],
+          "platformKeys": { "other": ["delete"] },
+          "label": "Delete selected files",
+          "description": "Opens the Trash confirmation for the selected files and folders. Cmd+Delete on macOS, Delete on Windows and Linux.",
+          "scenario": "File tree focused, outside an inline input."
+        },
+        {
           "id": "files-deployment-find",
           "keys": ["mod", "f"],
           "label": "Search deployment logs",
