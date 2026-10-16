@@ -30,6 +30,7 @@
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
   import DesignHistoryActions from '$lib/components/design/DesignHistoryActions.svelte'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
   import CompositionStage from '$lib/components/design/CompositionStage.svelte'
@@ -172,6 +173,12 @@
   let boardRevision = $state(0)
   /** Whether the user asked to reload over unsaved video controls. */
   let reloadRequested = $state(false)
+  /** Whether the reference-brand URL prompt is open. */
+  let referenceOpen = $state(false)
+  /** The reference site URL the brand extraction measures. */
+  let referenceUrl = $state('')
+  /** Why the entered reference URL was rejected, in the user's terms. */
+  let referenceError = $state('')
   /**
    * Undo and Redo for the folder in front, published by the history pane.
    *
@@ -741,19 +748,21 @@
   }
 
   async function requestDesignAction(
-    action: 'contract' | 'critique' | 'reference' | 'tweaks'
+    action: 'contract' | 'critique' | 'reference' | 'tweaks',
+    referenceUrl?: string
   ): Promise<void> {
     if (!selected.directory || canvasBusy) return
     canvasBusy = action
     try {
+      const directoryLiteral = JSON.stringify(selected.directory)
       const text =
         action === 'contract'
           ? designContractRequest(selected.directory)
           : action === 'critique'
-            ? `@cio-design Review the design in ${JSON.stringify(selected.directory)}. Render each screen, check phone and desktop widths, exercise its main interactions and run craft lint. Record a single evidence-based critique per screen using the design capability's rubric, report scores and concrete fixes, and mark any failing screens unfinished. Do not silently run critique loops.`
+            ? `@cio-design Review the design in ${directoryLiteral}. Render each screen, check phone and desktop widths, exercise its main interactions and run craft lint. Record a single evidence-based critique per screen using the design capability's rubric, report scores and concrete fixes, and mark any failing screens unfinished. Do not silently run critique loops.`
             : action === 'reference'
-              ? `@cio-design Extract a lightweight brand contract from the reference site I name for the design in ${JSON.stringify(selected.directory)}. If no reference URL is attached or supplied, ask me for it. Use extract-reference to measure it, compare with existing project CSS tokens and the current contract, then generate DESIGN.md with write-contract so existing contracts are preserved as dated backups. Report measured values separately from inferred rules.`
-              : `@cio-design Add lightweight live review controls to the design in ${JSON.stringify(selected.directory)} using data-cio-tweaks and /__cio/tweaks.js. Reuse its actual CSS variables and add only useful controls such as accent, spacing, theme or sample data. Changes must update the existing DOM without reload. Wire cio:tweaks listeners for theme or content controls, test them in the preview, and keep these review controls out of production implementation.`
+              ? `@cio-design Extract a lightweight brand contract from the reference site ${JSON.stringify(referenceUrl ?? '')} for the design in ${directoryLiteral}. Use extract-reference to measure it, compare with existing project CSS tokens and the current contract, then generate DESIGN.md with write-contract so existing contracts are preserved as dated backups. Report measured values separately from inferred rules.`
+              : `@cio-design Add lightweight live review controls to the design in ${directoryLiteral} using data-cio-tweaks and /__cio/tweaks.js. Reuse its actual CSS variables and add only useful controls such as accent, spacing, theme or sample data. Changes must update the existing DOM without reload. Wire cio:tweaks listeners for theme or content controls, test them in the preview, and keep these review controls out of production implementation.`
       const delivery = await sendOrQueueThreadMessage(projectId, threadId, {
         text
       })
@@ -772,6 +781,34 @@
     } finally {
       canvasBusy = ''
     }
+  }
+
+  /**
+   * Open the reference-brand prompt for the folder in front.
+   *
+   * The extraction measures a site the user names, so the URL is collected
+   * up front rather than asked for mid-turn: confirming sends it as part of
+   * the prompt in the same step.
+   */
+  function openReferencePrompt(): void {
+    if (selected.directory === '' || canvasBusy !== '') return
+    referenceUrl = ''
+    referenceError = ''
+    referenceOpen = true
+  }
+
+  /** Send the brand extraction with the entered URL as part of the prompt. */
+  function confirmReferencePrompt(): void {
+    const url = referenceUrl.trim()
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error()
+    } catch {
+      referenceError = 'Enter a full site URL starting with http:// or https://.'
+      return
+    }
+    referenceOpen = false
+    void requestDesignAction('reference', url)
   }
 
   function startExport(entry: string | null, format: DesignExportFormat): void {
@@ -1576,7 +1613,7 @@
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestDesignAction('reference')}
+                  onSelect={openReferencePrompt}
                   >Extract brand from reference</DropdownMenu.Item
                 >
 
@@ -1860,6 +1897,75 @@
     {/key}
   </div>
 </div>
+
+<Modal
+  open={referenceOpen}
+  title="Extract brand from reference"
+  description="Enter the reference site to measure for this design."
+  size="md"
+  onClose={() => {
+    referenceOpen = false
+  }}
+>
+  <div class="flex flex-col gap-2">
+    <label for="reference-url" class="text-[0.8125rem] font-medium text-foreground">
+      Reference site URL
+    </label>
+    <input
+      id="reference-url"
+      type="url"
+      inputmode="url"
+      autocomplete="off"
+      spellcheck={false}
+      placeholder="https://example.com"
+      bind:value={referenceUrl}
+      aria-invalid={referenceError !== ''}
+      aria-describedby={referenceError !== '' ? 'reference-url-error' : undefined}
+      class="h-8 w-full border border-border bg-elevated px-2 text-[0.8125rem] text-foreground outline-none focus:border-primary"
+      onkeydown={(event) => {
+        if (event.key !== 'Enter') return
+        event.preventDefault()
+        confirmReferencePrompt()
+      }}
+    />
+    {#if referenceError !== ''}
+      <p id="reference-url-error" class="text-[0.75rem] text-danger" role="alert">
+        {referenceError}
+      </p>
+    {:else}
+      <p class="text-[0.75rem] text-muted">
+        The agent measures this site, then writes the brand into DESIGN.md for {selectedName ===
+          ''
+          ? `this ${noun}`
+          : selectedName}.
+      </p>
+    {/if}
+  </div>
+  {#snippet footer()}
+    <button
+      type="button"
+      class="border border-border px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      title="Close without extracting"
+      aria-label="Close without extracting"
+      onclick={() => {
+        referenceOpen = false
+      }}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      data-modal-primary-action
+      class="bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90 disabled:opacity-50"
+      disabled={referenceUrl.trim() === '' || canvasBusy !== ''}
+      title="Extract the brand from this reference site"
+      aria-label="Extract the brand from this reference site"
+      onclick={confirmReferencePrompt}
+    >
+      Extract brand
+    </button>
+  {/snippet}
+</Modal>
 
 <ConfirmDialog
   open={reloadRequested}
