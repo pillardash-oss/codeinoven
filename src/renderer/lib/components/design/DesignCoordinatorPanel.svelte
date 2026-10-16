@@ -3,6 +3,7 @@
   import {
     Check,
     ChevronDown,
+    ChevronRight,
     Copy,
     Download,
     Ellipsis,
@@ -1186,13 +1187,28 @@
             {copyLabel}
           </ContextMenu.Item>
           {#if !video}
-            {#each DESIGN_EXPORT_FORMATS as format (format)}
-              <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => startExport(screen.entry, format)}
-                >Export screen as {format.toUpperCase()}</ContextMenu.Item
+            <ContextMenu.Sub>
+              <ContextMenu.SubTrigger
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated"
               >
-            {/each}
+                <Download size={13} class="shrink-0 text-muted" />
+                Export
+                <ChevronRight size={13} class="ml-auto text-muted" />
+              </ContextMenu.SubTrigger>
+              <ContextMenu.Portal>
+                <ContextMenu.SubContent
+                  class="z-50 min-w-44 border border-border bg-surface p-1 shadow-lg"
+                >
+                  {#each DESIGN_EXPORT_FORMATS as format (format)}
+                    <ContextMenu.Item
+                      class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      onSelect={() => startExport(screen.entry, format)}
+                      >Export screen as {format.toUpperCase()}</ContextMenu.Item
+                    >
+                  {/each}
+                </ContextMenu.SubContent>
+              </ContextMenu.Portal>
+            </ContextMenu.Sub>
           {/if}
         </ContextMenu.Content>
       </ContextMenu.Portal>
@@ -1480,17 +1496,42 @@
                 <FolderTree size={13} class="shrink-0 text-muted" />
                 Reveal path
               </DropdownMenu.Item>
-              {#if video}
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                  disabled={selected.directory === '' ||
-                    videoJobs.some((job) => job.state === 'running')}
-                  onSelect={() => void exportVideo()}
+              <DropdownMenu.Sub>
+                <DropdownMenu.SubTrigger
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  disabled={selected.directory === ''}
                 >
                   <Download size={13} class="shrink-0 text-muted" />
-                  Export MP4
-                </DropdownMenu.Item>
-              {/if}
+                  Export
+                  <ChevronRight size={13} class="ml-auto text-muted" />
+                </DropdownMenu.SubTrigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.SubContent
+                    class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
+                    sideOffset={4}
+                  >
+                    {#if video}
+                      <DropdownMenu.Item
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                        disabled={selected.directory === '' ||
+                          videoJobs.some((job) => job.state === 'running')}
+                        onSelect={() => void exportVideo()}
+                      >
+                        Export MP4
+                      </DropdownMenu.Item>
+                    {:else}
+                      {#each DESIGN_EXPORT_FORMATS as format (format)}
+                        <DropdownMenu.Item
+                          class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                          disabled={selected.directory === ''}
+                          onSelect={() => startExport(null, format)}
+                          >Export design as {format.toUpperCase()}</DropdownMenu.Item
+                        >
+                      {/each}
+                    {/if}
+                  </DropdownMenu.SubContent>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Sub>
               {#if !video}
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
@@ -1526,14 +1567,6 @@
                       'https://github.com/nexu-io/open-design/tree/main/design-templates'
                     )}>Browse Open Design prompts</DropdownMenu.Item
                 >
-                {#each DESIGN_EXPORT_FORMATS as format (format)}
-                  <DropdownMenu.Item
-                    class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
-                    disabled={selected.directory === ''}
-                    onSelect={() => startExport(null, format)}
-                    >Export design as {format.toUpperCase()}</DropdownMenu.Item
-                  >
-                {/each}
               {/if}
               {#if !video && canvasRead && canvasState === null}
                 <DropdownMenu.Item
