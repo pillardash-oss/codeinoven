@@ -7,6 +7,7 @@
     Download,
     Ellipsis,
     Film,
+    FolderTree,
     Frame,
     GlobeCode,
     History,
@@ -884,6 +885,24 @@
    * the project, scope and machine the design lives on, an absolute path when it
    * does not, and the way to reach another Oven when the design is on one.
    */
+  /**
+   * Show the design folder in the project's file tree: it opens the files
+   * surface, expands the ancestors and selects the entry, so the design
+   * lands in the same tree every other path citation uses instead of a
+   * folder the user has to find again.
+   */
+  async function revealDesignPath(directory: string): Promise<void> {
+    if (directory === '') return
+    try {
+      const { revealProjectFileFromAbsolutePath } = await import('$lib/reveal-file')
+      const revealed = await revealProjectFileFromAbsolutePath(projectId, directory)
+      if (!revealed) toast.error('The design could not be revealed in the file tree.')
+    } catch (failure) {
+      logRendererError('The design could not be revealed in the file tree.', failure)
+      toast.error('The design could not be revealed in the file tree.')
+    }
+  }
+
   async function copyDesignPath(directory: string, entry: string | null = null): Promise<void> {
     if (directory === '') return
     const payload = designCopyFor(directory, entry)
@@ -1452,6 +1471,14 @@
               >
                 <Copy size={13} class="shrink-0 text-muted" />
                 Copy path
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={selected.directory === ''}
+                onSelect={() => void revealDesignPath(selected.directory)}
+              >
+                <FolderTree size={13} class="shrink-0 text-muted" />
+                Reveal path
               </DropdownMenu.Item>
               {#if video}
                 <DropdownMenu.Item
