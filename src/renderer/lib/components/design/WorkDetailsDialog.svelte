@@ -23,25 +23,30 @@
     onClose: () => void
     onUpdated: (directory: string, moved: number) => Promise<void>
   } = $props()
-  let draft = $state('')
+  let rootDraft = $state('')
+  let nameDraft = $state('')
   let thisOnly = $state(true)
   let busy = $state(false)
   let error = $state('')
   const noun = $derived(kind === 'video' ? 'video' : 'design')
   const renaming = $derived(mode === 'rename')
-  const slug = $derived(sanitizeWorkName(draft))
   const name = $derived(directory.split('/').at(-1) ?? '')
+  const nameChanged = $derived(nameDraft !== name)
+  const slug = $derived(nameChanged ? sanitizeWorkName(nameDraft) : name)
   const target = $derived(
-    renaming ? `${directory.split('/').slice(0, -1).join('/')}/${slug}` : `${draft.trim()}/${name}`
+    renaming
+      ? `${directory.split('/').slice(0, -1).join('/')}/${slug}`
+      : `${rootDraft.trim()}/${slug}`
   )
 
   onMount(() => {
-    draft = mode === 'rename' ? name : directory.split('/').slice(0, -1).join('/') || root
+    rootDraft = directory.split('/').slice(0, -1).join('/') || root
+    nameDraft = name
     thisOnly = mode !== 'all'
   })
 
   async function save(): Promise<void> {
-    if (busy || draft.trim() === '' || (renaming && slug === '')) return
+    if (busy || slug === '' || (!renaming && rootDraft.trim() === '')) return
     busy = true
     error = ''
     try {
@@ -49,7 +54,8 @@
         kind,
         directory,
         thisOnly,
-        ...(renaming ? { name: draft } : { root: draft.trim() })
+        ...(!renaming ? { root: rootDraft.trim() } : {}),
+        ...(nameChanged ? { name: nameDraft } : {})
       })
       await onUpdated(result.directory, result.moved)
       onClose()
@@ -69,18 +75,25 @@
   }}
 >
   <div class="space-y-4 p-4">
+    {#if !renaming}
+      <label class="block space-y-2 text-sm">
+        <span>Save folder relative to this project</span>
+        <input
+          class="w-full border border-border bg-elevated px-2 py-1.5 font-mono text-sm text-foreground outline-none focus:border-primary"
+          bind:value={rootDraft}
+          disabled={busy}
+        />
+      </label>
+    {/if}
     <label class="block space-y-2 text-sm">
-      <span
-        >{renaming
-          ? `${noun === 'design' ? 'Design' : 'Video'} name`
-          : 'Save folder relative to this project'}</span
-      >
+      <span>{noun === 'design' ? 'Design name' : 'Video name'}</span>
       <input
         class="w-full border border-border bg-elevated px-2 py-1.5 font-mono text-sm text-foreground outline-none focus:border-primary"
-        bind:value={draft}
+        bind:value={nameDraft}
         disabled={busy}
       />
     </label>
+    <p class="text-xs text-muted">The folder name is automatically made URL friendly.</p>
     {#if !renaming}
       <Switch
         bind:checked={thisOnly}
@@ -95,9 +108,6 @@
       </p>
     {/if}
     <p class="break-all font-mono text-xs text-muted">{target}</p>
-    {#if renaming}<p class="text-xs text-muted">
-        The folder name is automatically made URL friendly.
-      </p>{/if}
     {#if error}<p class="text-xs text-danger" role="alert">{error}</p>{/if}
   </div>
   {#snippet footer()}
@@ -111,8 +121,8 @@
       type="button"
       data-modal-primary-action
       class="bg-primary px-3 py-1.5 text-xs text-on-primary disabled:opacity-40"
-      disabled={busy || draft.trim() === '' || (renaming && slug === '')}
-      onclick={() => void save()}>{busy ? 'Saving…' : renaming ? 'Rename' : 'Save path'}</button
+      disabled={busy || slug === '' || (!renaming && rootDraft.trim() === '')}
+      onclick={() => void save()}>{busy ? 'Saving…' : renaming ? 'Rename' : 'Save changes'}</button
     >
   {/snippet}
 </Modal>
