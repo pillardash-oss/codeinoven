@@ -329,7 +329,10 @@
             {:else if coordinator.panel.component === 'design'}
               {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
                 {#key `${coordinator.projectId}:${coordinator.threadId}:${coordinator.panel.props.kind ?? 'session'}`}
-                  <DesignCoordinatorPanel {...coordinator.panel.props} />
+                  <DesignCoordinatorPanel
+                    {...coordinator.panel.props}
+                    active={active && contextSidebarState.sidebarVisible}
+                  />
                 {/key}
               {/await}
             {:else}

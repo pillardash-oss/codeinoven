@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
+  import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import {
     Check,
     ChevronDown,
@@ -108,9 +110,33 @@
      * so it sets the kind here.
      */
     kind?: AuthoredWorkKind
+    active?: boolean
   }
 
-  let { projectId, threadId, kind: forcedKind }: Props = $props()
+  let { projectId, threadId, kind: forcedKind, active = true }: Props = $props()
+
+  /** Export playback participates in the same sound registry as native views. */
+  const attachExport: Attachment<HTMLVideoElement> = (element) => {
+    const audioId = `video-export:${projectId}:${threadId}`
+    const report = (): void => {
+      browserAudio.reportThreadTab(
+        audioId,
+        threadId,
+        projectId,
+        !element.paused && !element.ended && !element.muted && element.volume > 0
+      )
+    }
+    const events = ['play', 'pause', 'ended', 'volumechange'] as const
+    for (const event of events) element.addEventListener(event, report)
+    $effect(() => {
+      if (!active) element.pause()
+    })
+    return () => {
+      element.pause()
+      for (const event of events) element.removeEventListener(event, report)
+      browserAudio.forget(audioId)
+    }
+  }
 
   /**
    * How wide a screen is pictured at.
@@ -1084,7 +1110,7 @@
         the composition's own aspect ratio inside this pane, so the frame is whole
         at every panel size.
       -->
-      <CompositionStage tab={liveTab} />
+      <CompositionStage tab={liveTab} {active} />
     {:else if !playable}
       <div
         class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
@@ -1108,6 +1134,7 @@
       >
         {#if exportPath}
           <video
+            {@attach attachExport}
             class="min-h-0 flex-1 object-contain"
             src={`appfile://project/${projectId}/${exportPath}`}
             controls

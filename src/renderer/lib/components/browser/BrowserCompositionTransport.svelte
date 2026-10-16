@@ -16,9 +16,11 @@
      * has anyone to show the playhead to, so nothing runs while it is false.
      */
     active: boolean
+    /** Board playback must stop when its surface goes away. */
+    pauseWhenHidden?: boolean
   }
 
-  let { tabId, composition, active }: Props = $props()
+  let { tabId, composition, active, pauseWhenHidden = false }: Props = $props()
 
   /** How often the scrubber catches up with the page it is driving. */
   const POLL_MS = 250
@@ -112,9 +114,14 @@
   // cannot restart the timer it just fed.
   $effect(() => {
     if (!active) return
+    const playbackTabId = tabId
+    const pauseOnHide = pauseWhenHidden
     void refresh()
     const timer = setInterval(() => void refresh(), POLL_MS)
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      if (pauseOnHide) void invoke('browser:transport', playbackTabId, 'pause', 0).catch(() => {})
+    }
   })
 </script>
 

@@ -25,6 +25,8 @@
     /** Renders as plain text instead of `icon`   e.g. the message-history count. */
     countLabel?: string
     active: boolean
+    /** The work behind this item is emitting sound. */
+    playing?: boolean
     /** Renders a small status dot on the icon   e.g. pending memory proposals.
      *  Colours and variants flow through the global `ThreadStatusTone` palette
      *  (same vocabulary as thread rows and `StatusBadge`), so the rail can
@@ -55,6 +57,7 @@
 <script lang="ts">
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import RailHighlight from './RailHighlight.svelte'
+  import RailAudioBadge from './RailAudioBadge.svelte'
 
   interface Props {
     /** Ordered groups. Empty groups are dropped so no stray hairline renders. */
@@ -121,13 +124,13 @@
             {#if item.appearance.iconUrl}
               <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 object-contain" />
             {:else}
-              <span
-                class="h-3.5 w-3.5"
-                style="background-color: {item.appearance.color}"
-              ></span>
+              <span class="h-3.5 w-3.5" style="background-color: {item.appearance.color}"></span>
             {/if}
           {:else if Icon}
             <Icon size={16} strokeWidth={1.8} />
+          {/if}
+          {#if item.playing}
+            <RailAudioBadge label={item.label} />
           {/if}
           {#if item.badge}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">

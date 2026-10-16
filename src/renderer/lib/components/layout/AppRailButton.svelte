@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Volume2 } from '@lucide/svelte'
+  import RailAudioBadge from './RailAudioBadge.svelte'
   import type { Component, Snippet } from 'svelte'
 
   interface Props {
@@ -118,14 +118,7 @@
          hiding the other. It is a status, not a control: the mute toggle lives
          on the tab row the sound actually belongs to. Like the badge row above,
          it clears the glyph band on the way out, so the item's icon reads. -->
-    <span
-      class="absolute -bottom-2 -right-2 flex h-3.5 w-3.5 items-center justify-center border border-border bg-elevated text-info shadow-sm"
-      role="status"
-      aria-label={`${label} is playing audio`}
-      title={`${label} is playing audio`}
-    >
-      <Volume2 size={9} strokeWidth={2.6} aria-hidden="true" />
-    </span>
+    <RailAudioBadge {label} />
   {/if}
   {@render badge?.()}
 </button>

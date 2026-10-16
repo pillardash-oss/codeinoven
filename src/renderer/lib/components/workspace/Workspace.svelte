@@ -25,6 +25,7 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import {
     AUTHORED_WORK_ICON_BY_KIND,
@@ -1324,6 +1325,7 @@
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in this project`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
           active: authoredWorkActive(kind),
+          playing: kind === 'video' && browserAudio.videoIsPlaying(selectedThread.id),
           onSelect: () => openAuthoredWork(kind)
         })
       }

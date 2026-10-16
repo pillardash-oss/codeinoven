@@ -30,9 +30,10 @@
    */
   interface Props {
     tab: VideoCompositionTab
+    active?: boolean
   }
 
-  let { tab }: Props = $props()
+  let { tab, active = true }: Props = $props()
 
   const surface = 'panel' as const
   // The tab identity is snapshotted at construction: the key is this stage's entry
@@ -193,7 +194,12 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col overflow-hidden border border-border bg-surface">
-  <BrowserCompositionTransport tabId={tab.tabId} composition={tab} active={placed} />
+  <BrowserCompositionTransport
+    tabId={tab.tabId}
+    composition={tab}
+    active={active && placed}
+    pauseWhenHidden
+  />
   <div
     {@attach attachHost}
     data-native-composition-stage
