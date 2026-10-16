@@ -67,6 +67,18 @@
         transform-origin: center;
       }
 
+      /*
+       * The sheen: a band of auric light stencilled to the mark, falling down the
+       * logo and rising back up on a loop. Drawn, not stored. Parked clear above
+       * the mark is the base style, so animations off and reduced motion show the
+       * resolved mark unlit rather than a band stuck across it.
+       */
+      .sheen-band {
+        transform-box: fill-box;
+        transform-origin: center;
+        transform: translateY(-52px) rotate(14deg);
+      }
+
       @media (prefers-reduced-motion: no-preference) {
         .draw-c,
         .draw-o,
@@ -107,6 +119,22 @@
 
         .draw-dot {
           animation-name: splashDrawDot;
+        }
+
+        .sheen-band {
+          /*
+           * One pass down and back up, repeating until the window paints over the
+           * splash. `alternate` is the whole ping-pong. It starts as the draw
+           * resolves, and the band is clear of the mark at both ends of the
+           * travel, so the turn happens while the mark is unlit.
+           */
+          animation-name: splashSheenFall;
+          animation-duration: 1.15s;
+          animation-timing-function: cubic-bezier(0.33, 0, 0.67, 1);
+          animation-delay: 1.15s;
+          animation-iteration-count: infinite;
+          animation-direction: alternate;
+          animation-fill-mode: both;
         }
       }
 
@@ -153,6 +181,15 @@
         }
       }
 
+      @keyframes splashSheenFall {
+        0% {
+          transform: translateY(-52px) rotate(14deg);
+        }
+        100% {
+          transform: translateY(116px) rotate(14deg);
+        }
+      }
+
       .splash-meta {
         display: flex;
         flex-direction: column;
@@ -179,6 +216,34 @@
         role="img"
         aria-label="CodeInOven C/O logo"
       >
+        <defs>
+          <!-- A vertical fade, so the band has soft edges instead of hard ones. -->
+          <linearGradient id="splashSheenWarm" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#d4af37" stop-opacity="0" />
+            <stop offset="0.5" stop-color="#d4af37" stop-opacity="0.5" />
+            <stop offset="1" stop-color="#d4af37" stop-opacity="0" />
+          </linearGradient>
+          <!-- The stencil: the mark's own geometry, so the light can only land on
+               the mark and never beside it. -->
+          <mask
+            id="splashSheenStencil"
+            maskUnits="userSpaceOnUse"
+            x="10"
+            y="10"
+            width="80"
+            height="76"
+          >
+            <rect x="10" y="10" width="80" height="76" fill="#000000" />
+            <g fill="#ffffff" stroke="#ffffff" stroke-linecap="square" stroke-linejoin="miter">
+              <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke-width="8" />
+              <path d="M61 23h23v50H61z" fill="none" stroke-width="7" />
+              <rect x="58" y="45" width="29" height="6" />
+              <!-- stroke="none" as on the mark, or the stencil's dot is half a
+                   unit fatter and lights a ring of light around it. -->
+              <circle cx="84" cy="48" r="5" stroke="none" />
+            </g>
+          </mask>
+        </defs>
         <g fill="none" stroke="#f5f4f0" stroke-linecap="square" stroke-linejoin="miter">
           <path
             class="draw-stroke draw-c"
@@ -189,6 +254,19 @@
           <path class="draw-stroke draw-o" d="M61 23h23v50H61z" stroke-width="7" pathLength="1" />
           <rect class="draw-slot" x="58" y="45" width="29" height="6" fill="#f5f4f0" />
           <circle class="draw-dot" cx="84" cy="48" r="5" fill="#d4af37" stroke="none" />
+        </g>
+        <!-- The sheen, stencilled to the mark. The stencil sits on this group and
+             the tilt on the band inside it, because a mask referenced by a tilted
+             element is resolved in that tilted space and would tilt with it. -->
+        <g class="sheen" mask="url(#splashSheenStencil)">
+          <rect
+            class="sheen-band"
+            x="8"
+            y="0"
+            width="88"
+            height="34"
+            fill="url(#splashSheenWarm)"
+          />
         </g>
       </svg>
       <div class="splash-meta" aria-label="Application version">
