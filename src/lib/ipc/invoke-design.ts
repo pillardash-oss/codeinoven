@@ -39,6 +39,15 @@ export const invokeDesignContract = {
   'video:cancel': {} as Contract<[projectId: string, threadId: string, jobId: string], void>,
   'video:export': {} as Contract<[projectId: string, threadId: string, directory: string], unknown>,
   /**
+   * The export one composition already has, as a project-relative path, or null
+   * when it has never been exported.
+   *
+   * Read rather than remembered: the board asks this for the folder in front, so
+   * an export made in another thread of the same project, or before a restart,
+   * still answers for the composition that produced it.
+   */
+  'video:latestExport': {} as Contract<[projectId: string, directory: string], string | null>,
+  /**
    * A waveform picture for one audio source's used range, as a data URL.
    *
    * A timeline draws one band per audio track, and a band wants a picture of the

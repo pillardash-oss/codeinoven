@@ -11,7 +11,7 @@ import {
   type VideoExportEncoderSupport
 } from './video-export-encoder'
 import { checkVideoExport, keepFailedExport, type VideoExportCheck } from './video-export-check'
-import { videoFile, readVideoStudio, videoOutput } from './video-paths'
+import { videoFile, readVideoStudio, videoExportFolder } from './video-paths'
 import { loadCompositionManifest } from './video-manifest'
 import { startVideoProcess } from './video-process'
 import type { VideoJobContext } from './video-jobs'
@@ -120,7 +120,9 @@ export async function exportVideo(
   if (manifest.width * manifest.height > 3840 * 2160)
     throw new Error('Export supports up to 4K pixel count')
   const studio = await readVideoStudio(folder)
-  const directory = await videoOutput(root, 'exports')
+  // Named from the composition rather than minted fresh, so this export stays
+  // findable by anything that holds the composition, in this run or a later one.
+  const directory = await videoExportFolder(root, relative(root, folder))
   const partial = join(directory, 'render.partial.mp4'),
     final = join(directory, 'render.mp4'),
     failed = join(directory, 'render.failed.mp4')

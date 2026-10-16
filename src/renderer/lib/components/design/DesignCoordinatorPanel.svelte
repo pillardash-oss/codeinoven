@@ -43,6 +43,7 @@
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
@@ -252,6 +253,16 @@
    * stays empty for it.
    */
   let videoJobs = $state.raw<VideoJob[]>([])
+  /**
+   * The export the composition in front already has on disk, as a project-relative
+   * path.
+   *
+   * The job list is this process's memory of this thread's work, so it cannot
+   * answer for a composition exported in another thread of the same project or
+   * before a restart. This is that answer, read from the composition itself, and it
+   * is what the board stands on when no job of its own describes an export.
+   */
+  let savedExport = $state<string | null>(null)
   /** Whether the studio controls hold unsaved edits, which a reload would discard. */
   let studioDirty = $state(false)
   /** Bumped to remount the video timeline and controls, so a refresh re-reads them. */
@@ -317,7 +328,10 @@
     const files = videoJobs.flatMap((job) =>
       job.operation === 'export' && job.state === 'completed' ? job.files : []
     )
-    return files.at(-1) ?? null
+    // A job of this session is the freshest answer there can be, because it is
+    // written the moment the export finishes. The composition's own export stands
+    // behind it for every case a job record cannot cover.
+    return files.at(-1) ?? savedExport
   })
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
@@ -349,12 +363,24 @@
    *
    * A rail-opened board lists the project's folders for its own kind, so the
    * board shows the work whether or not the thread on screen has any; a session
-   * board keeps the listing main answered alongside its own record. */
-  let items = $derived(
-    forcedKind !== undefined
+   * board keeps the listing main answered alongside its own record.
+   *
+   * A composition is the exception, because a video is watched rather than owned:
+   * it belongs to its project, so every thread of that project lists the same
+   * compositions and can watch what another thread made. The read is keyed by this
+   * project's id, which is also what keeps another project's work out of this
+   * panel entirely. The session's own answer stands in until that read lands, so
+   * the board never blanks while it waits.
+   */
+  let items = $derived.by(() => {
+    if (video) {
+      const project = projectWorkState.itemsFor(projectId, 'video')
+      return project.length > 0 ? project : (designState?.items ?? [])
+    }
+    return forcedKind !== undefined
       ? projectWorkState.itemsFor(projectId, forcedKind)
       : (designState?.items ?? [])
-  )
+  })
   /** How many designs sit behind the "Others" trigger. */
   let otherCount = $derived(Math.max(0, items.length - 1))
   /** What the trigger and its menu are called, in this board's own words. */
@@ -599,9 +625,11 @@
    *
    * A composition has no screens, so its single picture keeps coming from the one
    * thumbnail call, which is also what reports the tab the mute button drives.
-   * Once the board is playing the composition in its own view, that call is
-   * skipped: the live view is on screen, and a poster would reload it to a still
-   * under the playhead. The mute then drives the view the user is watching.
+   * That call is skipped only once the board is actually playing the composition
+   * in its own view: a poster then would reload the page to a still under the
+   * playhead. It is taken precisely when the live view has not arrived, so a board
+   * waiting on its stage shows the composition's own frame instead of claiming it
+   * has captured nothing.
    */
   async function loadGallery(force = false): Promise<void> {
     if (selected.directory === '' || selectedMissing) {
@@ -610,7 +638,7 @@
     }
     galleryBusy = true
     try {
-      if (video && liveEditing && boardTabId !== '') {
+      if (video && liveTab !== null) {
         gallery = []
         tabId = boardTabId
       } else if (video) {
@@ -722,6 +750,11 @@
     compositionAsked = directory
     composing = directory
     try {
+      // The stage is fed by `browser:state`, and that listener only exists once
+      // the browser runtime is wired. Wiring it before the open is what makes the
+      // board's own composition arrive: without it the open succeeds in main, the
+      // store never hears about the view, and the stage has nothing to mount.
+      await loadBrowser()
       const opened = await invoke(
         'design:open',
         projectId,
@@ -732,6 +765,10 @@
         forcedKind
       )
       boardTabId = opened.tabId
+      // A view main already holds on this composition is answered with `reused`
+      // and not reloaded, so no state follows the open. Reading the view's own
+      // state closes that gap rather than waiting for a report that never comes.
+      await videoTimelineState.seed(opened.tabId)
       compositionError = ''
     } catch (failure) {
       compositionError =
@@ -969,6 +1006,30 @@
       videoJobs = await invoke('video:jobs', projectId, threadId)
     } catch (failure) {
       logRendererError('The video jobs could not be read.', failure)
+    }
+    await readSavedExport()
+  }
+
+  /**
+   * Read the export the composition in front already has.
+   *
+   * Asked on every job poll rather than once per folder, because an export the
+   * agent runs from another thread writes this file with no job of ours to report
+   * it, and the board should stand on it as soon as it exists. A read that fails,
+   * or one that is answered for a folder the user has already left, leaves the
+   * answer it had rather than blanking a board the user is watching.
+   */
+  async function readSavedExport(): Promise<void> {
+    const directory = selected.directory
+    if (!video || directory === '') {
+      savedExport = null
+      return
+    }
+    try {
+      const path = await invoke('video:latestExport', projectId, directory)
+      if (selected.directory === directory) savedExport = path
+    } catch (failure) {
+      logRendererError('The export this composition has could not be read.', failure)
     }
   }
 
@@ -1927,7 +1988,7 @@
         </p>
         <button
           type="button"
-          class="ml-auto flex items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
+          class="flex items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
           onclick={() => (removeRequested = selectedItem)}
           ><Trash2 size={13} />Remove from panel</button
         >

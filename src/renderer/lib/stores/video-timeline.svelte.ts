@@ -2,6 +2,7 @@ import { SvelteMap } from 'svelte/reactivity'
 import type {
   BrowserCompositionPlayback,
   BrowserCompositionTab,
+  BrowserPageState,
   BrowserTransportCommand
 } from '$shared/ipc-contract'
 import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -57,26 +58,56 @@ class VideoTimelineState {
   start(): void {
     if (this.started) return
     this.started = true
-    subscribe('browser:state', (state) => {
-      const key = compositionKey(state.projectId, state.threadId)
-      if (state.composition) {
-        const tab: VideoCompositionTab = {
-          ...state.composition,
-          tabId: state.tabId,
-          projectId: state.projectId,
-          threadId: state.threadId,
-          url: state.url,
-          boxId: state.boxId
-        }
-        this.tabs.set(key, tab)
-        this.byTabId.set(state.tabId, tab)
-        return
+    subscribe('browser:state', (state) => this.adopt(state))
+  }
+
+  /**
+   * Record one tab's page state, or forget the composition it no longer shows.
+   *
+   * Public because a push is not always available. A view main already holds on a
+   * composition is answered with `reused` and deliberately not reloaded, so no
+   * `browser:state` follows the open and a renderer that was not listening when
+   * that state was first published would never learn about the composition at all.
+   * The board reads that tab's state itself and hands it here instead, so the two
+   * arrival routes fill the same entries.
+   */
+  adopt(state: BrowserPageState): void {
+    const key = compositionKey(state.projectId, state.threadId)
+    if (state.composition) {
+      const tab: VideoCompositionTab = {
+        ...state.composition,
+        tabId: state.tabId,
+        projectId: state.projectId,
+        threadId: state.threadId,
+        url: state.url,
+        boxId: state.boxId
       }
-      // A tab that is no longer showing a composition must not keep answering
-      // for one: the folder may have been replaced by a normal page.
-      if (this.tabs.get(key)?.tabId === state.tabId) this.tabs.delete(key)
-      this.byTabId.delete(state.tabId)
-    })
+      this.tabs.set(key, tab)
+      this.byTabId.set(state.tabId, tab)
+      return
+    }
+    // A tab that is no longer showing a composition must not keep answering
+    // for one: the folder may have been replaced by a normal page.
+    if (this.tabs.get(key)?.tabId === state.tabId) this.tabs.delete(key)
+    this.byTabId.delete(state.tabId)
+  }
+
+  /**
+   * Read one view's own page state and record it.
+   *
+   * The pull half of {@link adopt}, for a view whose state was published before
+   * this store was listening. A tab that went away between the open and this read
+   * reports nothing, and a view whose composition is not recognised yet reports no
+   * composition: both leave the store as it was, so the push that follows a first
+   * load is what settles them.
+   */
+  async seed(tabId: string): Promise<void> {
+    try {
+      const state = await invoke('browser:pageState', tabId)
+      if (state !== null) this.adopt(state)
+    } catch {
+      // A view that is gone is not this store's failure to report.
+    }
   }
 
   /** The composition this conversation is showing, or null when it shows none. */
