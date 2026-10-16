@@ -185,6 +185,23 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **A new assistant introduces itself, and the Getting started thread stops
+  looking like a place to give it work.** An assistant created from the form used
+  to sit silent until the user spoke first, and the interview then asked for the
+  name and the personality the user had just typed. It now opens the conversation
+  itself, told its own name and personality: it greets the user in those words,
+  asks the one thing it needs to talk to them (what they want to be called, asked
+  through the question card and nothing else about them), says it is ready, and
+  says plainly that this thread is where they teach it and reshape it. A task goes
+  to a new one, and the copy names the app's own affordance for that (the New task
+  button in the header, or its shortcut) instead of inviting a message here. The
+  post-setup next-steps message follows the same rule and leads with the call to
+  action that fits how the assistant runs: fallback models for one on a clock,
+  starting a task for one that runs when asked. The interview no longer asks again
+  for a name and personality that are already settled, and the assistant's own
+  empty state on that thread points at a new task rather than at sending a
+  message.
+
 - **A thread keeps a marker for every kind of work it has authored.** A row drew
   only the thread's current design or video session, so a thread that designed
   something and later cut a video about it lost its design mark. Threads now

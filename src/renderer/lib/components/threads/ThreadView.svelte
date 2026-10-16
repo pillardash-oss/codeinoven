@@ -6,6 +6,8 @@
     shouldMountWorkingTrace
   } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
+  import { formatKeyCombo } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
@@ -7253,6 +7255,12 @@
    */
   const assistantUnnamed = $derived(assistantName === ASSISTANT_PLACEHOLDER_NAME)
 
+  /**
+   * The app's own shortcut for starting a task with an assistant, for the copy
+   * that sends the user to a new task rather than a message in this thread.
+   */
+  const assistantNewTaskShortcut = $derived(formatKeyCombo(keymapState.keysFor('assistant-new-task')))
+
   /** The assistant's own connection labels, for the recap card's kept ones. */
   const existingAssistantConnections = $derived(
     assistant?.connections.map((connection) => connection.label) ?? []
@@ -13974,6 +13982,10 @@
                     {:else if assistantName && !assistantKnowledgeComplete}
                       Tell {assistantName} what you want it to handle. It asks what it needs, and writes
                       down what it learns so every run follows it.
+                    {:else if assistantName && assistantSetupThread}
+                      This conversation is where you teach {assistantName} and change what it knows. To
+                      give it a task, start a new one with the New task button in the header, or press
+                      {assistantNewTaskShortcut}.
                     {:else if assistantName}
                       This task runs on what <span class="text-foreground">{assistantName}</span> knows.
                       Send a message to run it now, or change anything in What it knows.

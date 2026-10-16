@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  ASSISTANT_NEXT_STEPS_PROMPT,
-  isAssistantNextStepsPrompt
-} from '$shared/assistant-next-steps'
+import { assistantNextStepsPrompt, isAssistantNextStepsPrompt } from '$shared/assistant-next-steps'
 import {
   composeAssistantInstruction,
   assistantRunContext,
@@ -141,11 +138,25 @@ describe('assistantRunPrompt', () => {
   })
 })
 
-describe('isAssistantNextStepsPrompt', () => {
-  it('matches only the app-owned next-steps message', () => {
-    expect(isAssistantNextStepsPrompt(ASSISTANT_NEXT_STEPS_PROMPT)).toBe(true)
+describe('assistantNextStepsPrompt', () => {
+  it('matches only the app-owned next-steps message, in both variants', () => {
+    for (const scheduled of [true, false]) {
+      const prompt = assistantNextStepsPrompt(scheduled)
+      expect(isAssistantNextStepsPrompt(prompt)).toBe(true)
+      expect(isAssistantNextStepsPrompt(`${prompt} `)).toBe(false)
+    }
     expect(isAssistantNextStepsPrompt('Run this scheduled task now: Getting started')).toBe(false)
-    expect(isAssistantNextStepsPrompt(`${ASSISTANT_NEXT_STEPS_PROMPT} `)).toBe(false)
+  })
+  it('leads a scheduled assistant with fallbacks and an on-demand one with starting a task', () => {
+    expect(assistantNextStepsPrompt(true)).toContain('fallback models')
+    expect(assistantNextStepsPrompt(true)).not.toContain('New task button')
+    expect(assistantNextStepsPrompt(false)).toContain('New task button')
+    expect(assistantNextStepsPrompt(false)).not.toContain('fallback models')
+  })
+  it('never invites the user to run the assistant from the Getting started thread', () => {
+    for (const scheduled of [true, false]) {
+      expect(assistantNextStepsPrompt(scheduled)).toContain('not where work is run')
+    }
   })
 })
 

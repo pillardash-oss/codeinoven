@@ -4424,6 +4424,15 @@
     })
     await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
     await openAssistantKnowledgeFor(assistant)
+    // The assistant was given its name and personality on the form, so it opens
+    // the conversation itself: it greets the user by using them, asks what to
+    // call them, and says where a task goes. A failed opening turn is not fatal,
+    // because the conversation is open and the user can send the first message.
+    try {
+      await assistants.startManualSetup(assistant.id)
+    } catch (error) {
+      reportError(error, 'The assistant could not introduce itself')
+    }
   }
 
   /**
