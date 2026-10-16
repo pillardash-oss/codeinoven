@@ -20,6 +20,17 @@ export interface ThreadStateCounts {
   unread: number
   /** Threads parked on the user (a permission, question, secret, or review). */
   attention: number
+  /**
+   * Threads holding a finished artifact the user has not reviewed yet: a ready
+   * specification, or an audit report waiting on them.
+   *
+   * The review-ready state is its own count rather than part of attention because
+   * nothing is blocked on an answer and no work is running: the artifact is done
+   * and the next move is the user's. Without it a project whose only news is a
+   * ready spec or report (a thread the audit just parked on `spec`) showed an
+   * empty strip, which is exactly the traceability gap the strip exists to close.
+   */
+  spec: number
   /** Threads parked on a scheduled retry (a rate limit or provider wait). */
   retry: number
   /** Threads that ended in failure. */
@@ -34,13 +45,14 @@ export interface ThreadStateCounts {
  * user asked for whatever it parked on before. A failure is its own bucket
  * rather than part of attention: the number beside a red mark is a total, and a
  * failure nobody has opened is still a failure. A scheduled retry is a wait, not
- * work, and `awaiting_approval` is the thread parked on the user. Every other
+ * work, `awaiting_approval` is the thread parked on the user, and `spec` is the
+ * thread holding a finished artifact they have not reviewed yet. Every other
  * status is settled, and reports only on the unread axis.
  */
-export type ThreadStateBucket = 'working' | 'attention' | 'retry' | 'error' | 'settled'
+export type ThreadStateBucket = 'working' | 'attention' | 'spec' | 'retry' | 'error' | 'settled'
 
 export function emptyThreadStateCounts(): ThreadStateCounts {
-  return { working: 0, unread: 0, attention: 0, retry: 0, error: 0 }
+  return { working: 0, unread: 0, attention: 0, spec: 0, retry: 0, error: 0 }
 }
 
 /**
@@ -63,6 +75,7 @@ export function threadStateBucket(thread: Thread, now = Date.now()): ThreadState
   if (thread.status === 'working-paused') return 'retry'
   if (thread.status === 'failed') return 'error'
   if (thread.status === 'awaiting_approval') return 'attention'
+  if (thread.status === 'spec') return 'spec'
   return 'settled'
 }
 
@@ -74,6 +87,9 @@ function addThreadStateCount(counts: ThreadStateCounts, thread: Thread, now: num
       break
     case 'attention':
       counts.attention += 1
+      break
+    case 'spec':
+      counts.spec += 1
       break
     case 'retry':
       counts.retry += 1
@@ -92,15 +108,17 @@ function addThreadStateCount(counts: ThreadStateCounts, thread: Thread, now: num
 }
 
 /**
- * Count threads by the state a sidebar row reports. Working, attention, retry,
- * and error are mutually exclusive: a thread lands in exactly one of them, so a
- * thread is never double-counted. Unread is the separate axis described above.
+ * Count threads by the state a sidebar row reports. Working, attention, spec,
+ * retry, and error are mutually exclusive: a thread lands in exactly one of
+ * them, so a thread is never double-counted. Unread is the separate axis
+ * described above.
  *
  * Error counts every failed thread, read or not. Working reads the same rule the
  * rail's badge does, so a row's badge can never disagree with the rail, and
  * retry is the `working-paused` status, the same threads the rail counts as
  * "waiting to retry"; without it an assistant parked on a provider retry wore no
- * indicator at all.
+ * indicator at all. Spec counts the threads holding a finished artifact awaiting
+ * review, which is the state an audit report ready lands its thread on.
  *
  * For a figure that has to agree with the rail across every project at once, use
  * {@link countThreadStatesByProject}: it counts the one in-memory thread list
@@ -189,6 +207,7 @@ export function hasThreadStateCounts(counts: ThreadStateCounts): boolean {
     counts.working > 0 ||
     counts.unread > 0 ||
     counts.attention > 0 ||
+    counts.spec > 0 ||
     counts.retry > 0 ||
     counts.error > 0
   )

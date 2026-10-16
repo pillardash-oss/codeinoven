@@ -173,6 +173,32 @@ export function canMarkThreadUnread(status: ThreadStatus): boolean {
 }
 
 /**
+ * Whether this thread is parked on `spec` for an independent-audit report rather
+ * than for a specification.
+ *
+ * A ready report parks its thread on `spec`, exactly as a ready specification
+ * does, because both are finished artifacts waiting on the user. The audit's own
+ * card is the announcement for that landing ("Independent audit ready", naming
+ * the auditor's finding), so every surface that would announce "a spec is ready"
+ * for the status stands down for this one: two notices for one moment read as
+ * two events. The spec-based implementation audit keeps the generic notice   it
+ * has no card of its own.
+ *
+ * `auditState` is part of the test on purpose: dismissing the report clears it
+ * while the status stays `spec`, and from that moment the audit card no longer
+ * speaks for the thread.
+ */
+export function threadAwaitsIndependentAuditReview(
+  thread: Pick<Thread, 'status' | 'independentAudit' | 'auditState'>
+): boolean {
+  return (
+    thread.status === 'spec' &&
+    thread.independentAudit === true &&
+    thread.auditState === 'report_ready'
+  )
+}
+
+/**
  * Whether a settled thread reads as unread until the user opens it.
  *
  * A `completed` thread the user has not read shows the unread dot and sits in

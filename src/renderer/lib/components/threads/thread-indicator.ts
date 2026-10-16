@@ -1,3 +1,5 @@
+import type { Thread } from '$shared/types'
+
 /**
  * The single indicator slot a thread row can show. Speech, browser sound and
  * computer use compete for it, and exactly one of them wins.
@@ -13,9 +15,10 @@
  * must say which thread is making the noise the user is hearing.
  *
  * `engineering` is the durable Engineering mark: the thread has engaged the
- * Engineering lifecycle at least once. It is not an action in flight, so it
- * carries the oldest candidate time and yields the slot to any live action
- * (recording, speaking, transcription, computer use, browser sound)   the
+ * Engineering lifecycle, or the independent audit that is the other half of the
+ * same tooling (see {@link threadUsesEngineeringTooling}). It is not an action in
+ * flight, so it carries the oldest candidate time and yields the slot to any live
+ * action (recording, speaking, transcription, computer use, browser sound)   the
  * transient action is the more urgent fact, and the Engineering mark returns
  * the moment the slot is free.
  */
@@ -52,4 +55,27 @@ export function resolveThreadIndicator(
     if (winner === null || candidate.at > winner.at) winner = candidate
   }
   return winner?.indicator ?? null
+}
+
+/**
+ * Whether a thread has engaged Engineering tooling at all, which is what the
+ * row's Engineering mark reports.
+ *
+ * The durable `engineering` marker covers the Engineering lifecycle. The
+ * independent (spec-less) audit is the other half of the same tooling and is
+ * deliberately locked out of the lifecycle modes, so it never sets that marker:
+ * it carries its own durable pair instead (`independentAudit` while the switch
+ * is on, `independentAuditInitialized` once the first run starts). A thread
+ * whose audit report is waiting must wear the same mark the lifecycle threads
+ * wear, or the one moment it is asking for the user is the moment it reads as an
+ * ordinary conversation.
+ */
+export function threadUsesEngineeringTooling(
+  thread: Pick<Thread, 'engineering' | 'independentAudit' | 'independentAuditInitialized'>
+): boolean {
+  return (
+    thread.engineering === true ||
+    thread.independentAudit === true ||
+    thread.independentAuditInitialized === true
+  )
 }

@@ -18636,6 +18636,16 @@ export class ChatEngine {
         await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
           read: false
         })
+        // Park the coordinator on `spec` while the report is under review: the
+        // same settle the implementation and Achievement audits end on, because
+        // a ready report is a finished artifact waiting on the user. Landing on
+        // `completed` instead read as done, so the audited thread stayed in the
+        // Done group with no spec mark and no review-ready count on its project
+        // strip. `setStatus` also advances the thread's activity and clears its
+        // manual sort anchor, so the report bubbling up is the same write.
+        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
+          read: false
+        })
         await this.loadMessages(projectId, auditorThread.id)
         await this.notifyIndependentAuditCompletion(projectId, coordinatorThreadId, 'completed')
         return {
@@ -18710,6 +18720,11 @@ export class ChatEngine {
         version: report.version
       })
       await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+        read: false
+      })
+      // Same settle as the validated path above: a partial report is still a
+      // report the user has to read, so its thread parks on `spec` too.
+      await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
       await this.loadMessages(projectId, auditorThread.id)
@@ -25948,10 +25963,7 @@ export class ChatEngine {
   private asConnectionWaitIssue(issue: AgentProviderIssue): AgentProviderIssue {
     const connectivity = this.connectivity
     if (!connectivity || issue.kind !== 'unknown') return issue
-    if (
-      !connectivity.isOffline() &&
-      !connectivity.wasOfflineWithin(CONNECTION_LOSS_GRACE_MS)
-    )
+    if (!connectivity.isOffline() && !connectivity.wasOfflineWithin(CONNECTION_LOSS_GRACE_MS))
       return issue
     return {
       ...issue,

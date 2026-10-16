@@ -17,7 +17,10 @@ import {
   type Thread
 } from '$shared/types'
 import { assistants } from './assistants.svelte'
-import { threadStatusPolicy } from '$shared/thread-status-policy'
+import {
+  threadAwaitsIndependentAuditReview,
+  threadStatusPolicy
+} from '$shared/thread-status-policy'
 
 /** Top-level panel sections. */
 export type NotificationTopTab = 'projects' | 'chats' | 'assistants' | 'app-errors'
@@ -654,6 +657,10 @@ class NotificationPanelState {
         continue
       }
 
+      // A ready independent-audit report parks its thread on `spec` and is already
+      // announced by its own card, which the durable inbox holds. Synthesizing a
+      // second "spec is ready" entry would report that one moment twice.
+      if (threadAwaitsIndependentAuditReview(thread)) continue
       if (thread.status === 'awaiting_approval' || thread.status === 'spec') {
         const sourceName = isChat ? 'Chat' : (project?.name ?? thread.title)
         this.add({

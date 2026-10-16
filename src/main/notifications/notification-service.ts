@@ -21,7 +21,11 @@ import {
   type Thread,
   type ThreadStatus
 } from '../../lib/types'
-import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-policy'
+import {
+  THREAD_STATUSES,
+  threadAwaitsIndependentAuditReview,
+  threadStatusPolicy
+} from '../../lib/thread-status-policy'
 import {
   NOTIFICATION_SOUND_DEDUP_MS,
   notificationSoundKind,
@@ -627,6 +631,10 @@ export class NotificationService {
     // intermediate turn completions do not.
     if (this.isSuppressedOrchestration(thread)) return
     if (this.isPrematureCoordinatorCompletion(thread)) return
+    // A ready independent-audit report parks its thread on `spec` and is announced
+    // by the audit card, which names the auditor's finding; the generic "spec is
+    // ready" card for the same write would report one moment twice.
+    if (threadAwaitsIndependentAuditReview(thread)) return
     const previous = this.lastObservedStatus.get(threadKey)
     this.lastObservedStatus.set(threadKey, thread.status)
 

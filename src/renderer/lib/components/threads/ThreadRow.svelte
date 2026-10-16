@@ -18,7 +18,10 @@
   } from '$lib/components/shared/thread-hover-popover-layout'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
-  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import {
+    threadUsesEngineeringTooling,
+    type ThreadIndicator
+  } from '$lib/components/threads/thread-indicator'
   import {
     markDrawsRail,
     THREAD_FOREIGN_MARK,
@@ -507,7 +510,10 @@
     }
     if (isUsingComputerUse) live.push('computer-use')
     if (browserAudioAt !== null) live.push('browser-audio')
-    if (thread.engineering === true) live.push('engineering')
+    // The Engineering mark covers both halves of the tooling: the lifecycle
+    // marker, and the independent audit, which is locked out of that lifecycle
+    // and therefore carries its own durable flags.
+    if (threadUsesEngineeringTooling(thread)) live.push('engineering')
     return live
   })
 
