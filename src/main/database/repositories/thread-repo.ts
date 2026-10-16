@@ -322,7 +322,7 @@ export const RECENT_THREADS_PER_PROJECT = 10
 function buildOrderBy(options: ThreadListOptions): string {
   return options.order === 'activity'
     ? 'ORDER BY pinned DESC, pinned_at DESC, last_activity DESC'
-    : 'ORDER BY pinned DESC, pinned_at DESC, sort_order ASC, last_activity DESC'
+    : 'ORDER BY pinned DESC, pinned_at DESC, COALESCE(sort_order, last_activity) DESC, id ASC'
 }
 
 /**
@@ -427,7 +427,7 @@ ON CONFLICT(id) DO UPDATE SET
   title_source=excluded.title_source,
   status=excluded.status,
   pinned=excluded.pinned,
-  sort_order=excluded.sort_order,
+  sort_order=CASE WHEN excluded.last_activity > threads.last_activity THEN NULL ELSE excluded.sort_order END,
   scope_sort_order=excluded.scope_sort_order,
   archived=excluded.archived,
   read=excluded.read,
@@ -698,7 +698,7 @@ export class ThreadRepo {
     const wasRead = row.read === 1
     if (wasRead) {
       const updated = await this.db.executeViaWorker(
-        'UPDATE threads SET read = 0, last_activity = ?, updated_at = ? WHERE id = ? AND project_id = ? AND read = 1',
+        'UPDATE threads SET read = 0, sort_order = NULL, last_activity = ?, updated_at = ? WHERE id = ? AND project_id = ? AND read = 1',
         [now, now, id, projectId]
       )
       if (!updated.ok) throw new Error(updated.error ?? 'Could not mark thread unread')
@@ -707,6 +707,7 @@ export class ThreadRepo {
     thread.read = false
     if (wasRead) {
       thread.lastActivity = now
+      thread.sortOrder = undefined
       thread.updatedAt = now
     }
     const usage = await this.db.queryViaWorker(
@@ -1219,7 +1220,7 @@ export class ThreadRepo {
 
   setStatus(id: string, status: ThreadStatus, lastActivity: number): void {
     this.db.run(
-      'UPDATE threads SET status = ?, last_activity = ?, updated_at = ? WHERE id = ?',
+      'UPDATE threads SET status = ?, sort_order = NULL, last_activity = ?, updated_at = ? WHERE id = ?',
       status,
       lastActivity,
       lastActivity,
@@ -1237,11 +1238,12 @@ export class ThreadRepo {
     )
   }
 
-  setSortOrder(id: string, sortOrder: number): void {
+  setSortOrder(id: string, sortOrder: number, now = Date.now()): void {
     this.db.run(
-      'UPDATE threads SET sort_order = ?, updated_at = ? WHERE id = ?',
+      'UPDATE threads SET sort_order = ?, last_activity = ?, updated_at = ? WHERE id = ?',
       sortOrder,
-      Date.now(),
+      now,
+      now,
       id
     )
   }
@@ -1278,11 +1280,13 @@ export class ThreadRepo {
   }
 
   batchUpdateSortOrder(ids: string[]): void {
-    const stmt = this.db.prepare('UPDATE threads SET sort_order = ?, updated_at = ? WHERE id = ?')
+    const stmt = this.db.prepare(
+      'UPDATE threads SET sort_order = ?, last_activity = ?, updated_at = ? WHERE id = ?'
+    )
     const now = Date.now()
     this.db.transaction(() => {
       for (let i = 0; i < ids.length; i++) {
-        stmt.run(i, now, ids[i])
+        stmt.run(now - i, now, now, ids[i])
       }
     })
   }
@@ -1309,7 +1313,7 @@ export class ThreadRepo {
     const now = Date.now()
     this.db.transaction(() => {
       for (let i = 0; i < ids.length; i++) {
-        stmt.run(i, now, ids[i])
+        stmt.run(now - i, now, now, ids[i])
       }
     })
   }

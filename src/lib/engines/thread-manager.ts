@@ -521,8 +521,9 @@ export class ThreadManager {
    */
   async setSortOrder(projectId: string, threadId: string, sortOrder: number): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
-    this.threadRepo.setSortOrder(threadId, sortOrder)
-    const updated: Thread = { ...existing, sortOrder, updatedAt: Date.now() }
+    const now = Date.now()
+    this.threadRepo.setSortOrder(threadId, sortOrder, now)
+    const updated: Thread = { ...existing, sortOrder, lastActivity: now, updatedAt: now }
     this.onChange?.(updated)
     return updated
   }
@@ -718,6 +719,11 @@ export class ThreadManager {
     const updated: Thread = {
       ...existing,
       lastActivity: movedScopes ? Date.now() : (input.lastActivity ?? existing.lastActivity),
+      sortOrder:
+        movedScopes ||
+        (input.lastActivity !== undefined && input.lastActivity > existing.lastActivity)
+          ? undefined
+          : existing.sortOrder,
       title: input.title ?? existing.title,
       titleSource: input.titleSource ?? existing.titleSource,
       providerId: input.providerId ?? existing.providerId,
@@ -1050,7 +1056,8 @@ export class ThreadManager {
       lastErrorAt: status === 'failed' ? now : undefined,
       lastOutcome,
       updatedAt: now,
-      lastActivity: now
+      lastActivity: now,
+      sortOrder: undefined
     }
 
     await this.threadRepo.upsertViaWorker(updated)
@@ -1076,7 +1083,8 @@ export class ThreadManager {
       dismissedSpecId: specId,
       dismissedSpecVersion: specVersion,
       updatedAt: now,
-      lastActivity: now
+      lastActivity: now,
+      sortOrder: undefined
     }
 
     await this.threadRepo.upsertViaWorker(updated)
@@ -1117,7 +1125,8 @@ export class ThreadManager {
           ? { activeAuditId: undefined, activeAuditVersion: undefined }
           : {}),
       updatedAt: now,
-      lastActivity: now
+      lastActivity: now,
+      sortOrder: undefined
     }
     await this.threadRepo.upsertViaWorker(updated)
     await this.announce(updated)
