@@ -871,6 +871,16 @@ async function readOpenCodeV2Status(
 /**
  * OpenCode V2 auth: credentials live in its own SQLite store, while login and
  * logout take a positional provider id.
+ *
+ * Every client subcommand drives OpenCode's own managed daemon
+ * (`opencode serve --service`), which binds one fixed default port per install.
+ * A managed account is a separate install (its container owns XDG_CONFIG_HOME,
+ * XDG_DATA_HOME and friends), so the CLI cannot bind that port while any other
+ * OpenCode install's daemon already holds it, and it dies with
+ * "Server process exited with code 1   Managed service port <port> on 127.0.0.1
+ * is already in use by another process". `--standalone` runs the command on a
+ * private server instead, which is the rule the rest of the app already
+ * follows: it never talks to OpenCode's managed service.
  */
 function openCodeV2Auth(command: string): AuthDefinition {
   return {
@@ -878,11 +888,27 @@ function openCodeV2Auth(command: string): AuthDefinition {
     name: 'OpenCode',
     command,
     readStatus: readOpenCodeV2Status,
-    loginArgs: (options) => ['auth', 'login', ...(options.providerId ? [options.providerId] : [])],
-    logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+    loginArgs: (options) => [
+      'auth',
+      'login',
+      ...(options.providerId ? [options.providerId] : []),
+      '--standalone'
+    ],
+    logoutArgs: (providerId) => [
+      'auth',
+      'logout',
+      ...(providerId ? [providerId] : []),
+      '--standalone'
+    ],
     // V2 keeps several credentials per integration and switches the active one
     // by id or label (`opencode auth switch <integration> <credential>`).
-    activateArgs: (providerId, credentialId) => ['auth', 'switch', providerId, credentialId],
+    activateArgs: (providerId, credentialId) => [
+      'auth',
+      'switch',
+      providerId,
+      credentialId,
+      '--standalone'
+    ],
     // The active credential lives in V2's own store, and `auth list` does not
     // report it, so account state is read from the store itself.
     nativeStore: 'v2',
