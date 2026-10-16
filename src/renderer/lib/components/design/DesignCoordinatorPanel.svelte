@@ -449,6 +449,22 @@
    */
   let liveTab = $derived(boardTabId !== '' ? videoTimelineState.compositionByTab(boardTabId) : null)
   /**
+   * Whether the user is watching this composition in the sidebar browser instead.
+   *
+   * The app shows one native view at a time and a board outranks a plain sidebar,
+   * so the board has to let go of the view for a composition the user asked to see
+   * in the browser to be visible there at all. It is read from what the sidebar is
+   * actually showing rather than from a flag the last click set, so it settles both
+   * ways on its own: opening the composition in the browser yields the board, and
+   * closing that tab or looking at another one hands the board back its stage.
+   */
+  let watchedInBrowser = $derived.by(() => {
+    if (!video || !contextSidebarState.sidebarVisible) return false
+    const shown = contextSidebarState.sidebarActiveTab?.id ?? ''
+    if (shown === '' || shown === boardTabId) return false
+    return videoTimelineState.compositionByTab(shown) !== null
+  })
+  /**
    * Whether the folder in front has an entry page, which is what makes it playable.
    *
    * A composition folder with no `index.html` yet is a folder of assets rather than
@@ -638,7 +654,7 @@
     }
     galleryBusy = true
     try {
-      if (video && liveTab !== null) {
+      if (video && liveTab !== null && !watchedInBrowser) {
         gallery = []
         tabId = boardTabId
       } else if (video) {
@@ -1256,7 +1272,7 @@
         </button>
       </div>
     {/if}
-    {#if liveTab}
+    {#if liveTab && !watchedInBrowser}
       <!--
         The live composition, played in the board.
 
@@ -1265,6 +1281,12 @@
         composition the user is watching rather than a still of it. The stage fits
         the composition's own aspect ratio inside this pane, so the frame is whole
         at every panel size.
+
+        It stands aside while the sidebar browser is showing this composition: the
+        app displays one native view at a time, and a board outranks a plain
+        sidebar, so holding the view here would leave the page the user asked for
+        blank. What stands in is the composition's own picture, or the export it
+        already has.
       -->
       <CompositionStage tab={liveTab} {active} />
     {:else if !playable}
