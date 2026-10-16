@@ -91,6 +91,7 @@
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
@@ -507,27 +508,51 @@
 
   /**
    * A guide only says what the next step is. The app performs it, because the
-   * app is the only thing that knows how to add a project, open the settings
-   * page that connects a provider, or put the caret in the composer.
+   * app is the only thing that knows how to add a project, connect an agent,
+   * open a settings page, or put the caret in the composer.
+   *
+   * Reports whether the step is actually done. A step that has to hand the user
+   * somewhere to finish (an installer for an agent that is not on this machine)
+   * answers false, and the guide stays on it rather than walking on as if the
+   * agent were connected.
    */
-  function runGuideAction(action: GuideActionKind): void {
+  async function runGuideAction(action: GuideActionKind): Promise<boolean> {
     if (action.kind === 'add-project') {
       openNewProjectSpotlight()
-      return
+      return true
     }
     if (action.kind === 'focus-composer') {
       focusVisibleComposer()
-      return
+      return true
+    }
+    if (action.kind === 'connect-harness') {
+      const harness = providerStore.providers.find((entry) => entry.id === action.harnessId)
+      if (harness && harness.status === 'available' && harness.integration === 'ready') return true
+      if (!harness || harness.status !== 'available') {
+        // The agent is not on this machine yet: open its own install guide, the
+        // same page the setup tour offers, and leave the step standing.
+        try {
+          const info = await invoke('harnessInstall:getInfo', action.harnessId)
+          await openInBrowser(info.pageUrl)
+        } catch {
+          navigate(settingsViewForSection('harnesses'))
+        }
+        return false
+      }
+      await providerStore.checkOne(action.harnessId)
+      return true
     }
     navigate(settingsViewForSection(action.section))
+    return true
   }
 
   /** The dock's own button asks for the step the stop is about. */
   $effect(() => {
     const action = guideState.consumeActionRequest()
     if (!action) return
-    runGuideAction(action.run)
-    guideState.completeAction()
+    void runGuideAction(action.run).then((done) => {
+      if (done) guideState.completeAction()
+    })
   })
 
   /**

@@ -28,6 +28,8 @@
   const stopCount = $derived(guideState.stopCount)
   /** The step this stop asks the app to take, when it asks for one. */
   const action = $derived(stop?.action ?? null)
+  /** The other way to take this step, for a user the primary does not fit. */
+  const alternative = $derived(stop?.alternative ?? null)
 
   let root = $state<HTMLElement | undefined>(undefined)
 
@@ -204,6 +206,33 @@
           {/each}
         </div>
 
+        {#if action}
+          <!-- The step the stop asks for, with the other way to take it beside
+               it: a stop asks for one thing and offers one alternative, never a
+               menu. The alternative stays quieter and to the left. -->
+          <div class="mt-2.5 flex items-center justify-end gap-1.5 border-t border-border pt-2.5">
+            {#if alternative}
+              <button
+                type="button"
+                class="flex h-8 items-center gap-1.5 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                title={alternative.label}
+                onclick={() => guideState.requestAlternative()}
+              >
+                {alternative.label}
+              </button>
+            {/if}
+            <button
+              type="button"
+              class="flex h-8 items-center gap-1.5 border border-primary bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+              title={action.label}
+              onclick={() => guideState.requestAction()}
+            >
+              {action.label}
+              <CioArrowRight size={12} />
+            </button>
+          </div>
+        {/if}
+
         <div class="mt-2.5 flex items-center gap-1.5 border-t border-border pt-2.5">
           <button
             type="button"
@@ -217,9 +246,8 @@
           </button>
           <span class="flex-1"></span>
           {#if action}
-            <!-- A step the stop asks the app to take, so the tour onboards
-                 instead of only describing. Next stays available for a user who
-                 has already done it. -->
+            <!-- The step has its own row above, so this is only the way past it
+                 for a user who has already done it. -->
             <button
               type="button"
               class="flex h-8 items-center gap-1.5 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -240,17 +268,7 @@
             <CioArrowLeft size={12} />
             Back
           </button>
-          {#if action}
-            <button
-              type="button"
-              class="flex h-8 items-center gap-1.5 border border-primary bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
-              title={action.label}
-              onclick={() => guideState.requestAction()}
-            >
-              {action.label}
-              <CioArrowRight size={12} />
-            </button>
-          {:else}
+          {#if !action}
             <button
               type="button"
               class="flex h-8 items-center gap-1.5 border border-primary bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"

@@ -73,6 +73,7 @@ export interface GuideKey {
 export type GuideActionKind =
   | { kind: 'add-project' }
   | { kind: 'focus-composer' }
+  | { kind: 'connect-harness'; harnessId: string }
   | { kind: 'open-settings'; section: SettingsSection }
 
 export interface GuideAction {
@@ -111,6 +112,12 @@ export interface GuideStop {
   keys?: readonly GuideKey[]
   /** The step this stop asks the user to take, when it asks for one. */
   action?: GuideAction
+  /**
+   * The other way to take that step, for a user the first one does not fit.
+   * Drawn quieter and to the left of the primary, never instead of it: a stop
+   * asks for one thing and offers one alternative.
+   */
+  alternative?: GuideAction
 }
 
 export interface ViewGuide {
@@ -183,16 +190,17 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
       {
         anchor: 'rail-settings',
         shape: 'control',
-        eyebrow: 'Connect the work',
-        title: 'A provider answers, an agent does',
+        eyebrow: 'The agent',
+        title: 'Pi is already here, so you can start',
         description:
-          'Gateways holds your model providers and accounts: that is who answers. Harnesses is what can run here, the one built into CodeInOven, one you install yourself, or one an Oven discovers. Nothing runs until both are set.',
+          'Pi comes with CodeInOven and needs nothing installed first. It reads the project you pick, writes the code, and reports back in the conversation. If you would rather use a different agent, every one this machine can run is on the Harnesses page, and the account Pi answers with is set there too.',
         path: ['Rail', 'Settings'],
-        tag: 'setup',
+        tag: 'the agent',
         treatment: 'locator',
-        action: {
-          label: 'Open setup',
-          run: { kind: 'open-settings', section: 'gateways' },
+        action: { label: 'Start with Pi', run: { kind: 'connect-harness', harnessId: 'pi' } },
+        alternative: {
+          label: 'Other agents',
+          run: { kind: 'open-settings', section: 'harnesses' },
           leavesTheView: true
         }
       },

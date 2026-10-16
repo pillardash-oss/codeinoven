@@ -144,7 +144,15 @@ class GuideStateStore {
    * open a settings page, and `completeAction` closes the loop afterwards.
    */
   requestAction(): void {
-    const action = this.stop?.action
+    this.#request(this.stop?.action ?? null)
+  }
+
+  /** The other way to take this step, for a user the primary does not fit. */
+  requestAlternative(): void {
+    this.#request(this.stop?.alternative ?? null)
+  }
+
+  #request(action: GuideAction | null): void {
     if (!action) return
     // A step that opens another view puts the guide in waiting *before* the
     // navigation lands, so the view change it causes is read as this step
