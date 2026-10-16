@@ -46,31 +46,110 @@
         overflow: visible;
       }
 
-      .logo-mark {
+      /*
+       * The mark draws itself: the C sweeps counter-clockwise, the O closes as a
+       * square, the slot snaps in and the auric dot ignites last.
+       *
+       * `pathLength="1"` normalises each path to one unit, so a dash of one unit
+       * covers it exactly and the draw-in needs no measured path length.
+       *
+       * The resolved state is the base style, not the animation's end state. A
+       * launch with animations disabled, and a reduced-motion preference, then
+       * still show the complete mark rather than a blank space.
+       */
+      .draw-stroke {
+        stroke-dasharray: 1;
+        stroke-dashoffset: 0;
+      }
+
+      .draw-dot {
         transform-box: fill-box;
         transform-origin: center;
-        animation: logoSettle 2.2s ease-in-out infinite;
       }
 
-      @keyframes logoSettle {
-        0%,
+      @media (prefers-reduced-motion: no-preference) {
+        .draw-c,
+        .draw-o,
+        .draw-slot,
+        .draw-dot {
+          /*
+           * One play, then held. The splash is torn down when the main window
+           * paints, so it must resolve well inside that window and then sit
+           * still instead of looping under the user's eye.
+           *
+           * The timings below resolve the mark by about 1.2s and then hold to
+           * the end of the 1.6s. Startup telemetry puts the main window's first
+           * frame at roughly 3.7s from process entry on this machine, so the
+           * mark is normally complete and still for a beat or two before the
+           * window covers it. Resolving earlier also keeps the signature auric
+           * dot on screen on faster launches, which a longer sequence would miss.
+           *
+           * The easing is a gentle deceleration rather than a hard ease-out.
+           * Applied per keyframe segment, a hard curve drew the whole C inside
+           * the first 285ms, which reads as a snap instead of a stroke.
+           */
+          animation-duration: 1.6s;
+          animation-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+          animation-fill-mode: both;
+        }
+
+        .draw-c {
+          animation-name: splashDrawC;
+        }
+
+        .draw-o {
+          animation-name: splashDrawO;
+        }
+
+        .draw-slot {
+          animation-name: splashDrawSlot;
+        }
+
+        .draw-dot {
+          animation-name: splashDrawDot;
+        }
+      }
+
+      @keyframes splashDrawC {
+        0% {
+          stroke-dashoffset: 1;
+        }
+        28%,
         100% {
-          transform: scale(0.96);
-        }
-        28% {
-          transform: scale(1.035);
-        }
-        46% {
-          transform: scale(0.99);
-        }
-        62% {
-          transform: scale(1);
+          stroke-dashoffset: 0;
         }
       }
 
-      @media (prefers-reduced-motion: reduce) {
-        .logo-mark {
-          animation: none;
+      @keyframes splashDrawO {
+        0%,
+        9% {
+          stroke-dashoffset: 1;
+        }
+        50%,
+        100% {
+          stroke-dashoffset: 0;
+        }
+      }
+
+      @keyframes splashDrawSlot {
+        0%,
+        47% {
+          opacity: 0;
+        }
+        59%,
+        100% {
+          opacity: 1;
+        }
+      }
+
+      @keyframes splashDrawDot {
+        0%,
+        56% {
+          transform: scale(0);
+        }
+        75%,
+        100% {
+          transform: scale(1);
         }
       }
 
@@ -100,17 +179,16 @@
         role="img"
         aria-label="CodeInOven C/O logo"
       >
-        <g
-          class="logo-mark"
-          fill="none"
-          stroke="#f5f4f0"
-          stroke-linecap="square"
-          stroke-linejoin="miter"
-        >
-          <path d="M49 17a31 31 0 1 0 0 62" stroke-width="8" />
-          <path d="M61 23h23v50H61z" stroke-width="7" />
-          <rect x="58" y="45" width="29" height="6" fill="#f5f4f0" />
-          <circle cx="84" cy="48" r="5" fill="#d4af37" stroke="none" />
+        <g fill="none" stroke="#f5f4f0" stroke-linecap="square" stroke-linejoin="miter">
+          <path
+            class="draw-stroke draw-c"
+            d="M49 17a31 31 0 1 0 0 62"
+            stroke-width="8"
+            pathLength="1"
+          />
+          <path class="draw-stroke draw-o" d="M61 23h23v50H61z" stroke-width="7" pathLength="1" />
+          <rect class="draw-slot" x="58" y="45" width="29" height="6" fill="#f5f4f0" />
+          <circle class="draw-dot" cx="84" cy="48" r="5" fill="#d4af37" stroke="none" />
         </g>
       </svg>
       <div class="splash-meta" aria-label="Application version">
