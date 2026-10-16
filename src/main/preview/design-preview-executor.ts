@@ -84,7 +84,7 @@ export function createDesignPreviewExecutor(
         threadId: context.threadId,
         directory: input['directory'],
         entry: input['entry'],
-        defaultRoot: currentWorkRoot('design'),
+        defaultRoot: currentWorkRoot('design', context.projectId),
         attention,
         reveal: false,
         // The agent's own preview moves through the thread's one tab: it is the

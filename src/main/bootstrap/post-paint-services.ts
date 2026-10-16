@@ -20,7 +20,7 @@ import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { workRootsFromConfig } from '../../lib/design/work-roots'
-import { setWorkRoots } from '../design/work-roots-state'
+import { loadProjectWorkRoots, setWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -591,6 +591,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   } catch {
     // The strict policy and the default folders stand until the config can be read.
   }
+  await loadProjectWorkRoots(database)
   state.directoryPreviewService = new DirectoryPreviewService()
   state.chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>

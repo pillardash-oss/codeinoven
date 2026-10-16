@@ -63,7 +63,7 @@ export function createDesignMediaExecutor(
     const directory = resolveServedFolder(
       project.path,
       input['directory'],
-      currentWorkRoot('design')
+      currentWorkRoot('design', context.projectId)
     )
 
     const saved = await saveDesignMedia({

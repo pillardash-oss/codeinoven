@@ -72,7 +72,7 @@ export function createVideoPreviewExecutor(
         threadId: context.threadId,
         directory: input['directory'],
         entry: input['entry'],
-        defaultRoot: currentWorkRoot('video'),
+        defaultRoot: currentWorkRoot('video', context.projectId),
         attention,
         reveal: false
       }

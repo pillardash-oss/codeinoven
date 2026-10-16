@@ -63,7 +63,7 @@ export function createVideoCaptureExecutor(
     const directory = resolveServedFolder(
       project.path,
       input['directory'],
-      currentWorkRoot('video')
+      currentWorkRoot('video', context.projectId)
     )
     const manifest = await loadCompositionManifest(directory.absolute, directory.display)
     // Clamp before the page is loaded, so the URL and the frame drawn agree on
@@ -78,7 +78,7 @@ export function createVideoCaptureExecutor(
         threadId: context.threadId,
         directory: input['directory'],
         entry: input['entry'],
-        defaultRoot: currentWorkRoot('video'),
+        defaultRoot: currentWorkRoot('video', context.projectId),
         attention: 'background',
         reveal: false,
         captureSeconds: seconds

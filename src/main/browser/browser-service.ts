@@ -1915,6 +1915,20 @@ export class BrowserService {
     void this.tabHistory.flush()
   }
 
+  relocateWorkFolder(projectId: string, from: string, to: string): void {
+    for (const [tabId, tab] of this.tabs) {
+      if (
+        tab.projectId !== projectId ||
+        (tab.design?.directory !== from && tab.composition?.directory !== from)
+      )
+        continue
+      if (tab.design?.directory === from) tab.design = { ...tab.design, directory: to }
+      if (tab.composition?.directory === from)
+        tab.composition = { ...tab.composition, directory: to }
+      this.publishState(tabId)
+    }
+  }
+
   /**
    * Record that a tab is rendering a design folder. Non-null `design` on the
    *  published state is what makes the panel offer the element inspector, so only
@@ -2617,7 +2631,15 @@ export class BrowserService {
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
-    const tabId = designScreenTabId(input)
+    const movedTab = [...this.tabs].find(
+      ([id, tab]) =>
+        id.startsWith('browser:screen:') &&
+        tab.projectId === input.projectId &&
+        tab.threadId === input.threadId &&
+        tab.design?.directory === input.directory &&
+        this.tabUrl(id) === input.url
+    )
+    const tabId = movedTab?.[0] ?? designScreenTabId(input)
     const reused = this.tabs.has(tabId)
     const tab = this.ensureTab(tabId, input.projectId, input.threadId)
     if (!reused) {
@@ -2729,7 +2751,15 @@ export class BrowserService {
     const projectId = validateProjectId(input.projectId)
     const threadId = validateThreadId(input.threadId)
     const url = validateBrowserUrl(input.url)
-    const tabId = compositionBoardTabId({ projectId, threadId, directory: input.directory })
+    const movedTab = [...this.tabs].find(
+      ([id, tab]) =>
+        id.startsWith('browser:board:') &&
+        tab.projectId === projectId &&
+        tab.threadId === threadId &&
+        tab.composition?.directory === input.directory
+    )
+    const tabId =
+      movedTab?.[0] ?? compositionBoardTabId({ projectId, threadId, directory: input.directory })
     const existing = this.tabs.get(tabId)
     if (existing) {
       // A view already on this page is the one being asked for again, so it is

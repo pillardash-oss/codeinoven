@@ -391,3 +391,17 @@ export interface ScreenCanvasState {
   /** Titles of sketch frames still waiting for a real screen. */
   sketchTitles: string[]
 }
+
+export interface UpdateWorkDetails {
+  kind: AuthoredWorkKind
+  directory: string
+  root?: string
+  thisOnly: boolean
+  /** Settings can update the project default without selecting or moving a folder. */
+  newOnly?: boolean
+  name?: string
+}
+export interface UpdateWorkDetailsResult {
+  directory: string
+  moved: number
+}

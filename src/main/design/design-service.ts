@@ -1,11 +1,9 @@
+import { updateWorkDetails } from './work-details-service'
+import { rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
-import { isAbsolute, relative, sep } from 'node:path'
-import {
-  DEFAULT_WORK_ROOTS,
-  authoredWorkKindOf,
-  workRootForKind
-} from '../../lib/design/work-roots'
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { DEFAULT_WORK_ROOTS, workRootForKind } from '../../lib/design/work-roots'
 import type {
   AuthoredWorkKind,
   DesignEntry,
@@ -21,7 +19,8 @@ import type {
   ProjectWorkState,
   ScreenCanvasState,
   ThreadDesignCurrent,
-  ThreadDesignState
+  ThreadDesignState,
+  UpdateWorkDetails
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
 import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
@@ -42,7 +41,13 @@ import { listDesignScreens } from './design-screens'
 import { readScreenCanvasState } from './screen-canvas-state'
 import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
 import { openDesignPreview } from './design-preview-session'
-import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './work-roots-state'
+import {
+  currentWorkRoot,
+  currentWorkRootReports,
+  currentWorkRoots,
+  projectWorkRootPaths,
+  forgetProjectWorkRoots
+} from './work-roots-state'
 
 /**
  * What the app knows about a thread's authored work, and how the user gets back to it.
@@ -256,7 +261,14 @@ export class DesignService {
         requireId(rawProjectId, 'project id')
       )
       const { exportDesign } = await import('./design-export-service')
-      return exportDesign(project.path, directory, entry, format, this.options.previews)
+      return exportDesign(
+        project.path,
+        directory,
+        entry,
+        format,
+        this.options.previews,
+        currentWorkRoot('design', requireId(rawProjectId, 'project id'))
+      )
     })
     ipcMain.handle('design:state', async (_event, rawProjectId, rawThreadId) =>
       this.stateFor(requireId(rawProjectId, 'project id'), requireId(rawThreadId, 'thread id'))
@@ -313,11 +325,51 @@ export class DesignService {
     // Read rather than pushed, because both surfaces that change a root (the
     // Design settings card and the board's own save path) ask immediately after
     // the save that caused the move.
-    ipcMain.handle('design:workRootState', async () => ({
-      roots: currentWorkRoots(),
+    ipcMain.handle('design:workRootState', async (_event, projectId?: string) => ({
+      roots: currentWorkRoots(projectId),
       defaults: { ...DEFAULT_WORK_ROOTS },
       reports: currentWorkRootReports()
     }))
+    ipcMain.handle(
+      'design:updateDetails',
+      async (_event, rawProjectId, details: UpdateWorkDetails) => {
+        const projectId = requireId(rawProjectId, 'project id')
+        const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+        return updateWorkDetails({
+          database: this.options.database,
+          projectId,
+          projectPath: project.path,
+          details,
+          list: async () => (await this.projectWork(projectId))[details.kind],
+          relocate: async (from, to) => {
+            await this.history.relocateFolder(
+              projectId,
+              from,
+              to,
+              () => rename(resolve(project.path, from), resolve(project.path, to)),
+              () => rename(resolve(project.path, to), resolve(project.path, from))
+            )
+            try {
+              await this.options.previews.relocate(
+                resolve(project.path, from),
+                resolve(project.path, to)
+              )
+            } catch (error) {
+              await this.history.relocateFolder(
+                projectId,
+                to,
+                from,
+                () => rename(resolve(project.path, to), resolve(project.path, from)),
+                () => rename(resolve(project.path, from), resolve(project.path, to))
+              )
+              throw error
+            }
+            this.options.browser()?.relocateWorkFolder(projectId, from, to)
+            this.screenShots.clear()
+          }
+        })
+      }
+    )
     // The history behind Undo and Redo. Reading captures the present first, so a
     // change the app has not seen yet becomes a point the user can return to; the
     // restore is what Undo, Redo and clicking a revision all run.
@@ -469,7 +521,7 @@ export class DesignService {
   ): Promise<DesignHistoryTarget> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const kind = await this.resolveKind(threadId)
-    const folder = resolveServedFolder(project.path, directory, currentWorkRoot(kind))
+    const folder = resolveServedFolder(project.path, directory, currentWorkRoot(kind, projectId))
     return {
       projectId,
       projectPath: project.path,
@@ -549,7 +601,12 @@ export class DesignService {
       root
     )
     if (directory === null) return NO_TAB_MARK
-    const kind = authoredWorkKindOf(directory, currentWorkRoots())
+    const kind =
+      (['design', 'video'] as const).find((kind) =>
+        projectWorkRootPaths(projectId, kind).some(
+          (root) => directory === root || directory.startsWith(`${root}/`)
+        )
+      ) ?? null
     if (kind === null) return NO_TAB_MARK
     // A screen sweep moves the tab through every screen of one design, which is
     // the app taking pictures rather than the agent or the user choosing a folder.
@@ -620,6 +677,7 @@ export class DesignService {
   }
 
   forgetProject(projectId: string): void {
+    forgetProjectWorkRoots(this.options.database, projectId)
     this.designs.deleteProject(projectId)
     this.history.forgetProject(projectId)
     for (const key of [...this.screenShots.keys()]) {
@@ -655,15 +713,17 @@ export class DesignService {
     const current = await this.designs.forThreadViaWorker(threadId)
     const thread = await this.threads.getViaWorker(threadId)
     const kind = thread?.authoredWorkKind ?? current?.kind ?? 'design'
-    const root = currentWorkRoot(kind)
+    const root = currentWorkRoot(kind, projectId)
     // The listing reads disk, which knows nothing about authorship; the recorded
     // creators are merged in here so the board can badge a folder as the viewed
     // thread's own and send the user back to the thread that first wrote it.
     const origins = await this.designs.originsViaWorker(projectId)
-    const items = (await this.listWorkFolders(storedProject.path, root)).map((item) => ({
-      ...item,
-      creatorThreadId: origins.get(item.directory) ?? null
-    }))
+    const items = (await this.listProjectFolders(projectId, storedProject.path, kind)).map(
+      (item) => ({
+        ...item,
+        creatorThreadId: origins.get(item.directory) ?? null
+      })
+    )
     return {
       projectId,
       threadId,
@@ -755,7 +815,7 @@ export class DesignService {
     const path = project.path
     const origins = await this.designs.originsViaWorker(projectId)
     const list = async (kind: AuthoredWorkKind): Promise<DesignEntry[]> =>
-      (await this.listWorkFolders(path, currentWorkRoot(kind))).map((item) => ({
+      (await this.listProjectFolders(projectId, path, kind)).map((item) => ({
         ...item,
         creatorThreadId: origins.get(item.directory) ?? null
       }))
@@ -842,7 +902,11 @@ export class DesignService {
     force: boolean
   ): Promise<DesignScreenShot[]> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
-    const folder = resolveServedFolder(project.path, directory, currentWorkRoot('design'))
+    const folder = resolveServedFolder(
+      project.path,
+      directory,
+      currentWorkRoot('design', projectId)
+    )
     // The Screen Canvas is pictured with the screens: the board shows it as the
     // first entry of its screens grid, and that entry is a picture like the rest.
     // It is one more load in the sweep, cached against the file like every other
@@ -933,7 +997,11 @@ export class DesignService {
     directory: unknown
   ): Promise<ScreenCanvasState | null> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
-    const folder = resolveServedFolder(project.path, directory, currentWorkRoot('design'))
+    const folder = resolveServedFolder(
+      project.path,
+      directory,
+      currentWorkRoot('design', projectId)
+    )
     const screens = await listDesignScreens(folder.absolute)
     return readScreenCanvasState({
       folderAbsolute: folder.absolute,
@@ -949,6 +1017,37 @@ export class DesignService {
    * `.cio/videos/<name>/` are the documented layouts, so a folder another thread
    * wrote is found here without anything having registered it.
    */
+  private async listProjectFolders(
+    projectId: string,
+    path: string,
+    kind: AuthoredWorkKind
+  ): Promise<DesignEntry[]> {
+    const roots = new Set(projectWorkRootPaths(projectId, kind))
+    const recorded = await this.options.database.queryViaWorker(
+      'SELECT directory FROM thread_designs WHERE project_id = ? AND kind = ?',
+      [projectId, kind],
+      0
+    )
+    if (!recorded.ok) throw new Error('Could not read work folders')
+    for (const row of recorded.rows as unknown as Array<{ directory: string }>)
+      roots.add(dirname(row.directory))
+    const folders = new Map<string, DesignEntry>()
+    for (const root of roots) {
+      for (const item of await this.listWorkFolders(path, root)) {
+        // A previous root can contain the new root; that container is not another design.
+        if (
+          [...roots].some(
+            (known) => known === item.directory || known.startsWith(`${item.directory}/`)
+          )
+        )
+          continue
+        folders.set(item.directory, item)
+      }
+      await new Promise<void>((resume) => setImmediate(resume))
+    }
+    return [...folders.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
   async listWorkFolders(projectPath: string, root: string): Promise<DesignEntry[]> {
     return listProjectWorkFolders(projectPath, root)
   }
@@ -1076,7 +1175,7 @@ export class DesignService {
       threadId: input.threadId,
       directory: input.directory,
       entry: input.entry,
-      defaultRoot: currentWorkRoot(input.kind),
+      defaultRoot: currentWorkRoot(input.kind, input.projectId),
       attention: input.attention,
       reveal: input.reveal,
       posterSeconds: input.posterSeconds

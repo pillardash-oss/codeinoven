@@ -88,7 +88,7 @@ export class VideoStudioService {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     return {
       root: project.path,
-      folder: await videoFolder(project.path, directory ?? currentWorkRoot('video'))
+      folder: await videoFolder(project.path, directory ?? currentWorkRoot('video', projectId))
     }
   }
   async read(

@@ -84,6 +84,8 @@ import {
 } from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
+import { ThreadRepo } from '../database/repositories/thread-repo'
+import { DesignRepo } from '../database/repositories/design-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { type McpClient } from '../agents/mcp-stdio-client'
 import {
@@ -2073,12 +2075,30 @@ export class UtilityOrchestrationService {
    * `@cio-design` session performs at turn start, and a post-compaction docs
    * re-dump   come through here, so they cannot disagree.
    */
+  private async workContext(
+    threadId: string
+  ): Promise<{ roots: ReturnType<typeof currentWorkRoots>; note: string }> {
+    if (!this.database) return { roots: currentWorkRoots(), note: '' }
+    const thread = await new ThreadRepo(this.database).getViaWorker(threadId)
+    const current = await new DesignRepo(this.database).forThreadViaWorker(threadId)
+    return {
+      roots: currentWorkRoots(thread?.projectId),
+      note: current
+        ? `\nThe current ${current.kind} is in ${JSON.stringify(current.directory)}. Continue editing this folder. A save-path change affects new work; existing work can remain in other folders. Use the current recorded path rather than paths in older messages.\n`
+        : ''
+    }
+  }
+
   private async designPlaybook(threadId: string): Promise<string> {
     const config = await this.storage.getConfig()
-    return designCapabilityDocs(
-      prototypeCdnPolicyFromConfig(config),
-      await this.expertsForThread(threadId),
-      currentWorkRoots()
+    const work = await this.workContext(threadId)
+    return (
+      work.note +
+      designCapabilityDocs(
+        prototypeCdnPolicyFromConfig(config),
+        await this.expertsForThread(threadId),
+        work.roots
+      )
     )
   }
 
@@ -2088,7 +2108,8 @@ export class UtilityOrchestrationService {
    * models a design is.
    */
   private async videoPlaybook(threadId: string): Promise<string> {
-    return videoCapabilityDocs(await this.expertsForThread(threadId), currentWorkRoots())
+    const work = await this.workContext(threadId)
+    return work.note + videoCapabilityDocs(await this.expertsForThread(threadId), work.roots)
   }
 
   /**
@@ -2145,7 +2166,7 @@ export class UtilityOrchestrationService {
       // capability this one is invoked with typed fields.
       return {
         instructions: await this.designPlaybook(state.request.threadId),
-        tools: designUtilityTools(currentWorkRoots())
+        tools: designUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
     if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
@@ -2154,7 +2175,7 @@ export class UtilityOrchestrationService {
       // docs re-dump is one payload.
       return {
         instructions: await this.videoPlaybook(state.request.threadId),
-        tools: videoUtilityTools(currentWorkRoots())
+        tools: videoUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {

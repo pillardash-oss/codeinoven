@@ -24,7 +24,7 @@ import {
   findCioCleanupExclusion
 } from '../../lib/cio-cleanup'
 import { normalizeCioCleanupExcludedCategories } from '../../lib/types/cio-cleanup'
-import { currentWorkRoots } from '../design/work-roots-state'
+import { protectedWorkRoots } from '../design/work-roots-state'
 import { instanceRegistry } from '../system/instance-registry'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { CioCleanupRepo } from '../database/repositories/cio-cleanup-repo'
@@ -329,10 +329,16 @@ export class CioCleanupService {
       // settings, and one pass has to judge every workspace by the same list
       // rather than half of it by the value before a settings save and half by
       // the value after.
-      const protectedPaths = cioCleanupProtectedPaths(
-        currentWorkRoots(),
-        normalizeCioCleanupExcludedCategories(config.cioCleanupExcludedCategories)
-      )
+      const protectedPaths = [
+        ...new Set(
+          protectedWorkRoots().flatMap((roots) =>
+            cioCleanupProtectedPaths(
+              roots,
+              normalizeCioCleanupExcludedCategories(config.cioCleanupExcludedCategories)
+            )
+          )
+        )
+      ]
       const exclusions = await this.pruneAndListExclusions()
       const targets = await listCioCleanupTargets({
         database: this.deps.database,

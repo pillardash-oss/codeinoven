@@ -21,12 +21,10 @@
     PlayingCardsFan,
     Presentation,
     RefreshCw,
-    RotateCcw,
     Store,
     Target,
     Volume2,
-    VolumeX,
-    X
+    VolumeX
   } from '@lucide/svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
@@ -50,7 +48,6 @@
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
-  import { workRootMoveSummary } from '$lib/design-work-root-summary'
   import { openInBrowser } from '$lib/open-in-browser'
   import { designContractRequest } from '$shared/design/design-contract'
   import type { VideoJob } from '$shared/video/studio'
@@ -71,7 +68,7 @@
     ThreadDesignState,
     WorkRootState
   } from '$shared/ipc-contract'
-  import type { WorkRoots } from '$shared/design/work-roots'
+  import WorkDetailsDialog from './WorkDetailsDialog.svelte'
 
   /**
    * The coordinator board for a thread's authored work.
@@ -240,27 +237,13 @@
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
   let WorkIcon = $derived(video ? Film : Frame)
 
-  /**
-   * Where this kind of work is written, and the controls that change it.
-   *
-   * The folder is a setting rather than a constant, so the board is also the
-   * place a user points it at a folder Git tracks: they are looking at the work,
-   * so moving it is one menu item rather than a detour through Settings. Main owns
-   * the value and reports what the move did, which is why the draft is saved
-   * through the same channel the settings card uses.
-   */
+  /** Project defaults are separate from the current design or video's own folder. */
   let kind = $derived<AuthoredWorkKind>(requestedKind)
   let workRoots = $state<WorkRootState | null>(null)
-  let editingRoot = $state(false)
-  let rootDraft = $state('')
-  let rootBusy = $state(false)
-  let rootError = $state('')
-  let rootNotice = $state('')
+  let detailsMode = $state<'this' | 'all' | 'rename' | null>(null)
 
   /** The folder in use: main's answer once it has arrived, the board's until then. */
   let workRoot = $derived(workRoots?.roots[kind] ?? designState?.root ?? '')
-  let defaultRoot = $derived(workRoots?.defaults[kind] ?? '')
-  let rootIsDefault = $derived(workRoot !== '' && workRoot === defaultRoot)
 
   /**
    * The tab's live audio state, read from the same store the tab strip reads.
@@ -462,7 +445,7 @@
   /** Read the folders in use, and what the last change moved. */
   async function loadWorkRoots(): Promise<WorkRootState | null> {
     try {
-      const state = await invoke('design:workRootState')
+      const state = await invoke('design:workRootState', projectId)
       workRoots = state
       return state
     } catch {
@@ -473,46 +456,17 @@
     }
   }
 
-  function beginEditRoot(): void {
-    rootDraft = workRoot
-    rootError = ''
-    rootNotice = ''
-    editingRoot = true
-  }
-
-  function cancelEditRoot(): void {
-    editingRoot = false
-    rootError = ''
-  }
-
-  /**
-   * Point this kind of work at another folder, or back at the default.
-   *
-   * The setting is app-wide, so main moves every project's folder and answers with
-   * what it moved. The board re-reads its own state afterwards, because the folder
-   * it was showing may be the one that just moved.
-   */
-  async function applyRoot(next: string): Promise<void> {
-    const roots = workRoots?.roots
-    if (!roots || rootBusy || next === '' || next === workRoot) return
-    const nextRoots: WorkRoots =
-      kind === 'video' ? { ...roots, video: next } : { ...roots, design: next }
-    rootBusy = true
-    rootError = ''
-    rootNotice = ''
-    try {
-      await invoke('config:update', { workRoots: nextRoots })
-      const state = await loadWorkRoots()
-      await loadState()
-      await loadGallery()
-      await loadCanvas()
-      rootNotice = state ? workRootMoveSummary(state, kind) : ''
-      editingRoot = false
-    } catch (failure) {
-      rootError = failure instanceof Error ? failure.message : 'The save path could not be changed.'
-    } finally {
-      rootBusy = false
-    }
+  async function detailsUpdated(directory: string, moved: number): Promise<void> {
+    viewedDirectory = directory
+    projectWorkState.focusDirectory(projectId, kind, directory)
+    await loadWorkRoots()
+    await loadState()
+    // loadState can clear the old viewed directory when the thread link moves.
+    viewedDirectory = directory
+    await projectWorkState.refresh(projectId)
+    await loadGallery()
+    await loadCanvas()
+    toast.success(`${moved} ${noun}${moved === 1 ? '' : 's'} updated`)
   }
 
   /**
@@ -1673,21 +1627,34 @@
                 <History size={13} class="shrink-0 text-muted" />
                 {historyOpen ? 'Hide history' : 'Show history'}
               </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={beginEditRoot}
-              >
-                <Pencil size={13} class="shrink-0 text-muted" />
-                Change save path
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                disabled={rootIsDefault || rootBusy}
-                onSelect={() => void applyRoot(defaultRoot)}
-              >
-                <RotateCcw size={13} class="shrink-0 text-muted" />
-                Reset save path to default
-              </DropdownMenu.Item>
+              <DropdownMenu.Sub>
+                <DropdownMenu.SubTrigger
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  disabled={selected.directory === ''}
+                >
+                  <Pencil size={13} class="shrink-0 text-muted" />
+                  Update {noun} details
+                  <ChevronRight size={12} class="ml-auto" />
+                </DropdownMenu.SubTrigger>
+                <DropdownMenu.SubContent
+                  class="z-50 min-w-48 border border-border bg-surface p-1 shadow-xl"
+                  sideOffset={4}
+                >
+                  {#each [{ mode: 'this', label: 'Change this save path' }, { mode: 'all', label: 'Change all save paths' }, { mode: 'rename', label: `Rename ${noun}` }] as action (action.mode)}
+                    <DropdownMenu.Item
+                      class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      onSelect={() => {
+                        if (
+                          action.mode === 'this' ||
+                          action.mode === 'all' ||
+                          action.mode === 'rename'
+                        )
+                          detailsMode = action.mode
+                      }}>{action.label}</DropdownMenu.Item
+                    >
+                  {/each}
+                </DropdownMenu.SubContent>
+              </DropdownMenu.Sub>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
@@ -1707,56 +1674,6 @@
         </button>
       </span>
     </div>
-
-    {#if editingRoot}
-      <div class="flex items-center gap-1 border-t border-border/60 px-2.5 py-1.5">
-        <input
-          class="h-6 min-w-0 flex-1 border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
-          bind:value={rootDraft}
-          placeholder={defaultRoot}
-          aria-label={`Folder new ${noun}s are saved in, relative to the project`}
-          onkeydown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              cancelEditRoot()
-              return
-            }
-            if (event.key !== 'Enter') return
-            event.preventDefault()
-            void applyRoot(rootDraft.trim())
-          }}
-        />
-        <button
-          type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center text-accent transition-colors hover:bg-elevated disabled:opacity-40"
-          disabled={rootBusy || rootDraft.trim() === ''}
-          title={`Save this ${noun} folder`}
-          aria-label={`Save this ${noun} folder`}
-          onclick={() => void applyRoot(rootDraft.trim())}
-        >
-          {#if rootBusy}
-            <LoaderCircle size={11} class="animate-spin" />
-          {:else}
-            <Check size={12} />
-          {/if}
-        </button>
-        <button
-          type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Cancel"
-          aria-label="Cancel changing the save path"
-          onclick={cancelEditRoot}
-        >
-          <X size={12} />
-        </button>
-      </div>
-    {/if}
-
-    {#if rootError !== ''}
-      <p class="px-2.5 pb-1.5 text-[0.6875rem] text-danger" role="alert">{rootError}</p>
-    {:else if rootNotice !== ''}
-      <p class="px-2.5 pb-1.5 text-[0.6875rem] text-muted">{rootNotice}</p>
-    {/if}
 
     {#if canvasNotice !== ''}
       <p class="px-2.5 pb-1.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
@@ -1997,3 +1914,15 @@
 >
   <p>Your unsaved control and caption edits will be replaced with the saved version.</p>
 </ConfirmDialog>
+
+{#if detailsMode}
+  <WorkDetailsDialog
+    {projectId}
+    directory={selected.directory}
+    {kind}
+    root={workRoot}
+    mode={detailsMode}
+    onClose={() => (detailsMode = null)}
+    onUpdated={detailsUpdated}
+  />
+{/if}

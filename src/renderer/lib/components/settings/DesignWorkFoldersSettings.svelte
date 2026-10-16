@@ -1,7 +1,9 @@
 <script lang="ts">
   import { FolderOpen, LoaderCircle, RotateCcw } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { workRootMoveSummary } from '$lib/design-work-root-summary'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { projectWorkState } from '$lib/stores/project-work.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
   import {
     DEFAULT_WORK_ROOTS,
     normalizeWorkRoot,
@@ -11,27 +13,13 @@
   import type { AuthoredWorkKind, WorkRootState } from '$shared/ipc-contract'
   import type { AppConfig, AppConfigPatch } from '$shared/types'
 
-  /**
-   * Where designs and videos are saved.
-   *
-   * `.cio/` is ignored by Git, so work written there is explorable rather than a
-   * change to the product. A user who wants their designs reviewed, versioned and
-   * deployed alongside the code needs them somewhere the project tracks, and that
-   * is a per-project decision about a folder the app has no way to guess. So the
-   * folder is a setting, and this card is where it is set.
-   *
-   * One value covers every project, because the answer is almost always the same
-   * shape of path and repeating it per project would be busywork. The consequence
-   * is that changing it moves work in every project, which is why the card says so
-   * and why it reports what the move did rather than silently succeeding.
-   */
   interface Props {
     config: AppConfig
     settingsReady: boolean
     updateConfig: (patch: AppConfigPatch) => Promise<void>
   }
 
-  let { config, settingsReady, updateConfig }: Props = $props()
+  let { config, settingsReady }: Props = $props()
 
   /** The row whose save is in flight, so only that row shows a spinner. */
   let busy = $state<AuthoredWorkKind | null>(null)
@@ -51,8 +39,33 @@
     }
   ]
 
-  const configured = $derived(config.workRoots ?? DEFAULT_WORK_ROOTS)
-  const disabled = $derived(!settingsReady || busy !== null)
+  const projectId = $derived(workspaceState.activeProject?.id ?? '')
+  let projectRoots = $state<{ projectId: string; roots: WorkRoots } | null>(null)
+  let newOnly = $state(true)
+  const configured = $derived(
+    (projectRoots?.projectId === projectId ? projectRoots.roots : null) ??
+      config.workRoots ??
+      DEFAULT_WORK_ROOTS
+  )
+  $effect(() => {
+    const id = projectId
+    let cancelled = false
+    if (id)
+      void invoke('design:workRootState', id)
+        .then((state) => {
+          if (!cancelled) projectRoots = { projectId: id, roots: state.roots }
+        })
+        .catch((failure: unknown) => {
+          if (!cancelled)
+            error = failure instanceof Error ? failure.message : 'Could not load project folders.'
+        })
+    return () => {
+      cancelled = true
+    }
+  })
+  const disabled = $derived(
+    !settingsReady || busy !== null || !projectId || projectRoots?.projectId !== projectId
+  )
 
   /**
    * A draft checked before it is stored, so the field can say what is wrong
@@ -94,19 +107,22 @@
       notice = ''
       return
     }
-    const next: WorkRoots =
-      kind === 'design'
-        ? { design: checked.root, video: configured.video }
-        : { design: configured.design, video: checked.root }
+    const owner = projectId
     busy = kind
     error = ''
     notice = ''
     try {
-      // Going through the config write rather than a channel of its own is what
-      // makes the move happen: main relocates on every save that changes these.
-      await updateConfig({ workRoots: next })
-      const state: WorkRootState = await invoke('design:workRootState')
-      notice = workRootMoveSummary(state, kind)
+      const result = await invoke('design:updateDetails', owner, {
+        kind,
+        directory: '',
+        root: checked.root,
+        thisOnly: false,
+        newOnly
+      })
+      const state: WorkRootState = await invoke('design:workRootState', owner)
+      if (projectId === owner) projectRoots = { projectId: owner, roots: state.roots }
+      await projectWorkState.refresh(owner)
+      notice = `Project save folder updated. ${result.moved} folders moved.`
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The folder could not be changed.'
     } finally {
@@ -128,10 +144,13 @@
 <section id="settings-block-design-work-folders" class="border bg-surface p-4">
   <h2 class="text-sm font-semibold">Work folders</h2>
   <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
-    Where designs and videos are saved, relative to each project. Point a folder at somewhere the
-    project tracks to keep the work in version control. Changing one moves what is already saved
-    under the old folder, in every project.
+    Where designs and videos are saved in {workspaceState.activeProject?.name ??
+      'the current project'}. Each design or video keeps its own folder name.
   </p>
+
+  <div class="mt-3">
+    <Switch bind:checked={newOnly} label="New designs and videos only" {disabled} />
+  </div>
 
   {#each ROWS as row (row.kind)}
     <form class="mt-4" onsubmit={(event) => submitRow(row.kind, event)}>
@@ -167,7 +186,7 @@
           type="button"
           class="flex h-9 shrink-0 items-center gap-1.5 border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
           disabled={disabled || configured[row.kind] === DEFAULT_WORK_ROOTS[row.kind]}
-          title={`Put new ${row.label.toLowerCase().replace(' folder', 's')} back in ${DEFAULT_WORK_ROOTS[row.kind]}, and move the ones already there`}
+          title={`Put new ${row.label.toLowerCase().replace(' folder', 's')} back in ${DEFAULT_WORK_ROOTS[row.kind]}, in this project`}
           onclick={() => void applyRoot(row.kind, DEFAULT_WORK_ROOTS[row.kind])}
         >
           <RotateCcw size={12} />

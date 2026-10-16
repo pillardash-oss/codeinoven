@@ -1,5 +1,7 @@
 import type {
   AuthoredWorkKind,
+  UpdateWorkDetails,
+  UpdateWorkDetailsResult,
   DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
@@ -139,7 +141,11 @@ export const invokeDesignContract = {
    * moved. Read straight after a save, because both surfaces that change a root
    * have to report what the move did with the work already on disk.
    */
-  'design:workRootState': {} as Contract<[], WorkRootState>,
+  'design:workRootState': {} as Contract<[projectId?: string], WorkRootState>,
+  'design:updateDetails': {} as Contract<
+    [projectId: string, details: UpdateWorkDetails],
+    UpdateWorkDetailsResult
+  >,
   /**
    * One design or composition folder's history, captured up to the present.
    *

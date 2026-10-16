@@ -155,8 +155,8 @@ export class DesignRepo {
    *
    * The read runs on the database worker: this is reached from the save path that
    * moves a work root, which is an interaction path, so it must not touch SQLite
-   * on the Electron main thread (see `docs/APP-BIBLE.md`). The writes stay on the
-   * primary connection, where a bounded UPDATE is the tail of the same action.
+   * on the Electron main thread (see `docs/APP-BIBLE.md`). Updates run in one
+   * worker transaction so thread links and creator links move together.
    */
   async rebaseRoot(input: { projectId: string; from: string; to: string }): Promise<number> {
     const result = await this.db.queryViaWorker(
@@ -164,30 +164,29 @@ export class DesignRepo {
       [input.projectId],
       0
     )
-    if (!result.ok) return 0
+    if (!result.ok) throw new Error('Could not read work tracking')
     const rows = result.rows as unknown as Array<{ thread_id: string; directory: string }>
-    let updated = 0
-    for (const row of rows) {
-      if (row.directory !== input.from && !row.directory.startsWith(`${input.from}/`)) continue
-      this.db.run(
-        'UPDATE thread_designs SET directory = ? WHERE thread_id = ?',
-        `${input.to}${row.directory.slice(input.from.length)}`,
-        row.thread_id
-      )
-      updated += 1
-    }
-    // Origins name the same folders, so they have to move with them or the board
-    // would look for a creator under a directory that no longer exists.
-    this.db.run(
-      `UPDATE design_origins
-          SET directory = ? || SUBSTR(directory, ?)
-        WHERE project_id = ? AND (directory = ? OR directory LIKE ? ESCAPE '\\')`,
-      input.to,
-      input.from.length + 1,
-      input.projectId,
-      input.from,
-      `${input.from.replace(/[%_\\]/gu, '\\$&')}/%`
+    const matching = rows.filter(
+      (row) => row.directory === input.from || row.directory.startsWith(`${input.from}/`)
     )
+    const statements: Array<{ sql: string; params: unknown[] }> = matching.map((row) => ({
+      sql: 'UPDATE thread_designs SET directory = ? WHERE thread_id = ?',
+      params: [`${input.to}${row.directory.slice(input.from.length)}`, row.thread_id]
+    }))
+    statements.push({
+      sql: `UPDATE design_origins SET directory = ? || SUBSTR(directory, ?)
+        WHERE project_id = ? AND (directory = ? OR directory LIKE ? ESCAPE '\\')`,
+      params: [
+        input.to,
+        input.from.length + 1,
+        input.projectId,
+        input.from,
+        `${input.from.replace(/[%_\\]/gu, '\\$&')}/%`
+      ]
+    })
+    const saved = await this.db.transactionViaWorker(statements)
+    if (!saved.ok) throw new Error(saved.error ?? 'Could not update work tracking')
+    const updated = matching.length
     return updated
   }
 

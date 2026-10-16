@@ -3,10 +3,7 @@ import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../../lib/cio-prompts'
 import { prototypeCdnPolicyFromConfig } from '../../../lib/prototypes/prototype-cdn'
-import { type WorkRoots } from '../../../lib/design/work-roots'
-import { relocateWorkRoots } from '../../design/work-root-relocation'
 import { setWorkRootReports, setWorkRoots } from '../../design/work-roots-state'
-import { ProjectRepo } from '../../database/repositories/project-repo'
 import { normalizeWorkerNames } from '../../../lib/assignment/worker-names'
 import type {
   ProjectAction,
@@ -101,23 +98,6 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     rankingSnapshotRepo,
     chatEngine
   } = ctx
-
-  /**
-   * Move every project's authored work into the folders the user just chose.
-   *
-   * The roots are one app-wide setting, so the move covers every local project:
-   * one left behind would keep its designs under a root the board no longer
-   * lists. The reports are remembered for the surface that made the change, which
-   * asks for them as soon as this handler returns.
-   */
-  async function relocateAuthoringRoots(previous: WorkRoots, next: WorkRoots): Promise<void> {
-    if (previous.design === next.design && previous.video === next.video) return
-    const projects = new ProjectRepo(database)
-      .list()
-      .filter((project) => project.source === 'local' && project.path.length > 0)
-      .map((project) => ({ id: project.id, name: project.name, path: project.path }))
-    setWorkRootReports(await relocateWorkRoots({ database, projects, previous, next }))
-  }
 
   /**
    * One read of everything the grading panel shows: the queue, the judge, and
@@ -421,7 +401,8 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
         tts: patch.sound.ttsUnload
       } as Record<string, unknown>)
     }
-    if (patch.workRoots) await relocateAuthoringRoots(previous.workRoots, config.workRoots)
+    // Global defaults never move project files. Explicit moves use design:updateDetails.
+    if (patch.workRoots) setWorkRootReports([])
     broadcastConfigChanged(config)
     return config
   })
