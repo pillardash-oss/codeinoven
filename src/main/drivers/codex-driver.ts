@@ -349,6 +349,8 @@ export class CodexDriver extends PersistentCliDriver {
 
   /** Start a Codex turn through app-server so the same native turn can be steered. */
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
+    // A sibling can have rebound this app session since our last turn.
+    if (!this.activeTurns.has(options.sessionId)) this.sessionCache.delete(options.sessionId)
     const session = await this.requireSession(projectPath, options.sessionId)
     // A native turn can still be registered while the engine believes the
     // session is idle: a network failure tears down the visible turn, but the
@@ -444,7 +446,22 @@ export class CodexDriver extends PersistentCliDriver {
       let historyRecap = options.historyRecap
       let threadResult: Record<string, unknown>
       const previousNativeId = session.nativeSessionId
-      if (previousNativeId) {
+      const transferPath = `drivers/${this.id}/transfers/${session.id}.json`
+      const transfer = await this.storage.read<{ nativeThreadId: string; projectPath: string }>(
+        transferPath
+      )
+      const forkForTransfer =
+        transfer?.projectPath === projectPath && previousNativeId === transfer.nativeThreadId
+      if (forkForTransfer) {
+        threadResult = await this.appServerRequest(host, 'thread/fork', {
+          ...contextConfig,
+          threadId: transfer.nativeThreadId,
+          excludeTurns: true,
+          cwd: projectPath,
+          dynamicTools,
+          developerInstructions
+        })
+      } else if (previousNativeId) {
         try {
           threadResult = await this.appServerRequest(host, 'thread/resume', {
             threadId: previousNativeId,
@@ -480,10 +497,14 @@ export class CodexDriver extends PersistentCliDriver {
       const thread = recordValue(threadResult['thread'])
       const nativeThreadId = stringValue(thread?.['id']) ?? session.nativeSessionId
       if (!nativeThreadId) throw new Error('Codex app-server did not return a thread ID')
+      if (forkForTransfer && nativeThreadId === transfer.nativeThreadId) {
+        throw new Error('Codex app-server did not return a new thread ID for the transfer')
+      }
       active.nativeThreadId = nativeThreadId
       session.nativeSessionId = nativeThreadId
       this.threadSessionsByNativeId.set(nativeThreadId, { sessionId: session.id, projectPath })
       await this.persistSession(session)
+      if (transfer?.projectPath === projectPath) await this.storage.remove(transferPath)
 
       const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
@@ -848,6 +869,7 @@ export class CodexDriver extends PersistentCliDriver {
     if (active) await this.finishAppServerTurn(active)
     await super.deleteSession(projectPath, sessionId)
     await this.storage.remove(`drivers/${this.id}/inputs/${sessionId}`)
+    await this.storage.remove(`drivers/${this.id}/transfers/${sessionId}.json`)
     this.stopResidentHostForPathIfIdle(projectPath)
   }
 
@@ -857,9 +879,9 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   /**
-   * Hand an idle native thread to another CodeInOven process. Codex holds its
-   * writer lock for the lifetime of the loaded app-server thread, so closing
-   * only the project host can release it without deleting or forking history.
+   * Transfer a settled app session. An idle host exits to release the exact
+   * native writer. A busy host stays alive for unrelated turns; the receiving
+   * instance forks the settled history under a new native ID on its own host.
    */
   async releaseIdleSessionForTransfer(
     projectPath: string,
@@ -868,10 +890,25 @@ export class CodexDriver extends PersistentCliDriver {
     const nativeThreadId =
       (await this.requireSession(projectPath, sessionId)).nativeSessionId ?? null
     const host = this.writerHostFor(projectPath, sessionId, nativeThreadId)
-    if (!host) return { owner: false, released: false }
+    if (!host || !nativeThreadId) return { owner: false, released: false }
 
+    const sessionBlocker = this.sessionTransferBlocker(sessionId, nativeThreadId)
+    if (sessionBlocker) return { owner: true, released: false, reason: sessionBlocker }
     const blocker = this.handOffBlockerFor(host, sessionId)
-    if (blocker) return { owner: true, released: false, reason: blocker }
+    if (blocker) {
+      // Keep unrelated turns on their shared server. The adopter forks this
+      // settled native history on its own host and retains the app session ID.
+      await this.storage.write(`drivers/${this.id}/transfers/${sessionId}.json`, {
+        nativeThreadId,
+        projectPath
+      })
+      this.threadSessionsByNativeId.delete(nativeThreadId)
+      this.sessionCache.delete(sessionId)
+      void this.appServerRequest(host, 'thread/unsubscribe', { threadId: nativeThreadId }).catch(
+        (error: unknown) => Logger.dev('Codex transferred thread unsubscribe unavailable:', error)
+      )
+      return { owner: true, released: true }
+    }
 
     if (this.hostsByProjectPath.get(projectPath) === host) {
       this.hostsByProjectPath.delete(projectPath)
@@ -897,10 +934,9 @@ export class CodexDriver extends PersistentCliDriver {
    * Whether this thread's writer could be released once its own turn stops,
    * judged without stopping anything.
    *
-   * A transfer stops the run before it releases the writer, because Codex only
-   * hands an app-server over while no turn is running on it. Answering the same
-   * question beforehand is what lets the transfer refuse while the run is still
-   * alive, instead of stopping it and only then finding the hand-off impossible.
+   * Unrelated host activity can use the history-fork path. Only operations on
+   * this session block the transfer, and its own turn will be stopped by the
+   * caller after this probe.
    */
   async canHandOffIdleSession(
     projectPath: string,
@@ -918,8 +954,25 @@ export class CodexDriver extends PersistentCliDriver {
     // No writer here means this process is not the one holding the thread, so a
     // hand-off has nothing to wait on.
     if (!host) return { blocked: false }
-    const blocker = this.handOffBlockerFor(host, sessionId, { ignoreOwnTurn: true })
+    const blocker = this.sessionTransferBlocker(sessionId, nativeThreadId, true)
     return blocker ? { blocked: true, reason: blocker } : { blocked: false }
+  }
+
+  private sessionTransferBlocker(
+    sessionId: string,
+    nativeThreadId: string | null,
+    ignoreOwnTurn = false
+  ): string | null {
+    if (!ignoreOwnTurn && this.activeTurns.has(sessionId)) {
+      return `Codex session ${sessionId} still has an active turn.`
+    }
+    if (nativeThreadId && this.compactionsByThreadId.has(nativeThreadId)) {
+      return `Codex session ${sessionId} is still compacting its history.`
+    }
+    if (nativeThreadId && this.contextUsageByThreadId.has(nativeThreadId)) {
+      return `Codex session ${sessionId} is still refreshing context usage.`
+    }
+    return null
   }
 
   /**
@@ -1769,6 +1822,8 @@ export class CodexDriver extends PersistentCliDriver {
         (active) => active.nativeThreadId === threadId
       )
       if (byThread) return byThread
+      // A transferred thread can still emit late events on the source host.
+      return undefined
     }
     if (this.activeTurns.size === 1) return this.activeTurns.values().next().value
     return undefined
