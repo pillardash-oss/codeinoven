@@ -153,9 +153,14 @@ class FileExplorerStore {
 
   /** Merge a patch into a project's persisted explorer position. */
   update(projectId: string, patch: Partial<FileExplorerProjectState>): void {
+    const current = this.project(projectId)
+    // Effects may persist a preference that is already settled. Replacing the
+    // snapshot in that case retriggers its readers and can create a flush loop.
+    const keys = Object.keys(patch) as (keyof FileExplorerProjectState)[]
+    if (keys.every((key) => Object.is(current[key], patch[key]))) return
     this.byProject = {
       ...this.byProject,
-      [projectId]: { ...this.project(projectId), ...patch }
+      [projectId]: { ...current, ...patch }
     }
     this.schedulePersist()
   }
