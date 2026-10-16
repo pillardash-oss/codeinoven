@@ -178,4 +178,17 @@ describe('concise assistant delivery', () => {
   it('applies the same brevity rule to setup and follow-up persona layers', () => {
     expect(ASSISTANT_VOICE_INSTRUCTION).toContain(ASSISTANT_BRIEF_REPLY_INSTRUCTION)
   })
+  it('keeps the urgency out of the message instead of asking for a label', () => {
+    // A user reported `[whenever · just-me]` prefixes in assistant messages: the
+    // old contract said to label the report with the bracket, so the model wrote
+    // the tag into the message. Urgency is guidance, not message text.
+    const context = assistantRunContext({
+      name: 'Judge',
+      connections: [],
+      delivery: { channel: 'in-app' },
+      priority: { timeliness: 'whenever', impact: 'just-me' }
+    })
+    expect(context).not.toContain('Label the report')
+    expect(context).toContain('It never appears in your message')
+  })
 })

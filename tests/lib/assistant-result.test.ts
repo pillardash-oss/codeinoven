@@ -50,6 +50,22 @@ describe('assistant result delivery', () => {
       ASSISTANT_INVALID_RESULT
     )
   })
+  it('drops a leading urgency tag the run was never meant to write', () => {
+    // Urgency is the run's own guidance, so a bracket or label prefix is noise a
+    // user reported seeing. Both the stored ids and their display labels go.
+    expect(assistantResultText('[whenever · just-me] Both sites are online.')).toBe(
+      'Both sites are online.'
+    )
+    expect(assistantResultText('[Whenever · Just me] Both sites are online.')).toBe(
+      'Both sites are online.'
+    )
+    expect(assistantResultText('<assistant_result>[today · company] Ship it.</assistant_result>')).toBe(
+      'Ship it.'
+    )
+    // A sentence that merely starts with a bracket-free word stays untouched.
+    expect(assistantResultText('Today both sites are online.')).toBe('Today both sites are online.')
+    expect(assistantResultText(result)).toBe(result)
+  })
   it('archives exactly the same delivered update without model drafting or delimiters', () => {
     const document = buildAssistantReportDocument({
       taskTitle: 'Watch products',

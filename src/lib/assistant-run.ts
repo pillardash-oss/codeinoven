@@ -157,11 +157,11 @@ function reportingLines(assistant: Pick<Assistant, 'delivery' | 'priority'>): st
   const priority = assistant.priority
   if (priority) {
     lines.push(
-      `The agreed urgency for this assistant is ${assistantPriorityLabel(priority)}. Label the report with the bracket it actually falls in, and move it when what you found is more or less urgent than the agreed default. Time-based brackets (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based brackets (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. If the urgency needs mentioning, fold both brackets into the opening sentence without a separate justification paragraph.`
+      `The agreed urgency for this assistant is ${assistantPriorityLabel(priority)}; treat that as the default and move it when what you found is more or less urgent. Time-based brackets (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based brackets (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. That urgency is your own guidance for how hard to push and whether to interrupt the user. It never appears in your message: no bracket, tag, or label prefix, and no line stating the brackets. When the urgency genuinely matters to the reader, say it in plain words in the opening sentence.`
     )
   } else if (delivery) {
     lines.push(
-      `Label the report with its urgency on two brackets, decided from what you actually found rather than assumed. Time-based (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. If the urgency needs mentioning, fold both brackets into the opening sentence without a separate justification paragraph.`
+      `Judge the urgency of what you find on two brackets, from what you actually found rather than assumed. Time-based (how soon it matters): ${ASSISTANT_TIMELINESS_IDS.join(', ')}. Scope-based (how far it reaches): ${ASSISTANT_IMPACT_IDS.join(', ')}. That judgement is your own guidance for how hard to push and whether to interrupt the user. It never appears in your message: no bracket, tag, or label prefix, and no line stating the brackets. When the urgency genuinely matters to the reader, say it in plain words in the opening sentence.`
     )
   }
 

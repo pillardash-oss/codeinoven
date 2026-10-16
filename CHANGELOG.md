@@ -272,6 +272,17 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **An assistant stops tagging its message with its own urgency.** The run
+  contract told the assistant to "label the report with the bracket it actually
+  falls in", with the bracket ids listed right there, so a run prefixed its
+  update with something like `[whenever · just-me]`. Nothing in the app reads that
+  text, so it was pure noise the user never asked for. Urgency is now stated as
+  the run's own guidance for how hard to push and whether to interrupt, and the
+  contract says plainly that it never appears in the message. Result extraction
+  also drops such a leading tag if an older or over-eager model still writes one,
+  while a sentence that merely starts with the same kind of word ("Today both
+  sites are online.") is left alone.
+
 - **A thread parked on a dropped connection resumes itself when the device is
   back.** Losing Wi-Fi does not only fail a request, it takes the harness process
   down with it, and the failure that comes back is not shaped like a transport
