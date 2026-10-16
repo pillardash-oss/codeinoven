@@ -158,6 +158,12 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **A thread keeps a marker for every kind of work it has authored.** A row drew
+  only the thread's current design or video session, so a thread that designed
+  something and later cut a video about it lost its design mark. Threads now
+  carry the durable set of authored-work kinds beside the current session, and
+  the row draws one marker per kind in a stable canonical order.
+
 - **Agents answer like they are briefing an executive, and diagrams stop being
   decoration.** Long, meandering replies were normal, because nothing told an
   agent how much prose to write, and the Mermaid instruction only asked for a
@@ -236,6 +242,26 @@ All notable changes to CodeInOven are documented here. This project follows
   longer proposed for memory.
 
 ### Fixed
+
+- **A thread parked on a dropped connection resumes itself when the device is
+  back.** Losing Wi-Fi does not only fail a request, it takes the harness process
+  down with it, and the failure that comes back is not shaped like a transport
+  error: a killed process reports an exit, an empty stream, or a driver-specific
+  string, so it was read as a terminal verdict and the thread sat on an error
+  card with nothing left listening for the reconnection the card promised.
+  Connectivity is now tracked in one main-process service, and every
+  announcement (the renderer's online and offline events, a wake from sleep, a
+  request the app just watched fail) is a signal rather than a verdict: a real
+  round trip, an uncached DNS answer and then one TLS request, has to succeed
+  before the device counts as online, and one bounded timer re-probes with a
+  backoff while the device is offline so a reconnection the operating system
+  never announced is still found. On the transition back, a failure that carried
+  no provider verdict but landed inside the connection-loss window is re-read as
+  the connection wait it is, and every parked thread resumes through the retry
+  scheduler in batches of two, so a mass reconnection never stampedes the
+  machine. A provider that stated its own verdict (sign-in, billing, a usage
+  window) keeps it, because those need the user, not the network. The behavior
+  is harness independent.
 
 - **A resumed thread continues the harness conversation it already had.** A pi
   account that keeps its own container runs pi with `PI_CODING_AGENT_DIR` pointing

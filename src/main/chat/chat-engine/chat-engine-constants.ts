@@ -56,6 +56,29 @@ export const USAGE_RESET_FALLBACK_RETRY_MS = 60 * 60 * 1000
  *  drops straight back into the wait (observed with Codex on 2026-09-07). */
 export const RETRY_FIRE_GRACE_MS = 90 * 1000
 
+/**
+ * The card copy for a wait parked on the device's own connection. Kept in one
+ * place because the same wait reaches the user through several paths (a
+ * driver's transport verdict, the engine re-reading a failure while the device
+ * is offline, and the restored ledger after a restart), and all of them must
+ * promise the user the same thing.
+ */
+export const CONNECTION_WAIT_MESSAGE =
+  'Connection interrupted. This thread will resume automatically when the device reconnects.'
+
+/**
+ * How recently connectivity must have been verified absent for a failure with
+ * no provider verdict of its own to be read as a connection loss.
+ *
+ * A dropped Wi-Fi link takes the harness process down with it, and what that
+ * reports back ("process exited unexpectedly", an empty stream, a transport
+ * reset buried in a driver-specific string) classifies as `unknown`. Honoring
+ * that verdict parked the thread on a terminal card while the device was
+ * plainly the cause of the failure and already reconnecting, so a failure
+ * landing inside this window is re-read as the connection wait it is.
+ */
+export const CONNECTION_LOSS_GRACE_MS = 30_000
+
 export const LOOP_MAX_ITERATIONS = 8
 
 /** How long a transferring instance waits for the departing instance's aborted

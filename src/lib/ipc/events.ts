@@ -103,11 +103,12 @@ export const IPC_EVENT_CONTRACT = {
   ],
   /** Branch association changed for a thread. */
   'thread:branchUpdated': [] as unknown as [projectId: string, threadId: string, branch: string],
-  /** Authored-work session changed for a thread (its design/video marker). */
+  /** Authored-work sessions changed for a thread (its design/video markers). */
   'thread:authoredWorkUpdated': [] as unknown as [
     projectId: string,
     threadId: string,
-    kind: import('./design').AuthoredWorkKind
+    kind: import('./design').AuthoredWorkKind,
+    kinds: import('./design').AuthoredWorkKind[]
   ],
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [] as unknown as [projectId: string, threadId: string, hasNote: boolean],

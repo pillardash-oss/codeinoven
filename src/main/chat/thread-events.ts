@@ -183,22 +183,28 @@ export function broadcastThreadBranchUpdated(thread: Thread): void {
 }
 
 /**
- * Push just a thread's authored-work kind to every renderer window.
+ * Push just a thread's authored-work markers to every renderer window.
  *
  * Deliberately lighter than `broadcastThreadUpdate`, for the same reason as the
- * branch update above: the marker lands the moment a design or video preview
+ * branch update above: the markers land the moment a design or video preview
  * records the session, which is mid-turn, and routing it through the full
  * `thread:updated` fan-out would force ThreadView's message reconcile to reload
  * and re-merge the whole transcript at that moment. Only surfaces that draw the
- * marker need to react, and they patch the one field in place.
+ * markers need to react, and they patch the fields in place.
+ *
+ * Both facts travel: `kind` is the session the thread is in now and `kinds` is
+ * every session it has entered, which is what the row draws one marker per.
  */
 export function broadcastThreadAuthoredWorkUpdated(
   projectId: string,
   threadId: string,
-  kind: AuthoredWorkKind
+  kind: AuthoredWorkKind,
+  kinds: readonly AuthoredWorkKind[]
 ): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'thread:authoredWorkUpdated', projectId, threadId, kind)
+    sendToRenderer(win.webContents, 'thread:authoredWorkUpdated', projectId, threadId, kind, [
+      ...kinds
+    ])
   }
 }
 

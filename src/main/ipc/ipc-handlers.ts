@@ -503,6 +503,7 @@ export function registerIpcHandlers(
     assistantManager,
     assistantScheduler: options.assistantScheduler,
     autoAnswerStore: options.autoAnswerStore,
+    connectivity: options.connectivity,
     privilegedIpc,
     privileged,
     attachmentStorageDirectory,

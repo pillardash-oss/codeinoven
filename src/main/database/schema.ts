@@ -112,6 +112,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   branch               TEXT,
   feature_slug         TEXT,
   authored_work_kind   TEXT CHECK(authored_work_kind IN ('design','video')),
+  authored_work_kinds  TEXT,
   scope_bucket_id      TEXT DEFAULT 'default',
   settings             TEXT,
   context_usage        TEXT,

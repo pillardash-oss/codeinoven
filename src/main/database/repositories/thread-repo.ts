@@ -1,5 +1,11 @@
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
+import {
+  isAuthoredWorkKind,
+  orderAuthoredWorkKinds,
+  parseAuthoredWorkKinds,
+  serializeAuthoredWorkKinds
+} from '../../../lib/design/authored-work-kinds'
 import { canMarkThreadUnread, DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
 import {
   ASSISTANT_SPACE_ID,
@@ -33,6 +39,7 @@ interface ThreadRow {
   branch: string | null
   feature_slug: string | null
   authored_work_kind: string | null
+  authored_work_kinds: string | null
   scope_bucket_id: string | null
   settings: string | null
   context_usage: string | null
@@ -143,6 +150,23 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
   }
 }
 
+/**
+ * The authored-work kinds a row carries, or undefined when it has done none.
+ *
+ * The durable set is the answer, and the session kind is merged in because it is
+ * the one fact every write path is guaranteed to keep current. A row written
+ * before the set existed, or by a path that recorded only the session, still
+ * draws its marker instead of an empty row. Unknown values are dropped rather
+ * than trusted, so a hand-edited column cannot conjure a glyph.
+ */
+function authoredWorkKindsFromRow(row: ThreadRow): AuthoredWorkKind[] | undefined {
+  const kinds = orderAuthoredWorkKinds([
+    ...parseAuthoredWorkKinds(row.authored_work_kinds),
+    row.authored_work_kind
+  ])
+  return kinds.length > 0 ? kinds : undefined
+}
+
 /** Parse a raw thread row into a display-facing Thread. */
 function rowToThread(row: ThreadRow): Thread {
   return {
@@ -161,7 +185,10 @@ function rowToThread(row: ThreadRow): Thread {
     read: row.read === 1,
     branch: row.branch ?? undefined,
     featureSlug: row.feature_slug ?? undefined,
-    authoredWorkKind: (row.authored_work_kind as Thread['authoredWorkKind']) ?? undefined,
+    authoredWorkKind: isAuthoredWorkKind(row.authored_work_kind)
+      ? row.authored_work_kind
+      : undefined,
+    authoredWorkKinds: authoredWorkKindsFromRow(row),
     scopeBucketId: row.scope_bucket_id ?? undefined,
     settings: row.settings
       ? (sanitizeThreadSettings(JSON.parse(row.settings)) as ThreadSettings)
@@ -409,7 +436,7 @@ interface MessageMatchRow {
 const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
   pinned, pinned_at, bookmarked, sort_order, scope_sort_order, archived, read,
-  branch, feature_slug, authored_work_kind, scope_bucket_id, settings, context_usage,
+  branch, feature_slug, authored_work_kind, authored_work_kinds, scope_bucket_id, settings, context_usage,
   session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
@@ -421,7 +448,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -437,6 +464,7 @@ ON CONFLICT(id) DO UPDATE SET
   branch=excluded.branch,
   feature_slug=excluded.feature_slug,
   authored_work_kind=excluded.authored_work_kind,
+  authored_work_kinds=excluded.authored_work_kinds,
   scope_bucket_id=excluded.scope_bucket_id,
   settings=excluded.settings,
   context_usage=excluded.context_usage,
@@ -495,6 +523,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.branch ?? null,
     thread.featureSlug ?? null,
     thread.authoredWorkKind ?? null,
+    serializeAuthoredWorkKinds(thread.authoredWorkKinds),
     thread.scopeBucketId ?? null,
     thread.settings ? JSON.stringify(thread.settings) : null,
     thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
@@ -580,21 +609,46 @@ export class ThreadRepo {
   }
 
   /**
-   * Set a thread's authored-work kind off the main thread.
+   * Record that a thread entered one authored-work session.
    *
-   * The `IS NOT ?` guard makes a repeated write of the same kind a no-op, so a
-   * preview navigation that records the kind it already stored touches nothing.
-   * That matters because this runs on every recognized navigation, and an
-   * unconditional UPDATE would bump the WAL for an unchanged value.
+   * Two columns, one write: `authored_work_kind` becomes the session the thread
+   * is in now (what a preview resolves against) and `authored_work_kinds` gains
+   * the kind, because the row draws one marker per kind and a thread that
+   * designed something and later cut a video about it has done both.
+   *
+   * The current row is read first so the set can be unioned rather than
+   * replaced, and so a repeat of the kind already recorded writes nothing: this
+   * runs on every recognized navigation, and an unconditional UPDATE would bump
+   * the WAL for an unchanged value. It reads and writes on the database worker,
+   * because a preview navigation must never touch the Electron main thread.
+   * Returns the set it stored, or null when the thread row is gone.
    */
-  async setAuthoredWorkKindViaWorker(id: string, kind: AuthoredWorkKind): Promise<void> {
+  async setAuthoredWorkKindViaWorker(
+    id: string,
+    kind: AuthoredWorkKind
+  ): Promise<AuthoredWorkKind[] | null> {
+    const current = await this.db.queryViaWorker(
+      'SELECT authored_work_kind, authored_work_kinds FROM threads WHERE id = ?',
+      [id],
+      1
+    )
+    if (!current.ok) throw new Error(current.error ?? 'Thread authored-work read failed')
+    const row = current.rows[0] as
+      { authored_work_kind: unknown; authored_work_kinds: unknown } | undefined
+    if (!row) return null
+    const stored = parseAuthoredWorkKinds(
+      typeof row.authored_work_kinds === 'string' ? row.authored_work_kinds : null
+    )
+    const kinds = orderAuthoredWorkKinds([...stored, kind])
+    if (row.authored_work_kind === kind && kinds.length === stored.length) return kinds
     const result = await this.db.executeViaWorker(
-      'UPDATE threads SET authored_work_kind = ? WHERE id = ? AND authored_work_kind IS NOT ?',
-      [kind, id, kind]
+      'UPDATE threads SET authored_work_kind = ?, authored_work_kinds = ? WHERE id = ?',
+      [kind, serializeAuthoredWorkKinds(kinds), id]
     )
     if (!result.ok) {
       throw new Error(result.error ?? 'Thread authored-work kind update failed')
     }
+    return kinds
   }
 
   get(id: string): Thread | null {

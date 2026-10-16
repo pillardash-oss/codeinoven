@@ -732,11 +732,13 @@
     if (isRemote) void ovens.ensure()
   })
 
-  /** The authored-work session this thread is in, or null when it is in none.
-   *  Drawn from the persisted thread field: main writes it the moment the thread
-   *  enters a session and pushes the row over `thread:updated`, so no scan and no
-   *  per-row round trip stands behind the marker. */
-  let authoredWorkKind = $derived(thread.authoredWorkKind ?? null)
+  /** The authored-work sessions this thread has entered, in the canonical order
+   *  the markers are drawn in. Drawn from the persisted set: main records every
+   *  session the thread enters, so a thread that designed something and later cut
+   *  a video about it draws both marks rather than the last one over the first. */
+  let authoredWorkKinds = $derived(
+    thread.authoredWorkKinds ?? (thread.authoredWorkKind ? [thread.authoredWorkKind] : [])
+  )
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 
@@ -744,7 +746,7 @@
    *  thread always shows it: the Oven and the branch belong on every row of it,
    *  and a temporary chat's mark lives on that line. */
   let showBottomRow = $derived(
-    authoredWorkKind !== null ||
+    authoredWorkKinds.length > 0 ||
       scopeBucket !== null ||
       harnessIds.length > 1 ||
       hasNote ||
@@ -773,7 +775,7 @@
       isRemote ||
       hasNote ||
       hasTemporaryChat ||
-      authoredWorkKind !== null
+      authoredWorkKinds.length > 0
   )
 
   let scopeColor = $derived(
@@ -917,8 +919,8 @@
   {/if}
 {/snippet}
 
-{#snippet authoredWorkMarker(kind: AuthoredWorkKind | null)}
-  {#if kind}
+{#snippet authoredWorkMarker(kinds: readonly AuthoredWorkKind[])}
+  {#each kinds as kind (kind)}
     {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
     <span
       class="flex shrink-0 items-center text-muted"
@@ -927,7 +929,7 @@
     >
       <WorkIcon size={11} strokeWidth={1.8} aria-hidden="true" />
     </span>
-  {/if}
+  {/each}
 {/snippet}
 
 {#snippet temporaryChatMarker()}
@@ -1168,7 +1170,7 @@
               <ThreadNoteIcon size={11} />
             </span>
           {/if}
-          {@render authoredWorkMarker(authoredWorkKind)}
+          {@render authoredWorkMarker(authoredWorkKinds)}
           {#each activeIndicators as live (live)}
             <ThreadIndicatorSlot indicator={live} />
           {/each}
@@ -1433,7 +1435,7 @@
               </span>
             {/if}
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKind)}
+            {@render authoredWorkMarker(authoredWorkKinds)}
             {#each activeIndicators as live (live)}
               <ThreadIndicatorSlot indicator={live} />
             {/each}
@@ -1609,7 +1611,7 @@
               </span>
             {/if}
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKind)}
+            {@render authoredWorkMarker(authoredWorkKinds)}
             <span
               class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
               title={`Edited ${formatDateTime(thread.lastActivity)}`}

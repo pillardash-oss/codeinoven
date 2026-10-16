@@ -74,6 +74,15 @@ export interface Thread {
    * stands between the persisted fact and the sidebar.
    */
   authoredWorkKind?: AuthoredWorkKind
+  /**
+   * Every authored-work session this thread has entered, written at the same
+   * moments as `authoredWorkKind` above and never cleared, because the row draws
+   * one marker per kind: a thread that designed something and later cut a video
+   * about it shows both. `authoredWorkKind` still says which session it is in
+   * now, which is what a preview resolves against. Always in the app's canonical
+   * order, so the glyphs never swap places between renders.
+   */
+  authoredWorkKinds?: AuthoredWorkKind[]
   /** User-defined feature bucket used by the project's Scope board. */
   scopeBucketId?: string
   /** Per-thread agent configuration (harness, model, thinking, permissions). */

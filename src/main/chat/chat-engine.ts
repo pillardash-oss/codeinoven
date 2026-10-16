@@ -162,6 +162,7 @@ import {
 } from '../speech/lesson-protocol'
 import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { ConnectivitySource } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
 import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
@@ -601,6 +602,8 @@ import {
 } from './chat-engine/chat-engine-message-text'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
+  CONNECTION_LOSS_GRACE_MS,
+  CONNECTION_WAIT_MESSAGE,
   CONTINUATION_REQUEST_PAGE_MESSAGES,
   COORDINATOR_HANDOFF_QUEUE_DIR,
   CURRENT_SPEC_GENERATION_VERSION,
@@ -1317,6 +1320,8 @@ export class ChatEngine {
 
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
+  /** Verified device connectivity; null only before boot attaches it. */
+  private connectivity: ConnectivitySource | null = null
 
   /**
    * Resolves the model set an assistant task's assistant runs on. Attached by the
@@ -3789,6 +3794,7 @@ export class ChatEngine {
     await this.utilityRuntime.dispose()
     this.retryScheduler?.dispose()
     this.retryScheduler = null
+    this.connectivity = null
     this.sessionRegistry.clear()
     this.childSessionOwners.clear()
     this.childCaptureTasks.clear()
@@ -3923,19 +3929,21 @@ export class ChatEngine {
    * scanning every listed thread's persisted messages for the session tag, which
    * read the whole `parts` column through a LIKE on every sidebar render. The
    * thread knows the moment it enters a session, so the kind is written here and
-   * the existing `thread:updated` broadcast carries it to the row. Guarded on the
-   * current value so an unchanged kind never re-broadcasts, and best-effort: the
-   * marker is cosmetic and a failed write must never fail a turn.
+   * the existing `thread:updated` broadcast carries it to the row.
+   *
+   * The row draws one marker per session the thread has entered, so this records
+   * the kind in the durable set as well as naming the session it is in now: a
+   * thread that designed something and later cut a video about it keeps both
+   * marks. The manager writes nothing for a kind the thread already holds.
+   * Best-effort: the marker is cosmetic and a failed write must never fail a turn.
    */
   private async rememberAuthoredWorkKind(
     projectId: string,
     threadId: string,
-    kind: AuthoredWorkKind,
-    current: AuthoredWorkKind | undefined
+    kind: AuthoredWorkKind
   ): Promise<void> {
-    if (current === kind) return
     try {
-      await this.threadManager.updateThread(projectId, threadId, { authoredWorkKind: kind })
+      await this.threadManager.recordAuthoredWorkKind(projectId, threadId, kind)
     } catch (error) {
       Logger.dev('Authored-work kind persist failed:', error)
     }
@@ -8987,7 +8995,7 @@ export class ChatEngine {
         ? 'design'
         : null
     if (steeredKind) {
-      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind, thread.authoredWorkKind)
+      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind)
     }
     await this.rearmSteerUtilities(
       driver,
@@ -10097,12 +10105,7 @@ export class ChatEngine {
           ? 'design'
           : null
     if (authoredWorkKind) {
-      await this.rememberAuthoredWorkKind(
-        projectId,
-        threadId,
-        authoredWorkKind,
-        targetThread?.authoredWorkKind
-      )
+      await this.rememberAuthoredWorkKind(projectId, threadId, authoredWorkKind)
     }
     // The assistant knowledge authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
@@ -23422,11 +23425,9 @@ export class ChatEngine {
         // harnesses that schedule their own retry (OpenCode). Their native
         // resume emits `working` and clears the record; the recorded wait keeps
         // the thread retryable after an app restart.
-        void (
-          event.status.issue.kind === 'network' && event.status.issue.retryAt === undefined
-            ? Promise.resolve(false)
-            : this.scheduleAutomaticRetry(event.sessionId, event.status.issue)
-        ).catch((error) => Logger.dev('Retry scheduling failed for waiting session:', error))
+        void this.scheduleAutomaticRetry(event.sessionId, event.status.issue).catch((error) =>
+          Logger.dev('Retry scheduling failed for waiting session:', error)
+        )
       }
       if (event.status.state === 'working' || event.status.state === 'idle') {
         updateRetryWakeWindow(event.sessionId, null)
@@ -25089,13 +25090,40 @@ export class ChatEngine {
   }
 
   /**
+   * Register the verified connectivity tracker, and drain the resume queue on
+   * every transition into a verified online state.
+   *
+   * A wait parked on the device's connection is resumed from here rather than
+   * from the renderer's own event. The renderer relays what the operating
+   * system believes, and that belief can stay wrong in both directions (an
+   * associated access point with no uplink still reports online); only a probe
+   * that actually reached the network may start a harness turn again.
+   */
+  attachConnectivity(connectivity: ConnectivitySource): () => void {
+    this.connectivity = connectivity
+    return connectivity.onRestored(() => this.connectionRestored())
+  }
+
+  /**
+   * Whether the device can reach the outside right now.
+   *
+   * The verified answer once boot has attached the tracker, the Chromium hint
+   * as the floor before that. Failing towards "online" is deliberate: a resume
+   * fired against a dead link costs one attempt and a cooldown, while a resume
+   * that never fires strands the thread and the promise its card made.
+   */
+  private deviceOnline(): boolean {
+    return this.connectivity ? this.connectivity.isOnline() : net.isOnline()
+  }
+
+  /**
    * Register the auto-resume scheduler. Its resume callback routes back into
    * this engine so a timed retry flows through the same sendPrompt pipeline as
    * a manual Retry.
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
-    scheduler.attachNetworkTest(() => net.isOnline())
+    scheduler.attachNetworkTest(() => this.deviceOnline())
     scheduler.attachStoppedThreadTest((projectId, threadId) =>
       this.threadManager.wasStoppedByUser(projectId, threadId)
     )
@@ -25621,10 +25649,18 @@ export class ChatEngine {
       return false
     }
     const driver = this.driverForRuntime(info.driverId, info.accountId)
-    if (!driver) return false
+    // A device connection failure outlives the driver it killed: that is
+    // exactly what a Wi-Fi drop leaves behind, and refusing the record here is
+    // what stranded the thread on an error card nothing was listening to. The
+    // wait is the device's connectivity and the resume goes through the
+    // thread's own settings like any other send, so no driver is needed to arm
+    // it. Every other kind still needs its driver: both the reset time it
+    // waits on and the resume come from it.
+    if (!driver && issue.kind !== 'network') return false
     // Allow the failed turn to finish tearing down before admitting a continuation.
     let retryAt = issue.kind === 'network' ? Date.now() + 3_000 : issue.retryAt
     if (retryAt === undefined) {
+      if (!driver) return false
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
       // its account endpoint)   ask the provider-scoped account telemetry for
@@ -25843,6 +25879,15 @@ export class ChatEngine {
     issue: AgentProviderIssue,
     error?: string
   ): Promise<void> {
+    const connectionWait = this.asConnectionWaitIssue(issue)
+    if (connectionWait !== issue) {
+      // The device explains this failure, so it is the connection wait it is:
+      // the same card, the same ledger entry, and the same automatic resume a
+      // transport failure gets. Parking the thread here is what keeps the
+      // reconnection worth anything.
+      this.enterRetryWait(sessionId, connectionWait, error ?? issue.message)
+      return
+    }
     const retryScheduled = await this.scheduleAutomaticRetry(sessionId, issue)
     // Fallback: if scheduling did not produce a pending retry but the issue is
     // a retryable usage reset, still treat as paused so the thread does not
@@ -25852,10 +25897,15 @@ export class ChatEngine {
     // A user-stopped thread is exempt: schedule refused the record, and the
     // fallback here must not re-persist working-paused (or a later launch's
     // orphan-repair scan would re-arm a timer for the stopped thread).
+    //
+    // A connection wait is paused here for the same reason and with a stronger
+    // one: its resume is not a clock the thread can wait out, it is the device
+    // coming back, and a terminal error card is what stops the app from
+    // listening for that. The wait never requires the failed turn to have been
+    // retryable   the device, not the provider, owns whether it can run.
     const shouldStayPaused =
       !retryScheduled &&
-      isUsageResetWaitIssue(issue) &&
-      issue.retryable &&
+      (issue.kind === 'network' || (isUsageResetWaitIssue(issue) && issue.retryable)) &&
       !(await this.threadManager.wasStoppedByUser(
         this.sessionRegistry.get(sessionId)?.projectId ?? '',
         this.sessionRegistry.get(sessionId)?.threadId ?? ''
@@ -25879,6 +25929,40 @@ export class ChatEngine {
   }
 
   /**
+   * A provider failure the device itself explains.
+   *
+   * A turn that dies while the device has no connectivity did not fail because
+   * of the provider, and it was not the provider's verdict that surfaced: it is
+   * the connection. Harnesses report that loss in their own words (a process
+   * exit, an empty stream, a transport reset inside a driver-specific string)
+   * and most of those classify as `unknown`, which used to end the thread on a
+   * terminal error card with nothing listening for the reconnection. Any
+   * `unknown` failure landing inside the connection-loss window is therefore
+   * re-read as the connection wait it is.
+   *
+   * Only `unknown` is re-read. A provider that stated a verdict (sign-in
+   * required, billing, a usage window) keeps it: those need the user, not the
+   * network, and masking them behind a connection card would hide the one
+   * action that fixes them.
+   */
+  private asConnectionWaitIssue(issue: AgentProviderIssue): AgentProviderIssue {
+    const connectivity = this.connectivity
+    if (!connectivity || issue.kind !== 'unknown') return issue
+    if (
+      !connectivity.isOffline() &&
+      !connectivity.wasOfflineWithin(CONNECTION_LOSS_GRACE_MS)
+    )
+      return issue
+    return {
+      ...issue,
+      kind: 'network',
+      retryable: true,
+      retryAt: undefined,
+      message: CONNECTION_WAIT_MESSAGE
+    }
+  }
+
+  /**
    * Re-surface a terminal usage/rate-limit outcome as the unified waiting card
    * with a retry time. Also schedules the auto-resume for every harness (native
    * retry harnesses included) so the wait survives an app restart, and routes
@@ -25892,8 +25976,7 @@ export class ChatEngine {
         retryable: true,
         retryAt: undefined,
         rawError: issue.rawError ?? error ?? issue.message,
-        message:
-          'Connection interrupted. This thread will resume automatically when the device reconnects.'
+        message: CONNECTION_WAIT_MESSAGE
       }
     }
     this.sessionStatuses.set(sessionId, { state: 'waiting', issue })
@@ -26043,11 +26126,26 @@ export class ChatEngine {
     const threadId = validateEntityId(record.threadId, 'Thread ID')
     const { sessionId } = record
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
+    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) {
+      // The thread moved on (a newer session, an archive, a delete). This wait
+      // can never be admitted, and leaving it in the ledger turns every tick
+      // into a no-op attempt for a thread that is no longer waiting.
+      if (this.retryScheduler?.getPendingRetry(sessionId) === record) {
+        this.retryScheduler.clear(sessionId)
+      }
+      this.retryScheduler?.resumed(sessionId)
+      return
+    }
     const current = this.sessionStatuses.get(sessionId)
     if (current?.state === 'working') return
     if (record.issueKind === 'network') {
-      if (!net.isOnline()) throw new Error('Device disconnected before thread recovery')
+      if (!this.deviceOnline()) {
+        // The link the resume was armed on is gone again. Keep the wait and
+        // re-verify connectivity: firing the rest of a reconnect queue against
+        // a flapping network is what turns a recovery into a stampede.
+        this.connectivity?.invalidate('connection wait resume attempted offline')
+        throw new Error('Device disconnected before thread recovery')
+      }
       const info = this.sessionRegistry.get(sessionId)
       const driver = info ? this.driverForRuntime(info.driverId, info.accountId) : undefined
       if (

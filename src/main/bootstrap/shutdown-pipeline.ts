@@ -86,6 +86,13 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.connectivity?.stop()
+    state.connectivity = null
+  } catch (error) {
+    Logger.error('Connectivity cleanup failed during shutdown:', error)
+  }
+
+  try {
     state.heartbeatScheduler?.dispose()
   } catch (error) {
     Logger.error('Heartbeat scheduler cleanup failed during shutdown:', error)

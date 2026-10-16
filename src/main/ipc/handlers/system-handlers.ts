@@ -53,8 +53,18 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     return url.toString()
   })
 
+  // The renderer's connection events are announcements, not verdicts: both
+  // route into the connectivity tracker, which answers with a real round trip
+  // before any waiting thread is resumed. The Chromium hint stays as the
+  // fallback for the (never expected) boot where the tracker is missing.
   ipcMain.handle('network:restored', () => {
-    if (net.isOnline()) ctx.chatEngine?.connectionRestored()
+    if (ctx.connectivity) ctx.connectivity.signal('renderer online event')
+    else if (net.isOnline()) ctx.chatEngine?.connectionRestored()
+  })
+
+  ipcMain.handle('network:lost', () => {
+    if (ctx.connectivity) ctx.connectivity.signal('renderer offline event')
+    else if (!net.isOnline()) ctx.chatEngine?.connectionRestored()
   })
 
   // ─── System dialogs ────────────────────────────────────────────────────────

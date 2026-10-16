@@ -240,19 +240,27 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     notificationPanelState.reconcileThread(thread)
     deps.settleCloseConfirmationThread(thread)
   })
-  // The authored-work marker is pushed on its own light event (see
+  // The authored-work markers are pushed on their own light event (see
   // `broadcastThreadAuthoredWorkUpdated`) so the design-capability path can open
-  // a session without the full `thread:updated` reconcile. Patch the one field in
+  // a session without the full `thread:updated` reconcile. Patch the fields in
   // place on the scope threads and the open thread, exactly as the branch update
-  // does, so the row's marker appears the moment the agent enters a session.
+  // does, so the row's markers appear the moment the agent enters a session. The
+  // set is what the row draws, so it travels with the session kind and never
+  // without it.
   const unsubscribeThreadAuthoredWorkUpdated = subscribeGuarded(
     'thread:authoredWorkUpdated',
     (...args: unknown[]) => {
-      const [projectId, threadId, kind] = args as [string, string, AuthoredWorkKind]
-      scopeState.patchAuthoredWorkKind(projectId, threadId, kind)
+      const [projectId, threadId, kind, kinds] = args as [
+        string,
+        string,
+        AuthoredWorkKind,
+        AuthoredWorkKind[]
+      ]
+      scopeState.patchAuthoredWorkKind(projectId, threadId, kind, kinds)
       const selected = workspaceState.selectedThread
       if (selected?.projectId === projectId && selected.id === threadId) {
         selected.authoredWorkKind = kind
+        selected.authoredWorkKinds = [...kinds]
       }
     }
   )

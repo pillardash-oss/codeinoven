@@ -195,13 +195,20 @@ export interface DesignServiceOptions {
   database: Database
   onHistoryChanged?: (projectId: string, directory: string) => void
   /**
-   * Mirror a thread's authored-work kind to live UI the moment it is recorded.
+   * Mirror a thread's authored-work kinds to live UI the moment they are recorded.
    *
-   * The row is what the sidebar draws its marker from, and the agent can open a
+   * The row is what the sidebar draws its markers from, and the agent can open a
    * design or video session on its own (a preview into a work root) with no tag,
-   * so this write has to reach the renderer just like the tag path's does.
+   * so this write has to reach the renderer just like the tag path's does. The set
+   * is what the markers draw, because a thread that designed something and later
+   * cut a video about it has done both.
    */
-  onThreadKindChanged?: (projectId: string, threadId: string, kind: AuthoredWorkKind) => void
+  onThreadKindChanged?: (
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    kinds: readonly AuthoredWorkKind[]
+  ) => void
   previews: DirectoryPreviewService
   browser: () => BrowserService | null
 }
@@ -671,19 +678,22 @@ export class DesignService {
   /**
    * Mirror a recorded work kind onto the thread row.
    *
-   * The row is what the sidebar draws its marker from, and what the expert card
+   * The row is what the sidebar draws its markers from, and what the expert card
    * and media generation read the session from, so the folder record alone is not
-   * enough. Best-effort: the folder record has already landed, and a failed mirror
-   * must not fail the preview that triggered it. The repository guards the write,
-   * so a navigation that records the same kind churns nothing.
+   * enough. The write adds the kind to the thread's durable set as well as naming
+   * the session it is in now, and the set is what comes back to be announced.
+   * Best-effort: the folder record has already landed, and a failed mirror must
+   * not fail the preview that triggered it. The repository guards the write, so a
+   * navigation that records a kind the thread already holds churns nothing.
    */
   private async rememberThreadKind(
     projectId: string,
     threadId: string,
     kind: AuthoredWorkKind
   ): Promise<void> {
+    let kinds: readonly AuthoredWorkKind[]
     try {
-      await this.threads.setAuthoredWorkKindViaWorker(threadId, kind)
+      kinds = (await this.threads.setAuthoredWorkKindViaWorker(threadId, kind)) ?? [kind]
     } catch (error) {
       Logger.dev('Authored-work kind row update failed:', error)
       return
@@ -691,7 +701,7 @@ export class DesignService {
     // The persisted value is the fact; telling the renderer is what makes the
     // row's marker appear without a refresh, so the agent opening a session on
     // its own reads the same as the user typing the tag.
-    this.options.onThreadKindChanged?.(projectId, threadId, kind)
+    this.options.onThreadKindChanged?.(projectId, threadId, kind, kinds)
   }
 
   forgetProject(projectId: string): void {

@@ -280,19 +280,27 @@ export class ScopeThreads {
   }
 
   /**
-   * Patch one thread's authored-work kind in place.
+   * Patch one thread's authored-work kinds in place.
    *
-   * The design-capability path pushes this field on a light event instead of the
-   * full `thread:updated` snapshot, so the row's marker appears the moment the
+   * The design-capability path pushes these fields on a light event instead of the
+   * full `thread:updated` snapshot, so the row's markers appear the moment the
    * agent opens a session without forcing a transcript reconcile. Mutating the
-   * proxied row is enough: the marker is read straight off the object, so no list
-   * rebuild is needed.
+   * proxied row is enough: the markers are read straight off the object, so no
+   * list rebuild is needed. Both facts are patched together, because a row that
+   * learned the session kind without the set would drop a marker.
    */
-  patchAuthoredWorkKind(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
+  patchAuthoredWorkKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    kinds: readonly AuthoredWorkKind[]
+  ): void {
     const thread = this.allScopeThreads.find(
       (candidate) => candidate.projectId === projectId && candidate.id === threadId
     )
-    if (thread !== undefined) thread.authoredWorkKind = kind
+    if (thread === undefined) return
+    thread.authoredWorkKind = kind
+    thread.authoredWorkKinds = [...kinds]
   }
 
   /**

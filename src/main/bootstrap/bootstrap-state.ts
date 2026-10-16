@@ -22,6 +22,7 @@ import type { UpdaterService } from '../notifications/updater-service'
 import type { SkillUpdateService } from '../utilities/skill-updates'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { ConnectivityService } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { CioCleanupService } from '../cio-cleanup/cio-cleanup-service'
 import type { AssistantSchedulerService } from '../scheduler/assistant-scheduler-service'
@@ -102,6 +103,8 @@ export interface BootstrapState {
   skillUpdateService: SkillUpdateService | null
   powerWakeService: PowerWakeService | null
   retryScheduler: RetrySchedulerService | null
+  /** Verified device connectivity, the gate every connection wait resumes on. */
+  connectivity: ConnectivityService | null
   heartbeatScheduler: HeartbeatSchedulerService | null
   /** Daily sweep of stale `.cio` scratch folders, plus its manual run. */
   cioCleanup: CioCleanupService | null
@@ -198,6 +201,7 @@ export function createBootstrapState(): BootstrapState {
     skillUpdateService: null,
     powerWakeService: null,
     retryScheduler: null,
+    connectivity: null,
     heartbeatScheduler: null,
     cioCleanup: null,
     designService: null,

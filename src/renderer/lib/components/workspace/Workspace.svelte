@@ -2410,18 +2410,26 @@
     })
   })
 
-  // The authored-work marker arrives on its own light broadcast for the same
+  // The authored-work markers arrive on their own light broadcast for the same
   // reason as the branch: the agent can open a design or video session on its
   // own, mid-turn, and routing that through `thread:updated` would force
-  // ThreadView's message reconcile at that moment. Patch the field on the
-  // sidebar's own row so the marker appears without rebuilding any list.
+  // ThreadView's message reconcile at that moment. Patch the fields on the
+  // sidebar's own row so the markers appear without rebuilding any list. The set
+  // is what the row draws, so it is patched with the session kind.
   $effect(() => {
     return subscribe('thread:authoredWorkUpdated', (...args: unknown[]) => {
-      const [projectId, threadId, kind] = args as [string, string, AuthoredWorkKind]
+      const [projectId, threadId, kind, kinds] = args as [
+        string,
+        string,
+        AuthoredWorkKind,
+        AuthoredWorkKind[]
+      ]
       const listed = allThreads.find(
         (candidate) => candidate.projectId === projectId && candidate.id === threadId
       )
-      if (listed) listed.authoredWorkKind = kind
+      if (!listed) return
+      listed.authoredWorkKind = kind
+      listed.authoredWorkKinds = [...kinds]
     })
   })
 
