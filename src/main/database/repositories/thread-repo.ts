@@ -25,6 +25,7 @@ interface ThreadRow {
   status: string
   pinned: number
   pinned_at: number | null
+  bookmarked: number
   sort_order: number | null
   scope_sort_order: number | null
   archived: number
@@ -152,6 +153,7 @@ function rowToThread(row: ThreadRow): Thread {
     titleSource: (row.title_source || 'default') as ThreadTitleSource,
     status: row.status as ThreadStatus,
     pinned: row.pinned === 1,
+    bookmarked: row.bookmarked === 1,
     pinnedAt: row.pinned_at ?? undefined,
     sortOrder: row.sort_order ?? undefined,
     scopeSortOrder: row.scope_sort_order ?? undefined,
@@ -406,7 +408,7 @@ interface MessageMatchRow {
 // draft that is actively being composed in another window.
 const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
-  pinned, pinned_at, sort_order, scope_sort_order, archived, read,
+  pinned, pinned_at, bookmarked, sort_order, scope_sort_order, archived, read,
   branch, feature_slug, authored_work_kind, scope_bucket_id, settings, context_usage,
   session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
@@ -419,7 +421,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -427,6 +429,7 @@ ON CONFLICT(id) DO UPDATE SET
   title_source=excluded.title_source,
   status=excluded.status,
   pinned=excluded.pinned,
+  bookmarked=excluded.bookmarked,
   sort_order=CASE WHEN excluded.last_activity > threads.last_activity THEN NULL ELSE excluded.sort_order END,
   scope_sort_order=excluded.scope_sort_order,
   archived=excluded.archived,
@@ -484,6 +487,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.status,
     thread.pinned ? 1 : 0,
     thread.pinnedAt ?? null,
+    thread.bookmarked ? 1 : 0,
     thread.sortOrder ?? null,
     thread.scopeSortOrder ?? null,
     thread.archived ? 1 : 0,
@@ -1236,6 +1240,25 @@ export class ThreadRepo {
       Date.now(),
       id
     )
+  }
+
+  setBookmarked(id: string, bookmarked: boolean): void {
+    this.db.run(
+      'UPDATE threads SET bookmarked = ?, pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?',
+      bookmarked ? 1 : 0,
+      bookmarked ? 1 : 0,
+      bookmarked ? Date.now() : null,
+      Date.now(),
+      id
+    )
+  }
+
+  countBookmarkedByProject(projectId: string): number {
+    const row = this.db.get<{ count: number }>(
+      'SELECT COUNT(*) AS count FROM threads WHERE project_id = ? AND bookmarked = 1',
+      projectId
+    )
+    return row?.count ?? 0
   }
 
   setSortOrder(id: string, sortOrder: number, now = Date.now()): void {

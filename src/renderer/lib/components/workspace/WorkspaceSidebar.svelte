@@ -63,6 +63,7 @@
     threadHasVisibleWork
   } from './workspace-thread-helpers'
   import { countThreadStatesByProject, emptyThreadStateCounts } from '$lib/thread-state-counts'
+  import { toast } from 'svelte-sonner'
   import { moveThreadInList, resolveTimelineDrop } from './sidebar-thread-drop'
   import { ThreadOrderSettle } from './thread-order-settle.svelte'
 
@@ -1075,6 +1076,10 @@
                           filteredThreads,
                           activeThreadId
                         )}
+                        {@const projectDisplayThreads = [
+                          ...visibleFolderThreads.filter((thread) => thread.bookmarked),
+                          ...visibleFolderThreads.filter((thread) => !thread.bookmarked)
+                        ]}
                         {@const hiddenFolderCount = sidebar.hiddenThreadCount(
                           project.id,
                           filteredThreads,
@@ -1102,7 +1107,7 @@
                             </div>
                           {:else}
                             <div class="space-y-px py-0.5" role="list">
-                              {#each visibleFolderThreads as thread (thread.id)}
+                              {#each projectDisplayThreads as thread (thread.id)}
                                 <ThreadRow
                                   {thread}
                                   detailed
@@ -1111,6 +1116,25 @@
                                   onOpen={onOpenThread}
                                   {onRename}
                                   {onTogglePin}
+                                  showBookmark
+                                  onBookmark={async (target) => {
+                                    try {
+                                      const updated = await invoke(
+                                        'thread:setBookmarked',
+                                        target.projectId,
+                                        target.id,
+                                        true
+                                      )
+                                      workspaceState.updateThread(updated)
+                                      scopeState.updateThread(updated)
+                                    } catch (error) {
+                                      toast.error(
+                                        error instanceof Error
+                                          ? error.message
+                                          : 'Could not bookmark thread.'
+                                      )
+                                    }
+                                  }}
                                   {onDelete}
                                   {onFork}
                                   onMoveThread={(draggedId, targetId, pos) => {
@@ -1316,6 +1340,10 @@
                       filteredThreads,
                       activeThreadId
                     )}
+                    {@const projectDisplayThreads = [
+                      ...visibleFolderThreads.filter((thread) => thread.bookmarked),
+                      ...visibleFolderThreads.filter((thread) => !thread.bookmarked)
+                    ]}
                     {@const hiddenFolderCount = sidebar.hiddenThreadCount(
                       project.id,
                       filteredThreads,
@@ -1343,7 +1371,7 @@
                         </div>
                       {:else}
                         <div class="space-y-px py-0.5" role="list">
-                          {#each visibleFolderThreads as thread (thread.id)}
+                          {#each projectDisplayThreads as thread (thread.id)}
                             <ThreadRow
                               {thread}
                               detailed
@@ -1352,6 +1380,25 @@
                               onOpen={onOpenThread}
                               {onRename}
                               {onTogglePin}
+                              showBookmark
+                              onBookmark={async (target) => {
+                                try {
+                                  const updated = await invoke(
+                                    'thread:setBookmarked',
+                                    target.projectId,
+                                    target.id,
+                                    true
+                                  )
+                                  workspaceState.updateThread(updated)
+                                  scopeState.updateThread(updated)
+                                } catch (error) {
+                                  toast.error(
+                                    error instanceof Error
+                                      ? error.message
+                                      : 'Could not bookmark thread.'
+                                  )
+                                }
+                              }}
                               {onDelete}
                               {onFork}
                               onMoveThread={(draggedId, targetId, pos) => {

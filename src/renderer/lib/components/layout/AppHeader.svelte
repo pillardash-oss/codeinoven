@@ -116,7 +116,9 @@
       scopeState.updateThread(updated)
     },
     onTogglePin: async (thread) => {
-      const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+      const updated = thread.bookmarked
+        ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
+        : await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
       workspaceState.updateThread(updated)
       if (scopeState.allScopeThreads.some((t) => t.id === updated.id)) {
         scopeState.updateThread(updated)

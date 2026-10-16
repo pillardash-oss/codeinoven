@@ -222,6 +222,10 @@ export const invokeThreadContract = {
     [projectId: string, threadId: string, pinned: boolean],
     Thread
   >,
+  'thread:setBookmarked': {} as Contract<
+    [projectId: string, threadId: string, bookmarked: boolean],
+    Thread
+  >,
   'thread:setContextUsage': {} as Contract<
     [projectId: string, threadId: string, usage: ThreadContextUsage],
     void

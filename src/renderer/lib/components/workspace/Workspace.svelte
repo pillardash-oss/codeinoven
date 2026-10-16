@@ -2150,6 +2150,7 @@
       existing.status === incoming.status &&
       existing.title === incoming.title &&
       existing.pinned === incoming.pinned &&
+      existing.bookmarked === incoming.bookmarked &&
       existing.read === incoming.read &&
       existing.assistantId === incoming.assistantId
     )
@@ -4905,7 +4906,9 @@
     // put the row on screen, because the user acted on that row and expects to
     // see where it went (see `openPinnedSection`, `revealThreadInSidebar`).
     openPinnedSection(thread)
-    const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+    const updated = thread.bookmarked
+      ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
+      : await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
     upsertThreadInList(updated)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)

@@ -867,6 +867,7 @@ export class Database {
       this.migrateThreadEngineeringColumn(connection)
       this.migrateThreadAccountColumn(connection)
       this.migrateThreadDraftColumns(connection)
+      this.migrateThreadBookmarkColumn(connection)
       this.migrateThreadAssistantColumns(connection)
       this.migrateThreadFailureColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
@@ -1652,6 +1653,17 @@ export class Database {
     }
     if (!columns.has('draft_json')) {
       connection.exec('ALTER TABLE threads ADD COLUMN draft_json TEXT')
+    }
+  }
+
+  private migrateThreadBookmarkColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('bookmarked')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN bookmarked INTEGER NOT NULL DEFAULT 0')
     }
   }
 

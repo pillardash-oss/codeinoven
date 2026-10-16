@@ -43,6 +43,8 @@ export interface Thread {
   titleSource: ThreadTitleSource
   status: ThreadStatus
   pinned: boolean
+  /** Project-view bookmark; bookmarks are also pinned across other views. */
+  bookmarked?: boolean
   /** Timestamp (ms) when the thread was pinned; pins are ordered newest-first by this. */
   pinnedAt?: number
   /** Position for manual drag-to-reorder; items without sortOrder fall back to lastActivity. */

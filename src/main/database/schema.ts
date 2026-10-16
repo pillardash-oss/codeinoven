@@ -104,6 +104,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','spec','executing','working-paused','interrupted','completed','failed')),
   pinned               INTEGER NOT NULL DEFAULT 0,
   pinned_at            INTEGER,
+  bookmarked           INTEGER NOT NULL DEFAULT 0,
   sort_order           INTEGER,
   scope_sort_order     INTEGER,
   archived             INTEGER NOT NULL DEFAULT 0,

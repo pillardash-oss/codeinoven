@@ -64,7 +64,16 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import { Eye, Check, GitBranch, MessageCircleDashed, Monitor, Pin, Server } from '@lucide/svelte'
+  import {
+    Bookmark,
+    Eye,
+    Check,
+    GitBranch,
+    MessageCircleDashed,
+    Monitor,
+    Pin,
+    Server
+  } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -97,6 +106,8 @@
     onOpen?: (t: Thread) => void
     onRename?: (t: Thread, newName: string) => Promise<void>
     onTogglePin?: (t: Thread) => void
+    onBookmark?: (t: Thread) => void
+    showBookmark?: boolean
     onDelete?: (t: Thread) => Promise<void>
     onFork?: (t: Thread) => void
     /** Optional callback fired when the rename input changes (for move-on-edit behaviour). */
@@ -120,6 +131,8 @@
     onOpen = () => {},
     onRename = async () => {},
     onTogglePin = () => {},
+    onBookmark = () => {},
+    showBookmark = false,
     onDelete = async () => {},
     onFork = () => {},
     onRenameInputChange,
@@ -318,6 +331,8 @@
     getThread: () => thread,
     onRename: (t, newName) => onRename(t, newName),
     onTogglePin: (t) => onTogglePin(t),
+    onBookmark: (t) => onBookmark(t),
+    showBookmark: () => showBookmark,
     onFork: (t) => onFork(t),
     onDelete: (t) => onDelete(t),
     onDeleteError: (error) =>
@@ -994,21 +1009,30 @@
       class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
         ? 'opacity-100'
         : 'pointer-events-none opacity-0'}"
-      aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
+      aria-label={thread.bookmarked
+        ? 'Remove bookmark'
+        : effectivePinned
+          ? 'Unpin thread'
+          : 'Pin thread'}
       aria-hidden={!pinVisible}
-      title={effectivePinned ? 'Unpin' : 'Pin'}
+      title={thread.bookmarked ? 'Remove bookmark' : effectivePinned ? 'Unpin' : 'Pin'}
       onclick={(e: MouseEvent) => {
         e.stopPropagation()
-        onTogglePin(thread)
+        if (thread.bookmarked) onBookmark(thread)
+        else onTogglePin(thread)
       }}
       onkeydown={(e: KeyboardEvent) => {
         if (keymapState.matches('thread-pin', e)) {
           e.stopPropagation()
-          onTogglePin(thread)
+          if (thread.bookmarked) onBookmark(thread)
+          else onTogglePin(thread)
         }
       }}
     >
-      <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
+      {#if thread.bookmarked}<Bookmark size={11} class="text-accent" />{:else}<Pin
+          size={11}
+          class={effectivePinned ? 'text-accent' : 'text-dimmed'}
+        />{/if}
     </span>
   </span>
 {/snippet}
@@ -1234,26 +1258,34 @@
           class="flex h-[0.875rem] w-[0.875rem] mb-1 flex-none items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
             ? 'pointer-events-auto cursor-pointer opacity-100'
             : 'pointer-events-none opacity-0'}"
-          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
+          aria-label={thread.bookmarked
+            ? 'Remove bookmark'
+            : effectivePinned
+              ? 'Unpin thread'
+              : 'Pin thread'}
           aria-hidden={!pinVisible}
-          title={effectivePinned ? 'Unpin' : 'Pin'}
+          title={thread.bookmarked ? 'Remove bookmark' : effectivePinned ? 'Unpin' : 'Pin'}
           onclick={(e: MouseEvent) => {
             e.stopPropagation()
-            onTogglePin(thread)
+            if (thread.bookmarked) onBookmark(thread)
+            else onTogglePin(thread)
           }}
           onkeydown={(e: KeyboardEvent) => {
             if (keymapState.matches('thread-pin', e)) {
               e.stopPropagation()
-              onTogglePin(thread)
+              if (thread.bookmarked) onBookmark(thread)
+              else onTogglePin(thread)
             }
           }}
         >
-          <Pin
-            size={14}
-            fill={effectivePinned ? 'currentColor' : 'none'}
-            class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
-            aria-hidden="true"
-          />
+          {#if thread.bookmarked}
+            <Bookmark size={14} class="text-thread-pinned" aria-hidden="true" />
+          {:else}<Pin
+              size={14}
+              fill={effectivePinned ? 'currentColor' : 'none'}
+              class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
+              aria-hidden="true"
+            />{/if}
         </span>
         <span
           class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"

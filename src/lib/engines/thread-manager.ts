@@ -1196,6 +1196,30 @@ export class ThreadManager {
     return updated
   }
 
+  async setBookmarked(projectId: string, threadId: string, bookmarked: boolean): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    if (
+      bookmarked &&
+      !existing.bookmarked &&
+      this.threadRepo.countBookmarkedByProject(projectId) >= 3
+    ) {
+      throw new Error('A project can have at most 3 bookmarked threads.')
+    }
+    if (!bookmarked && isAssistantSetupThread(existing)) {
+      throw new Error('The knowledge thread stays pinned. Hide it instead.')
+    }
+    this.threadRepo.setBookmarked(threadId, bookmarked)
+    const updated: Thread = {
+      ...existing,
+      bookmarked,
+      pinned: bookmarked ? true : existing.pinned,
+      pinnedAt: bookmarked ? Date.now() : existing.pinnedAt,
+      updatedAt: Date.now()
+    }
+    this.onChange?.(updated)
+    return updated
+  }
+
   async markRead(projectId: string, threadId: string): Promise<Thread> {
     const result = await this.threadRepo.markReadViaWorker(projectId, threadId)
     if (!result) {

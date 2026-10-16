@@ -9,6 +9,7 @@ import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import { threadTracksReadStatus, type Thread } from '$shared/types'
 import {
   Copy,
+  Bookmark,
   EyeOff,
   GitFork,
   Kanban,
@@ -26,6 +27,8 @@ export interface ThreadActionsMenuConfig {
   getThread: () => Thread | null | undefined
   onRename: (thread: Thread, newName: string) => Promise<void>
   onTogglePin: (thread: Thread) => void | Promise<void>
+  onBookmark?: (thread: Thread) => void | Promise<void>
+  showBookmark?: () => boolean
   onFork: (thread: Thread) => void | Promise<void>
   onDelete: (thread: Thread) => Promise<void>
   onDeleteError?: (error: unknown, thread: Thread) => void
@@ -148,6 +151,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const showCopyIdItem = config.showCopyId?.() ?? false
     const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
     const knowledgeThread = config.isKnowledgeThread?.() ?? false
+    const bookmarkAvailable = (config.showBookmark?.() ?? false) && config.onBookmark !== undefined
     // Only a settled thread may be pushed back to unread: a finished or errored
     // run. Live work, a ready spec, and "Needs attention" are not the same as
     // unread and are never offered here (see `canMarkThreadUnread`).
@@ -167,11 +171,27 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
             }
           ]
         : [
-            {
-              label: thread.pinned ? 'Unpin' : 'Pin',
-              icon: thread.pinned ? PinOff : Pin,
-              onClick: () => void config.onTogglePin(thread)
-            }
+            ...(thread.bookmarked || bookmarkAvailable
+              ? [
+                  {
+                    label: thread.bookmarked ? 'Remove bookmark' : 'Bookmark thread',
+                    icon: Bookmark,
+                    onClick: () =>
+                      void (thread.bookmarked
+                        ? config.onTogglePin(thread)
+                        : config.onBookmark?.(thread))
+                  }
+                ]
+              : []),
+            ...(!thread.bookmarked
+              ? [
+                  {
+                    label: thread.pinned ? 'Unpin' : 'Pin',
+                    icon: thread.pinned ? PinOff : Pin,
+                    onClick: () => void config.onTogglePin(thread)
+                  }
+                ]
+              : [])
           ]),
       { label: 'Fork', icon: GitFork, onClick: () => void config.onFork(thread) },
       ...(showHandoffItem

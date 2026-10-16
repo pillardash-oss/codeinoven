@@ -635,6 +635,7 @@ export function pinnedThreadSort(
   b: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
+  if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1
   const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
   const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false
   if (aDraft !== bDraft) return aDraft ? -1 : 1
