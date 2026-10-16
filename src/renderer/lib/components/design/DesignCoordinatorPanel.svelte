@@ -20,6 +20,7 @@
     Presentation,
     RefreshCw,
     RotateCcw,
+    Store,
     Target,
     Volume2,
     VolumeX,
@@ -1565,7 +1566,9 @@
                   onSelect={() =>
                     void openInBrowser(
                       'https://github.com/nexu-io/open-design/tree/main/design-templates'
-                    )}>Browse Open Design prompts</DropdownMenu.Item
+                    )}>
+                    <Store size={13} class="shrink-0 text-muted" />
+                    Browse Open Design prompts</DropdownMenu.Item
                 >
               {/if}
               {#if !video && canvasRead && canvasState === null}
