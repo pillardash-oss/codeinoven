@@ -6,6 +6,7 @@ import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
+import { installForceRestartMenu } from './system/force-restart'
 import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
@@ -783,6 +784,7 @@ void app
     if (isProduction) {
       installProductionApplicationMenu(APP_NAME)
     }
+    installForceRestartMenu(quitAppDirectly)
 
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([

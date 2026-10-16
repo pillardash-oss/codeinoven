@@ -54,6 +54,7 @@ import type { UpdaterStatus } from '../../lib/ipc-contract'
 import { getConfigRoot, isBackgroundRegistrationDisabled } from '../../lib/utils'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
+import { forceRestartMenuItem } from './force-restart'
 import { instanceRegistry } from './instance-registry'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -522,6 +523,7 @@ export class BackgroundLifecycleService {
       { type: 'separator' },
       this.updateMenuItem(),
       { type: 'separator' },
+      forceRestartMenuItem(() => this.deps.quitApp()),
       { label: `Quit ${APP_NAME}`, click: () => this.deps.quitApp() }
     ])
   }
