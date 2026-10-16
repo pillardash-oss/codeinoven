@@ -1,5 +1,7 @@
 <script lang="ts">
   import CioChat from '$lib/components/icons/cio/CioChat.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
   import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
@@ -10,7 +12,7 @@
   import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { BatteryCharging, BatteryMedium, Cog, GlobeCode, Thermometer } from '@lucide/svelte'
+  import { BatteryCharging, BatteryMedium, Cog, Thermometer } from '@lucide/svelte'
   import type { Attachment } from 'svelte/attachments'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -1040,7 +1042,7 @@
                 aria-label={`Open ${processName(process.command)} in the thread browser`}
                 onclick={() => void openInBrowser(process)}
               >
-                <GlobeCode size={15} />
+                <CioBrowser size={ICON_SIZE.row} />
               </button>
               <button
                 type="button"

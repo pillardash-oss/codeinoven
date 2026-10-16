@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -264,7 +265,7 @@
         disabled={!navigationHistoryState.canGoBack}
         onclick={goBack}
       >
-        <CioBack size={16} />
+        <CioBack size={ICON_SIZE.control} />
       </button>
       <button
         class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
@@ -273,7 +274,7 @@
         disabled={!navigationHistoryState.canGoForward}
         onclick={goForward}
       >
-        <CioForward size={16} />
+        <CioForward size={ICON_SIZE.control} />
       </button>
     </div>
 
@@ -288,7 +289,7 @@
         title="Search settings"
         onclick={() => (settingsUiState.searchOpen = true)}
       >
-        <CioSearch size={15} />
+        <CioSearch size={ICON_SIZE.control} />
       </button>
     {:else}
       <AppHeaderViewActions />
@@ -321,7 +322,7 @@
         title="Open gateway dashboard   {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
-        <CioBrowser size={16} />
+        <CioBrowser size={ICON_SIZE.control} />
       </button>
     {/if}
 
@@ -357,11 +358,11 @@
         onclick={() => workspaceState.toggleSpecStudio?.()}
       >
         {#if workspaceState.specStudioBusy}
-          <CioSpinner size={15} class="animate-spin" />
+          <CioSpinner size={ICON_SIZE.control} class="animate-spin" />
         {:else}
           <!-- The specification's own mark, so the toolbox a user learns here is
                the same one a spec-ready row wears. -->
-          <CioTools size={15} />
+          <CioTools size={ICON_SIZE.control} />
         {/if}
         <span class="header-control-label text-[0.6875rem] font-medium">
           {workspaceState.specStudioBusy
@@ -402,7 +403,7 @@
       title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
       onclick={() => void toggleStickyNotes()}
     >
-      <CioNotes size={16} />
+      <CioNotes size={ICON_SIZE.control} />
     </button>
 
     <button
@@ -415,7 +416,7 @@
       data-guide="notifications"
       onclick={() => contextSidebarState.toggleNotifications()}
     >
-      <CioNotifications size={16} />
+      <CioNotifications size={ICON_SIZE.control} />
       {#if notificationPanelState.totalCount > 0 || notificationPanelState.hasAssistant}
         <!-- One dot per waiting kind, each in the app's own status colour, so a
              glance at the bell says what is waiting: a project message, a chat

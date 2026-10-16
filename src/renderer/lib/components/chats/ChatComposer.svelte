@@ -1,11 +1,16 @@
 <script lang="ts">
   import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioArrowUp from '$lib/components/icons/cio/CioArrowUp.svelte'
+  import CioFlame from '$lib/components/icons/cio/CioFlame.svelte'
+  import CioMinimize from '$lib/components/icons/cio/CioMinimize.svelte'
+  import CioStop from '$lib/components/icons/cio/CioStop.svelte'
   import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { fade } from 'svelte/transition'
-  import { ArrowUp, Flame, Minimize2, Square } from '@lucide/svelte'
+
   import { motionDuration } from '$lib/motion'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
@@ -1999,9 +2004,9 @@
         onclick={toggleComposerExpansion}
       >
         {#if expansion.maximized}
-          <Minimize2 size={13} />
+          <CioMinimize size={ICON_SIZE.control} />
         {:else}
-          <CioMaximize size={13} />
+          <CioMaximize size={ICON_SIZE.control} />
         {/if}
       </button>
     {/if}
@@ -2147,7 +2152,7 @@
         title="Switch this session to pay-as-you-go API usage credits"
         onclick={runUsageCredits}
       >
-        <Flame size={13} />
+        <CioFlame size={ICON_SIZE.control} />
       </button>
     {/if}
 
@@ -2197,14 +2202,14 @@
         {#if pendingStop}
           <span class="pending-stop-label text-[0.5625rem] font-semibold">Stop?</span>
           <span class="pending-stop-icon">
-            <Square size={14} />
+            <CioStop size={ICON_SIZE.control} />
           </span>
         {:else if canStop}
-          <Square size={14} />
+          <CioStop size={ICON_SIZE.control} />
         {:else if working}
-          <CioClock size={15} />
+          <CioClock size={ICON_SIZE.control} />
         {:else}
-          <ArrowUp size={16} />
+          <CioArrowUp size={ICON_SIZE.control} />
         {/if}
       </button>
     {/if}

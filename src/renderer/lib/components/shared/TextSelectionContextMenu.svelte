@@ -6,7 +6,7 @@
   import CioLink from '$lib/components/icons/cio/CioLink.svelte'
   import { SUPPORT_EMAIL } from '$shared/brand'
   import { onMount } from 'svelte'
-  import { Eraser, GlobeCode, Scissors, TextSelect } from '@lucide/svelte'
+  import { Eraser, Scissors, TextSelect } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
@@ -542,7 +542,7 @@
               title="Open in the browser tab already on screen"
               onclick={() => openLinkInActiveBrowserTab(target!.linkHref!)}
             >
-              <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
+              <CioBrowser class="size-3.5 shrink-0 text-text-muted" />
               Open in Current Tab
             </button>
           {:else}
@@ -564,7 +564,7 @@
                 title="Open in the CIO browser tab for this project"
                 onclick={() => openLinkInCioBrowser(target!.linkHref!)}
               >
-                <GlobeCode class="size-3.5 shrink-0 text-text-muted" />
+                <CioBrowser class="size-3.5 shrink-0 text-text-muted" />
                 Open in Thread Browser
               </button>
             {/if}

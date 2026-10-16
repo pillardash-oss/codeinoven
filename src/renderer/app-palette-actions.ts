@@ -1,4 +1,13 @@
 import CioBook from '$lib/components/icons/cio/CioBook.svelte'
+import CioBoard from '$lib/components/icons/cio/CioBoard.svelte'
+import CioChart from '$lib/components/icons/cio/CioChart.svelte'
+import CioFind from '$lib/components/icons/cio/CioFind.svelte'
+import CioHarness from '$lib/components/icons/cio/CioHarness.svelte'
+import CioKeyboard from '$lib/components/icons/cio/CioKeyboard.svelte'
+import CioLearn from '$lib/components/icons/cio/CioLearn.svelte'
+import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
+import CioTeam from '$lib/components/icons/cio/CioTeam.svelte'
+import CioThreads from '$lib/components/icons/cio/CioThreads.svelte'
 import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
 import CioChat from '$lib/components/icons/cio/CioChat.svelte'
 import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
@@ -13,18 +22,6 @@ import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
 import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
 import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
 import type { Component } from 'svelte'
-import {
-  Blocks,
-  ChartColumn,
-  FileSearch,
-  GraduationCap,
-  Keyboard,
-  LayoutDashboard,
-  ListTree,
-  SlidersHorizontal,
-  Timeline,
-  Users
-} from '@lucide/svelte'
 import { APP_NAME } from '$shared/brand'
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
@@ -68,7 +65,7 @@ export const navigationActions = [
     description: 'Review work across projects',
     category: 'navigation',
     source: applicationSource,
-    icon: LayoutDashboard,
+    icon: CioBoard,
     keywords: ['board', 'overview']
   },
   {
@@ -77,7 +74,7 @@ export const navigationActions = [
     description: 'Browse threads across all projects',
     category: 'navigation',
     source: applicationSource,
-    icon: ListTree,
+    icon: CioThreads,
     keywords: ['timeline', 'all']
   }
 ] satisfies ActionDefinition[]
@@ -92,7 +89,7 @@ export const settingsTabs: Array<{
     id: 'general',
     label: 'General',
     keywords: ['appearance', 'theme', 'preferences'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'browser',
@@ -110,13 +107,13 @@ export const settingsTabs: Array<{
     id: 'audits',
     label: 'Agents',
     keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review'],
-    icon: Users
+    icon: CioTeam
   },
   {
     id: 'harnesses',
     label: 'Harnesses',
     keywords: ['models', 'providers', 'harnesses'],
-    icon: Blocks
+    icon: CioHarness
   },
   {
     id: 'utilities',
@@ -128,13 +125,13 @@ export const settingsTabs: Array<{
     id: 'keymap',
     label: 'Keymap',
     keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
-    icon: Keyboard
+    icon: CioKeyboard
   },
   {
     id: 'profile',
     label: 'Usage',
     keywords: ['usage', 'activity', 'tokens', 'cost', 'rankings'],
-    icon: ChartColumn
+    icon: CioChart
   },
   {
     id: 'about',
@@ -201,7 +198,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
             description: 'Walk through this view with pointers, one step at a time',
             category: 'navigation',
             source: applicationSource,
-            icon: GraduationCap,
+            icon: CioLearn,
             keywords: ['tour', 'onboarding', 'walkthrough', 'guide', 'help', 'tips']
           } satisfies ActionDefinition
         ]
@@ -241,7 +238,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Tour the workspace and set up a project and coding agent',
       category: 'navigation',
       source: applicationSource,
-      icon: GraduationCap,
+      icon: CioLearn,
       keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
     }
   ]
@@ -253,7 +250,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Find and open a file from any local project',
       category: 'file',
       source: applicationSource,
-      icon: FileSearch,
+      icon: CioFind,
       keywords: ['quick open', 'find', 'workspace']
     })
   }
@@ -403,7 +400,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
             category: 'thread',
             source: applicationSource,
             // The Threads view's rail mark, not the generic chat bubble.
-            icon: Timeline,
+            icon: CioThreads,
             keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline', 'project']
           } satisfies ActionDefinition
         ]

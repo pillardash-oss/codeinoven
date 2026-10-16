@@ -1,5 +1,7 @@
 <script lang="ts">
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import CioClock from '$lib/components/icons/cio/CioClock.svelte'
   import CioCode from '$lib/components/icons/cio/CioCode.svelte'
   import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
@@ -8,7 +10,7 @@
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
-  import { BookOpenText, FilePenLine, FilePlus2, GlobeCode } from '@lucide/svelte'
+  import { BookOpenText, FilePenLine, FilePlus2 } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -221,7 +223,7 @@
     {:else if toolKind === 'search'}
       <CioSearch size={12} class={kindIconClass} />
     {:else if toolKind === 'web'}
-      <GlobeCode size={12} class={kindIconClass} />
+      <CioBrowser size={ICON_SIZE.inline} class={kindIconClass} />
     {:else if toolKind === 'shell'}
       <CioTerminal size={12} class={kindIconClass} />
     {:else}

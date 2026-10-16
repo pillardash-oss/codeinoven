@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
@@ -125,7 +126,7 @@
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import { GlobeCode } from '@lucide/svelte'
+
   import { tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
@@ -1427,7 +1428,7 @@
       threadNote.push({
         id: 'browser',
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
-        icon: GlobeCode,
+        icon: CioThreadBrowser,
         active: dockKindActive('browser'),
         countBadge:
           browser.unfinishedDownloadCount > 0 ? String(browser.unfinishedDownloadCount) : undefined,

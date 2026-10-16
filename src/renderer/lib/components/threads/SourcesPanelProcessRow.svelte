@@ -1,7 +1,9 @@
 <script lang="ts">
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import { GlobeCode } from '@lucide/svelte'
+
   import type { AgentRunningProcess } from '$shared/types'
   import { processName, processStartedAt } from './sources-panel-helpers'
 
@@ -36,7 +38,7 @@
         : 'text-primary'}"
     >
       {#if isAppWide}
-        <GlobeCode size={15} />
+        <CioBrowser size={ICON_SIZE.row} />
       {:else}
         <CioTerminal size={15} />
       {/if}

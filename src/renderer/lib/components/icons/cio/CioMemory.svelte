@@ -12,9 +12,11 @@
 
 <!--
   CIO · Memory
-  Memory: three plates with the middle one solid, so the stack reads as a
-  store rather than as a list. A brain outline was tried and read as a cloud
-  at 16px.
+  Memory: a head, closed at the chin, holding two solid nodes joined by a
+  short line, which is a mind with what it kept wired together. The plates
+  before it read as a list or a store and said nothing about whose memory it
+  is; a brain outline read as a cloud at 16px, and a first head with a neck
+  line read as a lightbulb.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -30,17 +32,17 @@
   {...rest}
 >
   <g
-    transform="translate(-3.478 -3.599) scale(1.2898)"
-    stroke-width={cioStrokeWidth(weight, 1.2898)}
+    transform="translate(-2.577 -2.762) scale(1.2148)"
+    stroke-width={cioStrokeWidth(weight, 1.2148)}
   >
-    <rect x="4.2" y="4.6" width="15.6" height="3.8" rx="1.8" /><rect
-      x="4.2"
-      y="10.2"
-      width="15.6"
-      height="3.8"
-      rx="1.8"
+    <path
+      d="M12 3.8a7 7 0 0 1 7 7c0 2.2-1 3.6-2 4.8-.8 1-1.2 1.8-1.3 3-.1 1.1-1 1.9-2.1 1.9h-3.2c-1.1 0-2-.8-2.1-1.9-.1-1.2-.5-2-1.3-3-1-1.2-2-2.6-2-4.8a7 7 0 0 1 7-7Z"
+    /><circle cx="9.4" cy="10.6" r="1.6" fill="currentColor" stroke="none" /><circle
+      cx="14.6"
+      cy="10.6"
+      r="1.6"
       fill="currentColor"
       stroke="none"
-    /><rect x="4.2" y="15.8" width="15.6" height="3.8" rx="1.8" />
+    /><path d="M11 10.6h2" />
   </g>
 </svg>

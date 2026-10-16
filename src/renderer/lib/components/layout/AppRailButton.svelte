@@ -1,5 +1,6 @@
 <script lang="ts">
   import RailAudioBadge from './RailAudioBadge.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type { Component, Snippet } from 'svelte'
 
   interface Props {
@@ -110,7 +111,7 @@
       </span>
     </span>
   {:else}
-    <Icon size={16} strokeWidth={1.8} class={spin ? 'animate-spin' : undefined} />
+    <Icon size={ICON_SIZE.rail} class={spin ? 'animate-spin' : undefined} />
   {/if}
   {#if playing}
     <!-- The speaker rides the opposite corner from the badge stack, so a view can

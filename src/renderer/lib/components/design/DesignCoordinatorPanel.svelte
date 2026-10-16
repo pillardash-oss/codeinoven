@@ -1,5 +1,7 @@
 <script lang="ts">
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
@@ -23,7 +25,6 @@
     ArrowUpDown,
     Film,
     Frame,
-    GlobeCode,
     Inspect,
     ListClock,
     PlayingCardsFan,
@@ -1991,7 +1992,8 @@
                   class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={openReferencePrompt}
-                  ><GlobeCode size={13} class="shrink-0 text-muted" />Extract brand from reference</DropdownMenu.Item
+                  ><CioBrowser size={ICON_SIZE.inline} class="shrink-0 text-muted" />Extract brand
+                  from reference</DropdownMenu.Item
                 >
 
                 <DropdownMenu.Item
@@ -2077,7 +2079,7 @@
           {#if opening}
             <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <GlobeCode size={12} />
+            <CioBrowser size={ICON_SIZE.inline} />
           {/if}
         </button>
       </span>

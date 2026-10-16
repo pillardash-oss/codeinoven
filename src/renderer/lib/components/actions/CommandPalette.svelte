@@ -5,7 +5,7 @@
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import CioZap from '$lib/components/icons/cio/CioZap.svelte'
   import { Command } from 'bits-ui'
-  import { CornerDownLeft } from '@lucide/svelte'
+  import CioEnter from '$lib/components/icons/cio/CioEnter.svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
@@ -449,7 +449,7 @@
               {/each}
             </span>
           {:else if selectedActionId === action.id && !action.disabledReason}
-            <CornerDownLeft size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+            <CioEnter size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
           {/if}
         </Command.Item>
       {:else}

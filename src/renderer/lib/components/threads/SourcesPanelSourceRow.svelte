@@ -1,6 +1,8 @@
 <script lang="ts">
   import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import { GlobeCode, Hash, Image as ImageIcon } from '@lucide/svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import { Hash, Image as ImageIcon } from '@lucide/svelte'
   import type {
     AgentSource,
     FileAgentSource,
@@ -44,7 +46,7 @@
         {#if favicon}
           <img src={favicon} alt="" class="h-5 w-5 object-contain" />
         {:else}
-          <GlobeCode size={15} />
+          <CioBrowser size={ICON_SIZE.row} />
         {/if}
       </span>
     {:else if source.kind === 'file-citation'}

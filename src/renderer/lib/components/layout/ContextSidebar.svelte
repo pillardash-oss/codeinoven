@@ -18,6 +18,7 @@
 
 <script lang="ts">
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
@@ -42,6 +43,7 @@
   import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     browserTabIndicators,
@@ -56,7 +58,7 @@
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { GlobeCode, PanelBottom, PanelRight } from '@lucide/svelte'
+  import { PanelBottom, PanelRight } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
@@ -432,14 +434,14 @@
       {#if tab.fileTabId}
         <FileTypeIcon path={tab.path ?? tab.title} size={12} />
       {:else}
-        <CioTabFiles size={12} class="shrink-0" />
+        <CioTabFiles size={ICON_SIZE.row} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'diff'}
-      <CioDiff size={12} class="shrink-0" />
+      <CioDiff size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'terminal'}
-      <CioTerminal size={12} class="shrink-0" />
+      <CioTerminal size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'actions'}
-      <CioActions size={12} class="shrink-0" />
+      <CioActions size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'browser'}
       {#if tab.favicon ?? faviconState.faviconFor(tab.url)}
         <img
@@ -449,41 +451,41 @@
           aria-hidden="true"
         />
       {:else}
-        <GlobeCode size={12} class="shrink-0" />
+        <CioThreadBrowser size={ICON_SIZE.row} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'debugger'}
-      <CioDebugger size={12} class="shrink-0 text-accent" />
+      <CioDebugger size={ICON_SIZE.row} class="shrink-0 text-accent" />
     {:else if tab.kind === 'sources'}
-      <CioTabInfo size={12} class="shrink-0" />
+      <CioTabInfo size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'subagent'}
       <!-- The sub-agent mark is the one a sub-agent wears on every surface; a
            hue would make it a second class of tab rather than one more tab. -->
-      <CioSubagent size={12} class="shrink-0" />
+      <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'temporary-chat'}
       <!-- The dashed bubble is the whole signal: a side chat carries the same
            neutral mark as every other tab, never an indicator colour. -->
-      <CioTemporaryChat size={12} class="shrink-0" />
+      <CioTemporaryChat size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'browser-agent'}
       <!-- The assistant conversation of a browser tab wears the Chats view's own
            mark, and no tone: it is a conversation, not a status. -->
       {@const ChatsIcon = CONTENT_FAMILY_ICONS.chats}
-      <ChatsIcon size={12} class="shrink-0" />
+      <ChatsIcon size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'notifications'}
-      <CioNotifications size={12} class="shrink-0" />
+      <CioNotifications size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'sticky-notes'}
       {@const StickyNotesIcon = feature('sticky-notes').icon}
-      <StickyNotesIcon size={12} class="shrink-0" />
+      <StickyNotesIcon size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'attention'}
-      <CioAttention size={12} class="shrink-0 text-warning" />
+      <CioAttention size={ICON_SIZE.row} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
-      <CioMemory size={12} class="shrink-0" />
+      <CioMemory size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'git'}
-      <CioTabGit size={12} class="shrink-0" />
+      <CioTabGit size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'cloud-deployment'}
-      <CioCloud size={12} class="shrink-0" />
+      <CioCloud size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'thread-note'}
       {@const ThreadNoteIcon = feature('thread-note').icon}
-      <ThreadNoteIcon size={12} class="shrink-0" />
+      <ThreadNoteIcon size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'popup-window'}
       {#if tab.favicon}
         <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -496,17 +498,17 @@
         />
       {/if}
     {:else if tab.kind === 'boxes'}
-      <CioTabBoxes size={12} class="shrink-0" />
+      <CioTabBoxes size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'extensions'}
-      <CioTabExtensions size={12} class="shrink-0" />
+      <CioTabExtensions size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
-      <CioNetwork size={12} class="shrink-0 text-primary" />
+      <CioNetwork size={ICON_SIZE.row} class="shrink-0 text-primary" />
     {:else if tab.kind === 'oven'}
-      <CioTerminal size={12} class="shrink-0" />
+      <CioTerminal size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'assistant-knowledge'}
-      <AssistantIcon mark="knowledge" size={12} class="shrink-0 text-primary" />
+      <AssistantIcon mark="knowledge" size={ICON_SIZE.row} class="shrink-0 text-primary" />
     {:else}
-      <CioSubagent size={12} class="shrink-0" />
+      <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
     {/if}
   {/snippet}
 

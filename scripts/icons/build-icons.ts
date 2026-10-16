@@ -388,6 +388,7 @@ ${APP_MARKS.map((m) => `  ${JSON.stringify(m.id)}: ${m.component},`).join('\n')}
 export type CioIconId = keyof typeof CIO_ICONS
 
 export { type CioGlyphProps, cioStrokeWidth } from './glyph'
+export { ICON_SIZE, type IconSize } from './scale'
 `
 await Bun.write(join(OUT, 'index.ts'), indexSource)
 

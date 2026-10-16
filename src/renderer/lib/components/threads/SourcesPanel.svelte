@@ -1,12 +1,14 @@
 <script lang="ts">
   import CioBook from '$lib/components/icons/cio/CioBook.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import { GlobeCode, Image as ImageIcon } from '@lucide/svelte'
+  import { Image as ImageIcon } from '@lucide/svelte'
   import { isImageMime, fileUrlToPath } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type {
@@ -457,7 +459,7 @@
           title="No sources yet"
           description="Attach files or ask the agent to research the web. Sources will appear here as they are used."
         >
-          {#snippet icon()}<GlobeCode size={18} />{/snippet}
+          {#snippet icon()}<CioBrowser size={ICON_SIZE.control} />{/snippet}
         </SourcesPanelEmptyState>
       {:else if filteredSources.length === 0}
         <SourcesPanelEmptyState
@@ -646,7 +648,7 @@
         {#if appProcesses.length > 0}
           <div class="border-b border-border bg-elevated/60 px-4 py-3">
             <div class="flex items-center gap-2">
-              <GlobeCode size={13} class="shrink-0 text-dimmed" />
+              <CioBrowser size={ICON_SIZE.inline} class="shrink-0 text-dimmed" />
               <p class="text-[0.6875rem] font-semibold text-foreground">App-wide processes</p>
             </div>
             <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">

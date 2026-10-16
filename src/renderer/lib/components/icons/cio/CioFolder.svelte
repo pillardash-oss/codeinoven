@@ -12,8 +12,10 @@
 
 <!--
   CIO · Folder
-  Folder: the plain container with a solid lip. The project mark is the same
-  folder carrying page marks, which is what keeps the two apart.
+  Folder: the container with its tab inked, so the mark has one solid mass and
+  its direction reads from the top left. The first drawing carried a bar
+  floating inside the body with uneven margins above and below it, which is
+  what made it look unmade.
 -->
 <svg
   viewBox="0 0 24 24"
@@ -29,11 +31,11 @@
   {...rest}
 >
   <g
-    transform="translate(-2.415 -2.761) scale(1.1816)"
-    stroke-width={cioStrokeWidth(weight, 1.1816)}
+    transform="translate(-2.328 -2.315) scale(1.1459)"
+    stroke-width={cioStrokeWidth(weight, 1.1459)}
   >
     <path
-      d="M3.6 17.6V7.4a1.6 1.6 0 0 1 1.6-1.6h3.4l2.2 2.8h8.4a1.6 1.6 0 0 1 1.6 1.6v7.4a1.6 1.6 0 0 1-1.6 1.6H5.2a1.6 1.6 0 0 1-1.6-1.6Z"
-    /><rect x="6.6" y="10.4" width="10.8" height="2.2" rx="1.1" fill="currentColor" stroke="none" />
+      d="M3.6 17.8V7.2a1.8 1.8 0 0 1 1.8-1.8h3.5l2.2 2.8h8.5a1.8 1.8 0 0 1 1.8 1.8v7.8a1.8 1.8 0 0 1-1.8 1.8H5.4a1.8 1.8 0 0 1-1.8-1.8Z"
+    /><rect x="3.4" y="5.3" width="8.4" height="2.6" rx="1.7" fill="currentColor" stroke="none" />
   </g>
 </svg>

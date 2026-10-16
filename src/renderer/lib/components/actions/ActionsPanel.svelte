@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioActions from '$lib/components/icons/cio/CioActions.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
@@ -8,7 +9,8 @@
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { Square, Variable } from '@lucide/svelte'
+  import CioStop from '$lib/components/icons/cio/CioStop.svelte'
+  import CioVariable from '$lib/components/icons/cio/CioVariable.svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import Modal from '$lib/components/ui/Modal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
@@ -398,7 +400,7 @@
                       requestRun(action)
                     }
                   }}
-                  >{#if run?.running}<Square size={13} fill="currentColor" />{:else}<CioPlay
+                  >{#if run?.running}<CioStop size={ICON_SIZE.inline} />{:else}<CioPlay
                       size={13}
                       fill="currentColor"
                     />{/if}</button
@@ -556,7 +558,7 @@
         <button
           type="button"
           class="flex h-8 items-center gap-1.5 border border-border px-2.5 text-xs font-semibold hover:bg-elevated"
-          onclick={addVariable}><Variable size={13} /> Add variable</button
+          onclick={addVariable}><CioVariable size={ICON_SIZE.inline} /> Add variable</button
         >
       </div>
       <div class="mt-2 space-y-2">

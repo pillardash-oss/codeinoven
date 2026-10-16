@@ -117,6 +117,16 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'arrow-up',
+    title: 'Send',
+    glyph: {
+      kind: 'drawn',
+      note: 'Send: the level arrow up, on the indicator box with the other direction marks, for the control that sends what is written.',
+      indicator: true,
+      shapes: `<path d="M12 19.6V4.4" /><path d="M5.8 10.6 12 4.4l6.2 6.2" />`
+    }
+  },
+  {
     id: 'arrow-up-right',
     title: 'Open',
     glyph: {
@@ -199,6 +209,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
       kind: 'solid',
       note: 'Planet and ring: disc, tilted ring gap, planet inside',
       body: `<path fill="currentColor" fill-rule="evenodd" d="M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.422,9.071A7.200,5.419 24 0 0 18.578,14.929A7.200,5.419 24 0 0 5.422,9.071Z" />`
+    }
+  },
+  {
+    id: 'chart',
+    title: 'Usage',
+    glyph: {
+      kind: 'drawn',
+      note: 'Usage: three bars rising to a solid peak, which is a measure going up rather than a plain column set.',
+      shapes: `<path d="M3.6 19.6h16.8" /><rect x="5.2" y="13.2" width="3.4" height="6.4" rx="1.2" /><rect x="10.3" y="9.6" width="3.4" height="10" rx="1.2" />${solid(15.4, 5.2, 3.4, 14.4, 1.2)}`
     }
   },
   {
@@ -431,6 +450,16 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'enter',
+    title: 'Run',
+    glyph: {
+      kind: 'drawn',
+      note: 'Run: the return arrow, on the indicator box with the other direction marks, for the key that runs what a palette row says.',
+      indicator: true,
+      shapes: `<path d="M18.4 5.4v8.4a2.8 2.8 0 0 1-2.8 2.8H5.6" /><path d="M9.6 12.8 5.4 16.6l4.2 3.8" />`
+    }
+  },
+  {
     id: 'external-link',
     title: 'Open elsewhere',
     glyph: {
@@ -494,12 +523,30 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'find',
+    title: 'Find in files',
+    glyph: {
+      kind: 'drawn',
+      note: 'Find in files: the document with a lens over its lower half, which is a search inside a file rather than a search of the app.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><circle cx="10.4" cy="13.6" r="3.2" />${dot(10.4, 13.6, 1.3)}<path d="M12.8 16 15.4 18.6" />`
+    }
+  },
+  {
+    id: 'flame',
+    title: 'Credits',
+    glyph: {
+      kind: 'drawn',
+      note: 'Credits: a flame with a solid core, which is a budget being burned rather than a warning to read.',
+      shapes: `<path d="M12 3.4c2.9 2.7 5.4 5.1 5.4 8.7a5.4 5.4 0 0 1-10.8 0c0-2 1-3.4 2.2-4.8" />${dot(12, 14.4, 2.4)}`
+    }
+  },
+  {
     id: 'folder',
     title: 'Folder',
     glyph: {
       kind: 'drawn',
-      note: 'Folder: the plain container with a solid lip. The project mark is the same folder carrying page marks, which is what keeps the two apart.',
-      shapes: `<path d="M3.6 17.6V7.4a1.6 1.6 0 0 1 1.6-1.6h3.4l2.2 2.8h8.4a1.6 1.6 0 0 1 1.6 1.6v7.4a1.6 1.6 0 0 1-1.6 1.6H5.2a1.6 1.6 0 0 1-1.6-1.6Z" />${solid(6.6, 10.4, 10.8, 2.2, 1.1)}`
+      note: 'Folder: the container with its tab inked, so the mark has one solid mass and its direction reads from the top left. The first drawing carried a bar floating inside the body with uneven margins above and below it, which is what made it look unmade.',
+      shapes: `<path d="M3.6 17.8V7.2a1.8 1.8 0 0 1 1.8-1.8h3.5l2.2 2.8h8.5a1.8 1.8 0 0 1 1.8 1.8v7.8a1.8 1.8 0 0 1-1.8 1.8H5.4a1.8 1.8 0 0 1-1.8-1.8Z" />${solid(3.4, 5.3, 8.4, 2.6, 1.7)}`
     }
   },
   {
@@ -567,6 +614,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'harness',
+    title: 'Harness',
+    glyph: {
+      kind: 'drawn',
+      note: 'Harness: a hexagon around a solid core, which is an engine part rather than a box. Four panels would have been the utilities mark.',
+      shapes: `<path d="M12 3.6 19.4 7.8v8.4L12 20.4 4.6 16.2V7.8Z" />${dot(12, 12, 2.8)}`
+    }
+  },
+  {
     id: 'history',
     title: 'History',
     glyph: {
@@ -594,12 +650,30 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'keyboard',
+    title: 'Keyboard',
+    glyph: {
+      kind: 'drawn',
+      note: 'Keyboard: a frame with four solid keys and a solid space bar, the keys centred in the frame so the margins match on both sides.',
+      shapes: `<rect x="2.6" y="6.2" width="18.8" height="11.6" rx="2.2" />${solid(4, 9.2, 2.8, 2.4, 1)}${solid(8.4, 9.2, 2.8, 2.4, 1)}${solid(12.8, 9.2, 2.8, 2.4, 1)}${solid(17.2, 9.2, 2.8, 2.4, 1)}${solid(7.4, 13.8, 9.2, 2.2, 1.1)}`
+    }
+  },
+  {
     id: 'layers',
     title: 'Layers',
     glyph: {
       kind: 'drawn',
       note: 'Layers: one plane above two, the top one carrying a solid edge so the stack reads in depth.',
       shapes: `<path d="M12 4.4 20.4 9 12 13.6 3.6 9Z" />${solid(9.6, 8.2, 4.8, 1.6, 0.8)}<path d="M3.6 12.6 12 17.2l8.4-4.6" />`
+    }
+  },
+  {
+    id: 'learn',
+    title: 'Learn',
+    glyph: {
+      kind: 'drawn',
+      note: 'Learn: a cap with a solid band across the board and a tassel, which is a taught thing rather than a document.',
+      shapes: `<path d="M12 4.6 21 9l-9 4.4L3 9Z" />${solid(9.2, 7.4, 5.6, 1.8, 0.9)}<path d="M6.6 11.4v4.2c0 1.6 2.4 2.8 5.4 2.8s5.4-1.2 5.4-2.8v-4.2" /><path d="M20.2 10v4.6" />`
     }
   },
   {
@@ -643,8 +717,8 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     title: 'Memory',
     glyph: {
       kind: 'drawn',
-      note: 'Memory: three plates with the middle one solid, so the stack reads as a store rather than as a list. A brain outline was tried and read as a cloud at 16px.',
-      shapes: `<rect x="4.2" y="4.6" width="15.6" height="3.8" rx="1.8" />${solid(4.2, 10.2, 15.6, 3.8, 1.8)}<rect x="4.2" y="15.8" width="15.6" height="3.8" rx="1.8" />`
+      note: 'Memory: a head, closed at the chin, holding two solid nodes joined by a short line, which is a mind with what it kept wired together. The plates before it read as a list or a store and said nothing about whose memory it is; a brain outline read as a cloud at 16px, and a first head with a neck line read as a lightbulb.',
+      shapes: `<path d="M12 3.8a7 7 0 0 1 7 7c0 2.2-1 3.6-2 4.8-.8 1-1.2 1.8-1.3 3-.1 1.1-1 1.9-2.1 1.9h-3.2c-1.1 0-2-.8-2.1-1.9-.1-1.2-.5-2-1.3-3-1-1.2-2-2.6-2-4.8a7 7 0 0 1 7-7Z" />${dot(9.4, 10.6, 1.6)}${dot(14.6, 10.6, 1.6)}<path d="M11 10.6h2" />`
     }
   },
   {
@@ -690,6 +764,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
       kind: 'drawn',
       note: 'Milestone: a stem with a flag on it, the flag solid so it reads on a timeline.',
       shapes: `<path d="M6.4 3.6v16.8" /><path d="M6.4 6h12l2.4 2.2-2.4 2.2h-12Z" />${solid(9, 7.2, 7.6, 2, 1)}`
+    }
+  },
+  {
+    id: 'minimize',
+    title: 'Collapse',
+    glyph: {
+      kind: 'drawn',
+      note: 'Collapse: four corners closing inward, the inverse of the maximise mark, so a pair of controls reads as one gesture either way.',
+      shapes: `<path d="M9.4 4.6v3.6a1.4 1.4 0 0 1-1.4 1.4H4.4" /><path d="M14.6 4.6v3.6a1.4 1.4 0 0 0 1.4 1.4h3.6" /><path d="M19.6 14.6h-3.6a1.4 1.4 0 0 0-1.4 1.4v3.6" /><path d="M4.4 14.6h3.6a1.4 1.4 0 0 1 1.4 1.4v3.6" />`
     }
   },
   {
@@ -1003,6 +1086,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'stop',
+    title: 'Stop',
+    glyph: {
+      kind: 'drawn',
+      note: 'Stop: one solid rounded square. Nothing else reads as a stop at 13px, and it sits opposite the play triangle in the same control.',
+      shapes: `${solid(6.4, 6.4, 11.2, 11.2, 2.8)}`
+    }
+  },
+  {
     id: 'subagent',
     title: 'Subagent',
     glyph: {
@@ -1120,6 +1212,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     }
   },
   {
+    id: 'team',
+    title: 'Team',
+    glyph: {
+      kind: 'drawn',
+      note: 'Team: two people, the one in front solid, which is a group of agents rather than a single account.',
+      shapes: `<circle cx="16.6" cy="8" r="2.8" /><path d="M14.4 19.6a5.6 5.6 0 0 1 5.8-5.4" />${dot(9, 7.8, 3.4)}<path d="M3.4 19.6a5.6 5.6 0 0 1 11.2 0" />`
+    }
+  },
+  {
     id: 'temporary-chat',
     title: 'Temporary chat',
     glyph: {
@@ -1135,6 +1236,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
       kind: 'drawn',
       note: 'Oven and terminal: a frame with a prompt and a solid cursor. The cursor is the anchor, and it is 2.4 units tall so it survives 12px as well as 16px.',
       shapes: `<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.4" /><path d="M7.6 9.4 10.4 12.2 7.6 15" />${solid(12, 12.6, 5.2, 2.6, 1.3)}`
+    }
+  },
+  {
+    id: 'thread-browser',
+    title: 'Browser in a thread',
+    glyph: {
+      kind: 'drawn',
+      note: 'Browser in a thread: the thread mark with the browser mark hanging off it, the same construction the thread note uses, so a reader who knows one knows the other.',
+      shapes: `<path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" /><ellipse cx="14.4" cy="12" rx="4.6" ry="2" transform="rotate(-24 14.4 12)" />${dot(14.4, 12, 2.2)}`
     }
   },
   {
@@ -1200,6 +1310,15 @@ export const CIO_GLYPHS: GlyphEntry[] = [
       kind: 'drawn',
       note: 'Upload: the download turned over, with the same solid shaft so the two read as one gesture in two directions.',
       shapes: `${solid(10.9, 8.4, 2.2, 7.6, 1.1)}<path d="M7.4 9.4 12 4.8l4.6 4.6" /><path d="M4.4 18.4v.8a1.4 1.4 0 0 0 1.4 1.4h12.4a1.4 1.4 0 0 0 1.4-1.4v-.8" />`
+    }
+  },
+  {
+    id: 'variable',
+    title: 'Variable',
+    glyph: {
+      kind: 'drawn',
+      note: 'Variable: a slot carrying a cross, which is the mark for a value the action leaves open.',
+      shapes: `<rect x="3.4" y="6.2" width="17.2" height="11.6" rx="2.2" /><path d="M9.6 9.8 14.4 14.2" /><path d="M14.4 9.8 9.6 14.2" />`
     }
   },
   {

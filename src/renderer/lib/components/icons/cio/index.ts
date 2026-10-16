@@ -14,6 +14,7 @@ import CioAlertCircle from './CioAlertCircle.svelte'
 import CioArchive from './CioArchive.svelte'
 import CioArrowLeft from './CioArrowLeft.svelte'
 import CioArrowRight from './CioArrowRight.svelte'
+import CioArrowUp from './CioArrowUp.svelte'
 import CioArrowUpRight from './CioArrowUpRight.svelte'
 import CioAttention from './CioAttention.svelte'
 import CioBack from './CioBack.svelte'
@@ -23,6 +24,7 @@ import CioBook from './CioBook.svelte'
 import CioBookmark from './CioBookmark.svelte'
 import CioBraces from './CioBraces.svelte'
 import CioBrowser from './CioBrowser.svelte'
+import CioChart from './CioChart.svelte'
 import CioChat from './CioChat.svelte'
 import CioCheck from './CioCheck.svelte'
 import CioCheckCircle from './CioCheckCircle.svelte'
@@ -48,6 +50,7 @@ import CioDisplay from './CioDisplay.svelte'
 import CioDot from './CioDot.svelte'
 import CioDownload from './CioDownload.svelte'
 import CioEllipsis from './CioEllipsis.svelte'
+import CioEnter from './CioEnter.svelte'
 import CioExternalLink from './CioExternalLink.svelte'
 import CioEye from './CioEye.svelte'
 import CioEyeOff from './CioEyeOff.svelte'
@@ -55,6 +58,8 @@ import CioFileCode from './CioFileCode.svelte'
 import CioFiles from './CioFiles.svelte'
 import CioFileText from './CioFileText.svelte'
 import CioFilter from './CioFilter.svelte'
+import CioFind from './CioFind.svelte'
+import CioFlame from './CioFlame.svelte'
 import CioFolder from './CioFolder.svelte'
 import CioFolderInput from './CioFolderInput.svelte'
 import CioFolderOpen from './CioFolderOpen.svelte'
@@ -63,10 +68,13 @@ import CioFork from './CioFork.svelte'
 import CioForward from './CioForward.svelte'
 import CioGrip from './CioGrip.svelte'
 import CioHammer from './CioHammer.svelte'
+import CioHarness from './CioHarness.svelte'
 import CioHistory from './CioHistory.svelte'
 import CioImageOff from './CioImageOff.svelte'
 import CioKey from './CioKey.svelte'
+import CioKeyboard from './CioKeyboard.svelte'
 import CioLayers from './CioLayers.svelte'
+import CioLearn from './CioLearn.svelte'
 import CioLink from './CioLink.svelte'
 import CioLock from './CioLock.svelte'
 import CioLockOpen from './CioLockOpen.svelte'
@@ -77,6 +85,7 @@ import CioMessage from './CioMessage.svelte'
 import CioMessagePlus from './CioMessagePlus.svelte'
 import CioMic from './CioMic.svelte'
 import CioMilestone from './CioMilestone.svelte'
+import CioMinimize from './CioMinimize.svelte'
 import CioMinus from './CioMinus.svelte'
 import CioNetwork from './CioNetwork.svelte'
 import CioNote from './CioNote.svelte'
@@ -111,6 +120,7 @@ import CioSkipForward from './CioSkipForward.svelte'
 import CioSparkles from './CioSparkles.svelte'
 import CioSpinner from './CioSpinner.svelte'
 import CioStar from './CioStar.svelte'
+import CioStop from './CioStop.svelte'
 import CioSubagent from './CioSubagent.svelte'
 import CioSwap from './CioSwap.svelte'
 import CioTabBoxes from './CioTabBoxes.svelte'
@@ -123,8 +133,10 @@ import CioTabTasks from './CioTabTasks.svelte'
 import CioTabUtilities from './CioTabUtilities.svelte'
 import CioTag from './CioTag.svelte'
 import CioTarget from './CioTarget.svelte'
+import CioTeam from './CioTeam.svelte'
 import CioTemporaryChat from './CioTemporaryChat.svelte'
 import CioTerminal from './CioTerminal.svelte'
+import CioThreadBrowser from './CioThreadBrowser.svelte'
 import CioThreads from './CioThreads.svelte'
 import CioTimerOff from './CioTimerOff.svelte'
 import CioTools from './CioTools.svelte'
@@ -132,6 +144,7 @@ import CioTrash from './CioTrash.svelte'
 import CioUndo from './CioUndo.svelte'
 import CioUnplug from './CioUnplug.svelte'
 import CioUpload from './CioUpload.svelte'
+import CioVariable from './CioVariable.svelte'
 import CioVolume from './CioVolume.svelte'
 import CioVolumeX from './CioVolumeX.svelte'
 import CioWindow from './CioWindow.svelte'
@@ -145,142 +158,156 @@ import TriangleQuestionMark from './TriangleQuestionMark.svelte'
 
 /** Every glyph the set draws, by id. */
 export const CIO_ICONS = {
-  actions: CioActions,
-  'alert-circle': CioAlertCircle,
-  archive: CioArchive,
-  'arrow-left': CioArrowLeft,
-  'arrow-right': CioArrowRight,
-  'arrow-up-right': CioArrowUpRight,
-  attention: CioAttention,
-  back: CioBack,
-  ban: CioBan,
-  board: CioBoard,
-  book: CioBook,
-  bookmark: CioBookmark,
-  braces: CioBraces,
-  browser: CioBrowser,
-  chat: CioChat,
-  check: CioCheck,
-  'check-circle': CioCheckCircle,
-  'chevron-down': CioChevronDown,
-  'chevron-up': CioChevronUp,
-  circle: CioCircle,
-  clapper: CioClapper,
-  'clipboard-check': CioClipboardCheck,
-  'clipboard-paste': CioClipboardPaste,
-  clock: CioClock,
-  close: CioClose,
-  cloud: CioCloud,
-  code: CioCode,
-  commit: CioCommit,
-  copy: CioCopy,
-  cpu: CioCpu,
-  'cross-circle': CioCrossCircle,
-  debugger: CioDebugger,
-  design: CioDesign,
-  diff: CioDiff,
-  disk: CioDisk,
-  display: CioDisplay,
-  dot: CioDot,
-  download: CioDownload,
-  ellipsis: CioEllipsis,
-  'external-link': CioExternalLink,
-  eye: CioEye,
-  'eye-off': CioEyeOff,
-  'file-code': CioFileCode,
-  files: CioFiles,
-  'file-text': CioFileText,
-  filter: CioFilter,
-  folder: CioFolder,
-  'folder-input': CioFolderInput,
-  'folder-open': CioFolderOpen,
-  'folder-plus': CioFolderPlus,
-  fork: CioFork,
-  forward: CioForward,
-  grip: CioGrip,
-  hammer: CioHammer,
-  history: CioHistory,
-  'image-off': CioImageOff,
-  key: CioKey,
-  layers: CioLayers,
-  link: CioLink,
-  lock: CioLock,
-  'lock-open': CioLockOpen,
-  maximize: CioMaximize,
-  memory: CioMemory,
-  merge: CioMerge,
-  message: CioMessage,
-  'message-plus': CioMessagePlus,
-  mic: CioMic,
-  milestone: CioMilestone,
-  minus: CioMinus,
-  network: CioNetwork,
-  note: CioNote,
-  notes: CioNotes,
-  notifications: CioNotifications,
-  package: CioPackage,
-  palette: CioPalette,
-  'panel-bottom': CioPanelBottom,
-  'panel-right': CioPanelRight,
-  paperclip: CioPaperclip,
-  pause: CioPause,
-  pencil: CioPencil,
-  person: CioPerson,
-  'person-plus': CioPersonPlus,
-  pin: CioPin,
-  play: CioPlay,
-  plug: CioPlug,
-  plus: CioPlus,
-  projects: CioProjects,
-  'pull-request': CioPullRequest,
-  redo: CioRedo,
-  refresh: CioRefresh,
-  rocket: CioRocket,
-  save: CioSave,
-  scoped: CioScoped,
-  search: CioSearch,
-  send: CioSend,
-  server: CioServer,
-  'shield-alert': CioShieldAlert,
-  'shield-check': CioShieldCheck,
-  'skip-forward': CioSkipForward,
-  sparkles: CioSparkles,
-  spinner: CioSpinner,
-  star: CioStar,
-  subagent: CioSubagent,
-  swap: CioSwap,
-  'tab-boxes': CioTabBoxes,
-  'tab-extensions': CioTabExtensions,
-  'tab-files': CioTabFiles,
-  'tab-git': CioTabGit,
-  'tab-info': CioTabInfo,
-  'tab-settings': CioTabSettings,
-  'tab-tasks': CioTabTasks,
-  'tab-utilities': CioTabUtilities,
-  tag: CioTag,
-  target: CioTarget,
-  'temporary-chat': CioTemporaryChat,
-  terminal: CioTerminal,
-  threads: CioThreads,
-  'timer-off': CioTimerOff,
-  tools: CioTools,
-  trash: CioTrash,
-  undo: CioUndo,
-  unplug: CioUnplug,
-  upload: CioUpload,
-  volume: CioVolume,
-  'volume-x': CioVolumeX,
-  window: CioWindow,
-  wrench: CioWrench,
-  zap: CioZap,
-  assistant: AssistantIcon,
-  'assistant-default': AssistantDefaultIcon,
-  'assistant-knowledge': AssistantKnowledgeIcon,
-  'assistant-task': AssistantTaskIcon,
-  question: TriangleQuestionMark
+  "actions": CioActions,
+  "alert-circle": CioAlertCircle,
+  "archive": CioArchive,
+  "arrow-left": CioArrowLeft,
+  "arrow-right": CioArrowRight,
+  "arrow-up": CioArrowUp,
+  "arrow-up-right": CioArrowUpRight,
+  "attention": CioAttention,
+  "back": CioBack,
+  "ban": CioBan,
+  "board": CioBoard,
+  "book": CioBook,
+  "bookmark": CioBookmark,
+  "braces": CioBraces,
+  "browser": CioBrowser,
+  "chart": CioChart,
+  "chat": CioChat,
+  "check": CioCheck,
+  "check-circle": CioCheckCircle,
+  "chevron-down": CioChevronDown,
+  "chevron-up": CioChevronUp,
+  "circle": CioCircle,
+  "clapper": CioClapper,
+  "clipboard-check": CioClipboardCheck,
+  "clipboard-paste": CioClipboardPaste,
+  "clock": CioClock,
+  "close": CioClose,
+  "cloud": CioCloud,
+  "code": CioCode,
+  "commit": CioCommit,
+  "copy": CioCopy,
+  "cpu": CioCpu,
+  "cross-circle": CioCrossCircle,
+  "debugger": CioDebugger,
+  "design": CioDesign,
+  "diff": CioDiff,
+  "disk": CioDisk,
+  "display": CioDisplay,
+  "dot": CioDot,
+  "download": CioDownload,
+  "ellipsis": CioEllipsis,
+  "enter": CioEnter,
+  "external-link": CioExternalLink,
+  "eye": CioEye,
+  "eye-off": CioEyeOff,
+  "file-code": CioFileCode,
+  "files": CioFiles,
+  "file-text": CioFileText,
+  "filter": CioFilter,
+  "find": CioFind,
+  "flame": CioFlame,
+  "folder": CioFolder,
+  "folder-input": CioFolderInput,
+  "folder-open": CioFolderOpen,
+  "folder-plus": CioFolderPlus,
+  "fork": CioFork,
+  "forward": CioForward,
+  "grip": CioGrip,
+  "hammer": CioHammer,
+  "harness": CioHarness,
+  "history": CioHistory,
+  "image-off": CioImageOff,
+  "key": CioKey,
+  "keyboard": CioKeyboard,
+  "layers": CioLayers,
+  "learn": CioLearn,
+  "link": CioLink,
+  "lock": CioLock,
+  "lock-open": CioLockOpen,
+  "maximize": CioMaximize,
+  "memory": CioMemory,
+  "merge": CioMerge,
+  "message": CioMessage,
+  "message-plus": CioMessagePlus,
+  "mic": CioMic,
+  "milestone": CioMilestone,
+  "minimize": CioMinimize,
+  "minus": CioMinus,
+  "network": CioNetwork,
+  "note": CioNote,
+  "notes": CioNotes,
+  "notifications": CioNotifications,
+  "package": CioPackage,
+  "palette": CioPalette,
+  "panel-bottom": CioPanelBottom,
+  "panel-right": CioPanelRight,
+  "paperclip": CioPaperclip,
+  "pause": CioPause,
+  "pencil": CioPencil,
+  "person": CioPerson,
+  "person-plus": CioPersonPlus,
+  "pin": CioPin,
+  "play": CioPlay,
+  "plug": CioPlug,
+  "plus": CioPlus,
+  "projects": CioProjects,
+  "pull-request": CioPullRequest,
+  "redo": CioRedo,
+  "refresh": CioRefresh,
+  "rocket": CioRocket,
+  "save": CioSave,
+  "scoped": CioScoped,
+  "search": CioSearch,
+  "send": CioSend,
+  "server": CioServer,
+  "shield-alert": CioShieldAlert,
+  "shield-check": CioShieldCheck,
+  "skip-forward": CioSkipForward,
+  "sparkles": CioSparkles,
+  "spinner": CioSpinner,
+  "star": CioStar,
+  "stop": CioStop,
+  "subagent": CioSubagent,
+  "swap": CioSwap,
+  "tab-boxes": CioTabBoxes,
+  "tab-extensions": CioTabExtensions,
+  "tab-files": CioTabFiles,
+  "tab-git": CioTabGit,
+  "tab-info": CioTabInfo,
+  "tab-settings": CioTabSettings,
+  "tab-tasks": CioTabTasks,
+  "tab-utilities": CioTabUtilities,
+  "tag": CioTag,
+  "target": CioTarget,
+  "team": CioTeam,
+  "temporary-chat": CioTemporaryChat,
+  "terminal": CioTerminal,
+  "thread-browser": CioThreadBrowser,
+  "threads": CioThreads,
+  "timer-off": CioTimerOff,
+  "tools": CioTools,
+  "trash": CioTrash,
+  "undo": CioUndo,
+  "unplug": CioUnplug,
+  "upload": CioUpload,
+  "variable": CioVariable,
+  "volume": CioVolume,
+  "volume-x": CioVolumeX,
+  "window": CioWindow,
+  "wrench": CioWrench,
+  "zap": CioZap,
+  "assistant": AssistantIcon,
+  "assistant-default": AssistantDefaultIcon,
+  "assistant-knowledge": AssistantKnowledgeIcon,
+  "assistant-task": AssistantTaskIcon,
+  "question": TriangleQuestionMark,
 } as const satisfies Record<string, Component>
 
 /** The id of a glyph, which is also its key in {@link CIO_ICONS}. */
 export type CioIconId = keyof typeof CIO_ICONS
 
 export { type CioGlyphProps, cioStrokeWidth } from './glyph'
+export { ICON_SIZE, type IconSize } from './scale'
