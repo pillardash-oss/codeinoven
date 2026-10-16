@@ -1087,7 +1087,9 @@
         </span>
       {/if}
       {#if pickerBadge}
-        <StatusPill>{pickerBadge}</StatusPill>
+        <StatusPill
+          ><span class={selected ? 'text-accent' : undefined}>{pickerBadge}</span></StatusPill
+        >
       {/if}
       {#if selected}
         <Check size={13} class="shrink-0 text-primary" />

@@ -28,6 +28,15 @@
 
   let { entries, projects, projectIconUrls, selectedKey, onSelect }: Props = $props()
 
+  function entryType(entry: ThreadSwitcherEntry): string {
+    return entry.kind === 'browser' ? 'browser' : contentThreadFamily(entry.thread)
+  }
+
+  const showTypeBadges = $derived.by(() => {
+    const firstEntry = entries[0]
+    return firstEntry !== undefined && entries.some((entry) => entryType(entry) !== entryType(firstEntry))
+  })
+
   let open = $state(false)
   let nativeReady = $state(false)
   let nativeFailed = $state(false)
@@ -399,18 +408,24 @@
                one, so importing the row statically would carry the browser's
                model into the first-paint chunk for a row that cannot appear. -->
           {#await import('./SwitcherBrowserRow.svelte') then { default: SwitcherBrowserRow }}
-            <SwitcherBrowserRow tab={entry.tab} selected={entryKey === highlightedKey} />
+            <SwitcherBrowserRow
+              tab={entry.tab}
+              selected={entryKey === highlightedKey}
+              showBadge={showTypeBadges}
+            />
           {/await}
         {:else}
           <ThreadRow
             thread={entry.thread}
             picker
             compact
-            pickerBadge={contentThreadFamily(entry.thread) === 'chats'
-              ? 'Chat'
-              : contentThreadFamily(entry.thread) === 'assistant'
-                ? 'Assistant'
-                : 'Project'}
+            pickerBadge={!showTypeBadges
+              ? undefined
+              : contentThreadFamily(entry.thread) === 'chats'
+                ? 'Chat'
+                : contentThreadFamily(entry.thread) === 'assistant'
+                  ? 'Assistant'
+                  : 'Project'}
             selected={entryKey === highlightedKey}
             projectIconUrl={resolvedProjectIcon}
             projectIconGlyph={contentFamilyIcon(entry.thread)}

@@ -13,9 +13,10 @@
   interface Props {
     tab: GlobalBrowserTab
     selected?: boolean
+    showBadge?: boolean
   }
 
-  let { tab, selected = false }: Props = $props()
+  let { tab, selected = false, showBadge = true }: Props = $props()
 
   /**
    * One browser tab in the Ctrl+Tab switcher.
@@ -94,6 +95,8 @@
         {/if}
       </span>
     {/if}
-    <StatusPill tone="info">Browser</StatusPill>
+    {#if showBadge}
+      <StatusPill><span class={selected ? 'text-accent' : undefined}>Browser</span></StatusPill>
+    {/if}
   </span>
 </div>
