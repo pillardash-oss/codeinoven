@@ -1,3 +1,4 @@
+import { isCodeModeToolName } from '../../../lib/agent-interactions'
 import type { AgentEvent, AgentPart, AgentToolState, PermissionReply } from '../../../lib/types'
 import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import type { OpenCodeV2SseEvent } from '../../opencode-v2/opencode-v2-client'
@@ -76,7 +77,7 @@ function toolPartFor(
     messageID: messageId,
     callID: callId,
     tool,
-    ...(tool === 'execute' ? { codeMode: true } : {}),
+    ...(isCodeModeToolName(tool) ? { codeMode: true } : {}),
     state
   }
 }

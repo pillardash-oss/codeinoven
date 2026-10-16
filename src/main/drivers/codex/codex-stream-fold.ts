@@ -1,3 +1,4 @@
+import { isCodeModeToolName } from '../../../lib/agent-interactions'
 import type { AgentMessage, AgentPart, SessionAgentEvent } from '../../../lib/types'
 import { Logger } from '../../system/logger'
 import type {
@@ -51,7 +52,7 @@ export function parseItem(
       sessionId,
       stringValue(item['tool']) ?? stringValue(item['name']) ?? 'mcp_tool_call'
     )
-  if (itemType === 'function_call') {
+  if (itemType === 'function_call' || itemType === 'custom_tool_call') {
     // Codex's collaboration mode (native sub-agents) surfaces as plain
     // function calls (`send_message`, `wait_agent`, ...) instead of the
     // richer `collab_tool_call` item type. Route those to the collaboration
@@ -289,6 +290,9 @@ function parseTool(
     messageID: itemId,
     callID: itemId,
     tool: providerTool,
+    ...(isCodeModeToolName(providerTool) || item['codeMode'] === true || item['code_mode'] === true
+      ? { codeMode: true }
+      : {}),
     state: {
       status: !completed
         ? ('running' as const)
