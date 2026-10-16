@@ -14,7 +14,6 @@ import { AssignmentRepo } from '../database/repositories/assignment-repo'
 import { AssistantRepo } from '../database/repositories/assistant-repo'
 import {
   ASSISTANT_SPACE_ID,
-  GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
   isAssistantRunThread,
   isAssistantSetupThread,
@@ -617,17 +616,11 @@ export class NotificationService {
 
     const threadKey = `${thread.projectId}:${thread.id}`
     if (this.abortingThreads.has(threadKey)) return
-    // A browser tab's assistant conversation is answered beside the page it is
-    // about, so a settled turn there is never something the user has to be told
-    // about while they are looking elsewhere. That was already true of the side
-    // chat it replaced, and it stays true of the thread it is now. A thread
-    // parked on the user is the exception and always notifies: it can only be
-    // waiting because they moved on, and the conversation they left behind has
-    // no other surface to ask them from, so staying silent made an agent
-    // question indistinguishable from an idle tab.
-    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID && thread.status !== 'awaiting_approval') {
-      return
-    }
+    // A browser tab's assistant conversation is a real thread of the hidden
+    // browser project, so it notifies exactly like any other thread: a finished
+    // turn, a parked question and a failure all earn a card. The answer itself
+    // is still delivered beside the page it is about, but the card is what
+    // reaches the user when they are looking somewhere else.
     // In Achievement/Assignment mode only the Sr. Engineer (coordinator) thread
     // notifies, and only when the whole process is over or human intervention
     // is needed. Worker/auditor threads never notify, and the coordinator's
