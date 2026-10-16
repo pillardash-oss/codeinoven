@@ -611,6 +611,8 @@ export function threadSort(
   b: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
+  // Bookmarks belong at the head of their project strip, ahead of unsent drafts.
+  if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1
   // Unsent drafts and the empty "New Thread" placeholder stay pinned at the top.
   const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
   const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false

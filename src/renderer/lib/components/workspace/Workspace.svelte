@@ -1964,8 +1964,9 @@
   let threadsByProject = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
     for (const t of allThreads) {
-      // Pinned threads live exclusively in the Pinned section.
-      if (t.archived || t.pinned) continue
+      // Bookmarks stay in their project's strip in Projects view. Other pinned
+      // threads live exclusively in the Pinned section.
+      if (t.archived || (t.pinned && !t.bookmarked)) continue
       const list = map.get(t.projectId) ?? []
       list.push(t)
       map.set(t.projectId, list)

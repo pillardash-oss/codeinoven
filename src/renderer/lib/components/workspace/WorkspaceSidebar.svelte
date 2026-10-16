@@ -949,7 +949,7 @@
         <PinnedSection
           sectionKey="projects-threads"
           label="Pinned Threads"
-          threads={pinnedThreads}
+          threads={pinnedThreads.filter((thread) => !thread.bookmarked)}
           detailed
           sticky
           activeThreadId={activeThreadId ?? null}
