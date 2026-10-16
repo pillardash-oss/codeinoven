@@ -10,7 +10,8 @@ import { atomicWrite } from '../../lib/utils'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
 import {
   cachedOpenCodeInstallation,
-  detectOpenCodeInstallation
+  detectOpenCodeInstallation,
+  resolvedOpenCodeCommand
 } from '../agents/opencode-installation'
 import type {
   HarnessAuthAccount,
@@ -910,21 +911,27 @@ async function readFileOrEmpty(filePath: string): Promise<string> {
 /**
  * OpenCode V1 auth: `opencode auth list`, with a `--provider` login target and
  * a credential store CodeInOven can edit directly (`~/.local/share/opencode`).
+ *
+ * The command is the canonical install the app assessed, so a v1 binary answers
+ * the probe and the login from the same copy rather than from whichever one PATH
+ * resolves for that particular spawn.
  */
-const OPENCODE_V1_AUTH: AuthDefinition = {
-  id: 'opencode',
-  name: 'OpenCode',
-  command: 'opencode',
-  statusArgs: ['auth', 'list'],
-  parseStatus: parseOpenCodeStatus,
-  loginArgs: (options) => [
-    'auth',
-    'login',
-    ...(options.providerId ? ['--provider', options.providerId] : [])
-  ],
-  logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
-  resolveLogoutTarget: resolveOpencodeLogoutTarget,
-  pickerLogin: true
+function openCodeV1Auth(command: string): AuthDefinition {
+  return {
+    id: 'opencode',
+    name: 'OpenCode',
+    command,
+    statusArgs: ['auth', 'list'],
+    parseStatus: parseOpenCodeStatus,
+    loginArgs: (options) => [
+      'auth',
+      'login',
+      ...(options.providerId ? ['--provider', options.providerId] : [])
+    ],
+    logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+    resolveLogoutTarget: resolveOpencodeLogoutTarget,
+    pickerLogin: true
+  }
 }
 
 /**
@@ -1013,7 +1020,7 @@ async function openCodeAuthDefinition(): Promise<AuthDefinition> {
   if (installation && isOpenCodeV2Version(installation.version)) {
     return openCodeV2Auth(installation.command)
   }
-  return OPENCODE_V1_AUTH
+  return openCodeV1Auth(resolvedOpenCodeCommand())
 }
 
 /** Version-aware definition without spawning a probe (for existence checks). */
@@ -1022,7 +1029,7 @@ function openCodeAuthDefinitionCached(): AuthDefinition {
   if (installation && isOpenCodeV2Version(installation.version)) {
     return openCodeV2Auth(installation.command)
   }
-  return OPENCODE_V1_AUTH
+  return openCodeV1Auth(resolvedOpenCodeCommand())
 }
 
 const AUTH_DEFINITIONS: AuthDefinition[] = [
