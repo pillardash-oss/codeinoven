@@ -129,7 +129,9 @@ async function moveDetails(
       await repo.rebaseRoot({ projectId, ...plan })
       await new Promise<void>((resume) => setImmediate(resume))
     }
-    if (root !== undefined) await saveProjectWorkRoot(database, projectId, details.kind, root)
+    if (root !== undefined && !details.thisOnly) {
+      await saveProjectWorkRoot(database, projectId, details.kind, root)
+    }
   } catch (error) {
     for (const plan of moved.reverse()) {
       await input.relocate(plan.to, plan.from)

@@ -98,12 +98,12 @@
       <Switch
         bind:checked={thisOnly}
         disabled={busy}
-        label={`This ${noun} only and new ones after`}
-        aria-label={`Move only this ${noun} and use this save folder for new ${noun}s`}
+        label={`This ${noun} only`}
+        aria-label={`Move only this ${noun}`}
       />
       <p class="text-xs text-muted">
         {thisOnly
-          ? `Moves this ${noun} and sets the default folder for new ${noun}s in this project.`
+          ? `Moves only this ${noun}. The default folder for new ${noun}s stays unchanged.`
           : `Moves all ${noun}s in this project and sets the default folder for new ones.`}
       </p>
     {/if}

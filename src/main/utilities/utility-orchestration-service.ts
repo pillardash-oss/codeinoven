@@ -2084,7 +2084,7 @@ export class UtilityOrchestrationService {
     return {
       roots: currentWorkRoots(thread?.projectId),
       note: current
-        ? `\nThe current ${current.kind} is in ${JSON.stringify(current.directory)}. Continue editing this folder. A save-path change affects new work; existing work can remain in other folders. Use the current recorded path rather than paths in older messages.\n`
+        ? `\nThe current ${current.kind} is in ${JSON.stringify(current.directory)}. Continue editing this folder. An individual save-path change affects only this folder. The project save root controls new work. Use the current recorded path rather than paths in older messages.\n`
         : ''
     }
   }

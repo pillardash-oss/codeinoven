@@ -106,6 +106,13 @@ export class DesignRepo {
         Date.now(),
         Date.now()
       )
+    } else {
+      // Refresh an exact relocated record without adopting its parent as a default.
+      this.db.run(
+        'UPDATE authored_work_folders SET missing = 0 WHERE project_id = ? AND directory = ?',
+        input.projectId,
+        input.directory
+      )
     }
     // The first thread to preview a folder is the one that created it, because the
     // agent writes a folder before showing it. The insert is ignored once the

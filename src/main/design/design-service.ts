@@ -627,11 +627,13 @@ export class DesignService {
     )
     if (directory === null) return NO_TAB_MARK
     const kind =
+      (await new WorkFolderRegistry(this.options.database).kindFor(projectId, directory)) ??
       (['design', 'video'] as const).find((kind) =>
         projectWorkRootPaths(projectId, kind).some(
           (root) => directory === root || directory.startsWith(`${root}/`)
         )
-      ) ?? null
+      ) ??
+      null
     if (kind === null) return NO_TAB_MARK
     // A screen sweep moves the tab through every screen of one design, which is
     // the app taking pictures rather than the agent or the user choosing a folder.

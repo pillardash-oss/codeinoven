@@ -329,16 +329,40 @@ export class CioCleanupService {
       // settings, and one pass has to judge every workspace by the same list
       // rather than half of it by the value before a settings save and half by
       // the value after.
+      const excludedCategories = normalizeCioCleanupExcludedCategories(
+        config.cioCleanupExcludedCategories
+      )
       const protectedPaths = [
         ...new Set(
           protectedWorkRoots().flatMap((roots) =>
-            cioCleanupProtectedPaths(
-              roots,
-              normalizeCioCleanupExcludedCategories(config.cioCleanupExcludedCategories)
-            )
+            cioCleanupProtectedPaths(roots, excludedCategories)
           )
         )
       ]
+      // Protect exact individually relocated work without changing project defaults.
+      const recorded = await this.deps.database.queryViaWorker(
+        'SELECT project_id, directory, kind FROM authored_work_folders',
+        [],
+        0
+      )
+      if (!recorded.ok) throw new Error('Could not read authored-work cleanup protection')
+      const recordedPaths = new Map<string, string[]>()
+      const recordedRows = recorded.rows as unknown as Array<{
+        project_id: string
+        directory: string
+        kind: string
+      }>
+      for (let offset = 0; offset < recordedRows.length; offset += 100) {
+        for (const row of recordedRows.slice(offset, offset + 100)) {
+          if (!excludedCategories.includes(row.kind === 'video' ? 'videos' : 'designs')) continue
+          const path = cioScratchRelativePath(row.directory)
+          if (!path) continue
+          const paths = recordedPaths.get(row.project_id) ?? []
+          paths.push(path)
+          recordedPaths.set(row.project_id, paths)
+        }
+        await new Promise<void>((resume) => setImmediate(resume))
+      }
       const exclusions = await this.pruneAndListExclusions()
       const targets = await listCioCleanupTargets({
         database: this.deps.database,
@@ -360,7 +384,12 @@ export class CioCleanupService {
           target,
           cutoff,
           exclusions,
-          protectedPaths,
+          protectedPaths: [
+            ...new Set([
+              ...protectedPaths,
+              ...target.mounts.flatMap((mount) => recordedPaths.get(mount.projectId) ?? [])
+            ])
+          ],
           control: {
             isCancelled: () => live.cancelled,
             onScanned: () => this.publishProgress()

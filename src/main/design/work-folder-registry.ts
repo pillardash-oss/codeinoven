@@ -142,6 +142,18 @@ export class WorkFolderRegistry {
     return entries.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
+  /** Individual relocations can live outside every project default root. */
+  async kindFor(projectId: string, directory: string): Promise<AuthoredWorkKind | null> {
+    const result = await this.database.queryViaWorker(
+      'SELECT kind FROM authored_work_folders WHERE project_id = ? AND directory = ?',
+      [projectId, directory],
+      1
+    )
+    if (!result.ok) throw new Error('Could not recognize the work folder')
+    const row = result.rows[0] as { kind: string } | undefined
+    return row?.kind === 'design' || row?.kind === 'video' ? row.kind : null
+  }
+
   /** Remove an unavailable record only. This operation never deletes files. */
   removeMissing(projectId: string, projectPath: string, directory: string): Promise<void> {
     return exclusive(projectId, () => this.remove(projectId, projectPath, directory))
