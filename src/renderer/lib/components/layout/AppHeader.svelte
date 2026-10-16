@@ -242,6 +242,13 @@
   style={trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
+    <div class="flex shrink-0 items-center gap-1.5 px-1.5" aria-label="CodeInOven">
+      <VendorIcon name="CodeInOven" size={20} class="text-muted" />
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight text-muted">
+        CodeInOven
+      </span>
+    </div>
+
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
       <button
@@ -262,13 +269,6 @@
       >
         <ChevronRight size={16} strokeWidth={1.8} />
       </button>
-    </div>
-
-    <div class="flex shrink-0 items-center gap-1.5 pl-1.5" aria-label="CodeInOven">
-      <VendorIcon name="CodeInOven" size={20} class="text-muted" />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight text-muted">
-        CodeInOven
-      </span>
     </div>
 
     {#if onSettings}
