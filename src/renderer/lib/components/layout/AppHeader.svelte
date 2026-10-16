@@ -17,7 +17,7 @@
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { publicAssetUrl } from '$lib/static-assets'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
   import {
     Bell,
@@ -49,7 +49,6 @@
   }
 
   let { activeView, goBack, goForward, navigation }: Props = $props()
-  const appMarkUrl = publicAssetUrl('icon-mark.svg')
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -266,7 +265,7 @@
     </div>
 
     <div class="flex shrink-0 items-center gap-1.5 pl-1.5" aria-label="CodeInOven">
-      <img src={appMarkUrl} alt="" class="h-5 w-5 text-foreground" draggable="false" />
+      <VendorIcon name="CodeInOven" size={20} class="text-foreground" />
       <span class="whitespace-nowrap text-[0.75rem] font-semibold tracking-tight text-foreground">
         CodeInOven
       </span>
