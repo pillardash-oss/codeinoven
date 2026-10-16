@@ -16,6 +16,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
@@ -244,12 +245,16 @@
   style={trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
-    <div class="flex shrink-0 items-center gap-1.5 px-1.5" aria-label="CodeInOven">
-      <VendorIcon name="CodeInOven" size={20} class="text-muted" />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight text-muted">
-        CodeInOven
-      </span>
-    </div>
+    <button
+      type="button"
+      class="flex shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+      aria-label="Open thread switcher"
+      title="Open thread switcher"
+      onclick={() => threadSwitcherRequest.requestOpen()}
+    >
+      <VendorIcon name="CodeInOven" size={20} />
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"> CodeInOven </span>
+    </button>
 
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">

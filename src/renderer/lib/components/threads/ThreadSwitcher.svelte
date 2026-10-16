@@ -12,6 +12,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { ensureStoredBrowserTabs, isBrowserLoaded } from '$lib/stores/browser-access.svelte'
+  import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { browserTabLabel } from '$lib/stores/global-browser-types'
   import type { Project } from '$shared/types'
   import { threadSwitcherEntryKey, type ThreadSwitcherEntry } from './thread-switcher-entries'
@@ -216,6 +217,38 @@
     restoreFocusOnClose = true
     open = false
   }
+
+  /**
+   * Open the list for pointer picking (logo click). The highlight starts on
+   * the current surface so mouse users see where they are, and an empty list
+   * stays closed instead of flashing an empty dialog.
+   */
+  function openForPointer(): void {
+    if (open) return
+    keyboardAt = performance.timeOrigin + performance.now()
+    // Same stored-tab read as the keyboard cycle: the only fill for a list
+    // that is empty only because the browser runtime never loaded.
+    if (!isBrowserLoaded()) ensureStoredBrowserTabs()
+    if (entries.length === 0) return
+    nativeFailed = false
+    previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    restoreFocusOnClose = true
+    pointerAtOpen = lastPointer
+    const selectedIndex = entries.findIndex(
+      (entry) => threadSwitcherEntryKey(entry) === selectedKey
+    )
+    const first = selectedIndex >= 0 ? entries[selectedIndex] : entries[0]
+    highlightedKey = first ? threadSwitcherEntryKey(first) : null
+    open = true
+  }
+
+  let seenPointerRequest = 0
+  $effect(() => {
+    const id = threadSwitcherRequest.requestId
+    if (id === 0 || id === seenPointerRequest) return
+    seenPointerRequest = id
+    openForPointer()
+  })
 
   async function selectEntry(entry: ThreadSwitcherEntry): Promise<void> {
     commitToken += 1
