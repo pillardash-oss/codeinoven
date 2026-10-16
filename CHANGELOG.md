@@ -283,6 +283,15 @@ All notable changes to CodeInOven are documented here. This project follows
   while a sentence that merely starts with the same kind of word ("Today both
   sites are online.") is left alone.
 
+- **An assistant's update is delivered even when it runs long.** Result
+  extraction treated the 80-word brief limit as a gate: a run that wrapped its
+  answer in `<assistant_result>` and wrote past the limit had the whole message
+  thrown away and replaced with "I could not produce a clean update. Please retry
+  this run.", so a slightly long answer cost the user the answer itself. The
+  brief limit is guidance again: a longer result is shown as written, and the
+  retry message is reserved for a result that truly could not be read, like an
+  empty or half-formed boundary.
+
 - **A thread parked on a dropped connection resumes itself when the device is
   back.** Losing Wi-Fi does not only fail a request, it takes the harness process
   down with it, and the failure that comes back is not shaped like a transport

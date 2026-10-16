@@ -27,16 +27,15 @@ describe('assistant result delivery', () => {
   })
   it('accepts end-of-message as the closing boundary for a brief result', () => {
     expect(assistantResultText(`<assistant_result>${result}`)).toBe(result)
-    expect(assistantResultText(`<assistant_result>${'word '.repeat(81)}`)).toBe(
-      ASSISTANT_INVALID_RESULT
-    )
   })
-  it('refuses an overlong default result without silently cutting off its contents', () => {
-    expect(assistantResultText(`<assistant_result>${'word '.repeat(81)}</assistant_result>`)).toBe(
-      ASSISTANT_INVALID_RESULT
-    )
-    expect(assistantResultText(`<assistant_result>${'word '.repeat(80)}</assistant_result>`)).toBe(
-      'word '.repeat(80).trim()
+  it('delivers an overlong result instead of replacing it with a retry message', () => {
+    // Brevity is guidance, not a gate: a longer update is still the update the
+    // user needs, so it is shown rather than swapped for ASSISTANT_INVALID_RESULT.
+    const long = 'word '.repeat(81).trim()
+    expect(assistantResultText(`<assistant_result>${long}</assistant_result>`)).toBe(long)
+    expect(assistantResultText(`<assistant_result>${long}`)).toBe(long)
+    expect(assistantResultText(`<assistant_result>${'word '.repeat(90)}`, true)).toBe(
+      'word '.repeat(90).trim()
     )
   })
   it('preserves an explicitly requested detailed answer and existing unmarked reports', () => {

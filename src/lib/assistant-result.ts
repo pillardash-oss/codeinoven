@@ -52,22 +52,18 @@ function stripUrgencyTag(text: string): string {
   return text.replace(URGENCY_TAG_PREFIX, '')
 }
 
-/** Count only far enough to decide whether the default brief result fits. */
-function exceedsBriefLimit(text: string): boolean {
-  const words = /\S+/gu
-  let count = 0
-  while (words.exec(text) !== null) {
-    if (++count > 80) return true
-  }
-  return false
-}
-
 /**
  * Keep explicit final results, never the draft around them. Existing unmarked
  * reports remain readable, except recognizable drafting instructions. A result
  * accepts end-of-message as a closing boundary. Streaming
  * stays silent until a result opens, so partial internal text cannot flash in
  * the answer before its delimiter arrives. The original transcript is unchanged.
+ *
+ * Length is guidance, never a reason to withhold the update: the brief contract
+ * asks for a short result, but a run that writes more still delivered something
+ * the user needs, so an overlong result is shown rather than replaced with a
+ * retry message. The retry message is reserved for a result that truly could not
+ * be read (an empty or half-formed boundary).
  */
 export function assistantResultText(raw: string, streaming = false): string {
   let opening = -1
@@ -91,8 +87,6 @@ export function assistantResultText(raw: string, streaming = false): string {
     }
     result = stripUrgencyTag(result)
     if (!result && !streaming) return ASSISTANT_INVALID_RESULT
-    if (selected === 'assistant_result' && exceedsBriefLimit(result))
-      return streaming ? '' : ASSISTANT_INVALID_RESULT
     return result
   }
   if (streaming) return ''
