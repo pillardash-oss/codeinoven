@@ -1,4 +1,4 @@
-import { WorkFolderRegistry } from './work-folder-registry'
+import { WorkFolderRegistry, withWorkRegistryLock } from './work-folder-registry'
 import { updateWorkDetails } from './work-details-service'
 import { rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -194,6 +194,7 @@ function screenShotKey(
 export interface DesignServiceOptions {
   database: Database
   onHistoryChanged?: (projectId: string, directory: string) => void
+  onWorkRelocated?: (projectId: string, moves: Array<{ from: string; to: string }>) => void
   /**
    * Mirror a thread's authored-work kinds to live UI the moment they are recorded.
    *
@@ -365,6 +366,7 @@ export class DesignService {
           projectId,
           projectPath: project.path,
           details,
+          onRelocated: (moves) => this.options.onWorkRelocated?.(projectId, moves),
           list: async () => (await this.projectWork(projectId))[details.kind],
           relocate: async (from, to) => {
             await this.history.relocateFolder(
@@ -456,8 +458,10 @@ export class DesignService {
     directory: unknown,
     cause: DesignRevisionCause
   ): Promise<DesignHistoryState> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    return this.history.state(target, cause)
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      return this.history.state(target, cause)
+    })
   }
 
   /** Move a folder to one point in its history, which is what Undo and Redo do. */
@@ -467,10 +471,12 @@ export class DesignService {
     directory: unknown,
     revisionId: string
   ): Promise<DesignHistoryState> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    const result = await this.history.restore(target, revisionId)
-    this.options.onHistoryChanged?.(projectId, target.directory)
-    return result
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      const result = await this.history.restore(target, revisionId)
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return result
+    })
   }
 
   /** Agent checkpointing uses the same durable timeline as the board. */
@@ -483,18 +489,20 @@ export class DesignService {
     const entry = requirePath(input['entry'])
     const label = requireId(input['label'], 'checkpoint label')
     const directory = requirePath(input['directory'])
-    const target = await this.historyTarget(projectId, threadId, directory)
-    const state = await this.history.checkpoint(target, entry, label)
-    this.recordPreview({ projectId, threadId, directory: target.directory, entry, kind })
-    this.options.onHistoryChanged?.(projectId, target.directory)
-    return {
-      directory: target.directory,
-      entry,
-      label,
-      revisionId: state.cursorId,
-      checkpointed: !state.gitBacked,
-      gitBacked: state.gitBacked
-    }
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      const state = await this.history.checkpoint(target, entry, label)
+      this.recordPreview({ projectId, threadId, directory: target.directory, entry, kind })
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return {
+        directory: target.directory,
+        entry,
+        label,
+        revisionId: state.cursorId,
+        checkpointed: !state.gitBacked,
+        gitBacked: state.gitBacked
+      }
+    })
   }
 
   /** One page's own line through a folder's history. */
@@ -504,8 +512,10 @@ export class DesignService {
     directory: unknown,
     path: string
   ): Promise<DesignPageHistoryState> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    return this.history.pageState(target, path)
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      return this.history.pageState(target, path)
+    })
   }
 
   /** Move one page to one point in its own history. */
@@ -516,10 +526,12 @@ export class DesignService {
     path: string,
     revisionId: string
   ): Promise<DesignHistoryRestoreFileResult> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    const result = await this.history.restoreFile(target, revisionId, path)
-    this.options.onHistoryChanged?.(projectId, target.directory)
-    return result
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      const result = await this.history.restoreFile(target, revisionId, path)
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return result
+    })
   }
 
   /**
@@ -546,7 +558,17 @@ export class DesignService {
   ): Promise<DesignHistoryTarget> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const kind = await this.resolveKind(threadId)
-    const folder = resolveServedFolder(project.path, directory, currentWorkRoot(kind, projectId))
+    const requested = resolveServedFolder(project.path, directory, currentWorkRoot(kind, projectId))
+    const relocated = await this.options.database.queryViaWorker(
+      'SELECT destination FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+      [projectId, requested.display],
+      1
+    )
+    if (!relocated.ok) throw new Error('Could not resolve the current work folder')
+    const destination = relocated.rows[0] as { destination: string } | undefined
+    const folder = destination
+      ? resolveServedFolder(project.path, destination.destination, currentWorkRoot(kind, projectId))
+      : requested
     return {
       projectId,
       projectPath: project.path,
@@ -621,20 +643,21 @@ export class DesignService {
     if (origin === null) return NO_TAB_MARK
     const root = this.options.previews.rootForOrigin(origin)
     if (root === null) return NO_TAB_MARK
-    const directory = this.projectRelativeFolder(
+    const observedDirectory = this.projectRelativeFolder(
       (await requireLocalProjectViaWorker(this.options.database, projectId)).path,
       root
     )
-    if (directory === null) return NO_TAB_MARK
+    if (observedDirectory === null) return NO_TAB_MARK
     const kind =
-      (await new WorkFolderRegistry(this.options.database).kindFor(projectId, directory)) ??
+      (await new WorkFolderRegistry(this.options.database).kindFor(projectId, observedDirectory)) ??
       (['design', 'video'] as const).find((kind) =>
         projectWorkRootPaths(projectId, kind).some(
-          (root) => directory === root || directory.startsWith(`${root}/`)
+          (root) => observedDirectory === root || observedDirectory.startsWith(`${root}/`)
         )
       ) ??
       null
     if (kind === null) return NO_TAB_MARK
+    const directory = this.designs.resolveDirectory(projectId, observedDirectory)
     // A screen sweep moves the tab through every screen of one design, which is
     // the app taking pictures rather than the agent or the user choosing a folder.
     // Both capture and restoration leave the row alone, so browsing the
@@ -651,7 +674,9 @@ export class DesignService {
     if (kind === 'design') return { design: { directory, origin }, composition: null }
     // A composition with no readable manifest has no timeline, so there is nothing
     // to play: it is shown as an ordinary page rather than driven by a guess.
-    const manifest = await readCompositionManifest(root)
+    const manifest = await readCompositionManifest(
+      this.options.previews.rootForOrigin(origin) ?? root
+    )
     if (!manifest) return NO_TAB_MARK
     return {
       design: null,
@@ -793,6 +818,8 @@ export class DesignService {
   ): Promise<DesignOpenResult> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const kind = forcedKind ?? (await this.resolveKind(threadId))
+    const requested = resolveServedFolder(project.path, directory, currentWorkRoot(kind, projectId))
+    directory = this.designs.resolveDirectory(projectId, requested.display)
     const result = await this.serveWork({
       kind,
       projectPath: project.path,

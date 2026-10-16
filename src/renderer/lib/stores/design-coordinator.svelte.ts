@@ -175,8 +175,13 @@ class DesignCoordinatorState {
       // the other's panel if they ever do.
       const existing = coordinatorDockState.forThread(projectId, threadId)
       const ownsRow = existing === null || existing.panel.component === 'design'
+      const inherited =
+        existing?.panel.component === 'design' && existing.panel.props.threadId !== threadId
+      const hasOwnWork =
+        state.current !== null || state.items.some((item) => item.creatorThreadId === threadId)
+      if (inherited && !hasOwnWork && !this.projectBoards.has(key)) return
       if (!state.active) {
-        if (ownsRow && existing !== null && !this.projectBoards.has(key)) {
+        if (ownsRow && existing !== null && !this.projectBoards.has(key) && !inherited) {
           coordinatorDockState.withdraw(projectId, threadId, ['design'])
         }
         return
@@ -189,7 +194,7 @@ class DesignCoordinatorState {
         threadId,
         label,
         icon: COORDINATOR_ICON_BY_KIND[state.kind],
-        panel: { component: 'design', props: { projectId, threadId } }
+        panel: { component: 'design', props: { projectId, threadId, kind: state.kind } }
       })
       // Docks itself the first time a session appears, unless the user closed it
       // before; later refreshes are no-ops because the tab exists.

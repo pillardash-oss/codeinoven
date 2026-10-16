@@ -10,6 +10,7 @@ import { readDesignContracts, writeDesignContract } from '../design/design-contr
 import { runDesignReview } from '../design/design-review-service'
 import { executeDesignMotion } from '../design/design-motion-service'
 import { extractDesignReference } from '../design/design-reference-service'
+import { DesignRepo } from '../database/repositories/design-repo'
 
 /**
  * What the design capability needs from the app.
@@ -85,7 +86,13 @@ export function createDesignPreviewExecutor(
         projectPath: project.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory: input['directory'],
+        directory:
+          typeof input['directory'] === 'string'
+            ? new DesignRepo(options.database).resolveDirectory(
+                context.projectId,
+                input['directory']
+              )
+            : input['directory'],
         entry: input['entry'],
         defaultRoot: currentWorkRoot('design', context.projectId),
         attention,

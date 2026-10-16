@@ -145,7 +145,14 @@ async function folderIsGitBacked(
     GIT_DETECT_TIMEOUT_MS
   )
   if (ignored.code === 0) return false
-  if (ignored.code === 1) return true
+  if (ignored.code === 1) {
+    const tracked = await runGit(
+      ['ls-files', '--error-unmatch', '--', directory],
+      projectPath,
+      GIT_DETECT_TIMEOUT_MS
+    )
+    return tracked.code === 0 && tracked.stdout.trim() !== ''
+  }
   return false
 }
 
@@ -895,6 +902,8 @@ export class DesignHistoryService {
   }
 
   private async isGitBacked(target: DesignHistoryTarget): Promise<boolean> {
+    // Moving work into a tracked tree must not hide its existing snapshots.
+    if ((await this.revisions.countViaWorker(target.projectId, target.directory)) > 0) return false
     return folderIsGitBacked(target.projectPath, target.directory, target.gitMode)
   }
 

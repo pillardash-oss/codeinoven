@@ -1214,6 +1214,12 @@ CREATE TABLE IF NOT EXISTS design_history_heads (
 
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS work_folder_relocations (
+    project_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    PRIMARY KEY(project_id, directory)
+  );`,
   `CREATE TABLE IF NOT EXISTS authored_work_folders (
     project_id TEXT NOT NULL,
     directory TEXT NOT NULL,

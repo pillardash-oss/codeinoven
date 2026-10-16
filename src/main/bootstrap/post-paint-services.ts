@@ -657,6 +657,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const designService = new DesignService({
     database,
     onHistoryChanged: announceHistoryChanged,
+    onWorkRelocated: (projectId, moves) => {
+      for (const window of BrowserWindow.getAllWindows())
+        sendToRenderer(window.webContents, 'design:relocated', projectId, moves)
+    },
     // The agent can open a design or video session by previewing into a work
     // root with no tag, so the row's authored-work markers have to reach the
     // renderer the same way the tag path's write does, in real time.

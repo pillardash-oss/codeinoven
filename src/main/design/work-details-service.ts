@@ -6,6 +6,7 @@ import type { Database } from '../database/database'
 import { DesignRepo } from '../database/repositories/design-repo'
 import { isInsideProject } from '../preview/served-folder'
 import { currentWorkRoots, projectWorkRootPaths, saveProjectWorkRoot } from './work-roots-state'
+import { withWorkRegistryLock } from './work-folder-registry'
 
 const pending = new Map<string, Promise<unknown>>()
 
@@ -17,6 +18,7 @@ export async function updateWorkDetails(input: {
   details: UpdateWorkDetails
   list: () => Promise<DesignEntry[]>
   relocate: (from: string, to: string) => Promise<void>
+  onRelocated?: (moves: Array<{ from: string; to: string }>) => void
 }): Promise<UpdateWorkDetailsResult> {
   const previous = pending.get(input.projectId) ?? Promise.resolve()
   const operation = previous.catch(() => undefined).then(() => moveDetails(input))
@@ -124,9 +126,11 @@ async function moveDetails(
   try {
     for (const plan of plans) {
       await mkdir(dirname(resolve(projectPath, plan.to)), { recursive: true })
-      await input.relocate(plan.from, plan.to)
-      moved.push(plan)
-      await repo.rebaseRoot({ projectId, ...plan })
+      await withWorkRegistryLock(projectId, async () => {
+        await input.relocate(plan.from, plan.to)
+        moved.push(plan)
+        await repo.rebaseRoot({ projectId, ...plan })
+      })
       await new Promise<void>((resume) => setImmediate(resume))
     }
     if (root !== undefined && !details.thisOnly) {
@@ -134,11 +138,14 @@ async function moveDetails(
     }
   } catch (error) {
     for (const plan of moved.reverse()) {
-      await input.relocate(plan.to, plan.from)
-      await repo.rebaseRoot({ projectId, from: plan.to, to: plan.from })
+      await withWorkRegistryLock(projectId, async () => {
+        await input.relocate(plan.to, plan.from)
+        await repo.rebaseRoot({ projectId, from: plan.to, to: plan.from })
+      })
     }
     throw error
   }
+  if (plans.length > 0) input.onRelocated?.(plans)
   return {
     directory: plans.find((plan) => plan.from === details.directory)?.to ?? details.directory,
     moved: plans.length

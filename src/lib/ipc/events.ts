@@ -56,6 +56,10 @@ import type { AppControlRequest } from '../app-control'
 export const IPC_EVENT_CONTRACT = {
   'customVendors:iconChanged': [] as unknown as [payload: { providerId: string; icon: string }],
   'design:historyChanged': [] as unknown as [projectId: string, directory: string],
+  'design:relocated': [] as unknown as [
+    projectId: string,
+    moves: Array<{ from: string; to: string }>
+  ],
   /** One app call for the renderer to perform on the agent's behalf. The
    *  renderer answers on the `appControl:respond` invoke with the request id. */
   'appControl:request': [] as unknown as [request: AppControlRequest],

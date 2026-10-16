@@ -99,6 +99,10 @@
   let activePanelKey = $derived.by(() => {
     const tab = activeContextTab
     if (!tab) return ''
+    if (tab.kind === 'coordinator' && coordinator?.panel.component === 'design') {
+      const props = coordinator.panel.props
+      return `work:${props.projectId}:${props.threadId}:${props.kind ?? 'session'}`
+    }
     if (tab.kind !== 'files') return tab.id
     const mountThreadId =
       usesThreadWorkspaceMount(tab.projectId) ||
@@ -329,9 +333,10 @@
               {/await}
             {:else if coordinator.panel.component === 'design'}
               {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
-                {#key `${coordinator.projectId}:${coordinator.threadId}:${coordinator.panel.props.kind ?? 'session'}`}
+                {#key `${coordinator.projectId}:${coordinator.panel.props.threadId}:${coordinator.panel.props.kind ?? 'session'}`}
                   <DesignCoordinatorPanel
                     {...coordinator.panel.props}
+                    viewingThreadId={selectedThread?.id ?? coordinator.threadId}
                     active={active && contextSidebarState.sidebarVisible}
                   />
                 {/key}

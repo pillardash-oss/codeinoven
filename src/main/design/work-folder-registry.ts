@@ -15,7 +15,10 @@ interface FolderRow {
 }
 
 const registryOperations = new Map<string, Promise<unknown>>()
-async function exclusive<T>(projectId: string, action: () => Promise<T>): Promise<T> {
+export async function withWorkRegistryLock<T>(
+  projectId: string,
+  action: () => Promise<T>
+): Promise<T> {
   const previous = registryOperations.get(projectId) ?? Promise.resolve()
   const operation = previous.catch(() => undefined).then(action)
   registryOperations.set(projectId, operation)
@@ -40,7 +43,7 @@ export class WorkFolderRegistry {
 
   /** Only the canonical defaults are discovered from disk. Custom folders are exact records. */
   list(projectId: string, projectPath: string, kind: AuthoredWorkKind): Promise<DesignEntry[]> {
-    return exclusive(projectId, () => this.read(projectId, projectPath, kind))
+    return withWorkRegistryLock(projectId, () => this.read(projectId, projectPath, kind))
   }
 
   private async read(
@@ -57,6 +60,13 @@ export class WorkFolderRegistry {
     ])
     const valid = (directory: string): boolean =>
       normalizeWorkRoot(directory) === directory && !containers.has(directory)
+    const aliases = await this.database.queryViaWorker(
+      'SELECT directory FROM work_folder_relocations WHERE project_id = ?',
+      [projectId],
+      0
+    )
+    if (!aliases.ok) throw new Error('Could not read relocated folders')
+    const relocated = new Set(aliases.rows.map((row) => String(row.directory)))
     // Recover exact preview/creator paths from installations predating this registry.
     const legacy = await this.database.queryViaWorker(
       `SELECT directory, kind, updated_at AS created_at FROM thread_designs WHERE project_id = ?
@@ -71,7 +81,7 @@ export class WorkFolderRegistry {
     const discoveredByPath = new Map(discovered.map((entry) => [entry.directory, entry]))
     const inserts: Array<{ sql: string; params: unknown[] }> = []
     const register = (directory: string, created: number, updated: number): void => {
-      if (!valid(directory)) return
+      if (!valid(directory) || relocated.has(directory)) return
       inserts.push({
         sql: `INSERT OR IGNORE INTO authored_work_folders
         (project_id, directory, kind, created_at, updated_at, missing) VALUES (?, ?, ?, ?, ?, 0)`,
@@ -105,7 +115,9 @@ export class WorkFolderRegistry {
       0
     )
     if (!result.ok) throw new Error('Could not read work folder registry')
-    const rows = (result.rows as unknown as FolderRow[]).filter((row) => valid(row.directory))
+    const rows = (result.rows as unknown as FolderRow[]).filter(
+      (row) => valid(row.directory) && !relocated.has(row.directory)
+    )
     const entries: DesignEntry[] = []
     const updates: Array<{ sql: string; params: unknown[] }> = []
     for (let index = 0; index < rows.length; index += 8) {
@@ -139,7 +151,72 @@ export class WorkFolderRegistry {
       await new Promise<void>((resume) => setImmediate(resume))
     }
     await this.save(updates)
-    return entries.sort((a, b) => b.updatedAt - a.updatedAt)
+    await this.repairStaleMoves(projectId, entries)
+    return entries
+      .filter((entry) => !relocated.has(entry.directory))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /** Repair a late navigation recorded after an older version already moved its history. */
+  private async repairStaleMoves(projectId: string, entries: DesignEntry[]): Promise<void> {
+    const missing = entries.filter((entry) => entry.missing)
+    if (missing.length === 0) return
+    const origins = await this.database.queryViaWorker(
+      `SELECT o.directory, o.thread_id, o.created_at,
+        EXISTS(SELECT 1 FROM design_revisions r WHERE r.project_id = o.project_id AND r.directory = o.directory) AS history
+       FROM design_origins o WHERE o.project_id = ?`,
+      [projectId],
+      0
+    )
+    if (!origins.ok) throw new Error('Could not reconcile moved folders')
+    const rows = origins.rows as unknown as Array<{
+      directory: string
+      thread_id: string
+      created_at: number
+      history: number
+    }>
+    const originsByPath = new Map(rows.map((row) => [row.directory, row]))
+    const destinations = new Map<string, typeof rows>()
+    for (const entry of entries) {
+      const origin = originsByPath.get(entry.directory)
+      if (entry.missing || !origin?.history) continue
+      const key = `${origin.thread_id}\u0000${entry.name}`
+      const candidates = destinations.get(key) ?? []
+      candidates.push(origin)
+      destinations.set(key, candidates)
+    }
+    const removed = new Set<string>()
+    for (const entry of missing) {
+      const old = originsByPath.get(entry.directory)
+      if (!old || old.history) continue
+      const candidates = (destinations.get(`${old.thread_id}\u0000${entry.name}`) ?? []).filter(
+        (origin) => origin.created_at < old.created_at
+      )
+      if (candidates.length !== 1) continue
+      const destination = candidates[0]!.directory
+      await this.save([
+        {
+          sql: 'UPDATE thread_designs SET directory = ? WHERE project_id = ? AND directory = ?',
+          params: [destination, projectId, entry.directory]
+        },
+        {
+          sql: 'INSERT OR REPLACE INTO work_folder_relocations (project_id, directory, destination) VALUES (?, ?, ?)',
+          params: [projectId, entry.directory, destination]
+        },
+        {
+          sql: 'DELETE FROM design_origins WHERE project_id = ? AND directory = ?',
+          params: [projectId, entry.directory]
+        },
+        {
+          sql: 'DELETE FROM authored_work_folders WHERE project_id = ? AND directory = ?',
+          params: [projectId, entry.directory]
+        }
+      ])
+      removed.add(entry.directory)
+    }
+    for (let index = entries.length - 1; index >= 0; index--) {
+      if (removed.has(entries[index]!.directory)) entries.splice(index, 1)
+    }
   }
 
   /** Individual relocations can live outside every project default root. */
@@ -156,7 +233,7 @@ export class WorkFolderRegistry {
 
   /** Remove an unavailable record only. This operation never deletes files. */
   removeMissing(projectId: string, projectPath: string, directory: string): Promise<void> {
-    return exclusive(projectId, () => this.remove(projectId, projectPath, directory))
+    return withWorkRegistryLock(projectId, () => this.remove(projectId, projectPath, directory))
   }
 
   private async remove(projectId: string, projectPath: string, directory: string): Promise<void> {

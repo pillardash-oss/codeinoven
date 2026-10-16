@@ -16,7 +16,7 @@
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
   import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
-  import { onDestroy, onMount } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import {
@@ -104,6 +104,7 @@
    */
 
   interface Props {
+    viewingThreadId?: string
     projectId: string
     threadId: string
     /**
@@ -116,7 +117,8 @@
     active?: boolean
   }
 
-  let { projectId, threadId, kind: forcedKind, active = true }: Props = $props()
+  let { projectId, threadId, viewingThreadId, kind: forcedKind, active = true }: Props = $props()
+  let selectionThreadId = $derived(viewingThreadId ?? threadId)
 
   /** Export playback participates in the same sound registry as native views. */
   const attachExport: Attachment<HTMLVideoElement> = (element) => {
@@ -291,15 +293,6 @@
   } | null>(null)
 
   /**
-   * The folder the user is looking at, when it is not the thread's own.
-   *
-   * A design tab is a view change, not a preview: picking another design shows its
-   * screens here and leaves the browser alone, and the thread's own folder takes the
-   * board back the moment the agent or a preview moves it.
-   */
-  let viewedDirectory = $state('')
-
-  /**
    * The design's Screen Canvas: the page that shows every screen at once.
    *
    * It is agent work like the screens are, so the board's part is only to say
@@ -399,20 +392,21 @@
   /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
     const current = currentFolder
-    const picked =
-      viewedDirectory !== '' && items.some((item) => item.directory === viewedDirectory)
-        ? viewedDirectory
+    const picked = projectWorkState.selectedDirectory(projectId, requestedKind, selectionThreadId)
+    const inherited =
+      selectionThreadId !== threadId
+        ? projectWorkState.focusedDirectory(projectId, requestedKind)
         : ''
-    const directory =
-      picked !== ''
-        ? picked
-        : (current?.directory ??
-          items.find((item) => item.creatorThreadId === threadId)?.directory ??
-          items.find(
-            (item) => item.directory === projectWorkState.focusedDirectory(projectId, requestedKind)
-          )?.directory ??
-          items[0]?.directory ??
-          '')
+    const directory = items.some((item) => item.directory === picked)
+      ? picked
+      : (items.find((item) => item.directory === inherited)?.directory ??
+        current?.directory ??
+        items.find((item) => item.creatorThreadId === threadId)?.directory ??
+        items.find(
+          (item) => item.directory === projectWorkState.focusedDirectory(projectId, requestedKind)
+        )?.directory ??
+        items[0]?.directory ??
+        '')
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
   /** The folder in front as main lists it, which is where its entry page is known. */
@@ -609,13 +603,8 @@
   )
 
   async function loadState(): Promise<void> {
-    const before = designState?.current?.directory ?? ''
     try {
       designState = await invoke('design:state', projectId, threadId)
-      const current = designState.current?.directory ?? ''
-      // The thread's own folder is the truth: when the agent, or a preview, moves
-      // it, the board follows rather than staying on a tab the user picked earlier.
-      if (current !== before && current !== viewedDirectory) viewedDirectory = ''
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work state could not be read.'
@@ -629,8 +618,7 @@
     try {
       await invoke('design:removeMissing', projectId, target.directory)
       removeRequested = null
-      viewedDirectory = ''
-      projectWorkState.focusDirectory(projectId, kind, '')
+      projectWorkState.selectDirectory(projectId, kind, selectionThreadId, '')
       await projectWorkState.refresh(projectId)
       await loadState()
       await loadGallery()
@@ -657,12 +645,9 @@
   }
 
   async function detailsUpdated(directory: string, moved: number): Promise<void> {
-    viewedDirectory = directory
-    projectWorkState.focusDirectory(projectId, kind, directory)
+    projectWorkState.selectDirectory(projectId, kind, selectionThreadId, directory)
     await loadWorkRoots()
     await loadState()
-    // loadState can clear the old viewed directory when the thread link moves.
-    viewedDirectory = directory
     await projectWorkState.refresh(projectId)
     await loadGallery()
     await loadCanvas()
@@ -705,7 +690,7 @@
           selected.directory,
           selected.entry,
           SCREEN_SHOT_WIDTH,
-          forcedKind
+          requestedKind
         )
         gallery = [
           {
@@ -744,8 +729,7 @@
    */
   function selectDesign(directory: string): void {
     if (directory === '' || directory === selected.directory) return
-    viewedDirectory = directory
-    projectWorkState.focusDirectory(projectId, requestedKind, directory)
+    projectWorkState.selectDirectory(projectId, requestedKind, selectionThreadId, directory)
     gallery = []
     void loadGallery()
     void loadCanvas()
@@ -754,6 +738,23 @@
   /** Pick a design from the dropdown, which the radio group reports as a string. */
   function handleDesignChange(directory: string): void {
     selectDesign(directory)
+  }
+
+  // The board's owner stays mounted across empty threads, but its session choice
+  // belongs to the conversation currently on screen.
+  let previousViewingThread: string | undefined
+  async function refreshViewingThread(): Promise<void> {
+    await tick()
+    if (selectedItem) projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
+    if (canvasRead && canvasDirectory === selected.directory) return
+    await loadGallery()
+    await loadCanvas()
+  }
+  const watchViewingThread: Attachment<HTMLDivElement> = () => {
+    const next = selectionThreadId
+    if (previousViewingThread !== undefined && previousViewingThread !== next)
+      void refreshViewingThread()
+    previousViewingThread = next
   }
 
   /** The Sort menu reports a string too, so it is checked before it becomes the order. */
@@ -780,7 +781,15 @@
   async function openWork(directory: string, entry: string | null): Promise<void> {
     if (directory === '') return
     try {
-      await invoke('design:open', projectId, threadId, directory, entry, true, forcedKind)
+      await invoke(
+        'design:open',
+        projectId,
+        selectionThreadId,
+        directory,
+        entry,
+        true,
+        requestedKind
+      )
       await loadState()
       await loadGallery()
       await loadCanvas()
@@ -818,7 +827,7 @@
         directory,
         null,
         false,
-        forcedKind
+        requestedKind
       )
       boardTabId = opened.tabId
       // A view main already holds on this composition is answered with `reused`
@@ -1238,6 +1247,8 @@
     void videoPackagesStore.load()
     void projectWorkState.refresh(projectId).then(async () => {
       await loadState()
+      if (selectedItem)
+        projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
       await loadGallery()
       await loadCanvas()
     })
@@ -1248,6 +1259,17 @@
       videoPackagesStore.dispose()
     }
   })
+
+  onMount(() =>
+    subscribe('design:relocated', (changedProjectId) => {
+      if (changedProjectId !== projectId) return
+      void projectWorkState.refresh(projectId).then(async () => {
+        await loadState()
+        await loadGallery()
+        await loadCanvas()
+      })
+    })
+  )
 
   // Play the composition in the board rather than in the browser.
   //
@@ -1333,7 +1355,7 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 flex-col" {@attach watchViewingThread}>
   {#snippet videoStage()}
     {#if video && selected.directory !== '' && !liveEditing}
       <!--

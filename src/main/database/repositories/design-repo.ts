@@ -57,6 +57,17 @@ const CURRENT_COLUMNS = 'thread_id, project_id, directory, entry, kind, updated_
 export class DesignRepo {
   constructor(private readonly db: Database) {}
 
+  /** Indexed redirect lookup for navigation callbacks completing during a move. */
+  resolveDirectory(projectId: string, directory: string): string {
+    return (
+      this.db.get<{ destination: string }>(
+        'SELECT destination FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+        projectId,
+        directory
+      )?.destination ?? directory
+    )
+  }
+
   /**
    * Record (or refresh) the folder a thread is showing and the kind of work it
    * holds. Called on every preview, by the design capability and by the video
@@ -73,6 +84,9 @@ export class DesignRepo {
     entry: string | null
     kind: AuthoredWorkKind
   }): void {
+    // A navigation started before a move can finish after it. Never let that
+    // stale callback recreate the old folder or steal the thread's current path.
+    input = { ...input, directory: this.resolveDirectory(input.projectId, input.directory) }
     this.db.run(
       `INSERT INTO thread_designs (thread_id, project_id, directory, entry, kind, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
@@ -201,6 +215,21 @@ export class DesignRepo {
       sql: 'UPDATE thread_designs SET directory = ? WHERE thread_id = ?',
       params: [`${input.to}${row.directory.slice(input.from.length)}`, row.thread_id]
     }))
+    statements.push(
+      {
+        sql: 'DELETE FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+        params: [input.projectId, input.to]
+      },
+      {
+        sql: 'UPDATE work_folder_relocations SET destination = ? WHERE project_id = ? AND destination = ?',
+        params: [input.to, input.projectId, input.from]
+      },
+      {
+        sql: `INSERT INTO work_folder_relocations (project_id, directory, destination) VALUES (?, ?, ?)
+          ON CONFLICT(project_id, directory) DO UPDATE SET destination = excluded.destination`,
+        params: [input.projectId, input.from, input.to]
+      }
+    )
     statements.push({
       sql: `UPDATE design_origins SET directory = ? || SUBSTR(directory, ?)
         WHERE project_id = ? AND (directory = ? OR directory LIKE ? ESCAPE '\\')`,
@@ -223,6 +252,7 @@ export class DesignRepo {
   }
 
   deleteProject(projectId: string): void {
+    this.db.run('DELETE FROM work_folder_relocations WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM authored_work_folders WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM thread_designs WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM design_origins WHERE project_id = ?', projectId)
