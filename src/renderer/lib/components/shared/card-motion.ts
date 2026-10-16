@@ -38,6 +38,29 @@ export function foldSlide(): SlideParams {
 }
 
 /**
+ * The fold a body plays as its own clip height opens or closes, scripted rather
+ * than left to a CSS transition on `max-height`.
+ *
+ * A `transition` would keep replaying on changes that are not a fold: the body's
+ * measured height is re-read on every reflow, so a window or panel resize would
+ * animate `max-height` frame after frame and trail the content, briefly clipping
+ * a long body while it is being resized. Scripting it from the toggle runs the
+ * motion only when the reader opens or closes the body, and leaves the resting
+ * states to plain CSS, so a resize is a reflow and nothing more.
+ *
+ * `from` and `to` are the painted heights either side of the flip, in px. The
+ * animation fills neither end: the resting `max-height` is already correct on
+ * each side, so dropping the animation at the end lands on it exactly.
+ */
+export function playFoldClip(node: HTMLElement, from: number, to: number): void {
+  if (prefersReducedMotion()) return
+  node.animate([{ maxHeight: `${from}px` }, { maxHeight: `${to}px` }], {
+    duration: FOLD_MS,
+    easing: CUBIC_OUT
+  })
+}
+
+/**
  * Collapse-out animation for a card leaving the composer stack: closing it with
  * its own control, or the agent resolving what it asked for.
  *
