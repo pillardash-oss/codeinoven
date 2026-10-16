@@ -1209,11 +1209,12 @@ export class ThreadManager {
       throw new Error('The knowledge thread stays pinned. Hide it instead.')
     }
     this.threadRepo.setBookmarked(threadId, bookmarked)
+    const pinnedAt = bookmarked ? Date.now() : undefined
     const updated: Thread = {
       ...existing,
       bookmarked,
-      pinned: bookmarked ? true : existing.pinned,
-      pinnedAt: bookmarked ? Date.now() : existing.pinnedAt,
+      pinned: bookmarked,
+      pinnedAt,
       updatedAt: Date.now()
     }
     this.onChange?.(updated)
