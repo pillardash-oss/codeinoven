@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { fade } from 'svelte/transition'
   import { viewActions } from '$lib/stores/view-actions.svelte'
+  import { motionDuration } from '$lib/motion'
 </script>
 
 <!--
@@ -11,10 +13,13 @@
   {#each viewActions.items as item (item.id)}
     {#if item.component}
       {@const ActionControl = item.component}
-      <ActionControl {...item.props ?? {}} />
+      <span class="inline-flex" in:fade={{ duration: motionDuration(140) }}>
+        <ActionControl {...item.props ?? {}} />
+      </span>
     {:else if item.icon && item.run}
       {@const ActionIcon = item.icon}
       <button
+        in:fade={{ duration: motionDuration(140) }}
         class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
         aria-label={item.ariaLabel ?? item.title ?? 'Action'}
         title={item.title}
