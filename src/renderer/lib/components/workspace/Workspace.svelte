@@ -2669,7 +2669,7 @@
               if (open) sidebar.openThreadsSearch()
               else sidebar.closeThreadsSearch()
             },
-            onQueryChange: sidebar.runThreadsSearch,
+            onQueryChange: (value: string) => sidebar.runThreadsSearch(value),
             ariaLabel: 'Search threads',
             title: 'Search threads',
             placeholder: 'Search threads…',
