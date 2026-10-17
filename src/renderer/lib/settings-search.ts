@@ -351,8 +351,18 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-threads',
     title: 'Threads',
-    description: 'Thread limits, slash command behavior, and question timeout.',
-    keywords: ['limit', 'slash commands', 'timeout'],
+    description:
+      'Thread limits, slash command behavior, question timeout, and which panel tabs the switcher lists.',
+    keywords: [
+      'limit',
+      'slash commands',
+      'timeout',
+      'switcher',
+      'ctrl+tab',
+      'terminal tabs',
+      'file tabs',
+      'browser tabs'
+    ],
     icon: CioTabSettings
   },
   {

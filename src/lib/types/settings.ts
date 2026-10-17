@@ -361,6 +361,16 @@ export interface AppConfig {
   /** Explicit consent for anonymous installation usage statistics. */
   shareAnonymousUsage?: boolean
   threadLimit: number
+  /**
+   * The Ctrl+Tab thread switcher also lists each open terminal tab, so the tabs
+   * of a panel that keeps its own strip are reachable without a click. On by
+   * default; the tabs it adds are the ones open for the active project.
+   */
+  switcherTerminalTabs: boolean
+  /** The Ctrl+Tab thread switcher also lists each open project file tab. */
+  switcherFileTabs: boolean
+  /** The Ctrl+Tab thread switcher also lists each tab of the thread browser. */
+  switcherThreadBrowserTabs: boolean
   /** Time before a pending agent question automatically selects its recommendation. */
   questionTimeoutMs: number
   /** Maximum questions one structured agent question card can carry (cio_ask_user). */
@@ -537,6 +547,9 @@ export type AppConfigPatch = Partial<
     | 'onboardingCompleted'
     | 'shareAnonymousUsage'
     | 'threadLimit'
+    | 'switcherTerminalTabs'
+    | 'switcherFileTabs'
+    | 'switcherThreadBrowserTabs'
     | 'questionTimeoutMs'
     | 'agentQuestionCap'
     | 'slashCommandMode'

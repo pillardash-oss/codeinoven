@@ -31,6 +31,12 @@ const DEFAULT_ZOOM_LEVEL = 1
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
 let browserHibernationMinutes = $state(DEFAULT_BROWSER_HIBERNATION_MINUTES)
+/** Whether the Ctrl+Tab switcher lists terminal, file and thread-browser tabs.
+ *  Mirrored because the workspace builds the switcher's entries and holds no
+ *  copy of the config. */
+let switcherTerminalTabs = $state(true)
+let switcherFileTabs = $state(true)
+let switcherThreadBrowserTabs = $state(true)
 let browserHistoryLimit = $state(DEFAULT_BROWSER_HISTORY_LIMIT)
 /** Let a page keep a shortcut the app also binds; on until the config says
  *  otherwise. Main reads it to decide which chords it claims in a page. */
@@ -98,6 +104,18 @@ export const appConfigState = {
   get browserHibernationMinutes(): number {
     return browserHibernationMinutes
   },
+  /** Whether the switcher also lists each open terminal tab. */
+  get switcherTerminalTabs(): boolean {
+    return switcherTerminalTabs
+  },
+  /** Whether the switcher also lists each open project file tab. */
+  get switcherFileTabs(): boolean {
+    return switcherFileTabs
+  },
+  /** Whether the switcher also lists each thread-browser tab. */
+  get switcherThreadBrowserTabs(): boolean {
+    return switcherThreadBrowserTabs
+  },
   /** How many pages the browser's history keeps; the history store evicts older
    *  visits for newer ones past this. */
   get browserHistoryLimit(): number {
@@ -158,6 +176,9 @@ export const appConfigState = {
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
+    switcherTerminalTabs = config.switcherTerminalTabs !== false
+    switcherFileTabs = config.switcherFileTabs !== false
+    switcherThreadBrowserTabs = config.switcherThreadBrowserTabs !== false
     browserHistoryLimit = config.browserHistoryLimit
     browserAllowSiteKeymapOverride = config.browserAllowSiteKeymapOverride
     openLocalhostInCioBrowser = config.openLocalhostInCioBrowser

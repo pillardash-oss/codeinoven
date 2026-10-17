@@ -186,6 +186,9 @@ const CONFIG_PATCH_FIELDS = new Set([
   'onboardingCompleted',
   'shareAnonymousUsage',
   'threadLimit',
+  'switcherTerminalTabs',
+  'switcherFileTabs',
+  'switcherThreadBrowserTabs',
   'questionTimeoutMs',
   'agentQuestionCap',
   'slashCommandMode',
@@ -779,6 +782,19 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Thread limit must be an integer between 1 and 1000')
     }
     patch.threadLimit = value.threadLimit
+  }
+
+  for (const field of [
+    'switcherTerminalTabs',
+    'switcherFileTabs',
+    'switcherThreadBrowserTabs'
+  ] as const) {
+    if (field in value) {
+      if (typeof value[field] !== 'boolean') {
+        throw new TypeError(`${field} must be a boolean`)
+      }
+      patch[field] = value[field]
+    }
   }
 
   if ('questionTimeoutMs' in value) {

@@ -30,12 +30,17 @@
   let { entries, projects, projectIconUrls, selectedKey, onSelect }: Props = $props()
 
   function entryType(entry: ThreadSwitcherEntry): string {
-    return entry.kind === 'browser' ? 'browser' : contentThreadFamily(entry.thread)
+    if (entry.kind === 'browser') return 'browser'
+    if (entry.kind === 'panel') return `panel:${entry.tab.kind}`
+    return contentThreadFamily(entry.thread)
   }
 
   const showTypeBadges = $derived.by(() => {
     const firstEntry = entries[0]
-    return firstEntry !== undefined && entries.some((entry) => entryType(entry) !== entryType(firstEntry))
+    return (
+      firstEntry !== undefined &&
+      entries.some((entry) => entryType(entry) !== entryType(firstEntry))
+    )
   })
 
   let open = $state(false)
@@ -99,9 +104,9 @@
 
   /** The hover tooltip for one entry, phrased for the kind of surface it is. */
   function entryTitle(entry: ThreadSwitcherEntry): string {
-    return entry.kind === 'browser'
-      ? `Switch to ${browserTabLabel(entry.tab)}`
-      : `Open ${entry.thread.title}`
+    if (entry.kind === 'browser') return `Switch to ${browserTabLabel(entry.tab)}`
+    if (entry.kind === 'panel') return `Switch to ${entry.tab.title}`
+    return `Open ${entry.thread.title}`
   }
 
   /**
@@ -408,14 +413,14 @@
   <header class="border-b border-border px-4 py-3">
     <p class="text-sm font-semibold text-foreground">Switch to</p>
     <p class="mt-0.5 text-[0.6875rem] text-dimmed">
-      Release Control to open the highlighted thread or browser tab
+      Release Control to open the highlighted thread, browser tab or panel tab
     </p>
   </header>
 
   <div
     class="max-h-[calc(80vh-7rem)] min-h-0 overflow-y-auto overscroll-contain p-1.5"
     role="listbox"
-    aria-label="Recent threads and browser tabs"
+    aria-label="Recent threads, browser tabs and panel tabs"
   >
     {#each entries as entry, index (threadSwitcherEntryKey(entry))}
       {@const entryKey = threadSwitcherEntryKey(entry)}
@@ -442,6 +447,17 @@
                model into the first-paint chunk for a row that cannot appear. -->
           {#await import('./SwitcherBrowserRow.svelte') then { default: SwitcherBrowserRow }}
             <SwitcherBrowserRow
+              tab={entry.tab}
+              selected={entryKey === highlightedKey}
+              showBadge={showTypeBadges}
+            />
+          {/await}
+        {:else if entry.kind === 'panel'}
+          <!-- A panel row is a dynamic import for the same reason the browser row
+               is: the switcher mounts before any panel tab can, and the row only
+               ever appears in a list that already holds one. -->
+          {#await import('./SwitcherPanelRow.svelte') then { default: SwitcherPanelRow }}
+            <SwitcherPanelRow
               tab={entry.tab}
               selected={entryKey === highlightedKey}
               showBadge={showTypeBadges}

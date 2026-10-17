@@ -85,6 +85,9 @@ const DEFAULT_CONFIG: AppConfig = {
   onboardingCompleted: false,
   shareAnonymousUsage: true,
   threadLimit: 70,
+  switcherTerminalTabs: true,
+  switcherFileTabs: true,
+  switcherThreadBrowserTabs: true,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
@@ -272,6 +275,12 @@ export class StorageEngine {
           ? config.browserSearchEngine
           : DEFAULT_CONFIG.browserSearchEngine,
       browserCustomSearchEngines: sanitizeCustomSearchEngines(config?.browserCustomSearchEngines),
+      // The switcher's panel-tab sources are on by default: only an explicit
+      // `false` in the stored config turns one off, and a missing field keeps
+      // the shipped default.
+      switcherTerminalTabs: config?.switcherTerminalTabs !== false,
+      switcherFileTabs: config?.switcherFileTabs !== false,
+      switcherThreadBrowserTabs: config?.switcherThreadBrowserTabs !== false,
       // Background settings are read tolerantly: a hand-edited value outside the
       // closed set or the bounds falls back instead of disabling the feature
       // silently, and `launchAtLogin` follows the mode when it is off.
