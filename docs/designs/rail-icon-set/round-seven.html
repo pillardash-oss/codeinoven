@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · round seven</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      /* Browser chrome, mocked at the sizes the real call sites use, so a mark is
+         judged where it lands instead of on a swatch. */
+      .chrome {
+        margin-top: 1.25rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        overflow: hidden;
+      }
+
+      .chrome > header {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-overlay);
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+      }
+
+      .chrome > header .where {
+        margin-left: auto;
+        letter-spacing: 0;
+        text-transform: none;
+        font-weight: 400;
+      }
+
+      .chrome .body {
+        padding: 0.75rem;
+        background: var(--color-app);
+      }
+
+      .two-up {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.25rem;
+        align-items: start;
+        margin-top: 1rem;
+      }
+
+      @media (max-width: 60rem) {
+        .two-up {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .variant {
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+      }
+
+      .variant > header {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4375rem 0.625rem;
+        border-bottom: 1px solid var(--color-border);
+        font-size: 0.625rem;
+        font-weight: 600;
+        color: var(--color-foreground);
+      }
+
+      .variant > header .src {
+        margin-left: auto;
+        font-weight: 400;
+        font-size: 0.5625rem;
+        color: var(--color-dimmed);
+        font-family: var(--font-mono);
+      }
+
+      .variant .body {
+        padding: 0.625rem;
+        background: var(--color-app);
+      }
+
+      /* A browser titlebar. */
+      .titlebar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.375rem 0.5rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-surface);
+      }
+
+      .titlebar .traffic {
+        display: flex;
+        gap: 0.25rem;
+      }
+
+      .titlebar .traffic i {
+        width: 0.5rem;
+        height: 0.5rem;
+        display: block;
+        background: var(--color-border);
+      }
+
+      .titlebar .centre {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.375rem;
+        color: var(--color-dimmed);
+        font-size: 0.6875rem;
+        overflow: hidden;
+      }
+
+      .titlebar .centre span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* The address bar, where the mark is the fallback for a page with no favicon. */
+      .address {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0.625rem 0.5rem 0;
+        padding: 0.375rem 0.5rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-elevated);
+        color: var(--color-muted);
+        font-size: 0.6875rem;
+      }
+
+      .address .url {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--color-dimmed);
+      }
+
+      /* A tab strip. */
+      .tabs {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.25rem;
+        padding: 0.5rem 0.5rem 0;
+        background: var(--color-app);
+      }
+
+      .tab {
+        display: flex;
+        align-items: center;
+        gap: 0.4375rem;
+        min-width: 0;
+        flex: 1;
+        padding: 0.375rem 0.5rem;
+        border: 1px solid transparent;
+        border-bottom: 0;
+        font-size: 0.6875rem;
+        color: var(--color-muted);
+        background: transparent;
+      }
+
+      .tab[data-current] {
+        background: var(--color-surface);
+        border-color: var(--color-border);
+        color: var(--color-foreground);
+      }
+
+      .tab svg {
+        flex: none;
+        display: block;
+      }
+
+      .tab .label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* The right context dock, where a thread's browser panel is toggled. */
+      .dock {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.125rem;
+        width: 2.25rem;
+        padding: 0.4375rem 0;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+      }
+
+      .dock .it {
+        width: 1.75rem;
+        height: 1.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-muted);
+      }
+
+      .dock .it[data-current] {
+        background: var(--color-elevated);
+        color: var(--color-foreground);
+      }
+
+      .dock .it svg {
+        display: block;
+      }
+
+      .dock-row {
+        display: flex;
+        gap: 1rem;
+        align-items: flex-start;
+      }
+
+      .caption {
+        margin: 0.375rem 0 0;
+        font-size: 0.5625rem;
+        color: var(--color-dimmed);
+      }
+
+      /* The ladder of sizes the mark is asked to survive. */
+      .ladder {
+        display: flex;
+        align-items: flex-end;
+        gap: 1.75rem;
+        flex-wrap: wrap;
+        margin-top: 1rem;
+      }
+
+      .ladder figure {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .ladder svg {
+        display: block;
+        color: var(--color-foreground);
+      }
+
+      .ladder figcaption {
+        font-size: 0.5625rem;
+        color: var(--color-dimmed);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .ledger td.num {
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+      }
+
+      .statement {
+        border: 1px solid var(--color-border);
+        border-left: 0.125rem solid var(--color-primary);
+        background: var(--color-surface);
+        padding: 0.875rem 1rem;
+        margin-top: 1rem;
+      }
+
+      .statement p {
+        margin: 0;
+      }
+
+      .statement p + p {
+        margin-top: 0.625rem;
+      }
+
+      ul.notes {
+        margin: 1rem 0 0;
+        padding-left: 1.125rem;
+        font-size: 0.75rem;
+        line-height: 1.7;
+        color: var(--color-dimmed);
+      }
+
+      ul.notes li + li {
+        margin-top: 0.5rem;
+      }
+
+      ul.notes b {
+        color: var(--color-muted);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+      <!--
+        Round five's orbit, the real path data, lifted out of round six so the
+        comparison below shows the drawing that shipped rather than a redrawing of it.
+      -->
+      <symbol id="before-five" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd">
+        <path d="M1.8,12a10.2,10.2 0 1 0 20.4,0a10.2,10.2 0 1 0 -20.4,0 Z M20.800,12.000L20.767,12.453L20.666,12.903L20.500,13.346L20.269,13.779L19.976,14.198L19.621,14.600L19.209,14.983L18.741,15.342L18.223,15.677L17.657,15.983L17.047,16.260L16.400,16.503L15.719,16.713L15.010,16.886L14.278,17.023L13.528,17.121L12.767,17.180L12.000,17.200L11.233,17.180L10.472,17.121L9.722,17.023L8.990,16.886L8.281,16.713L7.600,16.503L6.953,16.260L6.343,15.983L5.777,15.677L5.259,15.342L4.791,14.983L4.379,14.600L4.024,14.198L3.731,13.779L3.500,13.346L3.334,12.903L3.233,12.453L3.200,12.000L3.233,11.547L3.334,11.097L3.500,10.654L3.731,10.221L4.024,9.802L4.379,9.400L4.791,9.017L5.259,8.658L5.777,8.323L6.343,8.017L6.953,7.740L7.600,7.497L8.281,7.287L8.990,7.114L9.722,6.977L10.472,6.879L11.233,6.820L12.000,6.800L12.767,6.820L13.528,6.879L14.278,6.977L15.010,7.114L15.719,7.287L16.400,7.497L17.047,7.740L17.657,8.017L18.223,8.323L18.741,8.658L19.209,9.017L19.621,9.400L19.976,9.802L20.269,10.221L20.500,10.654L20.666,11.097L20.767,11.547Z M17.680,12.000L17.658,12.181L17.594,12.361L17.486,12.538L17.337,12.711L17.148,12.879L16.919,13.040L16.653,13.193L16.351,13.337L16.016,13.471L15.651,13.593L15.258,13.704L14.840,13.801L14.400,13.885L13.943,13.955L13.470,14.009L12.986,14.048L12.495,14.072L12.000,14.080L11.505,14.072L11.014,14.048L10.530,14.009L10.057,13.955L9.600,13.885L9.160,13.801L8.742,13.704L8.349,13.593L7.984,13.471L7.649,13.337L7.347,13.193L7.081,13.040L6.852,12.879L6.663,12.711L6.514,12.538L6.406,12.361L6.342,12.181L6.320,12.000L6.342,11.819L6.406,11.639L6.514,11.462L6.663,11.289L6.852,11.121L7.081,10.960L7.347,10.807L7.649,10.663L7.984,10.529L8.349,10.407L8.742,10.296L9.160,10.199L9.600,10.115L10.057,10.045L10.530,9.991L11.014,9.952L11.505,9.928L12.000,9.920L12.495,9.928L12.986,9.952L13.470,9.991L13.943,10.045L14.400,10.115L14.840,10.199L15.258,10.296L15.651,10.407L16.016,10.529L16.351,10.663L16.653,10.807L16.919,10.960L17.148,11.121L17.337,11.289L17.486,11.462L17.594,11.639L17.658,11.819Z" />
+      </symbol>
+    </svg>
+    <div class="wrap">
+      <div class="masthead">
+        <span class="eyebrow">CodeInOven · brand work · round seven</span>
+        <h1>The browser mark, in both browsers</h1>
+        <p class="lede">
+          Round six drew the ring enclosed inside the planet's silhouette, which is what you
+          saw and called flipped. It is rebuilt so the ring sits outside the planet, inclined,
+          and it is drawn here in the global browser and the thread browser side by side on one
+          screen, because the thread browser is the half of it you could not find.
+        </p>
+      </div>
+
+      <!-- ══ One screen, both browsers ═══════════════════════════════════ -->
+      <section class="section" id="s1">
+        <div class="section-head">
+          <h2>1 · Both browsers, one screen</h2>
+          <span class="note">today on the left of each pair, the new mark on the right</span>
+        </div>
+
+        <div class="two-up">
+          <div>
+            <div class="chrome" style="margin-top: 0">
+              <header>
+                Global browser
+                <span class="where">the whole window</span>
+              </header>
+              <div class="body" style="padding: 0">
+                <div class="titlebar">
+                  <span class="traffic"><i></i><i></i><i></i></span>
+                  <span class="centre">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                      <path d="M2 12h20" />
+                    </svg>
+                    <span>docs.codeinoven.app</span>
+                  </span>
+                  <span class="traffic"><i></i><i></i><i></i></span>
+                </div>
+                <div class="address">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                    <path d="M2 12h20" />
+                  </svg>
+                  <span class="url">https://docs.codeinoven.app/</span>
+                </div>
+                <div class="tabs">
+                  <span class="tab" data-current>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                      <path d="M2 12h20" />
+                    </svg>
+                    <span class="label">docs.codeinoven.app</span>
+                  </span>
+                  <span class="tab">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                      <path d="M2 12h20" />
+                    </svg>
+                    <span class="label">no favicon yet</span>
+                  </span>
+                </div>
+                <div class="tabs" style="padding-bottom: 0.5rem">
+                  <span class="tab" data-current>
+                    <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+                    <span class="label">docs.codeinoven.app</span>
+                  </span>
+                  <span class="tab">
+                    <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+                    <span class="label">no favicon yet</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <p class="caption">
+              Today the whole window draws Lucide's globe at 13px in the titlebar, 15px in the
+              address bar and 12px in a tab: <code>AppHeaderBrowserCenter.svelte:33</code>,
+              <code>BrowserAddressSpotlight.svelte:151</code>,
+              <code>BrowserTabRow.svelte:379</code>.
+            </p>
+          </div>
+
+          <div>
+            <div class="chrome" style="margin-top: 0">
+              <header>
+                Thread browser
+                <span class="where">a panel on the conversation</span>
+              </header>
+              <div class="body" style="display: flex; gap: 1.25rem; align-items: flex-start">
+                <div class="dock">
+                  <span class="it" title="History">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v4h4" /><path d="M12 8v4l3 2" /></svg>
+                  </span>
+                  <span class="it" title="Notepad">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16" /><path d="M4 11h16" /><path d="M4 16h10" /></svg>
+                  </span>
+                  <span class="it" data-current title="Browser, today">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M15.5 10 13 7.5 15.5 5" />
+                      <path d="M15.861 14A14.5 14.5 0 0112 22a14.48 14.48 0 010-20 10 10 0 109.888 11.5" />
+                      <path d="M19.5 5 22 7.5 19.5 10" />
+                      <path d="M2 12h8.5" />
+                    </svg>
+                  </span>
+                  <span class="it" title="Terminal">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14" /><path d="M5 12h14" /><path d="M5 18h8" /></svg>
+                  </span>
+                </div>
+                <div class="dock">
+                  <span class="it" title="History">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v4h4" /><path d="M12 8v4l3 2" /></svg>
+                  </span>
+                  <span class="it" title="Notepad">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16" /><path d="M4 11h16" /><path d="M4 16h10" /></svg>
+                  </span>
+                  <span class="it" data-current title="Browser, the new mark">
+                    <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+                  </span>
+                  <span class="it" title="Terminal">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14" /><path d="M5 12h14" /><path d="M5 18h8" /></svg>
+                  </span>
+                </div>
+              </div>
+              <div class="body" style="padding: 0; border-top: 1px solid var(--color-border)">
+                <div class="tabs" style="padding-bottom: 0">
+                  <span class="tab" data-current>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M15.5 10 13 7.5 15.5 5" />
+                      <path d="M15.861 14A14.5 14.5 0 0112 22a14.48 14.48 0 010-20 10 10 0 109.888 11.5" />
+                      <path d="M19.5 5 22 7.5 19.5 10" />
+                      <path d="M2 12h8.5" />
+                    </svg>
+                    <span class="label">docs.codeinoven.app</span>
+                  </span>
+                  <span class="tab">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M15.5 10 13 7.5 15.5 5" />
+                      <path d="M15.861 14A14.5 14.5 0 0112 22a14.48 14.48 0 010-20 10 10 0 109.888 11.5" />
+                      <path d="M19.5 5 22 7.5 19.5 10" />
+                      <path d="M2 12h8.5" />
+                    </svg>
+                    <span class="label">localhost:3000</span>
+                  </span>
+                </div>
+                <div class="tabs" style="padding-top: 0; padding-bottom: 0.5rem">
+                  <span class="tab" data-current>
+                    <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+                    <span class="label">docs.codeinoven.app</span>
+                  </span>
+                  <span class="tab">
+                    <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+                    <span class="label">localhost:3000</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <p class="caption">
+              Today the panel draws Lucide's globe-with-code, <code>GlobeCode</code>, at 16px in
+              the dock, 12px in its tab strip and 11px in the fullscreen strip:
+              <code>Workspace.svelte:1431</code>, <code>ContextSidebar.svelte:457</code>,
+              <code>WorkspaceFullscreenBrowser.svelte:116</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ The mark at true size ═══════════════════════════════════════ -->
+      <section class="section" id="s2">
+        <div class="section-head">
+          <h2>2 · The mark at every size the app draws it</h2>
+          <span class="note">the ring is a ring at all of them, which the last two passes were not</span>
+        </div>
+        <p class="lede">
+          One filled circle and one stroked ellipse, inclined 28 degrees. The ring is drawn
+          outside the planet's circle, so it is the ring that protrudes and the planet that
+          sits inside it. Where the two meet, the ring's band merges into the planet, which is
+          what makes it read as passing behind.
+        </p>
+        <div class="ladder">
+          <figure>
+            <svg width="11" height="11" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>11 the fullscreen strip</figcaption>
+          </figure>
+          <figure>
+            <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>12 a tab</figcaption>
+          </figure>
+          <figure>
+            <svg width="13" height="13" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>13 the titlebar</figcaption>
+          </figure>
+          <figure>
+            <svg width="15" height="15" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>15 the address bar</figcaption>
+          </figure>
+          <figure>
+            <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>16 the rail and the dock</figcaption>
+          </figure>
+          <figure>
+            <svg width="20" height="20" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>20 an empty state</figcaption>
+          </figure>
+          <figure>
+            <svg width="32" height="32" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>32</figcaption>
+          </figure>
+          <figure>
+            <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+            <figcaption>64</figcaption>
+          </figure>
+        </div>
+
+        <table class="ledger">
+          <thead>
+            <tr>
+              <th>Measured</th>
+              <th class="num">Value</th>
+              <th>Why it matters</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Ink footprint</td>
+              <td class="num">23.0 × 19.5</td>
+              <td>Lucid draws inside 22.0, so this is the little extra you asked for</td>
+            </tr>
+            <tr>
+              <td>Ink mass</td>
+              <td class="num">44%</td>
+              <td>the set runs 17 to 44 and the assistant mark is 24.9, so this is the ceiling, not past it</td>
+            </tr>
+            <tr>
+              <td>Viewbox margin</td>
+              <td class="num">0.5 units</td>
+              <td>nothing touches the edge, so no stroke is trimmed at 1x</td>
+            </tr>
+            <tr>
+              <td>Gap, as an arc</td>
+              <td class="num">90° each side</td>
+              <td>the planet's edge and the ring's inner edge stay apart across the whole visible wing</td>
+            </tr>
+            <tr>
+              <td>Stroke weight</td>
+              <td class="num">2.24</td>
+              <td>the set's single 1.9 weight with the ring's own proportion folded in</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ══ The incline ════════════════════════════════════════════════ -->
+      <section class="section" id="s3">
+        <div class="section-head">
+          <h2>3 · The incline</h2>
+          <span class="note">the one proportion that is taste rather than measurement</span>
+        </div>
+        <p class="lede">
+          All three are the same planet and the same ring, rotated. Inclined is your word, and
+          how far is the only call in this drawing that measurement cannot make.
+        </p>
+        <div class="two-up" style="grid-template-columns: repeat(3, 1fr)">
+          <div class="variant">
+            <header>Shallower <span class="src">22°</span></header>
+            <div class="body">
+              <div class="ladder" style="margin-top: 0; gap: 1.25rem">
+                <figure>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser-flat" /></svg>
+                  <figcaption>16</figcaption>
+                </figure>
+                <figure>
+                  <svg width="32" height="32" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser-flat" /></svg>
+                  <figcaption>32</figcaption>
+                </figure>
+              </div>
+            </div>
+          </div>
+          <div class="variant" style="border-color: var(--color-primary)">
+            <header>As drawn <span class="src">28°</span></header>
+            <div class="body">
+              <div class="ladder" style="margin-top: 0; gap: 1.25rem">
+                <figure>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+                  <figcaption>16</figcaption>
+                </figure>
+                <figure>
+                  <svg width="32" height="32" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser" /></svg>
+                  <figcaption>32</figcaption>
+                </figure>
+              </div>
+            </div>
+          </div>
+          <div class="variant">
+            <header>Steeper <span class="src">34°</span></header>
+            <div class="body">
+              <div class="ladder" style="margin-top: 0; gap: 1.25rem">
+                <figure>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser-steep" /></svg>
+                  <figcaption>16</figcaption>
+                </figure>
+                <figure>
+                  <svg width="32" height="32" viewBox="0 0 24 24"><use href="./browser-ring.svg#x-browser-steep" /></svg>
+                  <figcaption>32</figcaption>
+                </figure>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ What went wrong ════════════════════════════════════════════ -->
+      <section class="section" id="s4">
+        <div class="section-head">
+          <h2>4 · What was actually wrong, drawn</h2>
+          <span class="note">four constructions, in the order they were tried</span>
+        </div>
+        <div class="two-up" style="grid-template-columns: repeat(3, 1fr)">
+          <div class="variant" style="border-color: var(--color-primary)">
+            <header>Round five <span class="src">ring as a knockout · picked</span></header>
+            <div class="body" style="display: flex; gap: 1.25rem; align-items: flex-end">
+              <svg width="16" height="16" viewBox="0 0 24 24" style="color: var(--color-foreground)"><use href="#before-five" /></svg>
+              <svg width="48" height="48" viewBox="0 0 24 24" style="color: var(--color-foreground)"><use href="#before-five" /></svg>
+            </div>
+            <p class="caption" style="padding: 0 0.625rem 0.625rem">
+              Picked in round eight. Read again in that light, this is the outer boundary
+              holding the ring and the planet inside it, which is the arrangement your
+              reference picture uses. Redrawn clean as <code>browser-mark.svg</code> and shown
+              at true pixel size in <a href="./round-eight.html">round eight</a>.
+            </p>
+          </div>
+          <div class="variant">
+            <header>Round six <span class="src">ring still enclosed</span></header>
+            <div class="body" style="display: flex; gap: 1.25rem; align-items: flex-end">
+              <svg width="16" height="16" viewBox="0 0 24 24" style="color: var(--color-foreground)"><use href="./browser-disc.svg#h-browser-orbit" /></svg>
+              <svg width="48" height="48" viewBox="0 0 24 24" style="color: var(--color-foreground)"><use href="./browser-disc.svg#h-browser-orbit" /></svg>
+            </div>
+            <p class="caption" style="padding: 0 0.625rem 0.625rem">
+              Nesting the planet, gap and ring outward fixed the order but stopped the ring at
+              the disc's own edge, so the ring still could not protrude. Enclosed is enclosed.
+            </p>
+          </div>
+          <div class="variant" style="border-color: var(--color-primary)">
+            <header>Round seven <span class="src">circle, then ring around it</span></header>
+            <div class="body" style="display: flex; gap: 1.25rem; align-items: flex-end">
+              <svg width="16" height="16" viewBox="0 0 24 24" style="color: var(--color-foreground)"><use href="./browser-ring.svg#x-browser" /></svg>
+              <svg width="48" height="48" viewBox="0 0 24 24" style="color: var(--color-foreground)"><use href="./browser-ring.svg#x-browser" /></svg>
+            </div>
+            <p class="caption" style="padding: 0 0.625rem 0.625rem">
+              The planet is a filled circle and the ring a stroked ellipse. A stroke is painted
+              rather than filled, so no fill rule can invert it, and the ring is free to sit
+              outside the planet. This is the one you gave a reference for.
+            </p>
+          </div>
+        </div>
+
+        <div class="statement">
+          <p>
+            <b>The reference, measured.</b> Your picture is a solid disc with a ring shaped
+            knockout inside it. I measured it rather than guessing: the disc is 258 px across,
+            the knockout takes 41% of it, and the knockout reaches no rim on any row, so in the
+            reference the ring is <em>enclosed</em>.
+          </p>
+          <p>
+            Round seven drew the opposite of that, on the reading that "around the planet"
+            meant the ring should sit outside the circle. You then picked the round five card,
+            so round eight went back to the reference's own arrangement and drew it clean,
+            which is <code>browser-mark.svg</code>.
+          </p>
+        </div>
+      </section>
+
+      <!-- ══ What is still open ═════════════════════════════════════════ -->
+      <section class="section" id="s5">
+        <div class="section-head">
+          <h2>5 · Still open</h2>
+        </div>
+        <ul class="notes">
+          <li>
+            <b>The rose from round five is still here.</b> You picked it and it has not been
+            touched, so if you want the global browser on the rose and the thread browser on the
+            ring, both are drawn and only the sprite reference changes.
+          </li>
+          <li>
+            <b>The thread browser's four other uses.</b> <code>GlobeCode</code> is also drawn in
+            the design coordinator, a tool card, the sources panel and the text selection menu.
+            Those are not the rail or a browser chrome, so they are out of scope until you say
+            otherwise.
+          </li>
+          <li>
+            <b>The update button is still undecided.</b> One control cycling six states, and
+            deciding its mark is deciding what that control is.
+          </li>
+        </ul>
+      </section>
+
+      <p class="footnote">
+        Earlier rounds: <a href="./index.html">one</a>,
+        <a href="./round-two.html">two</a>, <a href="./round-three.html">three</a>,
+        <a href="./round-four.html">four</a>, <a href="./round-five.html">five</a>,
+        <a href="./round-six.html">six</a>. The mark is generated by
+        <code>.cio/tmp/build-browser-ring.ts</code>, which is also the measurement
+        harness: it prints the ink mass, the footprint and the 16px raster, so a
+        proportion cannot be changed without its cost showing up as a number.
+      </p>
+    </div>
+  </body>
+</html>

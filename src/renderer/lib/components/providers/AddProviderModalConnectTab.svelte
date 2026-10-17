@@ -1,6 +1,11 @@
 <script lang="ts">
-  import { CheckCircle2, KeyRound, Loader2, RefreshCw, Search, Unplug, X } from '@lucide/svelte'
-
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
   import type {
     HarnessAccount,
     OfferedProvider,
@@ -47,7 +52,7 @@
     onSaveAuthenticatedAccount: () => void
     onBackToList: () => void
     onConnectWithKey: () => void
-    onLoginExit: (exitCode: number) => void
+    onLoginExit: (exitCode: number, output: string) => void
     onRequestDisconnect: (account: HarnessAccount | null) => void
     onToggleHidden: (providerId: string, hidden: boolean) => void
   }
@@ -110,9 +115,9 @@
     <div class="flex items-center justify-between gap-3 border bg-surface px-3 py-2.5">
       <div class="flex min-w-0 items-center gap-2">
         {#if authStatus?.state === 'authenticated'}
-          <CheckCircle2 size={15} class="shrink-0 text-success" />
+          <CioCheckCircle size={15} class="shrink-0 text-success" />
         {:else}
-          <KeyRound size={15} class="shrink-0 text-dimmed" />
+          <CioKey size={15} class="shrink-0 text-dimmed" />
         {/if}
         <p class="truncate text-xs font-medium">{stateLabel(authStatus)}</p>
       </div>
@@ -122,7 +127,7 @@
         disabled={checkingAuth}
         onclick={onCheckAuth}
       >
-        <RefreshCw size={11} class={checkingAuth ? 'animate-spin' : ''} />
+        <CioRefresh size={11} class={checkingAuth ? 'animate-spin' : ''} />
         Check
       </button>
     </div>
@@ -135,7 +140,7 @@
         </div>
         {#each authStatus.accounts.filter((account) => account.active !== false) as connected (connected.id)}
           <div class="flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0">
-            <CheckCircle2 size={14} class="shrink-0 text-success" />
+            <CioCheckCircle size={14} class="shrink-0 text-success" />
             <div class="min-w-0 flex-1">
               <p class="flex items-center gap-1.5 truncate text-xs font-medium text-foreground">
                 <span
@@ -175,7 +180,7 @@
                 title={`Disconnect ${accountForConnected(connected)?.label || connected.label}`}
                 onclick={() => onRequestDisconnect(accountForConnected(connected) ?? null)}
               >
-                <Unplug size={11} /> Disconnect
+                <CioUnplug size={11} /> Disconnect
               </button>
             {/if}
           </div>
@@ -204,7 +209,7 @@
   {#if step === 'labeling' && authenticatedProvider}
     <div class="space-y-3 border bg-surface p-4">
       <div class="flex items-start gap-2">
-        <CheckCircle2 size={16} class="mt-0.5 shrink-0 text-success" />
+        <CioCheckCircle size={16} class="mt-0.5 shrink-0 text-success" />
         <div>
           <p class="text-sm font-medium text-foreground">
             Label your newly logged in {authenticatedProvider.name} account
@@ -236,7 +241,7 @@
           args={loginHandoff.args}
           environment={loginHandoff.environment}
           startingLabel="Starting sign-in…"
-          onExit={(exitCode) => onLoginExit(exitCode)}
+          onExit={(exitCode, output) => onLoginExit(exitCode, output)}
         />
       </div>
       <p class="font-mono text-[0.625rem] text-dimmed">
@@ -252,11 +257,11 @@
           type="button"
           onclick={onBackToList}
         >
-          <X size={11} /> Back
+          <CioClose size={11} /> Back
         </button>
       </div>
       <div class="relative">
-        <Search
+        <CioSearch
           size={13}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -273,7 +278,7 @@
 
       {#if offeredLoading && offered.length === 0}
         <div class="flex h-24 items-center justify-center">
-          <Loader2 size={17} class="animate-spin text-dimmed" />
+          <CioSpinner size={17} class="animate-spin text-dimmed" />
         </div>
       {:else if offeredError}
         <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -372,7 +377,7 @@
               title="Sign in to {selectedProvider.name} in your browser"
               onclick={() => void oauth.start()}
             >
-              <KeyRound size={13} /> Sign in with browser
+              <CioKey size={13} /> Sign in with browser
             </button>
             <p class="text-center text-[0.625rem] text-dimmed">or paste an API key</p>
             {@render apiKeyField(selectedProvider.name)}
@@ -385,7 +390,7 @@
                 title="Connect to {selectedProvider.name}"
                 onclick={() => void oauth.start()}
               >
-                <KeyRound size={13} /> Connect
+                <CioKey size={13} /> Connect
               </button>
             </div>
           {/if}

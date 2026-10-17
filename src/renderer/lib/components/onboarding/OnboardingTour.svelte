@@ -1,17 +1,15 @@
 <script lang="ts">
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount, tick } from 'svelte'
   import { Portal } from 'bits-ui'
-  import {
-    ArrowLeft,
-    ArrowRight,
-    Download,
-    FolderInput,
-    FolderKanban,
-    Loader2,
-    MessageSquare,
-    PanelRight,
-    X
-  } from '@lucide/svelte'
+  import { PanelRight } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -19,22 +17,12 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { APP_NAME } from '$shared/brand'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import {
-    SETUP_SPOTLIGHT_STEPS,
-    VIEW_TOURS,
-    viewTourLabel,
-    type WorkspaceTourView
-  } from './onboarding-tour-steps'
+  import { SETUP_SPOTLIGHT_STEPS } from './onboarding-tour-steps'
 
   interface Props {
-    /** Which tour is running: the first-run setup sequence, or one content
-     *  view's own tour. */
-    tour?: 'setup' | WorkspaceTourView
     /**
-     * Position inside the running tour. The setup tour numbers its screens
-     * (0 welcome, 1-5 the spotlights, 6 the first project, 7+ the first
-     * agent); a view tour has no other screens, so it numbers its spotlights
-     * from 0.
+     * Position inside the first-run setup tour. It numbers its screens
+     * (0 welcome, 1-5 the spotlights, 6 the first project, 7+ the first agent).
      */
     step: number
     onStepChange: (step: number) => void
@@ -52,23 +40,14 @@
     height: number
   }
 
-  let {
-    tour = 'setup',
-    step,
-    onStepChange,
-    onChooseProject,
-    onBrowseHarnesses,
-    onFinish
-  }: Props = $props()
+  let { step, onStepChange, onChooseProject, onBrowseHarnesses, onFinish }: Props = $props()
 
-  const steps = $derived(tour === 'setup' ? SETUP_SPOTLIGHT_STEPS : VIEW_TOURS[tour].steps)
-  const tourLabel = $derived(tour === 'setup' ? 'Getting started tour' : viewTourLabel(tour))
-  /** Position inside `steps`: the setup tour spends its first screen on the
-   *  welcome card and its last two on project and agent setup. */
-  const spotlightIndex = $derived(tour === 'setup' ? step - 1 : step)
+  const steps = SETUP_SPOTLIGHT_STEPS
+  const tourLabel = 'Getting started tour'
+  /** The setup tour spends its first screen on the welcome card. */
+  const spotlightIndex = $derived(step - 1)
   const activeSpotlight = $derived(steps[spotlightIndex])
   const spotlightCount = $derived(steps.length)
-  const onLastSpotlight = $derived(spotlightIndex === spotlightCount - 1)
   /** Box root to place the callout from before it has rendered, so a step that
    *  carries key rows is never positioned from a box that is too short. */
   const calloutEstimate = $derived(activeSpotlight?.shortcuts ? 270 : 220)
@@ -135,18 +114,12 @@
   })
 
   function nextStep(): void {
-    // A view tour is only its spotlights, so the last one finishes the tour;
-    // the setup tour continues into the project and agent screens.
-    if (tour !== 'setup') {
-      if (onLastSpotlight) onFinish()
-      else onStepChange(step + 1)
-      return
-    }
+    // The setup tour continues past its spotlights into the project and agent
+    // screens, which its own step numbers name.
     onStepChange(step < 5 ? step + 1 : 6)
   }
 
   function previousStep(): void {
-    if (tour !== 'setup' && step === 0) return
     onStepChange(Math.max(0, step - 1))
   }
 
@@ -188,7 +161,7 @@
   }}
 />
 
-{#if tour === 'setup' && step === 0}
+{#if step === 0}
   <Modal open title={`Welcome to ${APP_NAME}`} onClose={onFinish} size="lg" closeOnBackdrop={false}>
     <div class="space-y-6">
       <div class="flex items-start gap-4">
@@ -202,14 +175,14 @@
 
       <div class="grid gap-2 sm:grid-cols-3">
         <div class="border bg-elevated p-3">
-          <FolderKanban size={17} class="text-primary" />
+          <CioProjects size={17} class="text-primary" />
           <p class="mt-2 text-sm font-medium">Import your work</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             Start with a folder already on your computer.
           </p>
         </div>
         <div class="border bg-elevated p-3">
-          <MessageSquare size={17} class="text-primary" />
+          <CioMessage size={17} class="text-primary" />
           <p class="mt-2 text-sm font-medium">Prompt the agent</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
             Describe a task and review what the agent does.
@@ -238,7 +211,7 @@
           data-modal-primary
           onclick={() => onStepChange(1)}
         >
-          Show me around <ArrowRight size={15} />
+          Show me around <CioArrowRight size={15} />
         </button>
       </div>
     </div>
@@ -299,11 +272,11 @@
           <button
             type="button"
             class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title={tour === 'setup' ? 'Skip setup' : 'Close tour'}
-            aria-label={tour === 'setup' ? 'Skip setup' : 'Close tour'}
+            title="Skip setup"
+            aria-label="Skip setup"
             onclick={onFinish}
           >
-            <X size={15} />
+            <CioClose size={15} />
           </button>
         </div>
         <p class="mt-2 text-sm leading-relaxed text-muted">{activeSpotlight.description}</p>
@@ -311,9 +284,7 @@
         {#if activeSpotlight.shortcuts}
           <div class="mt-4 grid gap-2">
             {#each activeSpotlight.shortcuts as shortcut (shortcut.label)}
-              <div
-                class="flex items-center justify-between border bg-elevated px-3 py-2"
-              >
+              <div class="flex items-center justify-between border bg-elevated px-3 py-2">
                 <span class="text-xs text-muted">{shortcut.label}</span>
                 <kbd class="border bg-surface px-2 py-1 text-[0.6875rem] font-medium"
                   >{shortcut.keys}</kbd
@@ -335,13 +306,13 @@
             {/each}
           </div>
           <div class="flex gap-2">
-            {#if tour === 'setup' || step > 0}
+            {#if step > 0}
               <button
                 type="button"
                 class="flex h-8 items-center gap-1 border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 onclick={previousStep}
               >
-                <ArrowLeft size={13} /> Back
+                <CioArrowLeft size={13} /> Back
               </button>
             {/if}
             <button
@@ -350,28 +321,20 @@
               class="flex h-8 items-center gap-1 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
               onclick={nextStep}
             >
-              {tour === 'setup'
-                ? step === 5
-                  ? 'Set up'
-                  : 'Next'
-                : onLastSpotlight
-                  ? 'Done'
-                  : 'Next'}
-              <ArrowRight size={13} />
+              {step === 5 ? 'Set up' : 'Next'}
+              <CioArrowRight size={13} />
             </button>
           </div>
         </div>
       </div>
     </div>
   </Portal>
-{:else if tour === 'setup' && step === 6}
+{:else if step === 6}
   <Modal open title="Add your first project" onClose={onFinish} size="lg" closeOnBackdrop={false}>
     <div class="space-y-5">
       <div class="flex items-start gap-4">
-        <div
-          class="flex h-11 w-11 shrink-0 items-center justify-center bg-elevated text-primary"
-        >
-          <FolderInput size={20} />
+        <div class="flex h-11 w-11 shrink-0 items-center justify-center bg-elevated text-primary">
+          <CioFolderInput size={20} />
         </div>
         <div>
           <p class="mt-1 text-sm leading-relaxed text-muted">
@@ -401,12 +364,12 @@
           data-modal-primary
           onclick={onChooseProject}
         >
-          <FolderInput size={15} /> Add a Project
+          <CioFolderInput size={15} /> Add a Project
         </button>
       </div>
     </div>
   </Modal>
-{:else if tour === 'setup'}
+{:else}
   <Modal
     open
     title="Connect your first coding agent"
@@ -457,9 +420,9 @@
               onclick={() => void openPiInstall()}
             >
               {#if installBusy}
-                <Loader2 size={15} class="animate-spin" />
+                <CioSpinner size={15} class="animate-spin" />
               {:else}
-                <Download size={15} />
+                <CioDownload size={15} />
               {/if}
               {installOpened ? 'Open install guide again' : 'Install Pi'}
             </button>
@@ -469,7 +432,7 @@
               disabled={piChecking}
               onclick={() => void checkPi()}
             >
-              {#if piChecking}<Loader2 size={14} class="animate-spin" />{/if}
+              {#if piChecking}<CioSpinner size={14} class="animate-spin" />{/if}
               Check again
             </button>
           </div>

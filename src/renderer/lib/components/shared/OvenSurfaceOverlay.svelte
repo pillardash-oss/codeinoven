@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
-  import { Loader2, RefreshCw, TriangleAlert } from '@lucide/svelte'
 
   /**
    * The canonical state layer for a surface whose content lives on an Oven.
@@ -85,7 +87,7 @@
           role="alert"
         >
           <div class="flex h-9 w-9 items-center justify-center bg-danger/10">
-            <TriangleAlert size={17} class="text-danger" aria-hidden="true" />
+            <CioAttention size={17} class="text-danger" aria-hidden="true" />
           </div>
           <p class="text-xs font-semibold text-foreground">{title}</p>
           <p class="max-w-[32ch] text-[0.625rem] leading-relaxed break-words text-muted">
@@ -97,7 +99,7 @@
               class="mt-1 flex h-7 items-center gap-1.5 border border-border-strong bg-surface px-2.5 text-[0.625rem] font-semibold text-foreground transition-colors hover:bg-overlay"
               onclick={onRetry}
             >
-              <RefreshCw size={12} aria-hidden="true" />
+              <CioRefresh size={12} aria-hidden="true" />
               {retryLabel}
             </button>
           {/if}
@@ -108,7 +110,7 @@
           role="status"
           aria-live="polite"
         >
-          <Loader2 size={13} class="animate-spin text-muted" aria-hidden="true" />
+          <CioSpinner size={13} class="animate-spin text-muted" aria-hidden="true" />
           <span class="text-[0.625rem] font-medium text-muted">{loadingLabel}</span>
         </div>
       {/if}

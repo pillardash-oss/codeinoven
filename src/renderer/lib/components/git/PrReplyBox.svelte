@@ -8,7 +8,9 @@
    * quotes it. The caller passes that difference in as `hint` so the reader is
    * never surprised by where their words land.
    */
-  import { Loader2, Send } from '@lucide/svelte'
+
+  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
 
   interface Props {
@@ -72,10 +74,10 @@
         onclick={() => void submit()}
       >
         {#if busy}
-          <Loader2 size={12} class="animate-spin" />
+          <CioSpinner size={12} class="animate-spin" />
           Posting…
         {:else}
-          <Send size={12} />
+          <CioSend size={12} />
           Reply
         {/if}
       </button>

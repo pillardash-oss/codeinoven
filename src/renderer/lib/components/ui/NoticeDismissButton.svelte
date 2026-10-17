@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
 
   /**
@@ -46,5 +46,5 @@
   aria-label={title}
   onclick={() => noticeDismissals.dismiss(id, condition)}
 >
-  <X size={size === 'sm' ? 12 : 13} aria-hidden="true" />
+  <CioClose size={size === 'sm' ? 12 : 13} aria-hidden="true" />
 </button>

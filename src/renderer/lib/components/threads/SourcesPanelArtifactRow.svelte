@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderOpen } from '@lucide/svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
   import type { AgentArtifact } from '$shared/types'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
 
@@ -57,7 +57,7 @@
       aria-label={`Reveal ${artifact.filename} in its folder`}
       onclick={() => onReveal(artifact)}
     >
-      <FolderOpen size={14} />
+      <CioFolderOpen size={14} />
     </button>
   </div>
 </article>

@@ -29,7 +29,9 @@
    * open. The menu is also sized to its own trigger, so it can never spill past
    * the field (and the panel) it belongs to.
    */
-  import { Check, ChevronDown } from '@lucide/svelte'
+
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   interface Props {
@@ -101,14 +103,9 @@
     >
       <span class="flex min-w-0 flex-1 items-center gap-1.5">
         {#if selected?.iconUrl}
-          <img
-            src={selected.iconUrl}
-            alt=""
-            class="h-3.5 w-3.5 shrink-0 object-contain"
-          />
+          <img src={selected.iconUrl} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
         {:else if selected?.accent}
-          <span class="h-2 w-2 shrink-0" style="background-color: {selected.accent}"
-          ></span>
+          <span class="h-2 w-2 shrink-0" style="background-color: {selected.accent}"></span>
         {/if}
         <span
           class="min-w-0 truncate {compact ? 'text-[0.6875rem]' : 'text-[0.75rem]'} {selected
@@ -118,7 +115,7 @@
           {selected?.label ?? placeholder}
         </span>
       </span>
-      <ChevronDown size={13} class="shrink-0 text-dimmed" />
+      <CioChevronDown size={13} class="shrink-0 text-dimmed" />
     </DropdownMenu.Trigger>
 
     <DropdownMenu.Portal>
@@ -136,15 +133,9 @@
             onSelect={() => onChange(option.id)}
           >
             {#if option.iconUrl}
-              <img
-                src={option.iconUrl}
-                alt=""
-                class="mt-0.5 h-3.5 w-3.5 shrink-0 object-contain"
-              />
+              <img src={option.iconUrl} alt="" class="mt-0.5 h-3.5 w-3.5 shrink-0 object-contain" />
             {:else if option.accent}
-              <span
-                class="mt-0.5 h-2 w-2 shrink-0"
-                style="background-color: {option.accent}"
+              <span class="mt-0.5 h-2 w-2 shrink-0" style="background-color: {option.accent}"
               ></span>
             {/if}
             <span class="min-w-0 flex-1">
@@ -156,7 +147,7 @@
               {/if}
             </span>
             {#if option.id === value}
-              <Check size={12} class="mt-0.5 shrink-0 text-primary" />
+              <CioCheck size={12} class="mt-0.5 shrink-0 text-primary" />
             {/if}
           </DropdownMenu.Item>
         {/each}

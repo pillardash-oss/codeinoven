@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import { onMount } from 'svelte'
-  import { RefreshCw } from '@lucide/svelte'
+
   import { invoke } from '$lib/ipc.svelte'
   import type { DesignModelRanking } from '$shared/design/design-review'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
@@ -36,10 +37,7 @@
   })
 </script>
 
-<section
-  class="mt-4 overflow-hidden border border-border"
-  aria-labelledby="design-ranking-heading"
->
+<section class="mt-4 overflow-hidden border border-border" aria-labelledby="design-ranking-heading">
   <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
     <div>
       <h2 id="design-ranking-heading" class="text-sm font-semibold">Design quality</h2>
@@ -55,7 +53,7 @@
       aria-label="Refresh design quality rankings"
       disabled={loading}
       onclick={() => void refresh()}
-      ><RefreshCw size={14} class={loading ? 'animate-spin' : ''} /></button
+      ><CioRefresh size={14} class={loading ? 'animate-spin' : ''} /></button
     >
   </div>
   {#if error}<p class="p-4 text-sm text-danger">{error}</p>

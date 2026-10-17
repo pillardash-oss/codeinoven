@@ -1,9 +1,16 @@
 <script lang="ts">
-  import { Code2, Eye, FileDiff, Loader2, MessageSquarePlus, Save } from '@lucide/svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
+  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { ProjectFileTab, ProjectFileView } from '$lib/stores/project-files.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
+  import type { DocumentReadAloud } from './project-files-panel-read-aloud'
 
   interface DiffStats {
     additions: number
@@ -21,6 +28,11 @@
     showAnnotateToggle: boolean
     /** Annotate is refused while no conversation is open to attach to. */
     annotateDisabled: boolean
+    /** The active document as a read-aloud target, or null when the viewer
+     *  cannot hand this file to the speech model. Same documents as the
+     *  annotation toggle, and the control itself stays hidden until a
+     *  text-to-speech model is installed. */
+    readAloud: DocumentReadAloud | null
     deletedAtCheckpoint: boolean
     showUndoRedo: boolean
     reloadDisabled: boolean
@@ -61,6 +73,7 @@
     showPreviewToggle,
     showAnnotateToggle,
     annotateDisabled,
+    readAloud,
     deletedAtCheckpoint,
     showUndoRedo,
     reloadDisabled,
@@ -91,6 +104,17 @@
 </script>
 
 <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
+  <!-- Read-aloud leads the row, away from the view toggles: it is an action,
+       and sitting between annotate and preview it was tapped by mistake. -->
+  {#if readAloud}
+    <SpeechPlaybackButton
+      messageId={readAloud.messageId}
+      markdown={readAloud.markdown}
+      disabled={readAloud.disabled}
+      scope={readAloud.scope}
+      spokenSubject="document"
+    />
+  {/if}
   <button
     type="button"
     class={[
@@ -105,7 +129,7 @@
     disabled={!checkpointDiff}
     onclick={() => onSetView('diff')}
   >
-    <FileDiff size={12} />
+    <CioDiff size={12} />
   </button>
   {#if showAnnotateToggle}
     <button
@@ -124,7 +148,7 @@
       disabled={annotateDisabled}
       onclick={() => onSetView('annotate')}
     >
-      <MessageSquarePlus size={12} />
+      <CioMessagePlus size={12} />
     </button>
   {/if}
   {#if showPreviewToggle}
@@ -141,7 +165,7 @@
       title={`${previewKindLabel} preview`}
       onclick={() => onSetView('preview')}
     >
-      <Eye size={12} />
+      <CioEye size={12} />
     </button>
   {/if}
   <button
@@ -157,7 +181,7 @@
     title={deletedAtCheckpoint ? 'View deleted source' : 'Edit source'}
     onclick={() => onSetView('source')}
   >
-    <Code2 size={12} />
+    <CioCode size={12} />
   </button>
   {#if deletedAtCheckpoint}
     <span class="ml-1 text-[0.5625rem] font-medium text-danger">Deleted · read-only</span>
@@ -208,9 +232,9 @@
       onclick={onSave}
     >
       {#if saving}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <Save size={11} />
+        <CioSave size={11} />
       {/if}
     </button>
   {/if}

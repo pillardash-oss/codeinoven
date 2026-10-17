@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CircleHelp, ClipboardList, Paperclip, Send, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPaperclip from '$lib/components/icons/cio/CioPaperclip.svelte'
+  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
+  import { CircleHelp, ClipboardList } from '@lucide/svelte'
   import { fly, slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'
   import { SvelteSet, createSubscriber } from 'svelte/reactivity'
@@ -592,7 +595,7 @@
                     class="flex max-w-full min-w-0 items-center gap-1 border border-border bg-elevated px-2 py-1"
                     role="listitem"
                   >
-                    <Paperclip size={11} class="shrink-0 text-muted" aria-hidden="true" />
+                    <CioPaperclip size={11} class="shrink-0 text-muted" aria-hidden="true" />
                     <span class="truncate font-mono text-[0.6875rem] text-foreground"
                       >{attachedPath}</span
                     >
@@ -604,7 +607,7 @@
                       title="Remove this attached file"
                       aria-label={`Remove attached file ${attachedPath}`}
                     >
-                      <X size={11} />
+                      <CioClose size={11} />
                     </button>
                   </span>
                 {/each}
@@ -613,7 +616,7 @@
             <CardButton
               label="Attach files…"
               title="Attach files from your computer to share with the agent"
-              icon={Paperclip}
+              icon={CioPaperclip}
               variant="secondary"
               disabled={working}
               onclick={() => void attachFiles()}
@@ -711,7 +714,7 @@
           <CardButton
             label={working ? 'Sending…' : `Submit ${total > 1 ? 'answers' : 'answer'}`}
             title="Send your answer to the agent"
-            icon={Send}
+            icon={CioSend}
             variant="primary"
             loading={working}
             disabled={!allAnswered || working}

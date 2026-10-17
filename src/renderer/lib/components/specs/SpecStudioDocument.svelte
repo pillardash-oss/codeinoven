@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageSquarePlus } from '@lucide/svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
   import type {
     CapturableSpecContextType,
     EngineeringSpec,
@@ -67,7 +67,7 @@
         onclick={(event: MouseEvent) => onAnnotate('problem', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Problem</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />
@@ -111,7 +111,7 @@
         onclick={(event: MouseEvent) => onAnnotate('test_strategy', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Test strategy</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />
@@ -152,7 +152,7 @@
           onclick={(event: MouseEvent) => onAnnotate('additional_info', event)}
         >
           <span class="text-xl font-semibold tracking-tight">Additional info</span>
-          <MessageSquarePlus
+          <CioMessagePlus
             size={14}
             class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
           />
@@ -182,7 +182,7 @@
         onclick={(event: MouseEvent) => onAnnotate('commit_pattern', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Commit pattern</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />
@@ -210,7 +210,7 @@
         onclick={(event: MouseEvent) => onAnnotate('constraints_risks', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Constraints & risks</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />

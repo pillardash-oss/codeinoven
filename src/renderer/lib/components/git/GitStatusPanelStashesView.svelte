@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Archive, Loader2, Trash2 } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import type { GitDiff, GitFileChange, GitRestoreTarget, GitStashEntry } from '$shared/types'
   import GitFileRow from './GitFileRow.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
@@ -50,12 +52,12 @@
     <div>
       {#if loadingStashDiff}
         <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-          <Loader2 size={14} class="animate-spin" />
+          <CioSpinner size={14} class="animate-spin" />
           Loading changes
         </div>
       {:else if stashDiffChanges.length === 0}
         <div class="flex flex-col items-center justify-center py-12 text-center">
-          <Archive size={22} class="mx-auto mb-2 text-dimmed" />
+          <CioArchive size={22} class="mx-auto mb-2 text-dimmed" />
           <p class="text-xs font-medium text-muted">No file changes</p>
           <p class="mt-1 text-[0.625rem] text-dimmed">This stash has no changes.</p>
         </div>
@@ -98,7 +100,7 @@
             aria-label="View changes in stash {stash.id}"
             onclick={() => onSelectStash(stash)}
           >
-            <Archive size={12} class="shrink-0 text-dimmed" />
+            <CioArchive size={12} class="shrink-0 text-dimmed" />
             <span class="min-w-0 flex-1">
               <span class="block truncate text-[0.6875rem] leading-snug text-foreground">
                 {stash.message}
@@ -131,7 +133,7 @@
             aria-label="Discard stash {stash.id}"
             onclick={() => onRequestStashDrop(stash)}
           >
-            <Trash2 size={12} />
+            <CioTrash size={12} />
           </button>
         </div>
       {/each}

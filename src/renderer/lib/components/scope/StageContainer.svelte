@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { STAGE_COLORS, STAGE_LABELS, type ThreadStage } from '$lib/stores/scope.svelte'
   import type { Thread } from '$shared/types'
@@ -82,11 +83,11 @@
       onclick={onToggle}
     >
       {#if collapsed}
-        <ChevronRight size={13} class="shrink-0 text-dimmed" />
+        <CioForward size={13} class="shrink-0 text-dimmed" />
         <span class="text-[0.625rem] tabular-nums text-dimmed">{threads.length}</span>
         <span class="sr-only">{STAGE_LABELS[stage]}</span>
       {:else}
-        <ChevronDown size={13} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={13} class="shrink-0 text-dimmed" />
         <span class="text-[0.6875rem] font-semibold uppercase tracking-wide text-foreground">
           {STAGE_LABELS[stage]}
         </span>

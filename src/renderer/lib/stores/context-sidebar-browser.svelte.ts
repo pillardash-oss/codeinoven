@@ -490,6 +490,15 @@ export class SidebarBrowserTabs {
         state.audible && !state.muted
       )
     }
+    // Composition board views have thread ownership but no browser-strip tab.
+    if (!tab && state.tabId.startsWith('browser:board:')) {
+      browserAudio.reportThreadTab(
+        state.tabId,
+        state.threadId,
+        state.projectId,
+        state.audible && !state.muted
+      )
+    }
     const current = this.runtime.get(state.tabId)
     if (
       current &&

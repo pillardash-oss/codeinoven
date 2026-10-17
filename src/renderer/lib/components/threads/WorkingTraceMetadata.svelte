@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Zap } from '@lucide/svelte'
+  import CioZap from '$lib/components/icons/cio/CioZap.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -61,7 +61,7 @@
     <span class="truncate">{modelLabel}</span>
   </span>
   {#if isFast}
-    <Zap
+    <CioZap
       size={10}
       class="shrink-0 text-accent"
       fill="currentColor"

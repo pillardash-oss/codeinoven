@@ -213,11 +213,12 @@ export function piCoreToolsEventsSource(): string {
   pi.on('before_agent_start', (event) => {
     // A genuine user prompt begins a fresh task-list budget: the previous
     // turn's list is gone from the screen, and a reconciliation nudge may be
-    // spent again. This hook fires only for a user prompt   never for the
-    // guard's own synthetic reconciliation turn   so it can never disarm the
-    // guard mid-flight.
-    latestTodoItems = []
-    todoReconcileSpent = false
+    // spent again. Pi 1.2 also fires this hook for custom-message runs; those
+    // must preserve the guard's budget and current task list.
+    if (event.messageType === 'user') {
+      latestTodoItems = []
+      todoReconcileSpent = false
+    }
     // Pi reports each surface's annotations here, and an MCP server can connect
     // between turns, so the read-only set is refreshed before every turn.
     refreshCioReadOnlyTools(pi)

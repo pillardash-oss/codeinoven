@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Shield, ShieldAlert, ShieldCheck } from '@lucide/svelte'
+  import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import { Shield } from '@lucide/svelte'
   import { PERMISSION_LEVELS, permissionLevelLabel } from '$lib/actions'
   import type { PermissionLevel } from '$shared/types'
 
@@ -54,7 +56,7 @@
       onclick={onToggle}
     >
       {#if permissionLevel === 'full_access'}
-        <ShieldAlert size={12} strokeWidth={2.75} class="shrink-0" />
+        <CioShieldAlert size={12} strokeWidth={2.75} class="shrink-0" />
       {:else}
         <Shield size={12} class="shrink-0" />
       {/if}
@@ -82,9 +84,9 @@
             onclick={() => onSelect(level.id)}
           >
             {#if level.id === 'full_access'}
-              <ShieldAlert size={12} strokeWidth={2.75} class="text-warning" />
+              <CioShieldAlert size={12} strokeWidth={2.75} class="text-warning" />
             {:else}
-              <ShieldCheck size={12} class="text-info" />
+              <CioShieldCheck size={12} class="text-info" />
             {/if}
             {level.label}
           </button>

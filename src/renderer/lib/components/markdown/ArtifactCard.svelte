@@ -1,19 +1,16 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import { onDestroy } from 'svelte'
   import { artifactThemeStyles } from './artifact-theme'
   import { artifactKeyFor } from '$lib/artifact-element-reference'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import ArtifactInspector from './ArtifactInspector.svelte'
-  import {
-    Check,
-    Code2,
-    Copy,
-    Expand,
-    Eye,
-    SquareDashedMousePointer,
-    WrapText
-  } from '@lucide/svelte'
+  import { SquareDashedMousePointer, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
@@ -111,14 +108,9 @@
    */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
-  /**
-   * The viewer body draws the inspector rather than the sandboxed preview frame.
-   *
-   * The frame is its own document, so the viewer's own gestures never reach it;
-   * the inspector is app DOM and takes them directly, which is why only the frame
-   * needs the drag surface.
-   */
-  const viewerShowsInspector = $derived(inspecting && annotationScope !== undefined)
+  // Keep the SVG in one document across mode changes. Its gestures reach the
+  // viewer directly; sandboxed iframe previews need a gesture overlay instead.
+  const viewerUsesSvgSurface = $derived(canInspect)
 
   /**
    * The expanded viewer's zoom.
@@ -182,10 +174,11 @@
     <div class="[&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
-  {:else if inspecting && annotationScope && fullscreen}
+  {:else if canInspect && annotationScope && fullscreen}
     <div class="h-full min-h-0">
       <ArtifactInspector
         {code}
+        enabled={inspecting}
         {artifactKey}
         projectId={annotationScope.projectId}
         threadId={annotationScope.threadId}
@@ -204,17 +197,24 @@
     <!-- The inline frame is the artifact's own shape whenever the artifact states
          one, and the plain viewport otherwise. The viewer fills its stage and lets
          the zoom carry the picture past the frame's edges. -->
-    <iframe
-      title="{label} preview"
-      sandbox=""
-      {srcdoc}
-      class={[
-        'block w-full border-0 bg-app',
-        fullscreen ? 'h-full min-h-0' : picture === undefined ? 'h-80' : 'mx-auto'
-      ]}
-      style={fullscreen ? panZoom.transform : picture}
-      {@attach fullscreen ? panZoom.bindTarget : () => {}}
-    ></iframe>
+    {#if fullscreen}
+      <div {@attach panZoom.bindTarget} class="absolute inset-0" style={panZoom.transform}>
+        <iframe
+          title="{label} preview"
+          sandbox=""
+          {srcdoc}
+          class="block h-full w-full border-0 bg-app"
+        ></iframe>
+      </div>
+    {:else}
+      <iframe
+        title="{label} preview"
+        sandbox=""
+        {srcdoc}
+        class={['block w-full border-0 bg-app', picture === undefined ? 'h-80' : 'mx-auto']}
+        style={picture}
+      ></iframe>
+    {/if}
   {/if}
 {/snippet}
 
@@ -228,7 +228,7 @@
     aria-label="Zoomable {label.toLowerCase()}"
     class={[
       'relative h-full w-full touch-none overflow-hidden',
-      panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+      panZoom.zoom !== 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
     ]}
     onwheel={panZoom.onWheel}
     onpointerdown={panZoom.onPointerDown}
@@ -238,7 +238,7 @@
     ondblclick={() => panZoom.reset()}
   >
     {@render artifactBody(true)}
-    {#if panZoom.zoom > 1 && !viewerShowsInspector}
+    {#if !viewerUsesSvgSurface}
       <!-- The preview frame is a document of its own: a gesture inside it never
            reaches this surface, so a pan over it is taken here instead. -->
       <div class="absolute inset-0" role="presentation"></div>
@@ -266,7 +266,7 @@
           title="Show rendered {label} preview"
           onclick={() => (showSource = false)}
         >
-          <span class="flex items-center gap-1"><Eye size={12} />Preview</span>
+          <span class="flex items-center gap-1"><CioEye size={12} />Preview</span>
         </button>
         <button
           type="button"
@@ -278,7 +278,7 @@
           title="Show {label} source"
           onclick={() => (showSource = true)}
         >
-          <span class="flex items-center gap-1"><Code2 size={12} />Code</span>
+          <span class="flex items-center gap-1"><CioCode size={12} />Code</span>
         </button>
       </div>
       <button
@@ -297,9 +297,9 @@
         onclick={() => void copySource()}
       >
         {#if copied}
-          <Check size={13} class="text-success" />
+          <CioCheck size={13} class="text-success" />
         {:else}
-          <Copy size={13} />
+          <CioCopy size={13} />
         {/if}
       </button>
       <button
@@ -308,7 +308,7 @@
         title="Expand {label}"
         onclick={() => (expanded = true)}
       >
-        <Expand size={13} />
+        <CioMaximize size={13} />
       </button>
     </div>
   </div>

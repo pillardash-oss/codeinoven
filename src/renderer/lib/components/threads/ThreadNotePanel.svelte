@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Redo2, SquarePen, Trash2, Undo2 } from '@lucide/svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
@@ -76,7 +79,7 @@
         title="Edit note"
         onclick={startEdit}
       >
-        <SquarePen size={13} />
+        <CioPencil size={13} />
         Edit
       </button>
       <button
@@ -87,7 +90,7 @@
         disabled={tab.savedBody === null || tab.saving}
         onclick={() => (showDeleteConfirm = true)}
       >
-        <Trash2 size={13} />
+        <CioTrash size={13} />
         Delete
       </button>
     {:else}
@@ -110,7 +113,7 @@
         disabled={!historyController || !canUndo || tab.saving}
         onclick={() => historyController?.undo()}
       >
-        <Undo2 size={13} />
+        <CioUndo size={13} />
       </button>
       <button
         type="button"
@@ -120,7 +123,7 @@
         disabled={!historyController || !canRedo || tab.saving}
         onclick={() => historyController?.redo()}
       >
-        <Redo2 size={13} />
+        <CioRedo size={13} />
       </button>
       <button
         type="button"

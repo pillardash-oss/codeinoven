@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ListChecks, Play, Toolbox, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import { ListChecks, Toolbox } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -117,7 +119,7 @@
           aria-label={specless ? 'Dismiss Assignment entry' : 'Cancel specification review'}
           title="Cancel"
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       {/snippet}
     </CardHead>
@@ -204,7 +206,7 @@
                 title={assignmentAvailable
                   ? 'Open the existing Assignment'
                   : 'Generate the Assignment from this thread'}
-                icon={Play}
+                icon={CioPlay}
                 variant="primary"
                 disabled={busy}
                 loading={busy}
@@ -214,7 +216,7 @@
               <CardButton
                 label="Implement"
                 title="Implement this specification"
-                icon={Play}
+                icon={CioPlay}
                 variant="primary"
                 disabled={busy}
                 loading={busy}

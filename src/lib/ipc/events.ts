@@ -56,6 +56,10 @@ import type { AppControlRequest } from '../app-control'
 export const IPC_EVENT_CONTRACT = {
   'customVendors:iconChanged': [] as unknown as [payload: { providerId: string; icon: string }],
   'design:historyChanged': [] as unknown as [projectId: string, directory: string],
+  'design:relocated': [] as unknown as [
+    projectId: string,
+    moves: Array<{ from: string; to: string }>
+  ],
   /** One app call for the renderer to perform on the agent's behalf. The
    *  renderer answers on the `appControl:respond` invoke with the request id. */
   'appControl:request': [] as unknown as [request: AppControlRequest],
@@ -103,11 +107,12 @@ export const IPC_EVENT_CONTRACT = {
   ],
   /** Branch association changed for a thread. */
   'thread:branchUpdated': [] as unknown as [projectId: string, threadId: string, branch: string],
-  /** Authored-work session changed for a thread (its design/video marker). */
+  /** Authored-work sessions changed for a thread (its design/video markers). */
   'thread:authoredWorkUpdated': [] as unknown as [
     projectId: string,
     threadId: string,
-    kind: import('./design').AuthoredWorkKind
+    kind: import('./design').AuthoredWorkKind,
+    kinds: import('./design').AuthoredWorkKind[]
   ],
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [] as unknown as [projectId: string, threadId: string, hasNote: boolean],

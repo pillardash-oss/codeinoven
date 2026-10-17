@@ -1,3 +1,7 @@
+import { DEFAULT_WORK_ROOTS } from '../../../lib/design/work-roots'
+import { workPathNoticeStatements } from '../../design/work-path-notices'
+import { projectWorkRootPaths } from '../../design/work-roots-state'
+import { dirname } from 'node:path'
 import type { Database } from '../database'
 import type { AuthoredWorkKind, ThreadDesignCurrent } from '../../../lib/ipc/design'
 
@@ -54,6 +58,17 @@ const CURRENT_COLUMNS = 'thread_id, project_id, directory, entry, kind, updated_
 export class DesignRepo {
   constructor(private readonly db: Database) {}
 
+  /** Indexed redirect lookup for navigation callbacks completing during a move. */
+  resolveDirectory(projectId: string, directory: string): string {
+    return (
+      this.db.get<{ destination: string }>(
+        'SELECT destination FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+        projectId,
+        directory
+      )?.destination ?? directory
+    )
+  }
+
   /**
    * Record (or refresh) the folder a thread is showing and the kind of work it
    * holds. Called on every preview, by the design capability and by the video
@@ -70,6 +85,9 @@ export class DesignRepo {
     entry: string | null
     kind: AuthoredWorkKind
   }): void {
+    // A navigation started before a move can finish after it. Never let that
+    // stale callback recreate the old folder or steal the thread's current path.
+    input = { ...input, directory: this.resolveDirectory(input.projectId, input.directory) }
     this.db.run(
       `INSERT INTO thread_designs (thread_id, project_id, directory, entry, kind, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
@@ -86,6 +104,31 @@ export class DesignRepo {
       input.kind,
       Date.now()
     )
+    // A generic HTML preview is not a new design. Register only a folder directly
+    // under an authored-work root, including the project's explicit custom roots.
+    if (
+      [
+        DEFAULT_WORK_ROOTS[input.kind],
+        ...projectWorkRootPaths(input.projectId, input.kind)
+      ].includes(dirname(input.directory))
+    ) {
+      this.db.run(
+        `INSERT INTO authored_work_folders (project_id, directory, kind, created_at, updated_at, missing)
+        VALUES (?, ?, ?, ?, ?, 0) ON CONFLICT(project_id, directory) DO UPDATE SET kind = excluded.kind, missing = 0`,
+        input.projectId,
+        input.directory,
+        input.kind,
+        Date.now(),
+        Date.now()
+      )
+    } else {
+      // Refresh an exact relocated record without adopting its parent as a default.
+      this.db.run(
+        'UPDATE authored_work_folders SET missing = 0 WHERE project_id = ? AND directory = ?',
+        input.projectId,
+        input.directory
+      )
+    }
     // The first thread to preview a folder is the one that created it, because the
     // agent writes a folder before showing it. The insert is ignored once the
     // folder has an origin, so a second thread previewing someone else's design,
@@ -141,6 +184,7 @@ export class DesignRepo {
   }
 
   deleteThread(threadId: string): void {
+    this.db.run('DELETE FROM work_path_notices WHERE thread_id = ?', threadId)
     this.db.run('DELETE FROM thread_designs WHERE thread_id = ?', threadId)
   }
 
@@ -155,8 +199,8 @@ export class DesignRepo {
    *
    * The read runs on the database worker: this is reached from the save path that
    * moves a work root, which is an interaction path, so it must not touch SQLite
-   * on the Electron main thread (see `docs/APP-BIBLE.md`). The writes stay on the
-   * primary connection, where a bounded UPDATE is the tail of the same action.
+   * on the Electron main thread (see `docs/APP-BIBLE.md`). Updates run in one
+   * worker transaction so thread links and creator links move together.
    */
   async rebaseRoot(input: { projectId: string; from: string; to: string }): Promise<number> {
     const result = await this.db.queryViaWorker(
@@ -164,34 +208,65 @@ export class DesignRepo {
       [input.projectId],
       0
     )
-    if (!result.ok) return 0
+    if (!result.ok) throw new Error('Could not read work tracking')
     const rows = result.rows as unknown as Array<{ thread_id: string; directory: string }>
-    let updated = 0
-    for (const row of rows) {
-      if (row.directory !== input.from && !row.directory.startsWith(`${input.from}/`)) continue
-      this.db.run(
-        'UPDATE thread_designs SET directory = ? WHERE thread_id = ?',
-        `${input.to}${row.directory.slice(input.from.length)}`,
-        row.thread_id
-      )
-      updated += 1
-    }
-    // Origins name the same folders, so they have to move with them or the board
-    // would look for a creator under a directory that no longer exists.
-    this.db.run(
-      `UPDATE design_origins
-          SET directory = ? || SUBSTR(directory, ?)
-        WHERE project_id = ? AND (directory = ? OR directory LIKE ? ESCAPE '\\')`,
-      input.to,
-      input.from.length + 1,
-      input.projectId,
-      input.from,
-      `${input.from.replace(/[%_\\]/gu, '\\$&')}/%`
+    const matching = rows.filter(
+      (row) => row.directory === input.from || row.directory.startsWith(`${input.from}/`)
     )
+    const statements: Array<{ sql: string; params: unknown[] }> = matching.map((row) => ({
+      sql: 'UPDATE thread_designs SET directory = ? WHERE thread_id = ?',
+      params: [`${input.to}${row.directory.slice(input.from.length)}`, row.thread_id]
+    }))
+    for (const row of matching) {
+      statements.push(
+        ...workPathNoticeStatements(
+          input.projectId,
+          row.thread_id,
+          row.directory,
+          `${input.to}${row.directory.slice(input.from.length)}`
+        )
+      )
+    }
+    statements.push(
+      {
+        sql: 'DELETE FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+        params: [input.projectId, input.to]
+      },
+      {
+        sql: 'UPDATE work_folder_relocations SET destination = ? WHERE project_id = ? AND destination = ?',
+        params: [input.to, input.projectId, input.from]
+      },
+      {
+        sql: `INSERT INTO work_folder_relocations (project_id, directory, destination) VALUES (?, ?, ?)
+          ON CONFLICT(project_id, directory) DO UPDATE SET destination = excluded.destination`,
+        params: [input.projectId, input.from, input.to]
+      }
+    )
+    statements.push({
+      sql: `UPDATE design_origins SET directory = ? || SUBSTR(directory, ?)
+        WHERE project_id = ? AND (directory = ? OR directory LIKE ? ESCAPE '\\')`,
+      params: [
+        input.to,
+        input.from.length + 1,
+        input.projectId,
+        input.from,
+        `${input.from.replace(/[%_\\]/gu, '\\$&')}/%`
+      ]
+    })
+    statements.push({
+      sql: 'UPDATE authored_work_folders SET directory = ? WHERE project_id = ? AND directory = ?',
+      params: [input.to, input.projectId, input.from]
+    })
+    const saved = await this.db.transactionViaWorker(statements)
+    if (!saved.ok) throw new Error(saved.error ?? 'Could not update work tracking')
+    const updated = matching.length
     return updated
   }
 
   deleteProject(projectId: string): void {
+    this.db.run('DELETE FROM work_path_notices WHERE project_id = ?', projectId)
+    this.db.run('DELETE FROM work_folder_relocations WHERE project_id = ?', projectId)
+    this.db.run('DELETE FROM authored_work_folders WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM thread_designs WHERE project_id = ?', projectId)
     this.db.run('DELETE FROM design_origins WHERE project_id = ?', projectId)
   }

@@ -1,6 +1,7 @@
+import CioChat from '$lib/components/icons/cio/CioChat.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-import { MessagesSquare } from '@lucide/svelte'
+
 import type { Component } from 'svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { invoke } from '$lib/ipc.svelte'
@@ -247,7 +248,7 @@ export class ThreadSearchPaletteController {
     iconUri?: string
     icon?: Component
   } {
-    if (this.family === 'chats') return { label: 'Chats', icon: MessagesSquare }
+    if (this.family === 'chats') return { label: 'Chats', icon: CioChat }
     if (this.family === 'assistant') {
       const assistant = assistants.assistantForTask(thread)
       if (assistant) {
@@ -267,7 +268,7 @@ export class ThreadSearchPaletteController {
     return {
       label: project?.name ?? thread.projectId,
       ...(project?.color ? { color: project.color } : {}),
-      ...(iconUri ? { iconUri } : { icon: MessagesSquare })
+      ...(iconUri ? { iconUri } : { icon: CioChat })
     }
   }
 
@@ -376,7 +377,7 @@ export class ThreadSearchPaletteController {
         showSourceBadge: false,
         ...(container.iconUri
           ? { iconUri: container.iconUri }
-          : { icon: container.icon ?? MessagesSquare }),
+          : { icon: container.icon ?? CioChat }),
         ...(status ? { status } : {}),
         ...(scope ? { scope } : {}),
         threadMeta: {

@@ -3,7 +3,7 @@
   import { hasThreadStateCounts, type ThreadStateCounts } from '$lib/thread-state-counts'
 
   interface Props {
-    /** The unread / attention / error / working breakdown for the row's threads. */
+    /** The unread, attention, spec, retry, error, and working breakdown for the row's threads. */
     counts: ThreadStateCounts
     class?: string
   }
@@ -30,10 +30,14 @@
         `${counts.attention} ${counts.attention === 1 ? 'thread needs' : 'threads need'} attention`
       )
     }
+    if (counts.spec > 0) {
+      parts.push(`${counts.spec} ${counts.spec === 1 ? 'thread has' : 'threads have'} a spec ready`)
+    }
     if (counts.retry > 0) {
       parts.push(`${counts.retry} ${counts.retry === 1 ? 'thread' : 'threads'} waiting to retry`)
     }
-    if (counts.error > 0) parts.push(`${counts.error} ${counts.error === 1 ? 'thread' : 'threads'} failed`)
+    if (counts.error > 0)
+      parts.push(`${counts.error} ${counts.error === 1 ? 'thread' : 'threads'} failed`)
     if (counts.working > 0) {
       parts.push(`${counts.working} ${counts.working === 1 ? 'thread' : 'threads'} working`)
     }
@@ -51,17 +55,15 @@
 {/snippet}
 
 {#if visible}
-  <span
-    class="flex items-center gap-1.5 {className}"
-    role="img"
-    aria-label={label}
-    title={label}
-  >
+  <span class="flex items-center gap-1.5 {className}" role="img" aria-label={label} title={label}>
     {#if counts.unread > 0}
       {@render stateItem('var(--color-thread-unread)', counts.unread)}
     {/if}
     {#if counts.attention > 0}
       {@render stateItem('var(--color-warning)', counts.attention)}
+    {/if}
+    {#if counts.spec > 0}
+      {@render stateItem('var(--color-thread-spec)', counts.spec)}
     {/if}
     {#if counts.retry > 0}
       {@render stateItem('var(--color-thread-working-paused)', counts.retry)}

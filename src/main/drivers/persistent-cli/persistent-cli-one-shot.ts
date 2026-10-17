@@ -180,7 +180,8 @@ export async function runOneShotWithCandidates(
           text: candidatePrompt,
           attachments: [],
           readOnly: true,
-          allowedTools: []
+          allowedTools: [],
+          minimalContext: true
         }),
         completion.promise
       ])

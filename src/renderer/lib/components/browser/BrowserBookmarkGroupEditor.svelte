@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Trash2 } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -201,7 +202,7 @@
         title="Delete this group. Its bookmarks stay saved."
         onclick={() => (confirmDelete = true)}
       >
-        <Trash2 size={13} />
+        <CioTrash size={13} />
         Delete
       </button>
     {/if}
@@ -222,7 +223,7 @@
       title={existing ? 'Save this group' : 'Create this group'}
       onclick={save}
     >
-      <Check size={13} />
+      <CioCheck size={13} />
       {existing ? 'Save' : 'Create'}
     </button>
   </div>

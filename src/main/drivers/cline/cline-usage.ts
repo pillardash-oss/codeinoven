@@ -88,36 +88,6 @@ export function clineModelContextWindow(value: unknown): number | undefined {
 }
 
 /**
- * Parse a Cline per-turn usage object into the shared aggregate shape.
- *
- * `run_result.usage` sums every iteration of a run, so it is the billed token
- * total for the turn and never the occupancy of a single provider request;
- * live occupancy comes from the per-iteration `usage` event via
- * `mapClineStepUsage`. The aggregate total sums every reported category.
- * Cline's usage object has no token total of its own, so the synthesized sum is
- * the only comparable figure; a `totalTokens` supplied by a provider-specific
- * payload is preserved on the normalized payload as `rawTotal` rather than
- * mistaken for the turn total.
- */
-export function mapClineUsage(value: unknown): AgentTokenUsage | undefined {
-  const usage = record(value)
-  if (!usage) return undefined
-  const input = numberValue(usage['inputTokens']) ?? 0
-  const output = numberValue(usage['outputTokens']) ?? 0
-  const reasoning = numberValue(usage['reasoningTokens']) ?? 0
-  const cacheRead = numberValue(usage['cacheReadTokens']) ?? 0
-  const cacheWrite = numberValue(usage['cacheWriteTokens']) ?? 0
-  return {
-    input,
-    output,
-    reasoning,
-    cacheRead,
-    cacheWrite,
-    total: input + output + reasoning + cacheRead + cacheWrite
-  }
-}
-
-/**
  * Map Cline accounting into the canonical normalized contract.
  *
  * Cline reports the prompt cache as separate additive categories beside

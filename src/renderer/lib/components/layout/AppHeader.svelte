@@ -1,4 +1,7 @@
 <script lang="ts">
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -16,18 +19,17 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioNotes from '$lib/components/icons/cio/CioNotes.svelte'
+  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
-  import {
-    Bell,
-    ChevronLeft,
-    ChevronRight,
-    Globe,
-    Loader2,
-    Search,
-    StickyNotes,
-    Toolbox
-  } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
@@ -115,7 +117,9 @@
       scopeState.updateThread(updated)
     },
     onTogglePin: async (thread) => {
-      const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+      const updated = thread.bookmarked
+        ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
+        : await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
       workspaceState.updateThread(updated)
       if (scopeState.allScopeThreads.some((t) => t.id === updated.id)) {
         scopeState.updateThread(updated)
@@ -241,6 +245,17 @@
   style={trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
+    <button
+      type="button"
+      class="flex shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+      aria-label="Open thread switcher"
+      title="Open thread switcher"
+      onclick={() => threadSwitcherRequest.requestOpen()}
+    >
+      <VendorIcon name="CodeInOven" size={20} />
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"> cio </span>
+    </button>
+
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
       <button
@@ -250,7 +265,7 @@
         disabled={!navigationHistoryState.canGoBack}
         onclick={goBack}
       >
-        <ChevronLeft size={16} strokeWidth={1.8} />
+        <CioBack size={ICON_SIZE.control} />
       </button>
       <button
         class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
@@ -259,20 +274,9 @@
         disabled={!navigationHistoryState.canGoForward}
         onclick={goForward}
       >
-        <ChevronRight size={16} strokeWidth={1.8} />
+        <CioForward size={ICON_SIZE.control} />
       </button>
     </div>
-
-    <!-- Selected view's name: the rail is icon-only, so the header names the
-         view it has selected, between the nav buttons and the view's actions. -->
-    {#if navigation.activeHeaderViewLabel}
-      <span
-        class="whitespace-nowrap px-1 text-[0.6875rem] font-medium text-muted"
-        aria-live="polite"
-      >
-        {navigation.activeHeaderViewLabel}
-      </span>
-    {/if}
 
     {#if onSettings}
       <!-- Settings owns this slot while it is on screen: the per-view actions
@@ -285,7 +289,7 @@
         title="Search settings"
         onclick={() => (settingsUiState.searchOpen = true)}
       >
-        <Search size={15} strokeWidth={1.8} />
+        <CioSearch size={ICON_SIZE.control} />
       </button>
     {:else}
       <AppHeaderViewActions />
@@ -318,7 +322,7 @@
         title="Open gateway dashboard   {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
-        <Globe size={16} />
+        <CioBrowser size={ICON_SIZE.control} />
       </button>
     {/if}
 
@@ -354,11 +358,11 @@
         onclick={() => workspaceState.toggleSpecStudio?.()}
       >
         {#if workspaceState.specStudioBusy}
-          <Loader2 size={15} class="animate-spin" />
+          <CioSpinner size={ICON_SIZE.control} class="animate-spin" />
         {:else}
           <!-- The specification's own mark, so the toolbox a user learns here is
                the same one a spec-ready row wears. -->
-          <Toolbox size={15} />
+          <CioTools size={ICON_SIZE.control} />
         {/if}
         <span class="header-control-label text-[0.6875rem] font-medium">
           {workspaceState.specStudioBusy
@@ -399,7 +403,7 @@
       title={stickyNotesPanelActive ? 'Hide sticky notes' : 'Open sticky notes'}
       onclick={() => void toggleStickyNotes()}
     >
-      <StickyNotes size={16} />
+      <CioNotes size={ICON_SIZE.control} />
     </button>
 
     <button
@@ -409,9 +413,10 @@
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
       title="Open notifications"
       data-onboarding="notifications"
+      data-guide="notifications"
       onclick={() => contextSidebarState.toggleNotifications()}
     >
-      <Bell size={16} />
+      <CioNotifications size={ICON_SIZE.control} />
       {#if notificationPanelState.totalCount > 0 || notificationPanelState.hasAssistant}
         <!-- One dot per waiting kind, each in the app's own status colour, so a
              glance at the bell says what is waiting: a project message, a chat

@@ -20,7 +20,7 @@ import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { workRootsFromConfig } from '../../lib/design/work-roots'
-import { setWorkRoots } from '../design/work-roots-state'
+import { loadProjectWorkRoots, setWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -135,8 +135,8 @@ async function attachBrowserService(
   chatEngine.setBrowserUtilityExecutor((operation, input, browserContext) =>
     service.executeUtility(operation, input, browserContext)
   )
-  service.setTabMarkRecogniser((projectId, threadId, url) =>
-    designService.observeShownFolder(projectId, threadId, url)
+  service.setTabMarkRecogniser((projectId, threadId, url, recordThread) =>
+    designService.observeShownFolder(projectId, threadId, url, recordThread)
   )
 }
 
@@ -377,6 +377,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   )
   state.powerWakeService = new PowerWakeService(storage, database)
   state.retryScheduler = new RetrySchedulerService(storage)
+  // Verified device connectivity. Built before the IPC handlers, because the
+  // renderer's connection events are routed into it, and before the retry
+  // scheduler starts, so a wait restored from disk is gated on a verdict
+  // rather than on the operating system's guess.
+  const { ConnectivityService } = await import('../system/connectivity-service')
+  state.connectivity = new ConnectivityService()
   state.heartbeatScheduler = new HeartbeatSchedulerService(storage)
   state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
   state.assistantManager = new AssistantManager(database)
@@ -591,6 +597,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   } catch {
     // The strict policy and the default folders stand until the config can be read.
   }
+  await loadProjectWorkRoots(database)
   state.directoryPreviewService = new DirectoryPreviewService()
   state.chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
@@ -650,11 +657,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   const designService = new DesignService({
     database,
     onHistoryChanged: announceHistoryChanged,
+    onWorkRelocated: (projectId, moves) => {
+      for (const window of BrowserWindow.getAllWindows())
+        sendToRenderer(window.webContents, 'design:relocated', projectId, moves)
+    },
     // The agent can open a design or video session by previewing into a work
-    // root with no tag, so the row's authored-work marker has to reach the
+    // root with no tag, so the row's authored-work markers have to reach the
     // renderer the same way the tag path's write does, in real time.
-    onThreadKindChanged: (projectId, threadId, kind) =>
-      broadcastThreadAuthoredWorkUpdated(projectId, threadId, kind),
+    onThreadKindChanged: (projectId, threadId, kind, kinds) =>
+      broadcastThreadAuthoredWorkUpdated(projectId, threadId, kind, kinds),
     previews: state.directoryPreviewService,
     browser: () => state.browserService
   })
@@ -804,6 +815,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     powerWakeService: state.powerWakeService,
     backgroundLifecycle: state.backgroundLifecycle ?? undefined,
     retryScheduler: state.retryScheduler,
+    connectivity: state.connectivity ?? undefined,
     heartbeatScheduler: state.heartbeatScheduler,
     assistantManager: state.assistantManager ?? undefined,
     assistantScheduler: state.assistantScheduler ?? undefined,
@@ -823,6 +835,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.chatEngine.register()
   state.harnessManifestService.register()
   state.chatEngine.attachRetryScheduler(state.retryScheduler)
+  // A connection wait resumes the moment connectivity is verified back, not
+  // when the renderer happens to announce a link. Registering the source here
+  // is what turns a reconnection into the batch of resumes the parked threads
+  // were promised.
+  if (state.connectivity) state.chatEngine.attachConnectivity(state.connectivity)
   // Registered before `featuresReady`: a window hydrates the cross-instance turn
   // notice as soon as it mounts, and its invoke must not race the handler.
   state.foreignRuns = new ForeignRunService(database)
@@ -1030,6 +1047,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     try {
       await state.retryScheduler?.start()
+      // Connectivity first, so the scheduler's immediate launch tick already
+      // has a verdict: a wait restored from the last session fires as soon as
+      // the device is verified online instead of sitting through a probe
+      // window it cannot see.
+      state.connectivity?.start()
       await state.chatEngine?.repairPendingRetryThreadStatuses()
     } catch (error) {
       Logger.error('Retry scheduler startup failed (non-fatal):', error)
@@ -1068,6 +1090,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         const { PowerMonitorService } = await import('../system/power-monitor-service')
         state.powerMonitorService = new PowerMonitorService({
           onResume: () => {
+            // A machine that just woke cannot know what its link does now: the
+            // wake is the signal that re-verifies it and, when the device came
+            // back connected, resumes every thread parked on the connection.
+            state.connectivity?.signal('device wake')
             state.assistantScheduler?.evaluate()
             if (state.backgroundLifecycle?.autoRunMissedRuns) {
               void state.assistantScheduler

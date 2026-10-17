@@ -9,12 +9,7 @@ import type {
   CliLineParseContext,
   CliLineParseResult
 } from '../persistent-cli/persistent-cli-types'
-import {
-  clineModelContextWindow,
-  mapClineNormalizedUsage,
-  mapClineStepUsage,
-  mapClineUsage
-} from './cline-usage'
+import { clineModelContextWindow, mapClineNormalizedUsage, mapClineStepUsage } from './cline-usage'
 import {
   numberValue,
   record,
@@ -416,7 +411,6 @@ export function mapCurrentClineRecord(
       finalTextPart = part
     }
     const model = record(entry['model'])
-    const usage = mapClineUsage(entry['usage'])
     const normalizedUsage = mapClineNormalizedUsage(entry['usage'])
     const cost = numberValue(record(entry['usage'])?.['totalCost'])
     // Occupancy is the last iteration's prompt, never the run aggregate: a run
@@ -439,7 +433,9 @@ export function mapCurrentClineRecord(
       // A message is attributed to the provider and model the app ran, so the
       // turn's provenance stamps it (like every other persistent-CLI driver)
       // and the meter, ledger and pricing all key on the app's own selection.
-      ...(usage ? { tokens: usage } : {}),
+      // `run_result.usage` is cumulative for the whole run, so it is carried as
+      // `normalizedUsage` for the ledger only and never as this message's own
+      // generated-token count.
       ...(normalizedUsage ? { normalizedUsage } : {}),
       ...(cost !== undefined ? { cost } : {}),
       ...(contextWindow === undefined ? {} : { contextWindow }),
@@ -458,10 +454,9 @@ export function mapCurrentClineRecord(
       type: 'message.completed',
       sessionId: context.sessionId,
       messageId: state.messageId,
-      // The run's billed token total. Per-iteration `usage` events already
-      // streamed live readings; this is what the turn's cost and tokens/second
-      // rate are finally accounted from.
-      ...(usage ? { tokens: usage } : {}),
+      // The run's billed token total is the ledger's `normalizedUsage`; the
+      // live per-iteration `usage` events already provided this message's own
+      // generated-token figure, so the run total is never stamped here.
       ...(normalizedUsage ? { normalizedUsage } : {}),
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(contextUsed === undefined ? {} : { contextUsed }),

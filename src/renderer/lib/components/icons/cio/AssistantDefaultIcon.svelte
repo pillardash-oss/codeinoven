@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SVGAttributes } from 'svelte/elements'
-  import AssistantIcon from './AssistantIcon.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
 
   /**
    * The assistant's assistant mark, as a component a list can render directly.

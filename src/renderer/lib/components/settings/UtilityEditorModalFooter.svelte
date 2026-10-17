@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ChevronLeft, Loader2 } from '@lucide/svelte'
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
 
   interface Props {
     setupPreset: string | null
@@ -39,7 +40,7 @@
         data-modal-dismiss
         onclick={onBack}
       >
-        <ChevronLeft size={14} /> Back
+        <CioBack size={14} /> Back
       </button>
     {/if}
   </div>
@@ -60,7 +61,7 @@
         disabled={saving || !canImportPlugin}
         onclick={onImportPlugin}
       >
-        {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+        {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
         Install plugin
       </button>
     {:else}
@@ -79,7 +80,7 @@
           disabled={saving}
           onclick={onRequestDelete}
         >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
           Delete
         </button>
       {/if}
@@ -91,7 +92,7 @@
           data-modal-primary
           disabled={saving}
         >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
           {isNative ? 'Save changes' : 'Save utility'}
         </button>
       {/if}

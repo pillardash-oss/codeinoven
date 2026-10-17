@@ -1,16 +1,14 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    Copy,
-    ExternalLink,
-    Loader2,
-    Play,
-    RefreshCw,
-    Square,
-    Trash2,
-    Upload
-  } from '@lucide/svelte'
+  import { Square } from '@lucide/svelte'
   import type { GatewayStatus } from '$shared/gateway-types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
@@ -67,7 +65,8 @@
       applyStatus(status)
       if (!enabled) actionNotice = 'Gateway disabled'
     } catch (toggleError) {
-      error = toggleError instanceof Error ? toggleError.message : 'The gateway could not be updated.'
+      error =
+        toggleError instanceof Error ? toggleError.message : 'The gateway could not be updated.'
     } finally {
       busyPluginId = null
     }
@@ -107,7 +106,9 @@
       await loadGateways()
     } catch (refreshError) {
       error =
-        refreshError instanceof Error ? refreshError.message : 'The model catalog could not be refreshed.'
+        refreshError instanceof Error
+          ? refreshError.message
+          : 'The model catalog could not be refreshed.'
     } finally {
       busyPluginId = null
     }
@@ -122,7 +123,9 @@
       toast.success('Gateway uninstalled')
     } catch (uninstallError) {
       error =
-        uninstallError instanceof Error ? uninstallError.message : 'The gateway could not be uninstalled.'
+        uninstallError instanceof Error
+          ? uninstallError.message
+          : 'The gateway could not be uninstalled.'
     } finally {
       busyPluginId = null
     }
@@ -136,7 +139,8 @@
       applyStatus(await invoke('gateway:update', pluginId))
       toast.success('Gateway updated')
     } catch (updateError) {
-      error = updateError instanceof Error ? updateError.message : 'The gateway could not be updated.'
+      error =
+        updateError instanceof Error ? updateError.message : 'The gateway could not be updated.'
     } finally {
       busyPluginId = null
     }
@@ -153,7 +157,10 @@
 
   async function openDashboard(url: string): Promise<void> {
     const opened = await gatewayState.openDashboard(url)
-    if (!opened) toast.error('No project context   open a project first, or the dashboard will open externally.')
+    if (!opened)
+      toast.error(
+        'No project context   open a project first, or the dashboard will open externally.'
+      )
   }
 
   function hasUpdate(gateway: GatewayStatus): boolean {
@@ -167,7 +174,10 @@
   function applyStatus(status: GatewayStatus): void {
     const index = gateways.findIndex((gateway) => gateway.pluginId === status.pluginId)
     if (index === -1) gateways = [...gateways, status]
-    else gateways = gateways.map((gateway) => (gateway.pluginId === status.pluginId ? status : gateway))
+    else
+      gateways = gateways.map((gateway) =>
+        gateway.pluginId === status.pluginId ? status : gateway
+      )
   }
 
   onMount(() => {
@@ -201,7 +211,7 @@
 
   {#if loading && gateways.length === 0}
     <div class="flex items-center gap-2 border bg-surface p-4 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" />
+      <CioSpinner size={14} class="animate-spin" />
       Inspecting gateways…
     </div>
   {:else}
@@ -261,7 +271,7 @@
           <div
             class="mt-4 flex items-start gap-2 border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
           >
-            <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+            <CioAttention size={14} class="mt-0.5 shrink-0" />
             <span class="break-all">{gateway.detail}</span>
           </div>
         {/if}
@@ -271,8 +281,14 @@
           <div class="mt-4">
             <DownloadProgress
               percent={progress.percent}
-              label={progress.phase === 'downloading' ? `Downloading ${progress.detail ?? gateway.adapterName}` : 'Installing packages'}
-              detail={progress.phase === 'downloading' && progress.downloadedBytes !== undefined && progress.totalBytes !== undefined ? `${(progress.downloadedBytes / 1_048_576).toFixed(1)} / ${(progress.totalBytes / 1_048_576).toFixed(1)} MB` : undefined}
+              label={progress.phase === 'downloading'
+                ? `Downloading ${progress.detail ?? gateway.adapterName}`
+                : 'Installing packages'}
+              detail={progress.phase === 'downloading' &&
+              progress.downloadedBytes !== undefined &&
+              progress.totalBytes !== undefined
+                ? `${(progress.downloadedBytes / 1_048_576).toFixed(1)} / ${(progress.totalBytes / 1_048_576).toFixed(1)} MB`
+                : undefined}
               indeterminate={progress.percent === undefined}
               ariaLabel={`${gateway.adapterName} install progress`}
             />
@@ -300,9 +316,9 @@
               onclick={() => void startGateway(gateway.pluginId)}
             >
               {#if busy || gateway.lifecycle === 'starting' || gateway.lifecycle === 'installing'}
-                <Loader2 size={14} class="animate-spin" />
+                <CioSpinner size={14} class="animate-spin" />
               {:else}
-                <Play size={14} />
+                <CioPlay size={14} />
               {/if}
               Start
             </button>
@@ -314,7 +330,7 @@
             title="Re-fetch the model catalog from the running gateway"
             onclick={() => void refreshCatalog(gateway.pluginId)}
           >
-            <RefreshCw size={14} class={busy ? 'animate-spin' : ''} />
+            <CioRefresh size={14} class={busy ? 'animate-spin' : ''} />
             Refresh models
           </button>
           {#if gateway.dashboardUrl && gateway.lifecycle === 'ready'}
@@ -324,7 +340,7 @@
               title="Open the {gateway.adapterName} dashboard"
               onclick={() => openDashboard(gateway.dashboardUrl ?? '')}
             >
-              <ExternalLink size={14} />
+              <CioExternalLink size={14} />
               Open dashboard
             </button>
           {/if}
@@ -336,7 +352,7 @@
               title="Copy the provisioned dashboard password"
               onclick={() => void copyDashboardPassword(gateway.pluginId)}
             >
-              <Copy size={14} />
+              <CioCopy size={14} />
               Copy password
             </button>
           {/if}
@@ -348,7 +364,7 @@
               title="Reinstall at version {gateway.availableVersion}"
               onclick={() => (updateTarget = gateway)}
             >
-              <Upload size={14} />
+              <CioUpload size={14} />
               Update to {gateway.availableVersion}
             </button>
           {/if}
@@ -361,7 +377,7 @@
                 title="Uninstall the {gateway.adapterName} gateway and remove its data"
                 onclick={() => (uninstallTarget = gateway)}
               >
-                <Trash2 size={14} />
+                <CioTrash size={14} />
                 Uninstall
               </button>
             {/if}
@@ -369,7 +385,9 @@
         </div>
 
         {#if gateway.dashboardUrl}
-          <p class="mt-3 break-all font-mono text-[0.6875rem] text-dimmed">{gateway.dashboardUrl}</p>
+          <p class="mt-3 break-all font-mono text-[0.6875rem] text-dimmed">
+            {gateway.dashboardUrl}
+          </p>
         {/if}
       </section>
     {/each}
@@ -390,8 +408,8 @@
         the gateway will stop working.
       </p>
       <p class="text-xs text-dimmed">
-        Your gateway configuration data (providers set up inside the dashboard) is also removed.
-        You can reinstall the gateway at any time.
+        Your gateway configuration data (providers set up inside the dashboard) is also removed. You
+        can reinstall the gateway at any time.
       </p>
     </div>
     {#snippet footer()}
@@ -413,9 +431,9 @@
         }}
       >
         {#if busyPluginId === uninstallTarget?.pluginId}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Trash2 size={13} />
+          <CioTrash size={13} />
         {/if}
         Uninstall
       </button>
@@ -460,9 +478,9 @@
         }}
       >
         {#if busyPluginId === updateTarget?.pluginId}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Upload size={13} />
+          <CioUpload size={13} />
         {/if}
         Update
       </button>

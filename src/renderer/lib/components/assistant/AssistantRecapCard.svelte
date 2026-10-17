@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Clock, ListChecks, Plug, Signature, Sparkles } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import { ListChecks, Signature } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -7,6 +11,7 @@
   import CardHead from '../shared/CardHead.svelte'
   import { foldSlide } from '../shared/card-motion'
   import { describeSchedule } from '$shared/types'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { parseKnowledgeSections, type AssistantPlanDraft } from './assistant-view'
 
   /**
@@ -43,6 +48,13 @@
     saving: boolean
     onSave: () => void
     onKeepEditing: () => void
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
+    /** Thread the card belongs to, so its fold state is remembered per thread. */
+    threadId?: string
   }
 
   let {
@@ -54,10 +66,26 @@
     existingConnections = [],
     saving,
     onSave,
-    onKeepEditing
+    onKeepEditing,
+    stackedAbove = false,
+    joinsBelow = false,
+    threadId
   }: Props = $props()
 
-  let folded = $state(false)
+  /** The fold control writes a per-thread preference, so the card stays folded or
+   *  unfolded when the thread is reopened. */
+  let localFolded = $state(false)
+  const foldState = {
+    get folded(): boolean {
+      return threadId === undefined
+        ? localFolded
+        : threadCardFold.isFolded(threadId, 'assistant-recap')
+    },
+    set folded(value: boolean) {
+      if (threadId === undefined) localFolded = value
+      else threadCardFold.setFolded(threadId, 'assistant-recap', value)
+    }
+  }
 
   /**
    * Whether the assistant ends up on a clock. The conversation settles that as
@@ -100,16 +128,21 @@
   )
 </script>
 
-<CardFrame placement="replace" label="Review the assistant the agent drafted">
+<CardFrame
+  placement="replace"
+  label="Review the assistant the agent drafted"
+  {stackedAbove}
+  {joinsBelow}
+>
   <CardHead
     icon={ListChecks}
     title={cardTitle}
     chip={{ text: 'Draft', tone: 'paused' }}
-    bind:folded
+    bind:folded={foldState.folded}
     foldLabel="assistant recap"
   />
 
-  {#if !folded}
+  {#if !foldState.folded}
     <div
       transition:slide={foldSlide()}
       class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
@@ -139,7 +172,7 @@
               class="flex shrink-0 items-center gap-1.5 text-dimmed"
               title="How it behaves and sounds"
             >
-              <Sparkles size={12} strokeWidth={1.8} />
+              <CioSparkles size={12} strokeWidth={1.8} />
               <span>Personality</span>
             </dt>
             <dd class="min-w-0 flex-1 text-foreground">{plan.personality}</dd>
@@ -150,7 +183,7 @@
             class="flex shrink-0 items-center gap-1.5 text-dimmed"
             title="When the assistant runs"
           >
-            <Clock size={12} strokeWidth={1.8} />
+            <CioClock size={12} strokeWidth={1.8} />
             <span>Schedule</span>
           </dt>
           <dd class="min-w-0 flex-1 text-foreground">{scheduleLabel}</dd>
@@ -160,7 +193,7 @@
             class="flex shrink-0 items-center gap-1.5 text-dimmed"
             title="Utilities the assistant needs"
           >
-            <Plug size={12} strokeWidth={1.8} />
+            <CioPlug size={12} strokeWidth={1.8} />
             <span>Connections</span>
           </dt>
           <dd class="min-w-0 flex-1 text-foreground">
@@ -173,7 +206,7 @@
         </div>
         <div class="flex items-start gap-2">
           <dt class="flex shrink-0 items-center gap-1.5 text-dimmed" title="The saved instructions">
-            <Check size={12} strokeWidth={1.8} />
+            <CioCheck size={12} strokeWidth={1.8} />
             <span>Instructions</span>
           </dt>
           <dd class="min-w-0 flex-1 text-foreground">
@@ -184,7 +217,7 @@
     </div>
   {/if}
 
-  {#if !folded}
+  {#if !foldState.folded}
     <CardFoot>
       {#snippet left()}
         <CardButton
@@ -199,7 +232,7 @@
         <CardButton
           label={update ? 'Save changes' : 'Save assistant'}
           title={saveTitle}
-          icon={saving ? undefined : Check}
+          icon={saving ? undefined : CioCheck}
           variant="primary"
           loading={saving}
           disabled={saving}

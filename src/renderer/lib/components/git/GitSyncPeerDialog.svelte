@@ -8,8 +8,10 @@
    * user has to dismiss before they can keep working. What this file reads is
    * the list of ends, which is a fast question about the repository.
    */
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import { Loader2, Search } from '@lucide/svelte'
+
   import { gitState } from '$lib/stores/git.svelte'
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
@@ -241,7 +243,7 @@
 
     {#if loading}
       <div class="flex items-center gap-2 px-1 py-6 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+        <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
         Reading the project's checkouts and branches…
       </div>
     {:else if loadError}
@@ -251,7 +253,7 @@
       </div>
     {:else}
       <div class="relative">
-        <Search
+        <CioSearch
           size={12}
           class="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-dimmed"
           aria-hidden="true"

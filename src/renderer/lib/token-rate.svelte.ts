@@ -2,7 +2,8 @@ import {
   DEFAULT_CHARS_PER_TOKEN,
   GenerationClock,
   generatedTokens,
-  tokensPerSecond
+  tokensPerSecond,
+  type TokenUsageScope
 } from '$shared/usage-rate'
 
 /**
@@ -72,11 +73,18 @@ export class LiveGenerationRate {
     this.#startTicker()
   }
 
-  /** Provider-reported generated tokens for the message so far. */
-  noteReported(messageId: string, tokens: number): void {
+  /** Provider-reported generated tokens for the message so far. `scope` is what
+   *  the count covers, as declared by the owning harness: a per-request count is
+   *  summed across the message's requests, exactly as their windows are. */
+  noteReported(messageId: string, tokens: number, scope: TokenUsageScope = 'message'): void {
     if (!messageId || tokens <= 0) return
     this.#messageId = messageId
-    this.#clock.noteReported(GenerationClock.key(this.#sessionId, messageId), tokens, Date.now())
+    this.#clock.noteReported(
+      GenerationClock.key(this.#sessionId, messageId),
+      tokens,
+      Date.now(),
+      scope
+    )
     this.#startTicker()
   }
 

@@ -9,8 +9,8 @@
    * directions, so dragging a slider in the native window reaches exactly the same
    * handler a drag in the app window reaches.
    */
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
-  import { X } from '@lucide/svelte'
 
   interface Props {
     value?: string
@@ -187,7 +187,7 @@
       title="Close"
       onclick={onclose}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
 
@@ -237,8 +237,7 @@
     {#each PROJECT_COLORS as option (option.value)}
       <button
         type="button"
-        class="h-5 w-5 border-2 transition-transform hover:scale-110 {option.value ===
-        current
+        class="h-5 w-5 border-2 transition-transform hover:scale-110 {option.value === current
           ? 'border-foreground'
           : 'border-transparent'}"
         style="background-color: {option.value}"

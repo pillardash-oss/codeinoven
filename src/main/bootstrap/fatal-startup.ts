@@ -8,6 +8,7 @@ import type { BootstrapState } from './bootstrap-state'
 import { closeSplash } from './splash-window'
 import { startStartupUpdater } from './startup-updater'
 import { signalNativeSplashReady } from '../system/native-splash-handoff'
+import { queueAppRelaunch } from '../system/app-relaunch'
 
 export interface FatalStartupContext {
   state: BootstrapState
@@ -77,7 +78,7 @@ export async function handleFatalStartup(
       if (canAutoUpdate && response === downloadIndex) {
         await shell.openExternal(DOWNLOAD_PAGE)
       } else if (response === restartIndex) {
-        app.relaunch()
+        queueAppRelaunch()
         app.quit()
         return
       } else if (response === quitIndex) {

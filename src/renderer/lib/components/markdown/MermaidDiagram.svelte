@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Code2, Copy, Expand, MessageSquarePlus } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
   import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
   import { PanZoom } from '$lib/pan-zoom.svelte'
@@ -165,10 +169,7 @@
   </div>
 {/snippet}
 
-<div
-  class="overflow-hidden border bg-elevated"
-  {@attach renderDiagram(code.trim(), retryKey)}
->
+<div class="overflow-hidden border bg-elevated" {@attach renderDiagram(code.trim(), retryKey)}>
   <div class="flex h-8 items-center justify-between border-b px-2">
     <span class="px-1 font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">Mermaid</span>
     <div class="flex items-center gap-0.5">
@@ -182,7 +183,7 @@
             onAnnotate(code, event)
           }}
         >
-          <MessageSquarePlus size={13} />
+          <CioMessagePlus size={13} />
         </button>
       {/if}
       <button
@@ -195,7 +196,7 @@
         aria-pressed={sourceVisible}
         onclick={() => (sourceVisible = !sourceVisible)}
       >
-        <Code2 size={13} />
+        <CioCode size={13} />
       </button>
       <button
         class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
@@ -204,9 +205,9 @@
         onclick={() => void copySource()}
       >
         {#if copied}
-          <Check size={13} class="text-success" />
+          <CioCheck size={13} class="text-success" />
         {:else}
-          <Copy size={13} />
+          <CioCopy size={13} />
         {/if}
       </button>
       {#if svg}
@@ -216,7 +217,7 @@
           title="Expand Mermaid diagram"
           onclick={() => (expanded = true)}
         >
-          <Expand size={13} />
+          <CioMaximize size={13} />
         </button>
       {/if}
     </div>

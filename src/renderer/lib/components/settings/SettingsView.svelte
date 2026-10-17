@@ -1,4 +1,15 @@
 <script lang="ts">
+  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -45,23 +56,8 @@
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
-  import {
-    AlertCircle,
-    AlertTriangle,
-    Bell,
-    CheckCircle2,
-    Clock,
-    Download,
-    FolderOpen,
-    Loader2,
-    Monitor,
-    Moon,
-    RefreshCw,
-    Search,
-    Sun,
-    type LucideIcon
-  } from '@lucide/svelte'
-  import { onMount, tick } from 'svelte'
+  import { Moon, Sun } from '@lucide/svelte'
+  import { onMount, tick, type Component } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
@@ -252,7 +248,7 @@
   const tabs: Array<{
     id: SettingsSection
     label: string
-    icon: LucideIcon
+    icon: Component
   }> = SETTINGS_SEARCH_ENTRIES.filter((entry) => !entry.blockId).map((entry) => ({
     id: entry.section,
     label: entry.title,
@@ -276,7 +272,7 @@
   })
 
   const themeOptions = [
-    { id: 'system' as const, label: 'System', icon: Monitor },
+    { id: 'system' as const, label: 'System', icon: CioDisplay },
     { id: 'light' as const, label: 'Light', icon: Sun },
     { id: 'dark' as const, label: 'Dark', icon: Moon }
   ]
@@ -798,7 +794,7 @@
                 </p>
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
-                    <CheckCircle2 size={13} />
+                    <CioCheckCircle size={13} />
                     Notifications are allowed
                   </p>
                 {/if}
@@ -808,7 +804,7 @@
                     role="alert"
                   >
                     <div class="flex items-start gap-2">
-                      <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+                      <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
                       <div>
                         <p class="text-xs font-medium text-warning">Notifications are blocked</p>
                         <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
@@ -846,9 +842,9 @@
                 onclick={() => void testSystemNotification()}
               >
                 {#if notificationTestBusy}
-                  <Loader2 size={13} class="animate-spin" />
+                  <CioSpinner size={13} class="animate-spin" />
                 {:else}
-                  <Bell size={13} />
+                  <CioNotifications size={13} />
                 {/if}
                 Test notification
               </button>
@@ -1294,7 +1290,7 @@
                   disabled={!settingsReady || cioCleanupStore.state.running}
                   onclick={() => void cioCleanupStore.runNow()}
                 >
-                  <RefreshCw
+                  <CioRefresh
                     size={13}
                     class={cioCleanupStore.state.running ? 'animate-spin' : ''}
                   />
@@ -1548,12 +1544,12 @@
           <!-- Update status -->
           {#if updaterState.status.state === 'checking'}
             <div class="mb-3 flex items-center gap-2 text-xs text-muted">
-              <Loader2 size={13} class="animate-spin" />
+              <CioSpinner size={13} class="animate-spin" />
               Checking for updates…
             </div>
           {:else if updaterState.status.state === 'available'}
             <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <Download size={13} />
+              <CioDownload size={13} />
               <span>
                 Update <strong>{updaterState.status.availableVersion}</strong> available
               </span>
@@ -1571,20 +1567,20 @@
             </div>
           {:else if updaterState.status.state === 'downloaded'}
             <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <CheckCircle2 size={13} />
+              <CioCheckCircle size={13} />
               <span>
                 Update <strong>{updaterState.status.availableVersion}</strong> ready to install
               </span>
             </div>
             {#if updaterState.status.blockedReason}
               <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
-                <AlertCircle size={13} class="shrink-0" />
+                <CioAlertCircle size={13} class="shrink-0" />
                 <span>{updaterState.status.blockedReason}</span>
               </div>
             {/if}
           {:else if updaterState.status.state === 'waiting'}
             <div class="mb-3 flex items-center gap-2 text-xs text-accent">
-              <Clock size={13} class="shrink-0" />
+              <CioClock size={13} class="shrink-0" />
               <span>
                 Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
                 1
@@ -1602,12 +1598,12 @@
             </div>
           {:else if updaterState.status.state === 'error'}
             <div class="mb-3 flex items-center gap-2 text-xs text-danger">
-              <AlertCircle size={13} />
+              <CioAlertCircle size={13} />
               <span>{updaterState.status.errorMessage ?? 'Update check failed'}</span>
             </div>
           {:else if updaterState.status.state === 'idle' && updaterState.status.canAutoUpdate}
             <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
-              <CheckCircle2 size={13} />
+              <CioCheckCircle size={13} />
               <span>{APP_NAME} is up to date</span>
             </div>
           {/if}
@@ -1678,7 +1674,7 @@
                   title="Check for updates now"
                   onclick={() => void updaterState.checkForUpdates()}
                 >
-                  <RefreshCw
+                  <CioRefresh
                     size={13}
                     class={updaterState.status.state === 'checking' ? 'animate-spin' : ''}
                   />
@@ -1691,7 +1687,7 @@
                     title="Download update"
                     onclick={() => void updaterState.downloadUpdate()}
                   >
-                    <Download size={13} />
+                    <CioDownload size={13} />
                     Download
                   </button>
                 {/if}
@@ -1702,7 +1698,7 @@
                     title="Restart and install update"
                     onclick={() => void updaterState.installUpdate()}
                   >
-                    <RefreshCw size={13} />
+                    <CioRefresh size={13} />
                     Restart &amp; install
                   </button>
                 {/if}
@@ -1736,7 +1732,7 @@
                 title="Open the data directory in the file manager"
                 onclick={() => void openDataDirectory()}
               >
-                <FolderOpen size={13} />
+                <CioFolderOpen size={13} />
                 Open in file manager
               </button>
             </div>
@@ -1762,9 +1758,9 @@
               onclick={() => void exportDiagnostics()}
             >
               {#if diagnosticsBusy}
-                <Loader2 size={13} class="animate-spin" />
+                <CioSpinner size={13} class="animate-spin" />
               {:else}
-                <Download size={13} />
+                <CioDownload size={13} />
               {/if}
               Export
             </button>
@@ -1787,7 +1783,7 @@
     title="Search settings"
     placeholder="Search settings pages and sections…"
     emptyLabel="No matching settings"
-    headerIcon={Search}
+    headerIcon={CioSearch}
     onSelect={handleSettingsSearch}
     onClose={() => (settingsUiState.searchOpen = false)}
   />
@@ -1848,9 +1844,9 @@
         onclick={() => void setChannel('nightly')}
       >
         {#if channelBusy}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Download size={13} />
+          <CioDownload size={13} />
         {/if}
         Enable nightly builds
       </button>

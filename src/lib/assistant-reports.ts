@@ -1,3 +1,4 @@
+import { assistantResultText } from './assistant-result'
 import type { AssistantPriority, Thread, ThreadStatus } from './types'
 import { isAssistantSetupThread, isAssistantThread } from './types'
 import { assistantPriorityLabel } from './assistant-reporting'
@@ -72,7 +73,7 @@ export interface AssistantReportDocumentInput {
   taskTitle: string
   /** The assistant's name, when the task is grouped. */
   assistantName?: string
-  /** The turn's final answer, verbatim. */
+  /** The turn's raw final answer; delivery boundaries are resolved below. */
   report: string
   /** How the turn settled. */
   status: ThreadStatus
@@ -84,7 +85,7 @@ export interface AssistantReportDocumentInput {
 
 /**
  * The full Markdown document for one report: a small metadata header a reader
- * can scan in the files panel, then the run's final answer verbatim. The header
+ * can scan in the files panel, then the same result delivered in the run thread. The header
  * is plain Markdown (no front matter), so the file reads as one document in the
  * app's own preview.
  */
@@ -102,5 +103,14 @@ export function buildAssistantReportDocument(input: AssistantReportDocumentInput
   }
   if (input.priority) meta.push(`- Agreed urgency: ${assistantPriorityLabel(input.priority)}`)
 
-  return [`# Report: ${heading}`, '', ...meta, '', '---', '', input.report.trim(), ''].join('\n')
+  return [
+    `# Report: ${heading}`,
+    '',
+    ...meta,
+    '',
+    '---',
+    '',
+    assistantResultText(input.report),
+    ''
+  ].join('\n')
 }

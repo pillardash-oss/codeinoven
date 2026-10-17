@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CIO icons · round nine</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .rail-strip { display: inline-flex; flex-direction: column; gap: 0.125rem; padding: 0.375rem; background: var(--color-surface); border: 1px solid var(--color-border); }
+      .rail-strip .it { position: relative; width: 2rem; height: 2rem; display: flex; align-items: center; justify-content: center; color: var(--color-muted); }
+      .rail-strip .it[data-current] { background: var(--color-elevated); color: var(--color-foreground); }
+      .rail-strip .it[data-current]::after { content: ''; position: absolute; right: 0; top: 0.375rem; bottom: 0.375rem; width: 0.125rem; background: var(--color-primary); }
+      .rail-strip .it svg { display: block; }
+      .header-strip { display: flex; align-items: center; gap: 0.25rem; padding: 0.375rem 0.5rem; background: var(--color-surface); border: 1px solid var(--color-border); }
+      .header-strip .sep { width: 1px; height: 1.125rem; background: var(--color-border); margin: 0 0.25rem; }
+      .header-strip .grow { flex: 1; }
+      .header-strip .centre { display: flex; align-items: center; gap: 0.375rem; color: var(--color-dimmed); font-size: 0.6875rem; }
+      .header-strip .it { width: 1.75rem; height: 1.75rem; display: flex; align-items: center; justify-content: center; color: var(--color-muted); }
+      .header-strip .it svg { display: block; }
+      .sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.5rem; margin-top: 1rem; }
+      .card { display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.75rem; border: 1px solid var(--color-border); background: var(--color-surface); }
+      .card .art { display: flex; align-items: flex-end; gap: 0.5rem; color: var(--color-foreground); flex: none; }
+      .card .who { min-width: 0; }
+      .card .who b { display: block; font-size: 0.6875rem; font-weight: 600; color: var(--color-foreground); }
+      .card .who span { display: block; font-size: 0.5625rem; color: var(--color-dimmed); }
+      .ladder { display: flex; align-items: flex-end; gap: 1.5rem; flex-wrap: wrap; margin-top: 0.5rem; color: var(--color-foreground); }
+      .ladder figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
+      .ladder figcaption { font-size: 0.5625rem; color: var(--color-dimmed); }
+      .rules { margin: 1rem 0 0; padding-left: 1.125rem; font-size: 0.75rem; line-height: 1.75; color: var(--color-dimmed); }
+      .rules li + li { margin-top: 0.375rem; }
+      .rules b { color: var(--color-muted); font-weight: 500; }
+      .ledger td.num { font-variant-numeric: tabular-nums; text-align: right; }
+      .ledger td.mono { font-family: var(--font-mono); font-size: 0.625rem; color: var(--color-dimmed); }
+      .two { display: grid; grid-template-columns: auto 1fr; gap: 1.75rem; align-items: start; margin-top: 1rem; }
+      @media (max-width: 56rem) { .two { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="masthead">
+        <span class="eyebrow">CodeInOven · brand work · round nine</span>
+        <h1>CIO icons</h1>
+        <p class="lede">
+          The icon family has a name and a standard. Every rail, dock and header glyph in the
+          app is rebuilt to that standard here, from the Lucide source it was using, and the
+          page shows each one at the size it actually appears.
+        </p>
+      </div>
+
+      <section class="section" id="family">
+        <div class="section-head">
+          <h2>1 · The standard</h2>
+          <span class="note">one box, one stroke, from round three's five rules and round four's measurement</span>
+        </div>
+        <ul class="rules">
+          <li><b>Box, 22.6 units of ink.</b> Lucide draws inside 22.0. Round four tested targets from 22.0 to 23.1 and found 22.6 is the largest that keeps solid ink off the outermost row, so it is the standard rather than a preference.</li>
+          <li><b>Stroke, 1.9 units on every glyph.</b> Under Lucide's 2, so the chrome reads as the lighter layer rather than a heavier one.</li>
+          <li><b>Corners, 1.6 to 2 units</b>, matching the assistant mark's language.</li>
+          <li><b>Floor, 1.5 units.</b> Nothing drawn thinner or closer than that, because at 16px one unit under 1.5 stops surviving the rasterizer.</li>
+          <li><b>Fit, every glyph fills the box.</b> Each glyph is scaled about its own ink centre, so the rails stop looking uneven. This is pass F's construction applied to the whole inventory instead of the left rail alone.</li>
+        </ul>
+        <p class="lede">
+          The construction is pass F's: the source geometry sits in a group scaled to the box,
+          and the group carries its own stroke-width of 1.9 divided by that scale, so the
+          transform scales the drawing without scaling the stroke. That is what holds one
+          stroke weight across glyphs of different sizes.
+        </p>
+        <div class="ladder">
+          <figure>
+            <svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg>
+            <figcaption>16 rail</figcaption>
+          </figure>
+          <figure>
+            <svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg>
+            <figcaption>24</figcaption>
+          </figure>
+          <figure>
+            <svg width="40" height="40" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg>
+            <figcaption>40</figcaption>
+          </figure>
+          <figure>
+            <svg width="96" height="96" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg>
+            <figcaption>96 the box, visible</figcaption>
+          </figure>
+          <figure>
+            <svg width="128" height="128" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser"></use></svg>
+            <figcaption>the browser mark, settled</figcaption>
+          </figure>
+          <figure>
+            <svg width="128" height="128" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-thread-browser"></use></svg>
+            <figcaption>the thread mark, settled</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section" id="left">
+        <div class="section-head">
+          <h2>2 · The left rail</h2>
+          <span class="note">7 items at 16px, the app's own assistant mark left alone</span>
+        </div>
+        <div class="two">
+          <div class="rail-strip">
+            <span class="it" data-current title="projects"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg></span>
+            <span class="it" title="threads"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-threads"></use></svg></span>
+            <span class="it" title="scoped"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-scoped"></use></svg></span>
+            <span class="it" title="board"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-board"></use></svg></span>
+            <span class="it" title="chat"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-chat"></use></svg></span>
+            <span class="it" title="assistant"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)">
+          <rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" />
+          <circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" />
+        </g></svg></span>
+            <span class="it" title="browser"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-browser"></use></svg></span>
+          </div>
+          <div>
+            <p class="lede" style="margin-top: 0">
+              The view switcher from <code>src/renderer/lib/components/layout/AppHeaderNavigationController.svelte.ts:236</code>.
+              The browser slot now carries the mark you settled; the assistant keeps the
+              app's own drawing, which is a different language on purpose.
+            </p>
+            <div class="ladder">
+  <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg><figcaption>projects</figcaption></figure>
+              <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-threads"></use></svg><figcaption>threads</figcaption></figure>
+              <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-scoped"></use></svg><figcaption>scoped</figcaption></figure>
+              <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-board"></use></svg><figcaption>board</figcaption></figure>
+              <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-chat"></use></svg><figcaption>chat</figcaption></figure>
+              <figure><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)">
+          <rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" />
+          <circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" />
+          <circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" />
+        </g></svg><figcaption>assistant</figcaption></figure>
+              <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-browser"></use></svg><figcaption>browser</figcaption></figure>            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="header">
+        <div class="section-head">
+          <h2>3 · The app header</h2>
+          <span class="note">the clusters from AppHeader.svelte, at the sizes they are drawn</span>
+        </div>
+        <div class="header-strip">
+<span class="it" title="Back"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back"></use></svg></span>
+          <span class="it" title="Forward"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-forward"></use></svg></span>
+          <span class="sep"></span>
+          <span class="it" title="Search"><svg width="15" height="15" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-search"></use></svg></span>
+          <span class="grow"></span>
+          <span class="centre"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-browser"></use></svg><span>docs.codeinoven.app</span></span>
+          <span class="grow"></span>
+          <span class="it" title="Tools"><svg width="15" height="15" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tools"></use></svg></span>
+          <span class="it" title="Notes"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notes"></use></svg></span>
+          <span class="it" title="Notifications"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notifications"></use></svg></span>
+        </div>
+        <div class="ladder">
+<figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back"></use></svg><figcaption>back</figcaption></figure>
+          <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-forward"></use></svg><figcaption>forward</figcaption></figure>
+          <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-search"></use></svg><figcaption>search</figcaption></figure>
+          <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tools"></use></svg><figcaption>tools</figcaption></figure>
+          <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notes"></use></svg><figcaption>notes</figcaption></figure>
+          <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notifications"></use></svg><figcaption>notifications</figcaption></figure>        </div>
+        <div class="section-head" style="margin-top: 1.75rem">
+          <h2 style="font-size: 0.8125rem">The chevrons, and the alternative</h2>
+          <span class="note">an indicator is a direction, not a picture</span>
+        </div>
+        <p class="lede">
+          Back and forward are the only two glyphs whose source geometry is small enough that
+          filling the box asks for a 1.72x scale. At that scale a chevron measures 22.6 units
+          of ink while the search glyph beside it measures 22.6, so the direction arrows read
+          as much larger controls than everything around them. A chevron keeps Lucide's own
+          relative size instead, held at the family scale, which is 14.3 units of ink. Both are
+          below, so the call is yours to overrule.
+        </p>
+        <div class="ladder">
+          <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back"></use></svg><figcaption>back, shipped, 5.4 x 9.6px</figcaption></figure>
+          <figure><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back-filled"></use></svg><figcaption>back, filling the box, 7.3 x 13.3px</figcaption></figure>
+          <figure><svg width="15" height="15" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-search"></use></svg><figcaption>search, 15px, for scale</figcaption></figure>
+          <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back"></use></svg><figcaption>shipped at 32</figcaption></figure>
+          <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back-filled"></use></svg><figcaption>box filled at 32</figcaption></figure>
+        </div>
+      </section>
+
+      <section class="section" id="dock">
+        <div class="section-head">
+          <h2>4 · The right dock</h2>
+          <span class="note">the workspace dock at 16px, from Workspace.svelte</span>
+        </div>
+        <div class="two">
+          <div class="rail-strip">
+            <span class="it" title="how-to"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)">
+          <rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" />
+          <path d="M8.4 9.6h7.2" />
+          <path d="M8.4 12.6h7.2" />
+          <path d="M8.4 15.6h4" />
+        </g></svg></span>
+            <span class="it" title="terminal"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-terminal"></use></svg></span>
+            <span class="it" data-current title="files"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-files"></use></svg></span>
+            <span class="it" title="diff"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-diff"></use></svg></span>
+            <span class="it" title="actions"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-actions"></use></svg></span>
+            <span class="it" title="memory"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-memory"></use></svg></span>
+            <span class="it" title="cloud"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-cloud"></use></svg></span>
+            <span class="it" title="debugger"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-debugger"></use></svg></span>
+            <span class="it" title="temporary-chat"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-temporary-chat"></use></svg></span>
+            <span class="it" title="subagent"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-subagent"></use></svg></span>
+            <span class="it" title="attention"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-attention"></use></svg></span>
+            <span class="it" title="note"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-note"></use></svg></span>
+            <span class="it" title="thread-browser"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-thread-browser"></use></svg></span>
+          </div>
+          <div>
+            <div class="ladder">
+<figure><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)">
+          <rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" />
+          <path d="M8.4 9.6h7.2" />
+          <path d="M8.4 12.6h7.2" />
+          <path d="M8.4 15.6h4" />
+        </g></svg><figcaption>how-to</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-terminal"></use></svg><figcaption>terminal</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-files"></use></svg><figcaption>files</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-diff"></use></svg><figcaption>diff</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-actions"></use></svg><figcaption>actions</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-memory"></use></svg><figcaption>memory</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-cloud"></use></svg><figcaption>cloud</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-debugger"></use></svg><figcaption>debugger</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-temporary-chat"></use></svg><figcaption>temporary-chat</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-subagent"></use></svg><figcaption>subagent</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-attention"></use></svg><figcaption>attention</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-note"></use></svg><figcaption>note</figcaption></figure>
+              <figure><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-thread-browser"></use></svg><figcaption>thread-browser</figcaption></figure>            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="tabs">
+        <div class="section-head">
+          <h2>5 · The context sidebar tabs</h2>
+          <span class="note">12px, the smallest rail slot in the app</span>
+        </div>
+        <div class="sheet">
+<div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-files"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-files"></use></svg></span><span class="who"><b>files</b><span>12 and 24</span></span></div>
+          <div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-info"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-info"></use></svg></span><span class="who"><b>info</b><span>12 and 24</span></span></div>
+          <div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-git"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-git"></use></svg></span><span class="who"><b>git</b><span>12 and 24</span></span></div>
+          <div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-boxes"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-boxes"></use></svg></span><span class="who"><b>boxes</b><span>12 and 24</span></span></div>
+          <div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-extensions"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-extensions"></use></svg></span><span class="who"><b>extensions</b><span>12 and 24</span></span></div>
+          <div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-utilities"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-utilities"></use></svg></span><span class="who"><b>utilities</b><span>12 and 24</span></span></div>
+          <div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-tasks"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-tasks"></use></svg></span><span class="who"><b>tasks</b><span>12 and 24</span></span></div>
+          <div class="card"><span class="art"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-settings"></use></svg><svg width="24" height="24" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-settings"></use></svg></span><span class="who"><b>settings</b><span>12 and 24</span></span></div>        </div>
+      </section>
+
+      <section class="section" id="sheet">
+        <div class="section-head">
+          <h2>6 · The whole set</h2>
+          <span class="note">each glyph at 16 and at 32, vector</span>
+        </div>
+        <div class="sheet">
+<div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-projects"></use></svg></span><span class="who"><b>Project</b><span>left rail · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-threads"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-threads"></use></svg></span><span class="who"><b>Thread</b><span>left rail · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-scoped"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-scoped"></use></svg></span><span class="who"><b>Scoped</b><span>left rail · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-board"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-board"></use></svg></span><span class="who"><b>Board</b><span>left rail · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-chat"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-chat"></use></svg></span><span class="who"><b>Chat</b><span>left rail · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-back"></use></svg></span><span class="who"><b>Back</b><span>header · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-forward"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-forward"></use></svg></span><span class="who"><b>Forward</b><span>header · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-search"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-search"></use></svg></span><span class="who"><b>Search</b><span>header · 15px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tools"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tools"></use></svg></span><span class="who"><b>Tools</b><span>header · 15px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notes"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notes"></use></svg></span><span class="who"><b>Notes</b><span>header · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notifications"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-notifications"></use></svg></span><span class="who"><b>Notifications</b><span>header · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-terminal"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-terminal"></use></svg></span><span class="who"><b>Oven and terminal</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-files"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-files"></use></svg></span><span class="who"><b>Workspace files</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-diff"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-diff"></use></svg></span><span class="who"><b>Changes</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-actions"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-actions"></use></svg></span><span class="who"><b>Actions</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-memory"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-memory"></use></svg></span><span class="who"><b>Memory</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-cloud"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-cloud"></use></svg></span><span class="who"><b>Cloud deployments</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-debugger"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-debugger"></use></svg></span><span class="who"><b>Debugger</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-temporary-chat"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-temporary-chat"></use></svg></span><span class="who"><b>Temporary chat</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-subagent"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-subagent"></use></svg></span><span class="who"><b>Subagent</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-attention"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-attention"></use></svg></span><span class="who"><b>Decisions made for you</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-note"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-note"></use></svg></span><span class="who"><b>Thread note</b><span>right dock · 16px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-files"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-files"></use></svg></span><span class="who"><b>Files tab</b><span>context tabs · 12px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-info"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-info"></use></svg></span><span class="who"><b>Info tab</b><span>context tabs · 12px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-git"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-git"></use></svg></span><span class="who"><b>Git tab</b><span>context tabs · 12px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-boxes"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-boxes"></use></svg></span><span class="who"><b>Containers tab</b><span>context tabs · 12px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-extensions"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-extensions"></use></svg></span><span class="who"><b>Extensions tab</b><span>context tabs · 12px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-utilities"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-utilities"></use></svg></span><span class="who"><b>Utilities</b><span>context tabs · 12px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-tasks"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-tasks"></use></svg></span><span class="who"><b>Task manager</b><span>context tabs · 12px</span></span></div>
+          <div class="card"><span class="art"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-settings"></use></svg><svg width="32" height="32" viewBox="0 0 24 24"><use href="./cio-icons.svg#cio-tab-settings"></use></svg></span><span class="who"><b>Settings</b><span>context tabs · 12px</span></span></div>        </div>
+      </section>
+
+      <section class="section" id="inventory">
+        <div class="section-head">
+          <h2>7 · What was rebuilt</h2>
+          <span class="note">every glyph, the surface that draws it and the site that names it</span>
+        </div>
+        <table class="ledger">
+          <thead>
+            <tr><th>Glyph</th><th>Surface</th><th>Where it is drawn</th><th class="num">Size</th><th>Source</th></tr>
+          </thead>
+          <tbody>
+<tr><td>Project</td><td>left rail</td><td class="mono">AppHeaderNavigationController.svelte.ts:240</td><td class="num">16px</td><td class="mono">folder-kanban</td></tr>
+            <tr><td>Thread</td><td>left rail</td><td class="mono">AppHeaderNavigationController.svelte.ts:250</td><td class="num">16px</td><td class="mono">timeline</td></tr>
+            <tr><td>Scoped</td><td>left rail</td><td class="mono">AppHeaderNavigationController.svelte.ts:257</td><td class="num">16px</td><td class="mono">microscope</td></tr>
+            <tr><td>Board</td><td>left rail</td><td class="mono">AppHeaderNavigationController.svelte.ts:264</td><td class="num">16px</td><td class="mono">kanban</td></tr>
+            <tr><td>Chat</td><td>left rail</td><td class="mono">content-view-icons.ts:21</td><td class="num">16px</td><td class="mono">messages-circle</td></tr>
+            <tr><td>Assistant</td><td>left rail</td><td class="mono">content-view-icons.ts:22</td><td class="num">16px</td><td class="mono">the app own mark, untouched</td></tr>
+            <tr><td>Browser</td><td>left rail</td><td class="mono">AppHeaderNavigationController.svelte.ts:285</td><td class="num">16px</td><td class="mono">CIO mark, settled in round eight</td></tr>
+            <tr><td>Back</td><td>header</td><td class="mono">AppHeader.svelte:268</td><td class="num">16px</td><td class="mono">chevron-left</td></tr>
+            <tr><td>Forward</td><td>header</td><td class="mono">AppHeader.svelte:277</td><td class="num">16px</td><td class="mono">chevron-right</td></tr>
+            <tr><td>Search</td><td>header</td><td class="mono">AppHeader.svelte:292</td><td class="num">15px</td><td class="mono">search</td></tr>
+            <tr><td>Tools</td><td>header</td><td class="mono">AppHeader.svelte:365</td><td class="num">15px</td><td class="mono">toolbox</td></tr>
+            <tr><td>Notes</td><td>header</td><td class="mono">AppHeader.svelte:406</td><td class="num">16px</td><td class="mono">sticky-notes</td></tr>
+            <tr><td>Notifications</td><td>header</td><td class="mono">AppHeader.svelte:418</td><td class="num">16px</td><td class="mono">bell</td></tr>
+            <tr><td>Oven and terminal</td><td>right dock</td><td class="mono">Workspace.svelte:1216</td><td class="num">16px</td><td class="mono">square-terminal</td></tr>
+            <tr><td>Workspace files</td><td>right dock</td><td class="mono">Workspace.svelte:1277</td><td class="num">16px</td><td class="mono">folder-tree</td></tr>
+            <tr><td>Changes</td><td>right dock</td><td class="mono">Workspace.svelte:1285</td><td class="num">16px</td><td class="mono">file-diff</td></tr>
+            <tr><td>Actions</td><td>right dock</td><td class="mono">Workspace.svelte:1197</td><td class="num">16px</td><td class="mono">monitor-cog</td></tr>
+            <tr><td>Memory</td><td>right dock</td><td class="mono">Workspace.svelte:1322</td><td class="num">16px</td><td class="mono">brain-circuit</td></tr>
+            <tr><td>Cloud deployments</td><td>right dock</td><td class="mono">Workspace.svelte:1331</td><td class="num">16px</td><td class="mono">cloud</td></tr>
+            <tr><td>Debugger</td><td>right dock</td><td class="mono">Workspace.svelte:1350</td><td class="num">16px</td><td class="mono">bug</td></tr>
+            <tr><td>Temporary chat</td><td>right dock</td><td class="mono">Workspace.svelte:1373</td><td class="num">16px</td><td class="mono">message-circle-dashed</td></tr>
+            <tr><td>Subagent</td><td>right dock</td><td class="mono">Workspace.svelte:1453</td><td class="num">16px</td><td class="mono">bot</td></tr>
+            <tr><td>Decisions made for you</td><td>right dock</td><td class="mono">Workspace.svelte:1458</td><td class="num">16px</td><td class="mono">triangle-alert</td></tr>
+            <tr><td>Thread note</td><td>right dock</td><td class="mono">feature-registry.ts:23</td><td class="num">16px</td><td class="mono">feather</td></tr>
+            <tr><td>Browser in a thread</td><td>right dock</td><td class="mono">Workspace.svelte:1431</td><td class="num">16px</td><td class="mono">CIO mark, settled in round eight</td></tr>
+            <tr><td>How to (assistant knowledge)</td><td>right dock</td><td class="mono">Workspace.svelte:1199</td><td class="num">16px</td><td class="mono">the app own mark, untouched</td></tr>
+            <tr><td>Files tab</td><td>context tabs</td><td class="mono">ContextSidebar.svelte:440</td><td class="num">12px</td><td class="mono">files</td></tr>
+            <tr><td>Info tab</td><td>context tabs</td><td class="mono">ContextSidebar.svelte:462</td><td class="num">12px</td><td class="mono">info</td></tr>
+            <tr><td>Git tab</td><td>context tabs</td><td class="mono">ContextSidebar.svelte:485</td><td class="num">12px</td><td class="mono">git-branch</td></tr>
+            <tr><td>Containers tab</td><td>context tabs</td><td class="mono">ContextSidebar.svelte:503</td><td class="num">12px</td><td class="mono">boxes</td></tr>
+            <tr><td>Extensions tab</td><td>context tabs</td><td class="mono">ContextSidebar.svelte:505</td><td class="num">12px</td><td class="mono">puzzle</td></tr>
+            <tr><td>Utilities</td><td>context tabs</td><td class="mono">feature-registry.ts:22</td><td class="num">12px</td><td class="mono">tool-case</td></tr>
+            <tr><td>Task manager</td><td>context tabs</td><td class="mono">feature-registry.ts:26</td><td class="num">12px</td><td class="mono">cpu</td></tr>
+            <tr><td>Settings</td><td>context tabs</td><td class="mono">feature-registry.ts:27</td><td class="num">12px</td><td class="mono">settings</td></tr>          </tbody>
+        </table>
+      </section>
+
+      <section class="section" id="open">
+        <div class="section-head">
+          <h2>8 · Still open</h2>
+        </div>
+        <ul class="rules">
+          <li><b>The solid anchor.</b> Round three's fifth rule gives every glyph one solid mass so it reads at 16px. The left rail's seven already carry one, drawn by hand in pass E. The other glyphs keep whatever solid accents Lucide gave them, and the rest are drawn as outlines, so an anchoring pass over the remaining glyphs is still owed.</li>
+          <li><b>The chevrons.</b> Back and forward take Lucide's own relative size rather than filling the box, because at 1.72x they read as larger controls than the glyphs beside them. Both drawings are in section 3, so the exception is one number in <code>inventory.ts</code> if you want it gone.</li>
+          <li><b>The update button.</b> One control cycling six states, still waiting on what that control is rather than how it is drawn.</li>
+        </ul>
+        <p class="footnote">
+          Earlier rounds: <a href="./index.html">one</a>, <a href="./round-two.html">two</a>,
+          <a href="./round-three.html">three</a>, <a href="./round-four.html">four</a>,
+          <a href="./round-five.html">five</a>, <a href="./round-six.html">six</a>,
+          <a href="./round-seven.html">seven</a>, <a href="./round-eight.html">eight</a>.
+          The set is generated by <code>.cio/tmp/cio-icons/build.ts</code> from the sites
+          recorded in <code>.cio/tmp/cio-icons/inventory.ts</code>, so a glyph cannot drift
+          from the standard without the build showing it.
+        </p>
+      </section>
+    </div>
+  </body>
+</html>

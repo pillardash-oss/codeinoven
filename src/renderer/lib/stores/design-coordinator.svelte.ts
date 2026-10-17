@@ -70,8 +70,8 @@ class DesignCoordinatorState {
    *
    * Such a board has no session behind it, so a refresh that finds the thread
    * inactive must leave it alone rather than withdraw the very panel the user
-   * just opened. A session that appears later takes the board over and the marker
-   * is dropped.
+   * just opened. Activity refreshes preserve that explicit choice even when a
+   * session is active.
    */
   private readonly projectBoards = new Map<string, AuthoredWorkKind>()
 
@@ -87,7 +87,7 @@ class DesignCoordinatorState {
    * opens the coordinator board for the kind the user picked even though the
    * thread is not in that session. The board is marked as the rail's, which is
    * what stops the next refresh from withdrawing a panel with no session behind
-   * it. A session that later starts on the thread takes the board over.
+   * it. Activity refreshes also preserve the kind the user explicitly chose.
    */
   openBoard(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
     const key = threadKey(projectId, threadId)
@@ -175,23 +175,26 @@ class DesignCoordinatorState {
       // the other's panel if they ever do.
       const existing = coordinatorDockState.forThread(projectId, threadId)
       const ownsRow = existing === null || existing.panel.component === 'design'
+      const inherited =
+        existing?.panel.component === 'design' && existing.panel.props.threadId !== threadId
+      const hasOwnWork =
+        state.current !== null || state.items.some((item) => item.creatorThreadId === threadId)
+      if (inherited && !hasOwnWork && !this.projectBoards.has(key)) return
       if (!state.active) {
-        if (ownsRow && existing !== null && !this.projectBoards.has(key)) {
+        if (ownsRow && existing !== null && !this.projectBoards.has(key) && !inherited) {
           coordinatorDockState.withdraw(projectId, threadId, ['design'])
         }
         return
       }
-      if (!ownsRow) return
-      // A session has this thread now, so it owns the board: the rail's own
-      // marker is dropped and the board is registered for the session's kind.
-      this.projectBoards.delete(key)
+      if (!ownsRow || this.projectBoards.has(key)) return
+      // Explicit rail choices survive activity refreshes on this thread.
       const label = COORDINATOR_LABEL_BY_KIND[state.kind]
       coordinatorDockState.register({
         projectId,
         threadId,
         label,
         icon: COORDINATOR_ICON_BY_KIND[state.kind],
-        panel: { component: 'design', props: { projectId, threadId } }
+        panel: { component: 'design', props: { projectId, threadId, kind: state.kind } }
       })
       // Docks itself the first time a session appears, unless the user closed it
       // before; later refreshes are no-ops because the tab exists.

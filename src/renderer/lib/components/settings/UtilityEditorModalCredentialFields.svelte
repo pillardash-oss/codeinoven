@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { KeyRound, Plus, Trash2 } from '@lucide/svelte'
+  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import type { UtilityDefinition, UtilityCredentialMetadata } from '$shared/types'
   import type { UtilityDraft } from './utility-editor-modal-helpers'
 
@@ -75,7 +77,7 @@
           title={selected ? `Editing ${credential.label}` : `Set the value for ${credential.label}`}
           onclick={() => onSelectCredential(credential)}
         >
-          <KeyRound size={13} />
+          <CioKey size={13} />
         </button>
         <button
           class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
@@ -84,7 +86,7 @@
           title="Remove {credential.label}"
           onclick={() => onRemoveCredential(draft.id ?? '', credential.id)}
         >
-          <Trash2 size={13} />
+          <CioTrash size={13} />
         </button>
       </div>
     </div>
@@ -104,7 +106,7 @@
         title="Add another secret to this capability"
         onclick={onAddCredential}
       >
-        <Plus size={12} />
+        <CioPlus size={12} />
         Add secret
       </button>
     {/if}

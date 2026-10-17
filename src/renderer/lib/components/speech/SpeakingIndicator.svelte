@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Volume2 } from '@lucide/svelte'
+  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
 
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
@@ -21,7 +21,7 @@
   aria-label={label}
   title={label}
 >
-  <Volume2 {size} strokeWidth={2.5} class="text-info" aria-hidden="true" />
+  <CioVolume {size} strokeWidth={2.5} class="text-info" aria-hidden="true" />
 </span>
 
 <style>

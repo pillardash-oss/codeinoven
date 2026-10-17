@@ -8,7 +8,9 @@ import type { DesignCapabilityExecutor } from '../utilities/utility-orchestratio
 import type { DirectoryPreviewService } from './directory-preview-service'
 import { readDesignContracts, writeDesignContract } from '../design/design-contract-service'
 import { runDesignReview } from '../design/design-review-service'
+import { executeDesignMotion } from '../design/design-motion-service'
 import { extractDesignReference } from '../design/design-reference-service'
+import { DesignRepo } from '../database/repositories/design-repo'
 
 /**
  * What the design capability needs from the app.
@@ -58,6 +60,8 @@ export function createDesignPreviewExecutor(
   options: DesignPreviewExecutorOptions
 ): DesignCapabilityExecutor {
   return async (operation, input, context) => {
+    if (['motion-read', 'motion-preview', 'motion-apply', 'motion-inspect'].includes(operation))
+      return executeDesignMotion(options, operation, input, context)
     if (operation === 'lint' || operation === 'critique')
       return runDesignReview(options.database, context, input, operation === 'critique')
     if (operation === 'extract-reference') return extractDesignReference(input['url'])
@@ -82,9 +86,15 @@ export function createDesignPreviewExecutor(
         projectPath: project.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory: input['directory'],
+        directory:
+          typeof input['directory'] === 'string'
+            ? new DesignRepo(options.database).resolveDirectory(
+                context.projectId,
+                input['directory']
+              )
+            : input['directory'],
         entry: input['entry'],
-        defaultRoot: currentWorkRoot('design'),
+        defaultRoot: currentWorkRoot('design', context.projectId),
         attention,
         reveal: false,
         // The agent's own preview moves through the thread's one tab: it is the

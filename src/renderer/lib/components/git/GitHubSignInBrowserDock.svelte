@@ -1,14 +1,12 @@
 <script lang="ts">
-  import {
-    Check,
-    ChevronDown,
-    ChevronUp,
-    Copy,
-    Loader2,
-    TimerOff,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioChevronUp from '$lib/components/icons/cio/CioChevronUp.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTimerOff from '$lib/components/icons/cio/CioTimerOff.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import GitHubSignInActions from './GitHubSignInActions.svelte'
@@ -71,9 +69,9 @@
           {githubSignIn.device.userCode}
         </span>
         {#if githubSignIn.copied}
-          <Check size={12} class="text-success" aria-hidden="true" />
+          <CioCheck size={12} class="text-success" aria-hidden="true" />
         {:else}
-          <Copy size={12} class="text-dimmed" aria-hidden="true" />
+          <CioCopy size={12} class="text-dimmed" aria-hidden="true" />
         {/if}
       </button>
       <span class="hidden text-[0.625rem] text-dimmed lg:inline">
@@ -86,13 +84,13 @@
       aria-live="polite"
     >
       {#if githubSignIn.waiting}
-        <Loader2 size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+        <CioSpinner size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
       {:else if githubSignIn.phase === 'authorized'}
-        <Check size={11} class="shrink-0 text-success" aria-hidden="true" />
+        <CioCheck size={11} class="shrink-0 text-success" aria-hidden="true" />
       {:else if githubSignIn.phase === 'expired'}
-        <TimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
+        <CioTimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
       {:else}
-        <TriangleAlert size={11} class="shrink-0 text-danger" aria-hidden="true" />
+        <CioAttention size={11} class="shrink-0 text-danger" aria-hidden="true" />
       {/if}
       <!--
         The countdown sits beside the code that expires, not in the panel body,
@@ -114,9 +112,9 @@
       onclick={() => (collapsed ? githubSignIn.expand() : githubSignIn.minimize())}
     >
       {#if collapsed}
-        <ChevronUp size={14} />
+        <CioChevronUp size={14} />
       {:else}
-        <ChevronDown size={14} />
+        <CioChevronDown size={14} />
       {/if}
     </button>
     <button
@@ -126,7 +124,7 @@
       title={dismissLabel}
       onclick={() => githubSignIn.close()}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
 

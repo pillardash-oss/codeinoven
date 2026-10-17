@@ -1,9 +1,15 @@
 <script lang="ts">
+  import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
   import { contentThreadFamily } from '$lib/content-view-threads'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { feature } from '$lib/feature-registry'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { guideState } from '$lib/guide/guide-state.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
   import { motionDuration } from '$lib/motion'
@@ -25,6 +31,7 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import {
     AUTHORED_WORK_ICON_BY_KIND,
@@ -42,6 +49,7 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadChangesState } from '$lib/stores/thread-changes.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
@@ -108,23 +116,17 @@
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
-  import {
-    Bot,
-    BrainCircuit,
-    Bug,
-    Cloud,
-    FileDiff,
-    FolderTree,
-    GlobeCode,
-    History,
-    Info,
-    MessageCircleDashed,
-    MonitorCog,
-    Plus,
-    SquarePen,
-    SquareTerminal,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
+  import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+
   import { tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
@@ -136,14 +138,15 @@
     assistantForeignThread
   } from '../assistant/assistant-view'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import AssistantKnowledgeIcon from '$lib/components/icons/AssistantKnowledgeIcon.svelte'
-  import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
+  import AssistantKnowledgeIcon from '$lib/components/icons/cio/AssistantKnowledgeIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import AssistantCreateControl from '../assistant/AssistantCreateControl.svelte'
   import AssistantOwnerPicker from '../assistant/AssistantOwnerPicker.svelte'
   import type { NewAssistantDraft } from '../assistant/assistant-create'
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
@@ -880,6 +883,21 @@
     if (!isThreadBusy(thread)) void projectWorkState.refresh(thread.projectId)
   })
 
+  /**
+   * Keep the Changes rail indicator on the on-screen conversation. The store is
+   * event-driven, so tracking a thread also starts (and stops) its updates; the
+   * Changes panel itself is only mounted while it is open, so this is what keeps
+   * the rail's summary current either way.
+   */
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread) {
+      threadChangesState.untrack()
+      return
+    }
+    threadChangesState.track(thread.projectId, thread.id)
+  })
+
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
    *  children stay out of the visible thread list but land in the scope store
    *  through their broadcast updates, so the rail can mirror their state. */
@@ -975,9 +993,27 @@
    * in that session. The user reviews the work without hunting for the thread that
    * made it.
    */
+  function authoredWorkActive(kind: 'design' | 'video'): boolean {
+    if (
+      !selectedThread ||
+      !dockKindActive('coordinator') ||
+      coordinator?.panel.component !== 'design'
+    ) {
+      return false
+    }
+    const shownKind =
+      coordinator.panel.props.kind ??
+      designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)?.kind
+    return shownKind === kind
+  }
+
   function openAuthoredWork(kind: 'design' | 'video'): void {
     const thread = selectedThread
     if (!thread) return
+    if (authoredWorkActive(kind)) {
+      contextSidebarState.hide()
+      return
+    }
     designCoordinatorState.openBoard(thread.projectId, thread.id, kind)
   }
 
@@ -1064,6 +1100,26 @@
   })
 
   /**
+   * What the rail calls a tab, when its stored title is not the whole story.
+   *
+   * An Oven tab wears the Oven's own mark and name. An assistant's knowledge tab
+   * wears the assistant's, read from the live list rather than from the title the
+   * tab was opened with: the setup conversation names the assistant while that
+   * panel is open, so the row, the panel header and this conversation all rename
+   * themselves the moment the user answers.
+   */
+  function tabPresentation(
+    tab: ContextSidebarTab
+  ): { title: string; iconUrl?: string | null; color?: string | null } | null {
+    if (tab.kind === 'assistant-knowledge') {
+      if (!tab.assistantId) return null
+      const name = assistantList.find((entry) => entry.id === tab.assistantId)?.name.trim()
+      return name ? { title: name } : null
+    }
+    return ovenTabPresentation(tab)
+  }
+
+  /**
    * The Oven panel names itself.
    *
    * The sidebar header shows the Oven's own mark and name instead of the generic
@@ -1108,7 +1164,7 @@
         label: hasMessages
           ? `Message history (${workspaceState.messageCount} messages you sent)`
           : 'Message history',
-        icon: hasMessages ? undefined : History,
+        icon: hasMessages ? undefined : CioHistory,
         countLabel: hasMessages ? String(workspaceState.messageCount) : undefined,
         active: showHistoryMenu,
         menu: showHistoryMenu ? historyMenu : undefined,
@@ -1141,7 +1197,7 @@
       workspaceTools.push({
         id: 'oven',
         label: identity?.name ?? 'Oven',
-        icon: SquareTerminal,
+        icon: CioTerminal,
         ...(identity && !identity.local
           ? { appearance: { color: identity.color, iconUrl: identity.iconUrl } }
           : {}),
@@ -1160,25 +1216,58 @@
       workspaceTools.push({
         id: 'files',
         label: isChatThread ? 'Artifacts' : 'Workspace files',
-        icon: FolderTree,
+        icon: CioFiles,
         active: dockKindActive('files'),
         onSelect: () => toggleDockPanel('files', () => void openFiles())
       })
     }
     if (!isConversation && projectToolsAvailable) {
+      const changeFileCount = threadChangesState.fileCount
+      const changeTotals = threadChangesState.totals
+      const hasRecordedChanges = threadChangesState.current !== null && changeFileCount > 0
+      // The stored label doubles as the rail's tooltip, so it carries the same
+      // summary the hover flyout draws when a change set exists.
+      const changeLabel = hasRecordedChanges
+        ? [
+            'Changes',
+            changeTotals ? `+${changeTotals.additions} −${changeTotals.deletions}` : null,
+            `${changeFileCount} ${changeFileCount === 1 ? 'file' : 'files'}`
+          ]
+            .filter((part): part is string => part !== null)
+            .join(' · ')
+        : 'Changes'
+      // While the turn runs, the icon itself carries the running insertions and
+      // deletions as plain, colour-coded text on one line ("+128/-24"), so the
+      // change is visible without a hover and without a badge frame.
+      const changeText =
+        threadChangesState.working && changeTotals
+          ? [
+              ...(changeTotals.additions > 0
+                ? [{ text: `+${changeTotals.additions}`, tone: 'success' as const }]
+                : []),
+              ...(changeTotals.additions > 0 && changeTotals.deletions > 0
+                ? [{ text: '/', tone: 'neutral' as const }]
+                : []),
+              ...(changeTotals.deletions > 0
+                ? [{ text: `-${changeTotals.deletions}`, tone: 'danger' as const }]
+                : [])
+            ]
+          : []
       workspaceTools.push(
         {
           id: 'files',
           label: 'Files',
-          icon: FolderTree,
+          icon: CioFiles,
           active: dockKindActive('files'),
           onSelect: () => toggleDockPanel('files', () => void openFiles())
         },
         {
           id: 'diff',
-          label: 'Changes',
-          icon: FileDiff,
+          label: changeLabel,
+          icon: CioDiff,
           active: dockKindActive('diff'),
+          ...(hasRecordedChanges ? { flyout: changeSummaryFlyout } : {}),
+          ...(changeText.length > 0 ? { countText: changeText } : {}),
           onSelect: () => toggleDockPanel('diff', openDiff)
         }
       )
@@ -1188,7 +1277,7 @@
         workspaceTools.push({
           id: 'terminal',
           label: terminalOpen ? 'Hide terminal' : 'Show terminal',
-          icon: SquareTerminal,
+          icon: CioTerminal,
           active: terminalOpen,
           onSelect: toggleTerminal
         })
@@ -1196,7 +1285,7 @@
       workspaceTools.push({
         id: 'actions',
         label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
-        icon: MonitorCog,
+        icon: CioActions,
         active: dockKindActive('actions'),
         countBadge: runningActions > 0 ? String(runningActions) : undefined,
         countBadgeTone: runningActions > 0 ? 'working' : undefined,
@@ -1211,7 +1300,7 @@
           workspaceState.sourceProcessCount > 0
             ? `Sources (${workspaceState.sourceProcessCount} ${workspaceState.sourceProcessCount === 1 ? 'process' : 'processes'} running)`
             : 'Sources',
-        icon: Info,
+        icon: CioTabInfo,
         active: dockKindActive('sources'),
         countBadge:
           workspaceState.sourceProcessCount > 0
@@ -1222,7 +1311,7 @@
       {
         id: 'memory',
         label: 'Memory',
-        icon: BrainCircuit,
+        icon: CioMemory,
         active: dockKindActive('memory'),
         badge: memoryProposalState.hasPending ? 'attention' : undefined,
         badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
@@ -1233,7 +1322,7 @@
       sessionTools.push({
         id: 'cloud-deployment',
         label: 'Cloud deployments',
-        icon: Cloud,
+        icon: CioCloud,
         active: dockKindActive('cloud-deployment'),
         onSelect: () => toggleDockPanel('cloud-deployment', openCloudDeploymentsTab)
       })
@@ -1242,7 +1331,7 @@
       sessionTools.push({
         id: 'debugger',
         label: 'Debugger',
-        icon: Bug,
+        icon: CioDebugger,
         active: dockKindActive('debugger'),
         onSelect: () => toggleDockPanel('debugger', openDebugger)
       })
@@ -1261,7 +1350,7 @@
       temporaryChats.push({
         id: 'temporary-chat',
         label: dockKindActive('temporary-chat') ? `Hide ${name}` : `Show ${name}`,
-        icon: MessageCircleDashed,
+        icon: CioTemporaryChat,
         active: dockKindActive('temporary-chat'),
         onSelect: () => toggleDockPanel('temporary-chat', focusTemporaryChat)
       })
@@ -1275,32 +1364,37 @@
     // on, so the entry is there whether or not a session is open and opens the
     // board for the kind it names.
     const authoredWork: ContextDockItem[] = []
-    if (!coordinator && selectedThread) {
+    if (selectedThread) {
       const work = projectWorkState.stateFor(selectedThread.projectId)
       for (const kind of ['design', 'video'] as const) {
-        if ((work?.[kind].length ?? 0) === 0) continue
+        const session = designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
+        const sessionKind = session?.active ? session.kind : undefined
+        if ((work?.[kind].length ?? 0) === 0 && sessionKind !== kind) continue
         authoredWork.push({
           id: `authored-work-${kind}`,
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in this project`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
-          active: dockKindActive('coordinator'),
+          active: authoredWorkActive(kind),
+          playing: kind === 'video' && browserAudio.videoIsPlaying(selectedThread.id),
           onSelect: () => openAuthoredWork(kind)
         })
       }
     }
-    const coordination: ContextDockItem[] = coordinator
-      ? [
-          {
-            id: 'coordinator',
-            label: coordinator.label,
-            icon: coordinator.icon,
-            active: dockKindActive('coordinator'),
-            badge: coordinatorRailBadge,
-            badgeTitle: coordinatorRailBadgeTitle,
-            onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
-          }
-        ]
-      : authoredWork
+    const coordination: ContextDockItem[] =
+      coordinator && coordinator.panel.component !== 'design'
+        ? [
+            {
+              id: 'coordinator',
+              label: coordinator.label,
+              icon: coordinator.icon,
+              active: dockKindActive('coordinator'),
+              badge: coordinatorRailBadge,
+              badgeTitle: coordinatorRailBadgeTitle,
+              onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
+            },
+            ...authoredWork
+          ]
+        : authoredWork
 
     // The thread-note indicator sits below its own hairline. It's always
     // present   not just once a note exists   so it also doubles as the "add a
@@ -1334,7 +1428,7 @@
       threadNote.push({
         id: 'browser',
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
-        icon: GlobeCode,
+        icon: CioThreadBrowser,
         active: dockKindActive('browser'),
         countBadge:
           browser.unfinishedDownloadCount > 0 ? String(browser.unfinishedDownloadCount) : undefined,
@@ -1359,7 +1453,7 @@
       subagents.push({
         id: 'subagent',
         label: dockKindActive('subagent') ? `Hide ${name}` : `Show ${name}`,
-        icon: Bot,
+        icon: CioSubagent,
         active: dockKindActive('subagent'),
         onSelect: () => toggleDockPanel('subagent', focusSubagent)
       })
@@ -1387,7 +1481,7 @@
             {
               id: 'attention',
               label: 'Decisions made for you',
-              icon: TriangleAlert,
+              icon: CioAttention,
               tone: 'warning',
               countBadge: String(attentionItems.length),
               active: dockKindActive('attention'),
@@ -1643,8 +1737,19 @@
    * frame by frame and the thread beside it follows, the same motion the left
    * sidebar gets from `slideWidth`.
    */
+  /**
+   * While a guide runs, its dock is a column at the right edge, so the tool
+   * panel gets out of the way rather than letting the thread take the squeeze.
+   *
+   * It is hidden, never closed: the track collapses to nothing and the panel
+   * stops painting, while its tabs, width, scroll and open terminal all stay
+   * exactly as they were. Tearing it down would be a different thing entirely
+   * (a coordinator or editor inside it is not always safe to unmount), and the
+   * user asked for a guide, not for their panel to be closed.
+   */
+  let guideHidesToolPanel = $derived(guideState.visible)
   let railTrackWidth = $derived(
-    sidebarVisible ? `${Math.round(contextSidebarState.width)}px` : '0px'
+    sidebarVisible && !guideHidesToolPanel ? `${Math.round(contextSidebarState.width)}px` : '0px'
   )
   /**
    * True while the user drags the rail's edge. A drag has to track the pointer
@@ -1870,8 +1975,9 @@
   let threadsByProject = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
     for (const t of allThreads) {
-      // Pinned threads live exclusively in the Pinned section.
-      if (t.archived || t.pinned) continue
+      // Bookmarks stay in their project's strip in Projects view. Other pinned
+      // threads live exclusively in the Pinned section.
+      if (t.archived || (t.pinned && !t.bookmarked)) continue
       const list = map.get(t.projectId) ?? []
       list.push(t)
       map.set(t.projectId, list)
@@ -2056,6 +2162,7 @@
       existing.status === incoming.status &&
       existing.title === incoming.title &&
       existing.pinned === incoming.pinned &&
+      existing.bookmarked === incoming.bookmarked &&
       existing.read === incoming.read &&
       existing.assistantId === incoming.assistantId
     )
@@ -2314,18 +2421,26 @@
     })
   })
 
-  // The authored-work marker arrives on its own light broadcast for the same
+  // The authored-work markers arrive on their own light broadcast for the same
   // reason as the branch: the agent can open a design or video session on its
   // own, mid-turn, and routing that through `thread:updated` would force
-  // ThreadView's message reconcile at that moment. Patch the field on the
-  // sidebar's own row so the marker appears without rebuilding any list.
+  // ThreadView's message reconcile at that moment. Patch the fields on the
+  // sidebar's own row so the markers appear without rebuilding any list. The set
+  // is what the row draws, so it is patched with the session kind.
   $effect(() => {
     return subscribe('thread:authoredWorkUpdated', (...args: unknown[]) => {
-      const [projectId, threadId, kind] = args as [string, string, AuthoredWorkKind]
+      const [projectId, threadId, kind, kinds] = args as [
+        string,
+        string,
+        AuthoredWorkKind,
+        AuthoredWorkKind[]
+      ]
       const listed = allThreads.find(
         (candidate) => candidate.projectId === projectId && candidate.id === threadId
       )
-      if (listed) listed.authoredWorkKind = kind
+      if (!listed) return
+      listed.authoredWorkKind = kind
+      listed.authoredWorkKinds = [...kinds]
     })
   })
 
@@ -2569,7 +2684,7 @@
           ? [
               {
                 id: 'new-thread',
-                icon: Plus,
+                icon: CioPlus,
                 ariaLabel: `New thread in ${activeProject.name}`,
                 title: `New thread in ${activeProject.name}`,
                 shortcut: keymapState.keysFor('nav-new-thread'),
@@ -2600,7 +2715,7 @@
         },
         {
           id: 'new-chat',
-          icon: SquarePen,
+          icon: CioPencil,
           ariaLabel: 'New chat',
           title: 'New chat',
           shortcut: keymapState.keysFor('nav-new-thread'),
@@ -2629,7 +2744,7 @@
         },
         {
           id: 'new-thread',
-          icon: Plus,
+          icon: CioPlus,
           ariaLabel: 'New thread in this scope',
           title: 'New thread in this scope',
           shortcut: keymapState.keysFor('nav-new-thread'),
@@ -4314,6 +4429,15 @@
     })
     await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
     await openAssistantKnowledgeFor(assistant)
+    // The assistant was given its name and personality on the form, so it opens
+    // the conversation itself: it greets the user by using them, asks what to
+    // call them, and says where a task goes. A failed opening turn is not fatal,
+    // because the conversation is open and the user can send the first message.
+    try {
+      await assistants.startManualSetup(assistant.id)
+    } catch (error) {
+      reportError(error, 'The assistant could not introduce itself')
+    }
   }
 
   /**
@@ -4322,9 +4446,10 @@
    * It exists straight away with nothing known about it, its Getting started
    * conversation is seeded exactly like the form's, and the app posts the opening
    * turn: the user reads one line saying a new assistant is being created, and the
-   * model is told to run the setup conversation, starting with the name. The
-   * answers land back on the assistant when the recap is saved, so the name the
-   * user gives it in the conversation is the name every surface then uses.
+   * model is told to run the setup conversation, starting with the name. It wears
+   * a placeholder name and a colour of its own from that moment, and the name the
+   * user gives it in the conversation is written onto it as the answer lands, so
+   * every surface renames itself there and then rather than at the recap.
    */
   async function createAssistantViaChat(): Promise<void> {
     if (!assistantProject) return
@@ -4810,7 +4935,9 @@
     // put the row on screen, because the user acted on that row and expects to
     // see where it went (see `openPinnedSection`, `revealThreadInSidebar`).
     openPinnedSection(thread)
-    const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+    const updated = thread.bookmarked
+      ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
+      : await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
     upsertThreadInList(updated)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
@@ -5062,6 +5189,7 @@
           class="min-h-0 min-w-0 {rightSidebarFlushes ? 'border-l border-border' : ''}"
           style:grid-column="2"
           style:grid-row="1"
+          style:visibility={guideHidesToolPanel ? 'hidden' : 'visible'}
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
           out:fly={{
             x: contextSidebarState.width,
@@ -5076,7 +5204,7 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            tabPresentation={ovenTabPresentation}
+            {tabPresentation}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -5147,6 +5275,12 @@
   {#await import('./WorkspaceBrowserMenu.svelte') then { default: WorkspaceBrowserMenu }}
     <WorkspaceBrowserMenu {browser} />
   {/await}
+{/snippet}
+
+<!-- The Changes rail item's hover preview: the current change set's line totals
+     and file count. The store tracked for the on-screen thread feeds it. -->
+{#snippet changeSummaryFlyout()}
+  <ChangeSummaryFlyout />
 {/snippet}
 
 <!-- Global-browser surfaces wait for `browserStore()` so their chunks are not

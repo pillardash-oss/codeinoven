@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Maximize2, FileCode2 } from '@lucide/svelte'
-
+  import CioFileCode from '$lib/components/icons/cio/CioFileCode.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
@@ -44,7 +44,7 @@
       title="Full screen"
       onclick={() => standaloneFiles.showFullscreen()}
     >
-      <Maximize2 size={14} />
+      <CioMaximize size={14} />
     </button>
   {/snippet}
 
@@ -58,7 +58,7 @@
           title={active?.path ?? 'Show the file'}
           onclick={() => standaloneFiles.restore()}
         >
-          <FileCode2 size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioFileCode size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
           <span class="flex min-w-0 flex-col">
             <span
               class="max-w-40 truncate text-[0.625rem] font-medium leading-tight text-foreground"

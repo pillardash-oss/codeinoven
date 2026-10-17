@@ -29,6 +29,8 @@ export interface DesignEntry {
   name: string
   /** Whether the folder holds an `index.html` entry file. */
   hasEntry: boolean
+  /** A registered folder that no longer exists remains visible until removed. */
+  missing?: boolean
   /**
    * When the folder was made (ms), for the board's "created" stamp.
    *
@@ -202,6 +204,14 @@ export interface DesignScreenShot {
   /** Picture size in CSS pixels, for the board's aspect ratio. 0 with no picture. */
   width: number
   height: number
+  /**
+   * Latest modification time of the file (ms).
+   *
+   * Carried so the board can order its screens by what moved last, with the
+   * newest at the top, without a second read of the folder. It is the same stamp
+   * the picture is cached against.
+   */
+  updatedAt: number
 }
 
 /** A capture of a design, for the coordinator's preview. */
@@ -390,4 +400,18 @@ export interface ScreenCanvasState {
   orphanFrames: string[]
   /** Titles of sketch frames still waiting for a real screen. */
   sketchTitles: string[]
+}
+
+export interface UpdateWorkDetails {
+  kind: AuthoredWorkKind
+  directory: string
+  root?: string
+  thisOnly: boolean
+  /** Settings can update the project default without selecting or moving a folder. */
+  newOnly?: boolean
+  name?: string
+}
+export interface UpdateWorkDetailsResult {
+  directory: string
+  moved: number
 }

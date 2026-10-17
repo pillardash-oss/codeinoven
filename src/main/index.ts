@@ -6,6 +6,7 @@ import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
 import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
+import { installForceRestartMenu } from './system/force-restart'
 import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
@@ -292,13 +293,6 @@ function getAppIconPath(): string {
   return !isProduction && is.dev
     ? join(app.getAppPath(), 'src/renderer/static/icon.png')
     : join(mainBundleDirectory, '../renderer/icon.png')
-}
-
-/** macOS-specific icon artwork, sized per Apple guidelines. */
-function getMacIconPath(): string {
-  return !isProduction && is.dev
-    ? join(app.getAppPath(), 'src/renderer/static/macos/AppIcon512.png')
-    : join(mainBundleDirectory, '../renderer/macos/AppIcon512.png')
 }
 
 /**
@@ -790,16 +784,7 @@ void app
     if (isProduction) {
       installProductionApplicationMenu(APP_NAME)
     }
-
-    // In dev the raw Electron binary lacks a bundled icon   set it explicitly.
-    // Cosmetic: must never abort the startup chain if the artwork is missing.
-    if (process.platform === 'darwin' && app.dock) {
-      try {
-        app.dock.setIcon(getMacIconPath())
-      } catch (error) {
-        Logger.error('dock icon setup failed (non-fatal):', error)
-      }
-    }
+    installForceRestartMenu(quitAppDirectly)
 
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([

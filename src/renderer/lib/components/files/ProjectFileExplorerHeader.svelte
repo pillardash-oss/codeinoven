@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronsDown, ChevronsUp, FolderOpen, RefreshCw, Search, Target } from '@lucide/svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
+  import { ChevronsDown, ChevronsUp } from '@lucide/svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {
@@ -108,7 +112,7 @@
         style="color: {projectAccentColor ?? 'var(--color-primary)'}"
       />
     {:else}
-      <FolderOpen size={13} style="color: {projectAccentColor ?? 'var(--color-primary)'}" />
+      <CioFolderOpen size={13} style="color: {projectAccentColor ?? 'var(--color-primary)'}" />
     {/if}
   </span>
   <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground"
@@ -139,7 +143,7 @@
     aria-pressed={filterOpen}
     onclick={onToggleFilter}
   >
-    <Search size={12} />
+    <CioSearch size={12} />
   </button>
   <button
     type="button"
@@ -149,7 +153,7 @@
     disabled={!canRevealActiveFile}
     onclick={onRevealActiveFile}
   >
-    <Target size={12} />
+    <CioTarget size={12} />
   </button>
   <button
     type="button"
@@ -159,6 +163,6 @@
     disabled={rootLoading}
     onclick={onRefresh}
   >
-    <RefreshCw size={12} class={rootLoading ? 'animate-spin' : ''} />
+    <CioRefresh size={12} class={rootLoading ? 'animate-spin' : ''} />
   </button>
 </div>

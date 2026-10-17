@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Bot, CircleX, ExternalLink, Loader2, Terminal } from '@lucide/svelte'
+  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { onMount } from 'svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { formatDurationSeconds } from '$lib/format/duration'
@@ -158,12 +162,12 @@
 
   {#if loading && !detail}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-      <Loader2 size={13} class="animate-spin" />
+      <CioSpinner size={13} class="animate-spin" />
       Loading workflow run details
     </div>
   {:else if error && !detail}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <CircleX size={20} class="text-danger" />
+      <CioCrossCircle size={20} class="text-danger" />
       <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">{error}</p>
       <button
         type="button"
@@ -178,7 +182,7 @@
       <!-- Jobs -->
       <section>
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-          <Terminal size={11} class="text-dimmed" />
+          <CioTerminal size={11} class="text-dimmed" />
           <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Jobs</h3>
           <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{detail.jobs.length}</span
           >
@@ -191,9 +195,9 @@
               onclick={() => void reviewWithAgent(failedJob)}
             >
               {#if preparingAgent}
-                <Loader2 size={11} class="animate-spin" />
+                <CioSpinner size={11} class="animate-spin" />
               {:else}
-                <Bot size={11} />
+                <CioSubagent size={11} />
               {/if}
               Review failed job
             </button>
@@ -286,7 +290,7 @@
                             data-external-url={job.url}
                             onclick={() => void openInBrowser(job.url)}
                           >
-                            <ExternalLink size={10} />
+                            <CioExternalLink size={10} />
                             Follow live on GitHub
                           </button>
                         {/if}

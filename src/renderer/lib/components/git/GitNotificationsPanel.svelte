@@ -1,16 +1,11 @@
 <script lang="ts">
-  import {
-    Archive,
-    ArchiveRestore,
-    Bell,
-    BellOff,
-    Bookmark,
-    BookmarkCheck,
-    ExternalLink,
-    Inbox,
-    Loader2,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { ArchiveRestore, BellOff, BookmarkCheck, Inbox } from '@lucide/svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { onMount } from 'svelte'
@@ -226,14 +221,14 @@
     <div
       class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
     >
-      <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+      <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
       <p class="text-[0.625rem] leading-relaxed text-dimmed">{githubNotifications.error}</p>
     </div>
   {/if}
 
   {#if !githubConnected}
     <EmptyState
-      icon={Bell}
+      icon={CioNotifications}
       title="Sign in to GitHub"
       description="Notifications belong to your GitHub account, so sign in to read and act on them here."
     >
@@ -269,7 +264,7 @@
     </div>
   {:else if githubNotifications.loading && githubNotifications.items.length === 0}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">
-      <Loader2 size={14} class="animate-spin" aria-hidden="true" />
+      <CioSpinner size={14} class="animate-spin" aria-hidden="true" />
       Loading notifications
     </div>
   {:else if githubNotifications.items.length === 0}
@@ -362,7 +357,7 @@
                     {#if item.done}
                       <ArchiveRestore size={13} aria-hidden="true" />
                     {:else}
-                      <Archive size={13} aria-hidden="true" />
+                      <CioArchive size={13} aria-hidden="true" />
                     {/if}
                   </button>
                   <button
@@ -386,7 +381,7 @@
                     {#if item.saved}
                       <BookmarkCheck size={13} class="text-primary" aria-hidden="true" />
                     {:else}
-                      <Bookmark size={13} aria-hidden="true" />
+                      <CioBookmark size={13} aria-hidden="true" />
                     {/if}
                   </button>
                   <button
@@ -397,7 +392,7 @@
                     data-external-url={item.url ?? ''}
                     onclick={() => openOnGitHub(item)}
                   >
-                    <ExternalLink size={13} aria-hidden="true" />
+                    <CioExternalLink size={13} aria-hidden="true" />
                   </button>
                 </span>
               </span>

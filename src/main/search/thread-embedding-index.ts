@@ -2,14 +2,23 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Database } from '../database/database'
-import type { IntentThreadMatch, ThreadEmbeddingRecord } from '../../lib/search/types'
+import type {
+  IntentThreadMatch,
+  ThreadEmbeddingRecord,
+  ThreadEmbeddingWindow
+} from '../../lib/search/types'
 import { cosineSimilarity, decodeThreadIndex, encodeThreadIndex } from '../../lib/search/vector'
 import { Logger } from '../system/logger'
 import { paceIndexing } from './indexing-pacing'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/types/project'
-import { ThreadSearchSummaries, type SearchSummaryThread } from './thread-search-summary'
+import {
+  ThreadSearchSummaries,
+  threadWindowCount,
+  threadWindowOffset,
+  type SearchSummaryThread
+} from './thread-search-summary'
 
-/** Process one thread at a time, including provider summaries and embeddings. */
+/** Process one thread at a time, including its windows and optional summary. */
 const INDEX_BATCH_SIZE = 1
 /** Page metadata without loading conversations or blocking the main process. */
 const CATALOG_PAGE_SIZE = 256
@@ -26,15 +35,24 @@ export interface SweepResult {
   pending: number
 }
 
+/** Whether a record still owes windows for the revision it was read from. */
+function needsWindows(record: ThreadEmbeddingRecord): boolean {
+  // `planned: 0` is a record written before windows existed (one head vector and
+  // no plan), so the next sweep re-plans it and fills in the rest.
+  return record.planned === 0 || record.windows.length < record.planned
+}
+
 /**
- * Embeds raw thread text first, then optionally refines oversized documents
- * with a cached summary. Queries compare the vectors by cosine similarity.
+ * Embeds several evenly spread windows of each thread and answers intent queries
+ * by cosine similarity. A query matches a thread whose content it lands in
+ * anywhere, not only its opening messages.
  *
  * The index is derived from the same corpus the full-text index covers: the
  * thread title plus `agent_messages.search_text` for the main conversation, so
- * keyword and semantic search describe one body of content. It lives entirely
- * in memory while the app runs (a few thousand 768-dimension vectors is small)
- * and is persisted as one compact blob so it survives restart.
+ * keyword and semantic search describe one body of content. Its size is bounded
+ * by the threads themselves: a thread holds at most `maxWindows` vectors, and the
+ * index lives in memory while the app runs and is persisted as one compact blob
+ * so it survives restart.
  */
 export class ThreadEmbeddingIndex {
   readonly candidates = new Map<string, CandidateThread>()
@@ -103,7 +121,8 @@ export class ThreadEmbeddingIndex {
     this.removed.delete(thread.id)
     this.candidates.set(thread.id, thread)
     const record = this.records.get(thread.id)
-    if (!record || record.updatedAt < thread.stamp) this.pendingIds.add(thread.id)
+    if (!record || record.updatedAt < thread.stamp || needsWindows(record))
+      this.pendingIds.add(thread.id)
     else this.pendingIds.delete(thread.id)
   }
 
@@ -126,27 +145,24 @@ export class ThreadEmbeddingIndex {
   }
 
   /**
-   * Embed every thread whose content changed since it was last indexed, in
-   * bounded batches that yield to the event loop between requests. Returns how
-   * many threads the corpus holds and how many were pending when it started.
+   * Embed every thread that changed, or still owes windows, since it was last
+   * indexed, in bounded batches that yield to the event loop between requests.
+   * Returns how many threads the corpus holds and how many were pending when it
+   * started.
    */
   async sweep(
     embed: (texts: readonly string[]) => Promise<Float32Array[]>,
     options: {
       modelSignature: string
       documentPrefix: string
+      windowChars: number
+      maxWindows: number
       expectedDimensions: number
       signal: AbortSignal
-      fitsContext: (text: string) => Promise<boolean>
-      documentChars?: number
-      onOversized?: (thread: SearchSummaryThread, contentHash: string) => void
+      onOversized?: (thread: SearchSummaryThread) => void
       onProgress?: (result: SweepResult) => void
       onError?: (thread: SearchSummaryThread, error: unknown) => void
-      onThreadProgress?: (
-        thread: SearchSummaryThread,
-        stage: 'summarizing' | 'embedding',
-        chunks: number
-      ) => void
+      onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
     }
   ): Promise<SweepResult> {
     const candidates = [...this.candidates.values()]
@@ -156,10 +172,14 @@ export class ThreadEmbeddingIndex {
       await this.persist()
       return { total: 0, indexed: 0, pending: 0 }
     }
-    const stale = candidates.filter((candidate) => {
-      const record = this.records.get(candidate.id)
-      return !record || record.updatedAt < candidate.stamp
-    })
+    const stale = candidates
+      .filter((candidate) => {
+        const record = this.records.get(candidate.id)
+        return !record || record.updatedAt < candidate.stamp || needsWindows(record)
+      })
+      // Most recently active first: the threads a user is working in and is most
+      // likely to search for are the first to carry a complete set of windows.
+      .sort((left, right) => right.stamp - left.stamp)
     const total = candidates.length
     const pending = stale.length
     let indexed = 0
@@ -172,7 +192,7 @@ export class ThreadEmbeddingIndex {
         const batch = stale.slice(offset, offset + INDEX_BATCH_SIZE)
         let embedded = false
         try {
-          embedded = await this.indexBatch(batch, embed, options)
+          embedded = await this.indexThread(batch[0], embed, options)
           indexed += batch.length
         } catch (error) {
           if (options.signal.aborted) throw error
@@ -197,106 +217,118 @@ export class ThreadEmbeddingIndex {
     }
   }
 
-  /** Rank indexed threads by cosine similarity to the query vector. */
+  /** Rank indexed threads by the best cosine similarity across their windows. */
   search(queryVector: Float32Array, limit: number): IntentThreadMatch[] {
     const matches: IntentThreadMatch[] = []
     for (const record of this.records.values()) {
       if (record.dimensions !== queryVector.length) continue
-      const score = cosineSimilarity(queryVector, record.vector)
-      if (score < MIN_INTENT_SCORE) continue
-      matches.push({ threadId: record.threadId, score })
+      let best = 0
+      for (const window of record.windows) {
+        if (window.vector.length !== queryVector.length) continue
+        const score = cosineSimilarity(queryVector, window.vector)
+        if (score > best) best = score
+      }
+      if (best < MIN_INTENT_SCORE) continue
+      matches.push({ threadId: record.threadId, score: best })
     }
     matches.sort((left, right) => right.score - left.score)
     return matches.slice(0, limit)
   }
 
-  /** Replace only the exact raw revision that queued this optional summary. */
+  /**
+   * Add the optional whole-thread summary as one more vector a thread is scored
+   * by. It describes the thread globally, which the windows cannot, so it
+   * complements them instead of replacing the content they already located.
+   */
   async applySummary(
     thread: SearchSummaryThread,
-    expectedHash: string,
     vector: Float32Array,
     summary: string,
     modelSignature: string
   ): Promise<boolean> {
     const record = this.records.get(thread.id)
-    if (
-      !record ||
-      record.updatedAt !== thread.stamp ||
-      record.contentHash !== expectedHash ||
-      vector.length !== record.dimensions
-    )
+    if (!record || record.updatedAt !== thread.stamp || vector.length !== record.dimensions)
       return false
+    const contentHash = contentHashOf(modelSignature, summary)
+    if (record.windows.some((window) => window.contentHash === contentHash)) return false
     this.records.set(thread.id, {
       ...record,
-      vector,
-      contentHash: contentHashOf(modelSignature, summary)
+      windows: [...record.windows, { vector, contentHash }]
     })
     await this.persist()
     return true
   }
 
-  private async indexBatch(
-    batch: readonly CandidateThread[],
+  /**
+   * Index one thread: plan its coverage windows, embed the ones whose text is
+   * new, and reuse the rest. Returns whether the model was asked for anything,
+   * so the sweep only paces itself after real work.
+   */
+  private async indexThread(
+    candidate: CandidateThread,
     embed: (texts: readonly string[]) => Promise<Float32Array[]>,
     options: {
       modelSignature: string
       documentPrefix: string
+      windowChars: number
+      maxWindows: number
       expectedDimensions: number
       signal: AbortSignal
-      fitsContext: (text: string) => Promise<boolean>
-      documentChars?: number
-      onOversized?: (thread: SearchSummaryThread, contentHash: string) => void
-      onThreadProgress?: (
-        thread: SearchSummaryThread,
-        stage: 'summarizing' | 'embedding',
-        chunks: number
-      ) => void
+      onOversized?: (thread: SearchSummaryThread) => void
+      onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
     }
   ): Promise<boolean> {
-    const texts: string[] = []
-    const oversized: boolean[] = []
-    for (const candidate of batch) {
-      options.onThreadProgress?.(candidate, 'embedding', 0)
-      const content = await this.summaries.document(
-        candidate,
-        options.signal,
-        options.documentChars
-      )
-      const text = composeDocument(options.documentPrefix, candidate.title, content)
-      const sourceHash = contentHashOf(options.modelSignature, text)
-      const existing = this.records.get(candidate.id)
-      if (existing && (existing.sourceHash ?? existing.contentHash) === sourceHash) {
-        existing.updatedAt = candidate.stamp
-        existing.sourceHash = sourceHash
-        if ((this.candidates.get(candidate.id)?.stamp ?? Infinity) <= candidate.stamp)
-          this.pendingIds.delete(candidate.id)
-        return false
-      }
-      oversized.push(!(await options.fitsContext(text)))
-      texts.push(text)
+    const plan = await this.summaries.plan(candidate, options.signal)
+    const count = threadWindowCount(plan.total, options.windowChars, options.maxWindows)
+    const existing = this.records.get(candidate.id)
+    const windows: (ThreadEmbeddingWindow | undefined)[] = new Array(count)
+    const pending: { index: number; document: string }[] = []
+    for (let index = 0; index < count; index += 1) {
+      options.signal.throwIfAborted()
+      const offset = threadWindowOffset(index, count, plan.total, options.windowChars)
+      const text = await this.summaries.window(plan, offset, options.windowChars, options.signal)
+      // Windows carry the model's document prompt but not the thread title: the
+      // title is one signal, and repeating it in every window would pull all of
+      // them toward it instead of toward the conversation each one covers.
+      const document = composeDocument(options.documentPrefix, '', text)
+      const contentHash = contentHashOf(options.modelSignature, document)
+      const previous = existing?.windows.find((window) => window.contentHash === contentHash)
+      if (previous) windows[index] = previous
+      else pending.push({ index, document })
     }
-    const vectors = await embed(texts)
-    for (let index = 0; index < batch.length; index += 1) {
-      const vector = vectors[index]
-      if (!vector || vector.length !== options.expectedDimensions) {
-        throw new Error('The embedding model returned an unexpected vector dimension.')
+    if (pending.length > 0) {
+      options.onThreadProgress?.(candidate, 'embedding', pending.length)
+      const vectors = await embed(pending.map((entry) => entry.document))
+      for (let position = 0; position < pending.length; position += 1) {
+        const vector = vectors[position]
+        if (!vector || vector.length !== options.expectedDimensions) {
+          throw new Error('The embedding model returned an unexpected vector dimension.')
+        }
+        const entry = pending[position]
+        windows[entry.index] = {
+          vector,
+          contentHash: contentHashOf(options.modelSignature, entry.document)
+        }
       }
-      const candidate = batch[index]
-      if (this.removed.has(candidate.id) || !this.candidates.has(candidate.id)) continue
-      this.records.set(candidate.id, {
-        threadId: candidate.id,
-        contentHash: contentHashOf(options.modelSignature, texts[index]),
-        sourceHash: contentHashOf(options.modelSignature, texts[index]),
-        dimensions: vector.length,
-        updatedAt: candidate.stamp,
-        vector
-      })
-      if ((this.candidates.get(candidate.id)?.stamp ?? Infinity) <= candidate.stamp)
-        this.pendingIds.delete(candidate.id)
-      if (oversized[index])
-        options.onOversized?.(candidate, contentHashOf(options.modelSignature, texts[index]))
     }
-    return true
+    if (this.removed.has(candidate.id) || !this.candidates.has(candidate.id))
+      return pending.length > 0
+    const complete = windows.filter((window): window is ThreadEmbeddingWindow => Boolean(window))
+    if (complete.length === 0) return pending.length > 0
+    this.records.set(candidate.id, {
+      threadId: candidate.id,
+      dimensions: complete[0].vector.length,
+      updatedAt: candidate.stamp,
+      windows: complete,
+      planned: count,
+      width: options.windowChars
+    })
+    if ((this.candidates.get(candidate.id)?.stamp ?? Infinity) <= candidate.stamp)
+      this.pendingIds.delete(candidate.id)
+    // The windows could not describe everything this thread holds, so the
+    // provider-backed summary is worth one bounded request.
+    if (plan.total > count * options.windowChars) options.onOversized?.(candidate)
+    return pending.length > 0
   }
 
   private async pruneMissing(present: ReadonlySet<string>): Promise<void> {
@@ -358,7 +390,7 @@ export class ThreadEmbeddingIndex {
   }
 }
 
-/** The exact text an embedding model sees for one thread. */
+/** The exact text an embedding model sees for one thread window. */
 export function composeDocument(prefix: string, title: string, body: string): string {
   const head = title.trim()
   const trimmedBody = body

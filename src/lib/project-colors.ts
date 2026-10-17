@@ -34,3 +34,15 @@ export function pickColorForSeed(seed: string): string {
   }
   return PROJECT_COLORS[Math.abs(hash) % PROJECT_COLORS.length].value
 }
+
+/**
+ * Pick a colour at random, for a surface that should have an accent of its own
+ * from the moment it exists rather than one derived from its name.
+ *
+ * An assistant built by talking has no name while the conversation settles one,
+ * and the name it is given later must not repaint the accent it has been wearing,
+ * so its colour is chosen once, at creation, and never derived from the name.
+ */
+export function pickRandomColor(): string {
+  return PROJECT_COLORS[Math.floor(Math.random() * PROJECT_COLORS.length)].value
+}

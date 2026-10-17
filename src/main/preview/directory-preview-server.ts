@@ -498,6 +498,19 @@ export class DirectoryPreviewServer {
     return this.root
   }
 
+  /** Keep the origin stable while its authored folder is relocated. */
+  async relocate(directory: string): Promise<void> {
+    const root = await realpath(directory)
+    this.watcher?.close()
+    this.watcher = null
+    if (this.watchTimer) clearTimeout(this.watchTimer)
+    if (this.settleTimer) clearTimeout(this.settleTimer)
+    this.sawWatchEvent = false
+    this.root = root
+    this.startWatching()
+    this.queueReload()
+  }
+
   async start(): Promise<DirectoryPreviewEndpoint> {
     if (this.disposed) throw new Error('Directory preview server is closed')
     if (this.endpoint) return this.endpoint

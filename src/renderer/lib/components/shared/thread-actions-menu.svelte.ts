@@ -1,3 +1,11 @@
+import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+import CioEyeOff from '$lib/components/icons/cio/CioEyeOff.svelte'
+import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+import CioSend from '$lib/components/icons/cio/CioSend.svelte'
+import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
 import { copyText } from '$lib/copy-text'
 import { feature } from '$lib/feature-registry'
@@ -7,18 +15,7 @@ import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import { threadTracksReadStatus, type Thread } from '$shared/types'
-import {
-  Copy,
-  EyeOff,
-  GitFork,
-  Kanban,
-  Mail,
-  Pencil,
-  Pin,
-  PinOff,
-  Send,
-  Trash2
-} from '@lucide/svelte'
+import { Kanban, Mail, PinOff } from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
 
 export interface ThreadActionsMenuConfig {
@@ -26,6 +23,8 @@ export interface ThreadActionsMenuConfig {
   getThread: () => Thread | null | undefined
   onRename: (thread: Thread, newName: string) => Promise<void>
   onTogglePin: (thread: Thread) => void | Promise<void>
+  onBookmark?: (thread: Thread) => void | Promise<void>
+  showBookmark?: () => boolean
   onFork: (thread: Thread) => void | Promise<void>
   onDelete: (thread: Thread) => Promise<void>
   onDeleteError?: (error: unknown, thread: Thread) => void
@@ -148,13 +147,14 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const showCopyIdItem = config.showCopyId?.() ?? false
     const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
     const knowledgeThread = config.isKnowledgeThread?.() ?? false
+    const bookmarkAvailable = (config.showBookmark?.() ?? false) && config.onBookmark !== undefined
     // Only a settled thread may be pushed back to unread: a finished or errored
     // run. Live work, a ready spec, and "Needs attention" are not the same as
     // unread and are never offered here (see `canMarkThreadUnread`).
     const canMarkUnread =
       threadTracksReadStatus(thread) && thread.read && canMarkThreadUnread(thread.status)
     return [
-      { label: 'Rename', icon: Pencil, onClick: startRename },
+      { label: 'Rename', icon: CioPencil, onClick: startRename },
       ...(canMarkUnread
         ? [{ label: 'Mark as unread', icon: Mail, onClick: () => void markUnread() }]
         : []),
@@ -162,23 +162,39 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
         ? [
             {
               label: 'Hide knowledge thread',
-              icon: EyeOff,
+              icon: CioEyeOff,
               onClick: () => config.onHideKnowledge?.(thread)
             }
           ]
         : [
-            {
-              label: thread.pinned ? 'Unpin' : 'Pin',
-              icon: thread.pinned ? PinOff : Pin,
-              onClick: () => void config.onTogglePin(thread)
-            }
+            ...(thread.bookmarked || bookmarkAvailable
+              ? [
+                  {
+                    label: thread.bookmarked ? 'Remove bookmark' : 'Bookmark thread',
+                    icon: CioBookmark,
+                    onClick: () =>
+                      void (thread.bookmarked
+                        ? config.onTogglePin(thread)
+                        : config.onBookmark?.(thread))
+                  }
+                ]
+              : []),
+            ...(!thread.bookmarked
+              ? [
+                  {
+                    label: thread.pinned ? 'Unpin' : 'Pin',
+                    icon: thread.pinned ? PinOff : CioPin,
+                    onClick: () => void config.onTogglePin(thread)
+                  }
+                ]
+              : [])
           ]),
-      { label: 'Fork', icon: GitFork, onClick: () => void config.onFork(thread) },
+      { label: 'Fork', icon: CioFork, onClick: () => void config.onFork(thread) },
       ...(showHandoffItem
         ? [
             {
               label: 'Hand off to project',
-              icon: Send,
+              icon: CioSend,
               onClick: () => config.onHandoff?.(thread)
             }
           ]
@@ -194,14 +210,14 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
           ]
         : []),
       ...(showCopyIdItem
-        ? [{ label: 'Copy thread id', icon: Copy, onClick: () => void copyThreadId() }]
+        ? [{ label: 'Copy thread id', icon: CioCopy, onClick: () => void copyThreadId() }]
         : []),
       // A knowledge thread cannot be deleted: hiding is the only way to get it out
       // of the list, and it can always be revealed again from the knowledge panel.
       ...(knowledgeThread ? [] : [{ label: '', divider: true }]),
       ...(knowledgeThread
         ? []
-        : [{ label: 'Delete', icon: Trash2, onClick: startDelete, danger: true }])
+        : [{ label: 'Delete', icon: CioTrash, onClick: startDelete, danger: true }])
     ] as MenuItem[]
   })
 

@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Download, FolderTree, LoaderCircle } from '@lucide/svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import DockableModal from '$lib/components/ui/DockableModal.svelte'
   import DockRow from '$lib/components/ui/DockRow.svelte'
   import { exportProgressState as state } from '$lib/stores/export-progress.svelte'
@@ -60,7 +62,7 @@
         aria-label="Show export progress"
         onclick={() => (state.minimized = false)}
       >
-        {#if state.running}<LoaderCircle size={14} class="animate-spin" />{:else}<Download
+        {#if state.running}<CioSpinner size={14} class="animate-spin" />{:else}<CioDownload
             size={14}
           />{/if}
         {chipLabel}
@@ -72,7 +74,7 @@
     <p class="text-foreground">{state.label}</p>
     {#if state.running}
       <p class="flex items-center gap-2 text-muted" aria-live="polite">
-        <LoaderCircle size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         {state.kind === 'video' && state.stage ? state.stage : 'Exporting…'}
       </p>
       {#if state.kind === 'video'}
@@ -132,9 +134,9 @@
         onclick={() => void state.revealInFileTree()}
       >
         {#if state.revealing}
-          <LoaderCircle size={14} class="animate-spin" />
+          <CioSpinner size={14} class="animate-spin" />
         {:else}
-          <FolderTree size={14} />
+          <CioFiles size={14} />
         {/if}
         Reveal file
       </button>

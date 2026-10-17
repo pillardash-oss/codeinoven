@@ -1,12 +1,9 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Check,
-    Eye,
-    Image as ImageIcon,
-    ImagePlus,
-    RotateCw
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import { Image as ImageIcon, ImagePlus } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -15,6 +12,7 @@
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type {
     AgentModelSelection,
     ImageDescriptorErrorRequest,
@@ -42,6 +40,13 @@
       targetKey: string,
       position: 'before' | 'after'
     ) => void
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
+    /** Thread the card belongs to, so its fold state is remembered per thread. */
+    threadId?: string
   }
 
   let {
@@ -56,10 +61,26 @@
     onFalsePositive,
     onToggleFavorite,
     onRemoveRecent,
-    onReorderFavorite
+    onReorderFavorite,
+    stackedAbove = false,
+    joinsBelow = false,
+    threadId
   }: Props = $props()
 
-  let folded = $state(false)
+  /** The fold control writes a per-thread preference, so the card stays folded or
+   *  unfolded when the thread is reopened. */
+  let localFolded = $state(false)
+  const foldState = {
+    get folded(): boolean {
+      return threadId === undefined
+        ? localFolded
+        : threadCardFold.isFolded(threadId, 'image-descriptor')
+    },
+    set folded(value: boolean) {
+      if (threadId === undefined) localFolded = value
+      else threadCardFold.setFolded(threadId, 'image-descriptor', value)
+    }
+  }
   /** User-chosen replacement model; null falls back to the failed selection. */
   let override = $state<AgentModelSelection | null>(null)
   let remember = $state(false)
@@ -178,16 +199,16 @@
 </script>
 
 <div out:slide={dismissSlide()}>
-  <CardFrame placement="replace" label="Image descriptor error">
+  <CardFrame placement="replace" label="Image descriptor error" {stackedAbove} {joinsBelow}>
     <CardHead
-      icon={request.imageId ? ImageIcon : AlertTriangle}
+      icon={request.imageId ? ImageIcon : CioAttention}
       title={cardTitle}
       chip={{ text: 'Stopped', tone: 'urgent' }}
-      bind:folded
+      bind:folded={foldState.folded}
       foldLabel="vision model error"
     />
 
-    {#if !folded}
+    {#if !foldState.folded}
       <div transition:slide={foldSlide()}>
         <div class="space-y-4 p-4">
           <div>
@@ -256,13 +277,13 @@
       </div>
     {/if}
 
-    {#if !folded}
+    {#if !foldState.folded}
       <CardFoot>
         {#snippet left()}
           <CardButton
             label="Ignore"
             title="Ignore and continue without the description"
-            icon={Check}
+            icon={CioCheck}
             variant="ghost"
             disabled={working}
             onclick={() => void ignore()}
@@ -281,7 +302,7 @@
             <CardButton
               label="False positive"
               title="{falsePositiveTitle} so the image descriptor is skipped for it"
-              icon={Eye}
+              icon={CioEye}
               variant="secondary"
               disabled={working}
               onclick={() => void reportFalsePositive()}
@@ -298,7 +319,7 @@
                   ? 'Retry with more time'
                   : 'Retry'}
             title={retryTitle}
-            icon={working || !visionSelection ? undefined : RotateCw}
+            icon={working || !visionSelection ? undefined : CioRefresh}
             variant="primary"
             loading={working}
             disabled={working || !visionSelection}

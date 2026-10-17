@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Archive, ChevronRight, FileText, Loader2 } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { isImageMime } from '$lib/mime'
@@ -72,9 +75,9 @@
       onclick={() => (compactionOpen = !compactionOpen)}
     >
       {#if busy && !part.summary}
-        <Loader2 size={12} class="shrink-0 animate-spin text-info" />
+        <CioSpinner size={12} class="shrink-0 animate-spin text-info" />
       {:else}
-        <Archive size={12} class="shrink-0 text-dimmed" />
+        <CioArchive size={12} class="shrink-0 text-dimmed" />
       {/if}
       <div class="min-w-0 flex-1">
         <p class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] font-medium text-foreground">
@@ -96,7 +99,7 @@
               : 'Summarizing earlier work to free context'}
         </p>
       </div>
-      <ChevronRight
+      <CioForward
         size={12}
         class="shrink-0 text-dimmed transition-transform {compactionOpen ? 'rotate-90' : ''}"
       />
@@ -121,7 +124,7 @@
           void imageUrls.bindImage(part.url, part.mime, e.currentTarget as HTMLImageElement)}
       />
     {:else}
-      <FileText size={10} class="shrink-0" />
+      <CioFileText size={10} class="shrink-0" />
     {/if}
     {part.filename ?? part.url.split('/').pop() ?? 'file'}
   </div>

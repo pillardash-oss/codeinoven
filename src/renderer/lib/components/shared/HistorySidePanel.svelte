@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { GitFork, Loader2, Search, Shredder, Trash2, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import { Shredder } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
@@ -169,7 +174,7 @@
     <header class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
       {#if searching}
         <div class="flex min-w-0 flex-1 items-center gap-1.5 px-1">
-          <Search size={12} class="shrink-0 text-dimmed" />
+          <CioSearch size={12} class="shrink-0 text-dimmed" />
           <input
             bind:this={searchInput}
             bind:value={query}
@@ -201,7 +206,7 @@
               }
             }}
           >
-            <X size={12} />
+            <CioClose size={12} />
           </button>
         </div>
       {:else}
@@ -223,7 +228,7 @@
             title="Search messages"
             onclick={() => void openSearch()}
           >
-            <Search size={12} />
+            <CioSearch size={12} />
           </button>
           <button
             type="button"
@@ -232,7 +237,7 @@
             title="Close history panel"
             onclick={onClose}
           >
-            <X size={12} />
+            <CioClose size={12} />
           </button>
         {/if}
       </div>
@@ -270,9 +275,9 @@
               onclick={() => onFork(message.id)}
             >
               {#if forkingId === message.id}
-                <Loader2 size={12} class="animate-spin" />
+                <CioSpinner size={12} class="animate-spin" />
               {:else}
-                <GitFork size={12} />
+                <CioFork size={12} />
               {/if}
             </button>
             {#if originalIndex > 0}
@@ -295,7 +300,7 @@
               disabled={busy}
               onclick={() => onDelete(message.id, 'single')}
             >
-              <Trash2 size={12} />
+              <CioTrash size={12} />
             </button>
             {#if originalIndex < messages.length - 1}
               <button

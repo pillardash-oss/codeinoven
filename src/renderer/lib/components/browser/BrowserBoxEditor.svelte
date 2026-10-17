@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Trash2 } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
@@ -251,7 +252,7 @@
           title="Delete this box. Its tabs close."
           onclick={() => (confirmDelete = true)}
         >
-          <Trash2 size={13} />
+          <CioTrash size={13} />
           Delete
         </button>
       {/if}
@@ -274,7 +275,7 @@
         title={existing ? 'Save this box' : 'Create this box'}
         onclick={save}
       >
-        <Check size={13} />
+        <CioCheck size={13} />
         {existing ? 'Save' : 'Create'}
       </button>
     </div>

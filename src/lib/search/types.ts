@@ -85,6 +85,23 @@ export const SEARCH_CONTEXT_TOKENS_MAX = 32768
  */
 export const SEARCH_CONTEXT_TOKENS_DEFAULT = 8192
 
+/**
+ * Characters of conversation one embedding window covers.
+ *
+ * A thread is indexed by several windows spread across the whole conversation,
+ * and a query scores the thread by its best window. The width is deliberately a
+ * fraction of the runtime's token window: measured on long threads, six windows
+ * of ~4 K characters matched their own deep content better than six windows of
+ * 16 K characters (mean cosine 0.775 against 0.735, and 0.653 for a single head
+ * window), because a narrower window carries less unrelated conversation. That
+ * also makes a window ~850 tokens instead of a full 2 K, so a thread costs about
+ * 2.5x one head embedding rather than 6x.
+ */
+export const SEARCH_WINDOW_CHARS = 4096
+
+/** Windows one thread is indexed by, bounding its memory, blob and work. */
+export const SEARCH_MAX_WINDOWS_PER_THREAD = 6
+
 /** Clamp a requested context window into the supported range. */
 export function clampSearchContextTokens(value: number): number {
   if (!Number.isFinite(value)) return SEARCH_CONTEXT_TOKENS_DEFAULT
@@ -97,9 +114,9 @@ export interface SearchSettings {
   /** Installed model id used for embedding, or null when none is selected. */
   activeModelId: string | null
   /**
-   * Tokens of each thread the embedding runtime may attend to. User-adjustable:
-   * a larger window captures more of a long conversation, a smaller one is
-   * faster. Persisted so a restart keeps the user's choice.
+   * Tokens the local model may read in one pass. It bounds the size of one
+   * embedding window (and with it the runtime's memory); how much of a thread is
+   * searched is decided by the index's own windows, not by this value.
    */
   contextTokens: number
 }
@@ -164,15 +181,37 @@ export type SearchProgressEvent =
   | { kind: 'download'; artifactId: string; download: SearchDownloadState }
   | { kind: 'status'; status: SearchIndexStatus }
 
-/** A vector persisted for one thread, with the content hash that produced it. */
-export interface ThreadEmbeddingRecord {
-  /** Raw corpus fingerprint, retained when optional summaries replace the vector. */
-  sourceHash?: string
-  threadId: string
+/**
+ * One embedded coverage window of a thread: the vector for a slice of its
+ * conversation, with the fingerprint of the exact text that produced it.
+ */
+export interface ThreadEmbeddingWindow {
+  vector: Float32Array
+  /** Fingerprint of this window's text, so an unchanged window is never re-embedded. */
   contentHash: string
+}
+
+/**
+ * The windows one thread is indexed by, with the plan they were read for.
+ *
+ * A thread is represented by several evenly spread windows rather than one, so a
+ * query matches content anywhere in the conversation and not only in its opening
+ * messages. A query scores a thread by its best window.
+ */
+export interface ThreadEmbeddingRecord {
+  threadId: string
   dimensions: number
   updatedAt: number
-  vector: Float32Array
+  /** Windows in plan order; window 0 is always the thread's opening text. */
+  windows: ThreadEmbeddingWindow[]
+  /**
+   * Windows this record is planned to hold for the revision it was read from.
+   * `0` marks a record written before windows existed: it holds exactly one head
+   * window and is re-planned (and topped up) by the next sweep.
+   */
+  planned: number
+  /** Characters of conversation each window covers under that plan. */
+  width: number
 }
 
 /** One thread that surfaced from intent search, before it is hydrated. */

@@ -1,16 +1,11 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Check,
-    Clock3,
-    Code2,
-    Copy,
-    LogIn,
-    RotateCcw,
-    Square,
-    TimerReset,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import { Clock3, LogIn, Square, TimerReset } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
@@ -28,6 +23,7 @@
     ThreadSettings
   } from '$shared/types'
   import { copyText } from '$lib/copy-text'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
@@ -65,6 +61,16 @@
     retrying?: boolean
     /** Whether the app auto-resumes this thread once the reset time passes. */
     autoRetryEnabled?: boolean
+    /** Another card sits directly above this one, so its top rule is the broken
+     *  line that separates two stacked surfaces. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
+    /** Thread the card reports on, so its fold state is remembered per thread. */
+    threadId?: string
+    /** Card key within the thread when one component serves more than one card
+     *  (the thread's own provider status, and an attributed worker error). */
+    foldKey?: string
   }
 
   let {
@@ -87,9 +93,24 @@
     sourceDetail,
     retryLabel = 'Retry',
     retrying = false,
-    autoRetryEnabled = true
+    autoRetryEnabled = true,
+    stackedAbove = false,
+    joinsBelow = false,
+    threadId,
+    foldKey = 'provider'
   }: Props = $props()
-  let folded = $state(false)
+  /** The card's fold control writes a per-thread preference, so a card folded or
+   *  unfolded by the reader stays that way when the thread is reopened. */
+  let localFolded = $state(false)
+  const foldState = {
+    get folded(): boolean {
+      return threadId === undefined ? localFolded : threadCardFold.isFolded(threadId, foldKey)
+    },
+    set folded(value: boolean) {
+      if (threadId === undefined) localFolded = value
+      else threadCardFold.setFolded(threadId, foldKey, value)
+    }
+  }
   let showRawError = $state(false)
   let copiedRawError = $state(false)
   let signInOpen = $state(false)
@@ -272,12 +293,12 @@
 <!-- The live region wraps the frame so a status change still announces the whole
 card, the way it did before the head moved onto the shared primitives. -->
 <div role={waiting ? 'status' : 'alert'} aria-live="polite">
-  <CardFrame placement="top" label="Provider status">
+  <CardFrame placement="top" label="Provider status" {stackedAbove} {joinsBelow}>
     <CardHead
-      icon={waiting || autoResume ? Clock3 : AlertTriangle}
+      icon={waiting || autoResume ? Clock3 : CioAttention}
       title={sourceLabel ? 'Worker output error' : title}
       {chip}
-      bind:folded
+      bind:folded={foldState.folded}
       foldLabel="provider status"
     >
       {#snippet meta()}
@@ -288,7 +309,7 @@ card, the way it did before the head moved onto the shared primitives. -->
       {/snippet}
     </CardHead>
 
-    {#if !folded}
+    {#if !foldState.folded}
       <div
         transition:slide={foldSlide()}
         class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
@@ -341,14 +362,14 @@ card, the way it did before the head moved onto the shared primitives. -->
       </div>
     {/if}
 
-    {#if !folded}
+    {#if !foldState.folded}
       <CardFoot>
         {#snippet left()}
           {#if !waiting && onDismiss}
             <CardButton
               label="Dismiss"
               title="Dismiss provider error"
-              icon={X}
+              icon={CioClose}
               variant="ghost"
               onclick={onDismiss}
             />
@@ -367,7 +388,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label="Raw Error"
               title="Show the raw provider error"
-              icon={Code2}
+              icon={CioCode}
               variant="ghost"
               onclick={() => (showRawError = true)}
             />
@@ -404,7 +425,7 @@ card, the way it did before the head moved onto the shared primitives. -->
               <CardButton
                 label={retryLabel}
                 title={retryLabel}
-                icon={retrying ? undefined : RotateCcw}
+                icon={retrying ? undefined : CioUndo}
                 variant="secondary"
                 loading={retrying}
                 disabled={retrying}
@@ -422,7 +443,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label="Retry now"
               title="Retry the request now"
-              icon={retrying ? undefined : RotateCcw}
+              icon={retrying ? undefined : CioUndo}
               variant="primary"
               loading={retrying}
               disabled={retrying}
@@ -432,7 +453,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label={retryLabel}
               title={retryLabel}
-              icon={retrying ? undefined : RotateCcw}
+              icon={retrying ? undefined : CioUndo}
               variant="primary"
               loading={retrying}
               disabled={retrying}
@@ -458,10 +479,10 @@ card, the way it did before the head moved onto the shared primitives. -->
       onclick={() => void copyRawError()}
     >
       {#if copiedRawError}
-        <Check size={13} class="text-success" />
+        <CioCheck size={13} class="text-success" />
         Copied
       {:else}
-        <Copy size={13} />
+        <CioCopy size={13} />
         Copy
       {/if}
     </button>

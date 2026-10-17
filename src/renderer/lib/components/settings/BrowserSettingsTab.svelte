@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import { onMount } from 'svelte'
-  import { Plus, X } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import {
     DEFAULT_BROWSER_SEARCH_ENGINE_ID,
@@ -183,7 +185,11 @@
   <div class="space-y-4">
     <!-- Link routing -->
     <div id="settings-block-browser-links" class="border bg-surface p-4">
-      <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Links</h3>
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Links
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">Open localhost on CIO's browser</p>
@@ -221,7 +227,11 @@
 
     <!-- Search engine -->
     <div id="settings-block-browser-search" class="border bg-surface p-4">
-      <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Search</h3>
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Search
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">Search engine</p>
@@ -246,9 +256,7 @@
         {#if customEngines.length > 0}
           <ul class="mb-3 space-y-2">
             {#each customEngines as engine (engine.id)}
-              <li
-                class="flex items-center justify-between gap-3 border bg-elevated px-3 py-2"
-              >
+              <li class="flex items-center justify-between gap-3 border bg-elevated px-3 py-2">
                 <div class="min-w-0">
                   <p class="truncate text-sm font-medium">{engine.name}</p>
                   <p class="truncate font-mono text-xs text-dimmed">{engine.searchUrlTemplate}</p>
@@ -261,7 +269,7 @@
                   disabled={!settingsReady}
                   onclick={() => removeEngine(engine.id)}
                 >
-                  <X size={13} />
+                  <CioClose size={13} />
                 </button>
               </li>
             {/each}
@@ -295,7 +303,7 @@
               aria-label="Add this search engine"
               disabled={!settingsReady || !canAddEngine}
             >
-              <Plus size={13} />
+              <CioPlus size={13} />
               Add
             </button>
           </div>
@@ -309,7 +317,11 @@
 
     <!-- Tabs -->
     <div id="settings-block-browser-tabs" class="border bg-surface p-4">
-      <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Tabs</h3>
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Tabs
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">Hibernate inactive tabs</p>
@@ -358,7 +370,11 @@
 
     <!-- Browsing data -->
     <div id="settings-block-browser-library" class="border bg-surface p-4">
-      <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Browsing data</h3>
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Browsing data
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">History size</p>

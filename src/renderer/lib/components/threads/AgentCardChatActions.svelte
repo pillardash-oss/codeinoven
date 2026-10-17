@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { HelpCircle, MessageSquareDashed } from '@lucide/svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import { HelpCircle } from '@lucide/svelte'
 
   /**
    * The two context actions a human-decision card carries: explain it, or open a
@@ -52,7 +53,7 @@
         title={quickChatTitle}
         aria-label={quickChatTitle}
       >
-        <MessageSquareDashed size={14} class="shrink-0" />
+        <CioTemporaryChat size={14} class="shrink-0" />
       </button>
     {/if}
   </div>

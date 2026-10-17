@@ -1,9 +1,11 @@
 import { parentPort, workerData } from 'node:worker_threads'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
+import { analyzeMotionPoints } from '../../lib/video/motion-analysis'
 import { atomicWrite } from '../../lib/utils'
 import { startVideoProcess } from './video-process'
 
 interface TrackingRequest {
+  analyze?: boolean
   root: string
   source: string
   output: string
@@ -126,12 +128,28 @@ async function track(): Promise<void> {
     }
     await process.done
     if (!points.length) throw new Error('No video frames were decoded')
-    const output = join(request.output, 'tracking.json')
-    await atomicWrite(output, JSON.stringify({ version: 1, method: 'template', points }, null, 2))
+    const analysis = request.analyze ? analyzeMotionPoints(points) : undefined
+    const output = join(request.output, request.analyze ? 'motion-analysis.json' : 'tracking.json')
+    await atomicWrite(
+      output,
+      JSON.stringify(
+        {
+          version: 1,
+          method: 'template',
+          source: relative(request.root, request.source).replaceAll('\\', '/'),
+          range: { start: request.start, duration: request.duration },
+          points,
+          ...(analysis ? { analysis } : {})
+        },
+        null,
+        2
+      )
+    )
     parentPort?.postMessage({
       type: 'result',
       files: [output],
       result: {
+        ...(analysis ? { analysis } : {}),
         frames: frameIndex,
         method: 'template',
         note: 'Tracks local appearance. Review low-confidence frames and occlusions.'

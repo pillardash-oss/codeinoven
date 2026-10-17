@@ -1,3 +1,4 @@
+import { isCodeModeToolName } from '../../../lib/agent-interactions'
 import type { AgentEvent, AgentPart, AgentToolState, PermissionReply } from '../../../lib/types'
 import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
 import type { OpenCodeV2SseEvent } from '../../opencode-v2/opencode-v2-client'
@@ -76,7 +77,7 @@ function toolPartFor(
     messageID: messageId,
     callID: callId,
     tool,
-    ...(tool === 'execute' ? { codeMode: true } : {}),
+    ...(isCodeModeToolName(tool) ? { codeMode: true } : {}),
     state
   }
 }
@@ -347,16 +348,21 @@ export function mapOpenCodeV2Event(
       return [{ type: 'question.resolved', sessionId, requestId, resolution: 'dismissed' }]
     }
     case 'session.usage.updated': {
-      const { aggregateTokens, normalizedUsage } = mapOpenCodeV2Usage(data['tokens'])
-      if (!aggregateTokens && !normalizedUsage) return []
+      // This event carries a session-cumulative total, so its `tokens` are not
+      // the current message's own generated count; publishing them as one
+      // message's `tokens` divided that message's generation window by the
+      // whole session's count. The per-step `session.step.ended` event already
+      // reports the step's own figure, so only the canonical payload and the
+      // session's cumulative cost (stored as `sessionCostUsd`) are carried here.
+      const { normalizedUsage } = mapOpenCodeV2Usage(data['tokens'])
+      if (!normalizedUsage) return []
       const cost = typeof data['cost'] === 'number' ? data['cost'] : undefined
       return [
         {
           type: 'usage.updated',
           sessionId,
           messageId: context.assistantMessageId ?? '',
-          ...(aggregateTokens ? { tokens: aggregateTokens } : {}),
-          ...(normalizedUsage ? { normalizedUsage } : {}),
+          normalizedUsage,
           ...(cost === undefined ? {} : { cost })
         }
       ]

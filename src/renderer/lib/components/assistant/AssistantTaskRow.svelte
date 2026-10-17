@@ -1,16 +1,12 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    AppWindow,
-    ArrowRightLeft,
-    CalendarClock,
-    CalendarOff,
-    Loader2,
-    Pin
-  } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
+  import { ArrowRightLeft, CalendarClock, CalendarOff } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import { createSubscriber } from 'svelte/reactivity'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -201,7 +197,7 @@
         tone: 'working' as const,
         kind: undefined,
         variant: 'icon' as const,
-        icon: AppWindow,
+        icon: CioWindow,
         title: 'Running in another instance'
       }
     return {
@@ -366,7 +362,7 @@
             aria-label="Pinned task"
             title="Pinned"
           >
-            <Pin size={11} strokeWidth={1.8} class="text-accent" />
+            <CioPin size={11} strokeWidth={1.8} class="text-accent" />
           </span>
         {/if}
         {#if missed}
@@ -377,7 +373,7 @@
             aria-label="A scheduled run was missed"
             title="A scheduled run was missed"
           >
-            <AlertTriangle size={12} />
+            <CioAttention size={12} />
           </span>
         {/if}
       </span>
@@ -426,7 +422,7 @@
         onclick={transferForeignRun}
       >
         {#if foreignTransfer?.pending}
-          <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+          <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
         {:else}
           <ArrowRightLeft size={13} aria-hidden="true" />
         {/if}

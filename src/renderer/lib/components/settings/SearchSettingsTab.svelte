@@ -1,14 +1,13 @@
 <script lang="ts">
+  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
+  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import {
-    CircleAlert,
-    ClipboardPaste,
-    Download,
-    LoaderCircle,
-    RefreshCw,
-    Trash2,
-    Upload
-  } from '@lucide/svelte'
+
   import { invoke } from '$lib/ipc.svelte'
   import { searchSettingsStore as search } from '$lib/stores/search.svelte'
   import { formatCompactAge } from '../../../../lib/date-time-format'
@@ -153,7 +152,7 @@
         aria-label="Refresh search settings"
         onclick={() => void search.load()}
       >
-        <RefreshCw size={14} class={search.loading ? 'animate-spin' : ''} aria-hidden="true" />
+        <CioRefresh size={14} class={search.loading ? 'animate-spin' : ''} aria-hidden="true" />
       </button>
     </div>
   </div>
@@ -167,7 +166,7 @@
   <div class="space-y-4">
     {#if status && (!status.runtimeAvailable || runtimeTooOld)}
       <div class="flex items-start gap-3 border border-warning/40 bg-warning/10 p-4">
-        <CircleAlert size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+        <CioAlertCircle size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
         <div class="min-w-0 flex-1">
           <p class="text-sm font-medium">
             {runtimeTooOld
@@ -195,10 +194,10 @@
           onclick={() => void installRuntime()}
         >
           {#if installingRuntime}
-            <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
             Installing
           {:else}
-            <Download size={12} aria-hidden="true" />
+            <CioDownload size={12} aria-hidden="true" />
             {runtimeTooOld ? 'Update' : 'Install'}
           {/if}
         </button>
@@ -217,7 +216,7 @@
           disabled={!enabled || status?.indexing}
           onclick={() => void search.rebuildIndex()}
         >
-          <RefreshCw size={12} class={status?.indexing ? 'animate-spin' : ''} aria-hidden="true" />
+          <CioRefresh size={12} class={status?.indexing ? 'animate-spin' : ''} aria-hidden="true" />
           Rebuild
         </button>
       </div>
@@ -234,7 +233,7 @@
           <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">Progress</p>
           <p class="flex items-center gap-1.5 text-sm font-medium">
             {#if status?.indexing}
-              <LoaderCircle size={13} class="animate-spin text-primary" aria-hidden="true" />
+              <CioSpinner size={13} class="animate-spin text-primary" aria-hidden="true" />
               {totalThreads === null ? 'Counting threads…' : `${indexingPercent}%`}
             {:else}
               <span class="tabular-nums">
@@ -273,7 +272,9 @@
     <!-- Models -->
     <div class="border bg-surface p-4">
       <div class="mb-1 flex items-center justify-between gap-3 border-b border-border pb-2">
-        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Embedding model</h3>
+        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+          Embedding model
+        </h3>
         <div class="flex items-center gap-1.5">
           <button
             type="button"
@@ -282,7 +283,7 @@
             aria-label="Paste an embedding model path"
             onclick={() => (pasteOpen = true)}
           >
-            <ClipboardPaste size={12} aria-hidden="true" />
+            <CioClipboardPaste size={12} aria-hidden="true" />
             Paste path
           </button>
           <button
@@ -292,7 +293,7 @@
             aria-label="Import an embedding model"
             onclick={() => void search.importModel()}
           >
-            <Upload size={12} aria-hidden="true" />
+            <CioUpload size={12} aria-hidden="true" />
             Import
           </button>
         </div>
@@ -309,9 +310,7 @@
             {@const isActive = status?.activeModelId === model.id}
             <li class="flex items-center gap-3 py-2.5">
               <span
-                class="size-1.5 shrink-0 {isActive
-                  ? 'bg-primary'
-                  : 'bg-border-strong'}"
+                class="size-1.5 shrink-0 {isActive ? 'bg-primary' : 'bg-border-strong'}"
                 aria-hidden="true"
               ></span>
               <div class="min-w-0 flex-1">
@@ -346,7 +345,7 @@
                 aria-label="Remove {model.label}"
                 onclick={() => (pendingDelete = { id: model.id, label: model.label })}
               >
-                <Trash2 size={13} aria-hidden="true" />
+                <CioTrash size={13} aria-hidden="true" />
               </button>
             </li>
           {/each}
@@ -371,8 +370,9 @@
           <div class="min-w-0">
             <p class="text-sm font-medium">Context window</p>
             <p class="mt-0.5 text-xs leading-relaxed text-muted">
-              How many tokens of each thread the model reads when it embeds. A wider window keeps
-              more of a long conversation; a narrower one is faster.
+              How many tokens the model may read in one pass. Each thread is indexed by several
+              windows spread across the conversation, so this bounds one window's size rather than
+              how much of a thread is searched.
             </p>
             <p class="mt-1 text-xs text-dimmed">Changing it clears the index and rebuilds it.</p>
           </div>
@@ -420,7 +420,7 @@
           aria-label="Download {artifact.label}"
           onclick={() => void search.download(artifact.id)}
         >
-          <Download size={12} aria-hidden="true" />
+          <CioDownload size={12} aria-hidden="true" />
           {download?.state === 'failed' ? 'Retry' : 'Download'}
         </button>
       {/if}

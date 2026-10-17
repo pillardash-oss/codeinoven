@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
 
   interface Props {
     /**
@@ -27,5 +27,5 @@ sideways, so it never reads as a "next" affordance. -->
   title="{folded ? 'Expand' : 'Fold'} {label}"
   onclick={() => (folded = !folded)}
 >
-  <ChevronDown size={14} class="shrink-0 transition-transform {folded ? 'rotate-180' : ''}" />
+  <CioChevronDown size={14} class="shrink-0 transition-transform {folded ? 'rotate-180' : ''}" />
 </button>

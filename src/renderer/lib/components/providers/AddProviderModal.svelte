@@ -1,6 +1,10 @@
 <script lang="ts">
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import { Loader2, Plug, Server, X } from '@lucide/svelte'
+
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -27,6 +31,7 @@
   import {
     type AddTab,
     type ConnectStep,
+    loginFailureDetail,
     providerMatchesSearch
   } from './add-provider-modal-helpers'
 
@@ -479,7 +484,7 @@
     void discardPendingAccount()
   }
 
-  async function handleLoginExit(exitCode: number): Promise<void> {
+  async function handleLoginExit(exitCode: number, output: string): Promise<void> {
     const attemptedProvider = selectedProvider
     const providerName = selectedProvider?.name ?? 'Provider'
     loginHandoff = null
@@ -508,7 +513,12 @@
             : `${providerName} sign-in could not be verified.`
       }
     } else {
-      actionWarning = `${providerName} sign-in exited with code ${exitCode}.`
+      // The CLI named the reason in the terminal the user was just watching, so
+      // it belongs in the notice instead of an exit code on its own.
+      const detail = loginFailureDetail(output)
+      actionWarning = `${providerName} sign-in exited with code ${exitCode}.${
+        detail ? ` ${detail}` : ''
+      }`
       await discardPendingAccount()
     }
   }
@@ -614,7 +624,7 @@
           onclick={() => (oauth.docked = false)}
         >
           {#if signingIn}
-            <Loader2 size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
           {/if}
           <span class="flex min-w-0 flex-col">
             <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
@@ -638,7 +648,7 @@
           title={dockDismissLabel}
           onclick={() => void closeModal()}
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       </div>
     </DockRow>
@@ -675,7 +685,7 @@
       type="button"
       onclick={() => (tab = 'connect')}
     >
-      <Plug size={13} /> Connect provider
+      <CioPlug size={13} /> Connect provider
     </button>
     {#if canAddCustom}
       <button
@@ -686,7 +696,7 @@
         type="button"
         onclick={() => (tab = 'custom')}
       >
-        <Server size={13} /> Custom base URL
+        <CioServer size={13} /> Custom base URL
       </button>
     {/if}
   </div>
@@ -722,7 +732,7 @@
       onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
       onBackToList={backToList}
       onConnectWithKey={() => void connectWithKey()}
-      onLoginExit={(exitCode) => void handleLoginExit(exitCode)}
+      onLoginExit={(exitCode, output) => void handleLoginExit(exitCode, output)}
       onRequestDisconnect={(account) => (disconnectTarget = account)}
       onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}
     />

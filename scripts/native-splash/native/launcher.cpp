@@ -105,17 +105,6 @@ static void log_line_format(const char *format, ...) {
   log_line(buffer);
 }
 
-static void draw_centered_text(Graphics &graphics, const wchar_t *text, float baseline,
-                               float font_size, BYTE alpha, float width) {
-  Gdiplus::FontFamily family(L"Segoe UI");
-  Gdiplus::Font font(&family, font_size, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-  Gdiplus::SolidBrush brush(Gdiplus::Color(alpha, 247, 246, 242));
-  Gdiplus::StringFormat format;
-  format.SetAlignment(Gdiplus::StringAlignmentCenter);
-  graphics.DrawString(text, -1, &font, Gdiplus::RectF(0.0f, baseline, width, font_size + 3.0f),
-                      &format, &brush);
-}
-
 static const UINT WM_SPLASH_READY = WM_APP + 1;
 static const UINT WM_ELECTRON_EXITED = WM_APP + 2;
 static HWND placeholder_window = nullptr;
@@ -193,17 +182,12 @@ static LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM wpara
     HDC device = BeginPaint(window, &paint);
     RECT client = {};
     GetClientRect(window, &client);
-    HBRUSH black = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    FillRect(device, &client, black);
     Graphics graphics(device);
+    graphics.Clear(Gdiplus::Color(255, 11, 11, 13));
     if (icon_bitmap != nullptr) {
       graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-      graphics.DrawImage(icon_bitmap, (client.right - 200) / 2, (client.bottom - 200) / 2, 200, 200);
+      graphics.DrawImage(icon_bitmap, 0, 0, client.right, client.bottom);
     }
-    static wchar_t version_by_line[256];
-    swprintf_s(version_by_line, L"%ls - By", CODEINOVEN_VERSION_WIDE);
-    draw_centered_text(graphics, version_by_line, 275.0f, 11.0f, 184, client.right);
-    draw_centered_text(graphics, CODEINOVEN_COMPANY_WIDE, 291.0f, 11.0f, 184, client.right);
     EndPaint(window, &paint);
     return 0;
   }

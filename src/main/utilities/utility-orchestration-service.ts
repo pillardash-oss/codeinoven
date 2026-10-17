@@ -1,3 +1,6 @@
+import { invokeGatewayCapability } from './utility-orchestration/utility-gateway-discovery'
+import { normalizePlanDelivery, normalizePlanPriority } from '../../lib/assistant-reporting'
+import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { randomBytes, randomUUID } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import type {
@@ -31,6 +34,10 @@ import type { VideoSessionMode } from './cio-video-prompt'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
+  GATEWAY_CAPABILITY_ID,
+  GATEWAY_DISCOVERY_INSTRUCTION,
+  initialGatewayTools,
+  type GatewayToolDefinition,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
@@ -55,7 +62,6 @@ import {
   CREATE_BRAINSTORM_TOOL_NAME,
   CREATE_PRD_TOOL_NAME,
   CREATE_SPEC_TOOL_NAME,
-  ENGINEERING_TOOL_NAMES,
   isEngineeringTool,
   type EngineeringToolOperation
 } from '../../lib/engineering-tools'
@@ -67,8 +73,11 @@ import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { currentWorkRoots } from '../design/work-roots-state'
 import { gatewayStructuredResult } from '../../lib/image-payload'
+import {
+  budgetGatewayOutput,
+  type GatewayOutputMeasurement
+} from './utility-orchestration/utility-gateway-output'
 import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
-import { BACKGROUND_AGENT_CONTROL_INSTRUCTION } from '../../lib/agent-control-policy'
 import {
   cuaActionReference,
   cuaRefusal,
@@ -82,6 +91,8 @@ import {
 } from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
+import { ThreadRepo } from '../database/repositories/thread-repo'
+import { DesignRepo } from '../database/repositories/design-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { type McpClient } from '../agents/mcp-stdio-client'
 import {
@@ -114,6 +125,7 @@ import {
   ASSISTANT_AUTHORING_CHECKPOINT_LIMIT,
   assistantAuthoringUtility
 } from '../../lib/assistant-authoring'
+import { ASSISTANT_NAME_LIMIT, ASSISTANT_PERSONALITY_LIMIT } from '../../lib/types'
 import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import {
   UtilityScopeFootprintService,
@@ -225,6 +237,15 @@ export interface UtilityTurnRequest {
    * the checkpoint path and replaces its content.
    */
   saveAssistantCheckpoint?: (markdown: string) => Promise<{ path: string }>
+  /**
+   * Present only for an assistant's Getting started interview; the callback writes
+   * the name and the personality the conversation settles onto the assistant and
+   * broadcasts the change, so every surface renames itself the moment the user
+   * answers rather than at the end of the interview.
+   */
+  saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
+  /** Persist settled reporting choices during the live setup interview. */
+  saveAssistantReporting?: (reporting: AssistantReportingPatch) => Promise<void>
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -466,6 +487,7 @@ export interface AppControlExecutor {
 }
 
 interface TurnState {
+  grantedTools: GatewayToolDefinition[]
   id: string
   request: UtilityTurnRequest
   eligible: Map<string, ResolvedUtility>
@@ -1117,7 +1139,13 @@ export class UtilityOrchestrationService {
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
-      return hasOnDemand
+      return (
+        hasOnDemand ||
+        request.permissionLevel === 'full_access' ||
+        request.artifactTools === true ||
+        request.allowManagement === true ||
+        (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
+      )
     })
     if (gatewayTools.length === 0) {
       return {
@@ -1131,6 +1159,7 @@ export class UtilityOrchestrationService {
       }
     }
     const state: TurnState = {
+      grantedTools: gatewayTools,
       id,
       request,
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
@@ -1157,7 +1186,10 @@ export class UtilityOrchestrationService {
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
-    await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
+    await this.storage.writeRaw(
+      scriptPath,
+      buildUtilityGatewayScript(initialGatewayTools(gatewayTools))
+    )
     this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
@@ -1172,14 +1204,15 @@ export class UtilityOrchestrationService {
       request.permissionLevel !== 'full_access' &&
       (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     const toolInstructions = [
-      BACKGROUND_AGENT_CONTROL_INSTRUCTION,
+      GATEWAY_DISCOVERY_INSTRUCTION,
+      'Use available code mode to batch independent tool calls in one model request. Run independent reads with bounded parallelism and inspect every result; keep dependent operations, mutations, approvals and retries sequential. Filter large results before returning them to the model. Reuse loaded documentation and activated utilities. Read workstation targets only when dispatching work, and the app catalog only when driving the app.',
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
-      `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
+      `When a needed capability is missing, load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer its installation card. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
       `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
-            `The engineering artifact tools (${ENGINEERING_TOOL_NAMES.join(', ')}) create this thread's durable Brainstorm, PRD, specification and Assignment. Call the matching tool when the user asks for one of those artifacts instead of answering in prose: ${CREATE_BRAINSTORM_TOOL_NAME} for a brainstorm, ${CREATE_PRD_TOOL_NAME} for a PRD, ${CREATE_SPEC_TOOL_NAME} for a spec, ${CREATE_ASSIGNMENT_TOOL_NAME} for splitting work across workers. For the last one, choose between it and cio_spawn_agent by prompting: both an Assignment and spawned sub-agents can be monitored, but only Assignment workers can be prompted independently, so pick ${CREATE_ASSIGNMENT_TOOL_NAME} when the user wants to prompt the workers themselves. When the user has not said which they want, ask with cio_ask_user first, and never ask again when they already stated a preference.`
+            `For a requested Brainstorm, PRD, spec or Assignment, discover the matching cio_create_* schema through cio:gateway and invoke it. Ask once whether the user wants independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
           ]
         : []),
       ...(sessionToolsAskRequired
@@ -1194,32 +1227,32 @@ export class UtilityOrchestrationService {
         : []),
       ...(hasScopeCapability
         ? [
-            `The app-owned scope and Git-worktree capability (utility \`${APP_SCOPE_UTILITY_ID}\`) is deliberately not in your tool list. Only when the user explicitly asks you to work in a separate worktree: search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result, then invoke it with ${UTILITY_INVOKE_TOOL_NAME}. Never create a worktree on your own initiative, and never run raw \`git worktree add\`.`
+            `The app-owned worktree capability is not exposed directly. Only when the user explicitly requests a separate worktree, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${SCOPE_CAPABILITY_SEARCH_QUERY}"), activate the result and invoke it. Never create one on your own or run raw git worktree add.`
           ]
         : []),
       ...(hasAdbCapability
         ? [
-            `The app-owned Android device skill (utility \`${APP_ADB_UTILITY_ID}\`) is knowledge, not a tool, and it is not in your tool list. When a task involves an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the result before you probe the device by hand: it carries the verified recipes, the traps, and the evidence standard. Load it again with ${UTILITY_DOCS_TOOL_NAME} if it leaves your context. It is a baseline, not an authority: if the project or your harness already provides its own Android or adb skill or runbook, follow that one and use this only for what it does not cover.`
+            `Before probing an Android device or emulator, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${ADB_CAPABILITY_SEARCH_QUERY}") and activate the device playbook. Follow project Android guidance first; use this playbook for gaps. Re-list lost docs with ${UTILITY_DOCS_TOOL_NAME}.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)
         ? [
-            `The app-owned cio-artifact skill (utility ${APP_ARTIFACT_UTILITY_ID}) handles explicitly requested inline artifacts. Only when the user asks to create or edit an artifact inside this thread, activate it with ${UTILITY_ACTIVATE_TOOL_NAME} before producing the output. It covers image, audio, video, HTML and SVG delivery and prefers available direct generators. For ordinary design or media work use the task-specific capability. Inline artifact requests take this route before the design/video guidance below.`
+            `For requested inline artifacts, activate ${APP_ARTIFACT_UTILITY_ID} before producing output; it covers image, audio, video, HTML and SVG delivery. Ordinary design or video work uses its task-specific capability.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `The app-owned in-app browser (utility \`${APP_BROWSER_UTILITY_ID}\`) exists in this session and is your browser for anything that has to be rendered: a design, a prototype, a video composition, a served page. When you author or change something a browser renders, get its served URL from the capability that owns that folder, activate \`${APP_BROWSER_UTILITY_ID}\` with ${UTILITY_SEARCH_TOOL_NAME} and ${UTILITY_ACTIVATE_TOOL_NAME} if it is not in your tool list yet, and look at the page with \`screenshot\`, \`viewport\`, \`snapshot\` and \`console\`. Never render your own work with a browser of your own, such as a cached headless Chrome or Chromium binary, \`npx playwright\`, \`puppeteer\` or \`curl\`: the tab the app served is the page the user is watching.`
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
           ]
         : []),
       ...(hasDesignCapability
         ? [
-            `The app-owned design capability (utility \`${APP_DESIGN_UTILITY_ID}\`) is knowledge plus app operations, and it is not in your tool list. When the work is to design or prototype an interface in HTML, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the design pass, the folder a design belongs in and the rule that a product's screens are the design's pages, a \`preview\` operation that serves that folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed step for one screen, a \`delegate\` operation that runs the model the user assigned to a named piece of design work, a \`generate\` operation that produces an image, a video clip or an audio file with the model the user assigned to that craft, and a \`save-media\` operation that saves a link a generator elsewhere answered with into the project as a file the design can reference. \`preview\` returns the URL the thread's in-app browser capability (\`${APP_BROWSER_UTILITY_ID}\`) opens, and looking at the render there is how the work is checked, never with a browser of your own. It is a baseline, not an authority: where the project or the user's own design skill states a design language, follow that one.`
+            `For interface design or HTML prototypes, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${DESIGN_CAPABILITY_SEARCH_QUERY}") and activate ${APP_DESIGN_UTILITY_ID}. Its playbook owns folders, screens, preview, checkpoints, delegation and media generation. Inspect its preview in ${APP_BROWSER_UTILITY_ID}. Follow project design language first.`
           ]
         : []),
       ...(hasVideoCapability
         ? [
-            `The app-owned video capability (utility \`${APP_VIDEO_UTILITY_ID}\`) is knowledge plus four operations, and it is not in your tool list. When the work is to make a video   a title sequence, a walkthrough, a captioned cut, an explainer, a montage   search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate the result: it carries the edit pass, a \`preview\` operation that serves the composition folder and opens it in this thread's browser tab, a \`checkpoint\` operation that saves a named completed edit step, and a \`capture\` operation that freezes the composition at one second and hands the frame back as a picture you can look at. The preview tab also belongs to the thread's in-app browser capability (\`${APP_BROWSER_UTILITY_ID}\`), which is how the work is checked when a still is not enough, and never a browser of your own. Look at every frame you change. It is a baseline, not an authority: where the project or the user's own skill states a motion language, follow that one.`
+            `For video work, search with ${UTILITY_SEARCH_TOOL_NAME} (query "${VIDEO_CAPABILITY_SEARCH_QUERY}") and activate ${APP_VIDEO_UTILITY_ID}. Its playbook covers composition, preview, checkpoints and frame capture. Inspect every changed frame and use ${APP_BROWSER_UTILITY_ID} for motion. Follow project motion guidance first.`
           ]
         : []),
       ...(hasOnDemand
@@ -1252,7 +1285,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(request.allowManagement
         ? [
-            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`
+            `Explicit utility setup is enabled. Discover ${UTILITY_MANAGE_TOOL_NAME} through cio:gateway; install secret-free definitions, then collect credentials with ${ASK_SECRET_TOOL_NAME}.`
           ]
         : [])
     ].join('\n')
@@ -1274,6 +1307,7 @@ export class UtilityOrchestrationService {
       directEndpoint: {
         url: bridgeUrl,
         token,
+        toolNames: initialGatewayTools(gatewayTools).map(({ name }) => name),
         timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
       },
       managementEnabled: request.allowManagement === true,
@@ -1773,15 +1807,32 @@ export class UtilityOrchestrationService {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
+      const direct = GATEWAY_TOOLS.find((tool) => tool.route === request.url)
+      if (!direct || !state.grantedTools.some((tool) => tool.name === direct.name))
+        throw new Error('Tool is not granted to this turn')
       const result = await handler(state, input)
       // A tool that declares an output schema is answered with the payload both
       // ways: content parts for a model, the same data for a script. Every other
       // route keeps the exact body it has always returned.
-      this.respond(
-        response,
-        200,
-        this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result
+      let measurement: GatewayOutputMeasurement | undefined
+      const prepared = await budgetGatewayOutput(
+        this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result,
+        state.request.projectPath,
+        (value) => {
+          measurement = value
+        }
       )
+      if (measurement) {
+        await this.audit(state, 'gateway.output_budgeted', {
+          ...measurement,
+          route: request.url,
+          stage: 'gateway_text_preview',
+          nativeModelInputCharacters: null
+        }).catch((error: unknown) => {
+          Logger.error('Could not record gateway output measurement:', error)
+        })
+      }
+      this.respond(response, 200, prepared)
     } catch (error) {
       this.respond(response, 400, {
         error: error instanceof Error ? error.message : 'Utility gateway request failed'
@@ -1947,6 +1998,20 @@ export class UtilityOrchestrationService {
     // A capability installed moments ago must be findable in this same turn.
     await this.refreshEligible(state)
     const query = optionalString(input['query'], 500)
+    if (query && /^(?:cio:gateway|cio_(?:app_|orchestrate_|create_)\w+)$/.test(query)) {
+      return {
+        notFound: false,
+        utilities: [
+          {
+            id: GATEWAY_CAPABILITY_ID,
+            name: 'App tools',
+            kind: 'skill',
+            active: true,
+            description: GATEWAY_DISCOVERY_INSTRUCTION
+          }
+        ]
+      }
+    }
     const kinds = optionalKinds(input['kinds'])
     const requestedLimit = optionalNumber(input['limit'])
     const limit = Math.min(Math.max(requestedLimit ?? 8, 1), 20)
@@ -2004,6 +2069,12 @@ export class UtilityOrchestrationService {
 
   private async activate(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
+    if (utilityId === GATEWAY_CAPABILITY_ID)
+      return {
+        id: utilityId,
+        instructions: GATEWAY_DISCOVERY_INSTRUCTION,
+        operations: ['catalog', 'call', 'batch']
+      }
     // Re-check the registry first: the agent may be activating a utility that was
     // installed or enabled after this turn started.
     await this.refreshEligible(state)
@@ -2061,12 +2132,30 @@ export class UtilityOrchestrationService {
    * `@cio-design` session performs at turn start, and a post-compaction docs
    * re-dump   come through here, so they cannot disagree.
    */
+  private async workContext(
+    threadId: string
+  ): Promise<{ roots: ReturnType<typeof currentWorkRoots>; note: string }> {
+    if (!this.database) return { roots: currentWorkRoots(), note: '' }
+    const thread = await new ThreadRepo(this.database).getViaWorker(threadId)
+    const current = await new DesignRepo(this.database).forThreadViaWorker(threadId)
+    return {
+      roots: currentWorkRoots(thread?.projectId),
+      note: current
+        ? `\nThe current ${current.kind} is in ${JSON.stringify(current.directory)}. Continue editing this folder. An individual save-path change affects only this folder. The project save root controls new work. Use the current recorded path rather than paths in older messages.\n`
+        : ''
+    }
+  }
+
   private async designPlaybook(threadId: string): Promise<string> {
     const config = await this.storage.getConfig()
-    return designCapabilityDocs(
-      prototypeCdnPolicyFromConfig(config),
-      await this.expertsForThread(threadId),
-      currentWorkRoots()
+    const work = await this.workContext(threadId)
+    return (
+      work.note +
+      designCapabilityDocs(
+        prototypeCdnPolicyFromConfig(config),
+        await this.expertsForThread(threadId),
+        work.roots
+      )
     )
   }
 
@@ -2076,7 +2165,8 @@ export class UtilityOrchestrationService {
    * models a design is.
    */
   private async videoPlaybook(threadId: string): Promise<string> {
-    return videoCapabilityDocs(await this.expertsForThread(threadId), currentWorkRoots())
+    const work = await this.workContext(threadId)
+    return work.note + videoCapabilityDocs(await this.expertsForThread(threadId), work.roots)
   }
 
   /**
@@ -2133,7 +2223,7 @@ export class UtilityOrchestrationService {
       // capability this one is invoked with typed fields.
       return {
         instructions: await this.designPlaybook(state.request.threadId),
-        tools: designUtilityTools(currentWorkRoots())
+        tools: designUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
     if (resolved.utility.id === APP_VIDEO_UTILITY_ID) {
@@ -2142,7 +2232,7 @@ export class UtilityOrchestrationService {
       // docs re-dump is one payload.
       return {
         instructions: await this.videoPlaybook(state.request.threadId),
-        tools: videoUtilityTools(currentWorkRoots())
+        tools: videoUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
@@ -2266,6 +2356,12 @@ export class UtilityOrchestrationService {
    */
   private async docsLookup(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
+    if (utilityId === GATEWAY_CAPABILITY_ID)
+      return {
+        id: utilityId,
+        instructions: GATEWAY_DISCOVERY_INSTRUCTION,
+        operations: ['catalog', 'call', 'batch']
+      }
     const resolved = state.activated.get(utilityId) ?? state.eligible.get(utilityId)
     if (!resolved) {
       throw new Error(
@@ -2295,6 +2391,18 @@ export class UtilityOrchestrationService {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
     const operation = requiredString(input['operation'], 'operation', 256)
     const operationInput = recordValue(input['input'] ?? {})
+    if (utilityId === GATEWAY_CAPABILITY_ID) {
+      return invokeGatewayCapability(
+        operation,
+        operationInput,
+        state.grantedTools,
+        async (tool, args) => {
+          const handler = this.bridgeHandlers.get(tool.route)
+          if (!handler) throw new Error('Gateway handler is unavailable')
+          return handler(state, args)
+        }
+      )
+    }
     let resolved = state.activated.get(utilityId)
     if (!resolved) {
       // Straight-to-usage banked reuse: a utility registered in this thread's
@@ -2333,17 +2441,66 @@ export class UtilityOrchestrationService {
       )
       result = await state.request.saveBrainstormNotes(markdown)
     } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
-      if (operation !== 'save_checkpoint' || !state.request.saveAssistantCheckpoint) {
+      if (operation === 'save_reporting') {
+        if (!state.request.saveAssistantReporting) {
+          throw new Error('Reporting can only be saved in an assistant setup conversation')
+        }
+        const reporting: AssistantReportingPatch = {}
+        if (operationInput['delivery'] !== undefined) {
+          const delivery = normalizePlanDelivery(operationInput['delivery'])
+          if (!delivery) throw new Error('Delivery needs a valid channel')
+          reporting.delivery = delivery
+        }
+        if (operationInput['priority'] !== undefined) {
+          const priority = normalizePlanPriority(operationInput['priority'])
+          if (!priority) throw new Error('Priority needs both timeliness and impact')
+          reporting.priority = priority
+        }
+        if (!reporting.delivery && !reporting.priority) {
+          throw new Error('save_reporting needs delivery or priority')
+        }
+        await state.request.saveAssistantReporting(reporting)
+        result = { status: 'saved', ...reporting }
+      } else if (operation === 'save_checkpoint') {
+        if (!state.request.saveAssistantCheckpoint) {
+          throw new Error(
+            'The getting-started checkpoint is only available while an assistant\u2019s knowledge is being written'
+          )
+        }
+        const markdown = requiredString(
+          operationInput['markdown'],
+          'markdown',
+          ASSISTANT_AUTHORING_CHECKPOINT_LIMIT
+        )
+        result = await state.request.saveAssistantCheckpoint(markdown)
+      } else if (operation === 'save_identity') {
+        if (!state.request.saveAssistantIdentity) {
+          throw new Error(
+            'Renaming the assistant is only available while its knowledge is being written'
+          )
+        }
+        // Only the fields the user has actually settled are sent on, so naming the
+        // assistant never clears a personality the conversation agreed earlier.
+        const identity: { name?: string; personality?: string } = {}
+        if (operationInput['name'] !== undefined) {
+          identity.name = requiredString(operationInput['name'], 'name', ASSISTANT_NAME_LIMIT)
+        }
+        if (operationInput['personality'] !== undefined) {
+          identity.personality = requiredString(
+            operationInput['personality'],
+            'personality',
+            ASSISTANT_PERSONALITY_LIMIT
+          )
+        }
+        if (identity.name === undefined && identity.personality === undefined) {
+          throw new Error('save_identity needs a name or a personality')
+        }
+        result = await state.request.saveAssistantIdentity(identity)
+      } else {
         throw new Error(
-          'The getting-started checkpoint is only available while an assistant\u2019s knowledge is being written'
+          'The getting-started capability exposes save_checkpoint, save_identity and save_reporting'
         )
       }
-      const markdown = requiredString(
-        operationInput['markdown'],
-        'markdown',
-        ASSISTANT_AUTHORING_CHECKPOINT_LIMIT
-      )
-      result = await state.request.saveAssistantCheckpoint(markdown)
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       const executor = this.browserExecutor
       if (!executor) throw new Error('The in-app browser is unavailable')
@@ -2373,6 +2530,9 @@ export class UtilityOrchestrationService {
         ['lint', this.designPreviewExecutor],
         ['critique', this.designPreviewExecutor],
         ['extract-reference', this.designPreviewExecutor],
+        ...['motion-read', 'motion-preview', 'motion-apply', 'motion-inspect'].map(
+          (name): [string, DesignCapabilityExecutor | null] => [name, this.designPreviewExecutor]
+        ),
         ['delegate', this.designAssignmentExecutor],
         ['generate', this.mediaGenerationExecutor],
         ['save-media', this.designMediaExecutor]
@@ -2409,6 +2569,7 @@ export class UtilityOrchestrationService {
           'runtime',
           'captions',
           'track',
+          'analyze-motion',
           'remove-background'
         ].map((name): [string, VideoCapabilityExecutor | null] => [
           name,

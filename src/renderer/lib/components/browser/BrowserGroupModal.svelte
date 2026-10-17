@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Trash2 } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
@@ -192,7 +193,7 @@
           title="Delete this group. Its tabs stay open."
           onclick={() => (confirmDelete = true)}
         >
-          <Trash2 size={14} />
+          <CioTrash size={14} />
           Delete
         </button>
       {/if}
@@ -222,7 +223,7 @@
           title={existing ? 'Save this group' : 'Create this group'}
           onclick={save}
         >
-          <Check size={14} />
+          <CioCheck size={14} />
           {existing ? 'Save' : 'Create'}
         </button>
       </div>

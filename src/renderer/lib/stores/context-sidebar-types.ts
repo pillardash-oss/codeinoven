@@ -289,6 +289,10 @@ export interface BrowserPopupWindowContextTab {
   title: string
   /** Live page favicon (data URL) from the browser, if the popup reported one. */
   favicon?: string
+  /** Extension identity, when this popup belongs to an installed extension. */
+  extensionId?: string
+  /** Owning box, shown only while multiple popup tabs of this extension are open. */
+  boxName?: string
 }
 
 export type MemorySection = 'active' | 'proposed'

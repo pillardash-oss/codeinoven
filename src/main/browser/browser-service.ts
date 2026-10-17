@@ -1,3 +1,6 @@
+import { designMotionPageScript } from '../design/design-motion-page'
+import type { AuthoredMotion } from '../../lib/design/motion-policy'
+import { dialog } from '../system/file-dialogs'
 import {
   showBrowserNewTabMenu,
   validateBrowserNewTabMenuInput
@@ -18,7 +21,6 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  dialog,
   ipcMain as electronIpcMain,
   Menu,
   screen,
@@ -702,8 +704,8 @@ export class BrowserService {
    * The tab whose page last gained the keyboard, or null while the window's own
    * renderer did.
    *
-   * Updated by focus events alone, which makes it the last surface the user was
-   * actually working in. It is read once, on the window's `blur`, because
+   * Claimed by page clicks and explicit keyboard handovers, and released when
+   * the app renderer gains focus. It is read on the window's `blur`, because
    * nothing inside the app gains focus while the whole window is losing it, so
    * at that moment it still names the page the user was typing in.
    */
@@ -876,6 +878,7 @@ export class BrowserService {
     // return when the user had actually been in the toolbar.
     window.webContents.on('focus', () => {
       this.keyboardOwnerTabId = null
+      this.pendingPageFocusTabId = null
     })
     this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
@@ -1914,6 +1917,20 @@ export class BrowserService {
     void this.tabHistory.flush()
   }
 
+  relocateWorkFolder(projectId: string, from: string, to: string): void {
+    for (const [tabId, tab] of this.tabs) {
+      if (
+        tab.projectId !== projectId ||
+        (tab.design?.directory !== from && tab.composition?.directory !== from)
+      )
+        continue
+      if (tab.design?.directory === from) tab.design = { ...tab.design, directory: to }
+      if (tab.composition?.directory === from)
+        tab.composition = { ...tab.composition, directory: to }
+      this.publishState(tabId)
+    }
+  }
+
   /**
    * Record that a tab is rendering a design folder. Non-null `design` on the
    *  published state is what makes the panel offer the element inspector, so only
@@ -2021,7 +2038,10 @@ export class BrowserService {
       this.applyTabMark(tabId, tab, url, NO_TAB_MARK)
       return
     }
-    void recogniser(tab.projectId, tab.threadId, url)
+    // Project board views and user-opened screen tabs browse work without
+    // changing the thread's durable authored-work association.
+    const recordThread = !tabId.startsWith('browser:screen:') && !tabId.startsWith('browser:board:')
+    void recogniser(tab.projectId, tab.threadId, url, recordThread)
       .then((recognised) => {
         if (contents.isDestroyed() || contents.getURL() !== url) return
         this.applyTabMark(tabId, tab, url, recognised)
@@ -2613,7 +2633,15 @@ export class BrowserService {
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
-    const tabId = designScreenTabId(input)
+    const movedTab = [...this.tabs].find(
+      ([id, tab]) =>
+        id.startsWith('browser:screen:') &&
+        tab.projectId === input.projectId &&
+        tab.threadId === input.threadId &&
+        tab.design?.directory === input.directory &&
+        this.tabUrl(id) === input.url
+    )
+    const tabId = movedTab?.[0] ?? designScreenTabId(input)
     const reused = this.tabs.has(tabId)
     const tab = this.ensureTab(tabId, input.projectId, input.threadId)
     if (!reused) {
@@ -2725,7 +2753,15 @@ export class BrowserService {
     const projectId = validateProjectId(input.projectId)
     const threadId = validateThreadId(input.threadId)
     const url = validateBrowserUrl(input.url)
-    const tabId = compositionBoardTabId({ projectId, threadId, directory: input.directory })
+    const movedTab = [...this.tabs].find(
+      ([id, tab]) =>
+        id.startsWith('browser:board:') &&
+        tab.projectId === projectId &&
+        tab.threadId === threadId &&
+        tab.composition?.directory === input.directory
+    )
+    const tabId =
+      movedTab?.[0] ?? compositionBoardTabId({ projectId, threadId, directory: input.directory })
     const existing = this.tabs.get(tabId)
     if (existing) {
       // A view already on this page is the one being asked for again, so it is
@@ -2864,6 +2900,44 @@ export class BrowserService {
    * on it is never called back and every capture of a composition the app had
    * shown timed out instead of answering.
    */
+  designMotionTab(projectId: string, threadId: string, expectedUrl: string): string | null {
+    const id = this.agentTabFor(projectId, threadId)
+    const tab = id ? this.tabs.get(id) : null
+    return id &&
+      tab &&
+      !tab.view.webContents.isDestroyed() &&
+      tab.view.webContents.getURL() === expectedUrl
+      ? id
+      : null
+  }
+
+  async inspectDesignMotion(
+    tabId: string,
+    expectedUrl: string,
+    input: { targetId?: string; motion?: AuthoredMotion; sampleMs?: number }
+  ): Promise<unknown> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed())
+      throw new Error('The design preview is unavailable')
+    const contents = tab.view.webContents
+    if (contents.getURL() !== expectedUrl)
+      throw new Error('The preview navigated. Reopen the screen before inspecting motion.')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const result: unknown = await Promise.race([
+        contents.executeJavaScript(designMotionPageScript(input)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Motion observation timed out')), 4000)
+        })
+      ])
+      if (contents.isDestroyed() || contents.getURL() !== expectedUrl)
+        throw new Error('The preview changed during motion observation')
+      return result
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   async renderTabFrame(
     tabId: string,
     seconds: number
@@ -3496,11 +3570,28 @@ export class BrowserService {
     ])
 
     const publish = (): void => this.publishState(tabId)
-    // The page takes the keyboard whenever the user clicks into it, which is
-    // recorded here so a reactivated window can hand it back (see
-    // `restorePageFocusTabId`).
+    // A native click is explicit keyboard intent. Page scripts, reloads and
+    // agent DOM operations may focus the contents too, but cannot claim it.
+    view.webContents.on('before-mouse-event', (_event, mouse) => {
+      if (mouse.type !== 'mouseDown' || !this.isPageOnScreen(tabId)) return
+      this.pendingPageFocusTabId = null
+      this.focusPageView(tabId, tab)
+    })
     view.webContents.on('focus', () => {
-      this.keyboardOwnerTabId = tabId
+      if (this.keyboardOwnerTabId === tabId) return
+      // Native focus can precede mouseDown. Let that click claim ownership
+      // before rejecting an unsolicited handover, and recheck after the turn.
+      setImmediate(() => {
+        if (this.window.isDestroyed() || view.webContents.isDestroyed()) return
+        if (!view.webContents.isFocused() || this.keyboardOwnerTabId === tabId) return
+        const ownerId = this.keyboardOwnerTabId
+        const owner = ownerId ? this.tabs.get(ownerId) : undefined
+        if (ownerId && owner && this.isPageOnScreen(ownerId)) {
+          this.focusPageView(ownerId, owner)
+        } else if (!this.window.webContents.isDestroyed()) {
+          this.window.webContents.focus()
+        }
+      })
     })
     // A key pressed in the page reaches this view's web contents and nothing
     // else in the app, so this is where the browser claims the chords it
@@ -6770,6 +6861,7 @@ export class BrowserService {
    * the moment a switch lands on the tab rather than at the next mouse move.
    */
   private focusPageView(tabId: string, tab: BrowserTab): void {
+    this.keyboardOwnerTabId = tabId
     tab.view.webContents.focus()
     this.primePagePointer(tab, this.activeTabId === tabId ? this.activeTabBounds : null)
   }

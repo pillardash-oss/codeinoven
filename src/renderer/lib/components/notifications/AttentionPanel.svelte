@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, MessageSquare, TriangleAlert, X } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
@@ -107,7 +110,7 @@
 
 <div class="flex h-full min-h-0 flex-col bg-app">
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-    <TriangleAlert size={14} class="shrink-0 text-warning" />
+    <CioAttention size={14} class="shrink-0 text-warning" />
     <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
       Decisions made for you
     </span>
@@ -128,7 +131,7 @@
     {#if unread.length === 0}
       <div class="flex h-full min-h-0 flex-col">
         <EmptyState
-          icon={TriangleAlert}
+          icon={CioAttention}
           title="Nothing resolved for you on this thread"
           description="When a question, secret request, image decision, or destructive confirmation on this thread is settled without you, it is recorded here so the app never answers silently."
         />
@@ -158,7 +161,7 @@
                 disabled={busyId === item.id}
                 onclick={() => void openThread(item)}
               >
-                <MessageSquare size={13} />
+                <CioMessage size={13} />
               </button>
               <button
                 type="button"
@@ -167,7 +170,7 @@
                 title="Dismiss this decision"
                 onclick={() => dismiss(item)}
               >
-                <X size={13} />
+                <CioClose size={13} />
               </button>
             </div>
 
@@ -192,7 +195,7 @@
                             : 'text-muted'}"
                         >
                           {#if option === entry.picked}
-                            <Check size={11} class="mt-0.5 shrink-0" />
+                            <CioCheck size={11} class="mt-0.5 shrink-0" />
                           {:else}
                             <span class="mt-0.5 h-[11px] w-[11px] shrink-0" aria-hidden="true"
                             ></span>

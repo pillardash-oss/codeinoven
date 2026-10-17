@@ -1,24 +1,23 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    Ban,
-    ChevronRight,
-    Gauge,
-    Maximize2,
-    Pause,
-    Pencil,
-    Play,
-    RotateCcw
-  } from '@lucide/svelte'
+  import { Gauge } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantIcon, {
+    type AssistantIconMark
+  } from '$lib/components/icons/cio/AssistantIcon.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
@@ -60,6 +59,7 @@
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
+    knowledgeSectionSummary,
     parseKnowledgeSections,
     previewRuns,
     resolveConnections,
@@ -190,9 +190,31 @@
     visibleTabs.some((entry) => entry.id === panelTab) ? panelTab : ('all' as AssistantPanelTab)
   )
 
+  /** The status pill's ink: a paused assistant is a warning, a running one is a success. */
+  const statusToneColor = $derived(
+    assistant?.paused ? 'var(--color-warning)' : 'var(--color-success)'
+  )
+
+  /**
+   * The count a tab carries, or null when it has nothing worth counting. A zero
+   * is noise on a tab label, so every empty section reads as a bare label instead
+   * of a badge that says nothing.
+   */
+  function tabCount(id: AssistantPanelTab): number | null {
+    if (id === 'connections') return connectionViews.length || null
+    if (id === 'agents') {
+      return assistant ? 1 + (assistant.agents?.fallbacks.length ?? 0) : null
+    }
+    if (id === 'issues') return issueCount || null
+    return null
+  }
+
   // ─── Assistant content ──────────────────────────────────────────────────────
 
   const sections = $derived(assistant ? parseKnowledgeSections(assistant.knowledge) : [])
+
+  /** The one-line summary a folded section shows in place of its body. */
+  const sectionSummary = knowledgeSectionSummary
   const knowledgeComplete = $derived(assistant ? assistantKnowledgeComplete(assistant) : false)
   const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
   /** Whether this assistant runs on a clock at all; drives the schedule copy. */
@@ -598,6 +620,31 @@
     lastSuccessAt > 0 ? describeRelativeTime(lastSuccessAt, Date.now()) : 'never'
   )
 
+  /** The soonest intended fire across this panel's tasks, or null when none is scheduled. */
+  const nextRunAt = $derived.by(() => {
+    let earliest: number | null = null
+    for (const entry of runScopeTasks) {
+      const candidate = assistants.nextRunForTask(entry)
+      if (candidate === null) continue
+      if (earliest === null || candidate < earliest) earliest = candidate
+    }
+    return earliest
+  })
+  const nextRunLabel = $derived(nextRunAt === null ? 'Not scheduled' : formatDateTime(nextRunAt))
+  const nextRunRelative = $derived(
+    nextRunAt === null ? null : describeRelativeTime(nextRunAt, Date.now())
+  )
+  /**
+   * How a slot missed while the app was closed is recovered. Read from the live
+   * setting, so the Schedule card states the policy the scheduler actually follows
+   * instead of a sentence that can drift from it.
+   */
+  const missedRunPolicyLabel = $derived(
+    appConfigState.autoRunMissedAssistantRuns
+      ? 'Caught up on the next launch, at most once.'
+      : 'Waits for you in Issues.'
+  )
+
   let running = $state(false)
 
   // ─── The assistant's knowledge thread ──────────────────────────────────────────
@@ -671,6 +718,18 @@
   }
 
   /**
+   * Open the assistant's authoring thread from the empty state's "Open the task"
+   * action. A hidden thread is revealed first: a hidden row never reaches the
+   * sidebar, so opening it without revealing would land the user nowhere.
+   */
+  function openKnowledgeTask(): void {
+    const thread = knowledgeThread
+    if (!thread) return
+    if (knowledgeThreadHidden) void toggleKnowledgeThread()
+    else onOpenTask(thread)
+  }
+
+  /**
    * Run the assistant immediately, ignoring its schedule and pause state, so the
    * user can test what they built without waiting for the next fire. Every task
    * runs on a fresh thread, so the first run is opened to show it happening.
@@ -720,6 +779,47 @@
   })
 </script>
 
+{#snippet panelHead()}
+  {#if assistant}
+    <!--
+      The panel opens as a document about one assistant, so its own name, its
+      clock and its state sit above the sections rather than inside one tab.
+      The status pill is the pause control: the panel has no room for a separate
+      row of it, and the state is the one thing that belongs at the top.
+    -->
+    <header class="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2.5">
+      <div class="flex items-center gap-2.5">
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-on-primary">
+          <AssistantIcon size={20} />
+        </span>
+        <div class="min-w-0 flex-1">
+          <h1 class="truncate text-[0.875rem] font-semibold tracking-tight text-foreground">
+            {assistant.name}
+          </h1>
+          <p class="mt-0.5 truncate text-[0.6875rem] text-muted">
+            {scheduleLabel} · last run {lastRunLabel}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 border border-border px-1.5 py-0.5 text-[0.5625rem] tracking-wide uppercase transition-colors hover:bg-elevated"
+          style="color: {statusToneColor}"
+          title={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
+          aria-label={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
+          onclick={() => void togglePaused()}
+        >
+          {assistant.paused ? 'Paused' : 'Running'}
+        </button>
+      </div>
+      {#if assistant.description?.trim()}
+        <p class="border-l-2 border-border pl-2.5 text-[0.75rem] leading-relaxed text-muted">
+          {assistant.description}
+        </p>
+      {/if}
+    </header>
+  {/if}
+{/snippet}
+
 {#snippet panelHeader()}
   <div class="flex h-9 shrink-0 items-stretch border-b border-border pr-1">
     <div
@@ -740,12 +840,12 @@
           onclick={() => (panelTab = entry.id)}
         >
           {entry.label}
-          {#if entry.id === 'issues' && issueCount > 0}
+          {#if tabCount(entry.id) !== null}
             <span
-              class="border border-border tabular-nums px-1 text-[0.5625rem]"
-              style="color: var(--color-missed); background: color-mix(in srgb, var(--color-missed) 16%, transparent)"
+              class="border border-border bg-elevated px-1 text-[0.5625rem] tabular-nums"
+              style={entry.id === 'issues' ? 'color: var(--color-missed)' : ''}
             >
-              {issueCount}
+              {tabCount(entry.id)}
             </span>
           {/if}
           {#if activeTab === entry.id}
@@ -761,69 +861,78 @@
       aria-label="Open in full screen"
       onclick={() => (fullscreen = true)}
     >
-      <Maximize2 size={13} strokeWidth={1.8} />
+      <CioMaximize size={13} strokeWidth={1.8} />
     </button>
   </div>
 {/snippet}
 
-{#snippet summaryRow(args: {
+{#snippet glanceRow(args: {
   title: string
   detail: string
   target: AssistantPanelTab
+  icon: AssistantIconMark
   warn?: boolean
 })}
-  <div class="flex items-start gap-2 border border-border px-2.5 py-2">
-    <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-1.5">
-        <span class="text-[0.75rem] text-foreground">{args.title}</span>
-        {#if args.warn}
-          <span
-            class="flex items-center"
-            style="color: var(--color-warning)"
-            role="img"
-            aria-label="{args.title} needs setup"
-            title="{args.title} needs setup"
-          >
-            <AlertTriangle size={11} strokeWidth={2} />
-          </span>
-        {/if}
-      </div>
-      <p class="mt-0.5 text-[0.625rem] leading-relaxed text-dimmed">{args.detail}</p>
-    </div>
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-0.5 px-1.5 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open {args.title}"
-      aria-label="Open {args.title}"
-      onclick={() => (panelTab = args.target)}
-    >
-      More
-      <ChevronRight size={12} strokeWidth={1.8} />
-    </button>
-  </div>
+  <!--
+    The All tab is a table of contents, not a second copy of every section, so
+    each line is one door: what the section holds and a way in. The warn line
+    wears the missed-run ink on its left edge, which is the only colour an
+    assistant surface spends on a problem.
+  -->
+  <button
+    type="button"
+    class="flex w-full items-center gap-2.5 border border-border border-l-2 bg-surface px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+    style={args.warn
+      ? 'border-left-color: var(--color-missed)'
+      : 'border-left-color: var(--color-border)'}
+    title="Open {args.title}"
+    aria-label="Open the {args.title} section"
+    onclick={() => (panelTab = args.target)}
+  >
+    <span class="flex h-7 w-7 shrink-0 items-center justify-center bg-elevated text-foreground">
+      <AssistantIcon mark={args.icon} size={16} />
+    </span>
+    <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span class="text-[0.75rem] font-semibold text-foreground">{args.title}</span>
+      <span class="text-[0.625rem] leading-relaxed text-muted">{args.detail}</span>
+    </span>
+    <span class="shrink-0 text-[0.5625rem] tracking-wide text-dimmed uppercase">Open</span>
+  </button>
 {/snippet}
 
 {#snippet assistantEmptyState()}
-  <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
+  <div
+    class="flex flex-col items-center gap-2.5 border border-border bg-surface px-4 py-8 text-center"
+  >
     <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
       <AssistantIcon mark="knowledge" size={24} class="text-dimmed" />
     </span>
-    <p class="text-[0.8125rem] font-medium text-foreground">Nothing yet</p>
+    <p class="text-[0.8125rem] font-semibold text-foreground">Nothing yet</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Tell {assistantLabel} what you want in its thread. It asks what it needs, then writes it down here,
-      and every run follows it.
+      Tell {assistantLabel} what you want in its thread. Tell it the goal, the steps, and when it should
+      run. The plan you agree on shows up here.
     </p>
+    {#if knowledgeThread}
+      <button
+        type="button"
+        class="mt-1 border border-border px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open this assistant's knowledge thread"
+        aria-label="Open this assistant's knowledge thread"
+        onclick={openKnowledgeTask}
+      >
+        Open the task
+      </button>
+    {/if}
   </div>
   {#if gettingStartedCheckpoint}
-    <div class="px-3 pb-3">
-      <div class="border border-border bg-elevated p-2.5">
-        <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Agreed so far</p>
-        <p class="mb-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-          What you and the agent have agreed for this assistant so far.
-        </p>
-        <div class="text-[0.6875rem] text-muted">
-          <MarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
-        </div>
+    <div class="flex flex-col gap-1.5 border border-border bg-surface p-2.5">
+      <p class="text-[0.8125rem] font-semibold text-foreground">Agreed so far</p>
+      <p class="text-[0.6875rem] leading-relaxed text-muted">
+        What you and the agent have agreed for this assistant so far. It is not saved until you
+        confirm the recap.
+      </p>
+      <div class="text-[0.6875rem] text-muted">
+        <MarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
       </div>
     </div>
   {/if}
@@ -890,25 +999,7 @@
     {#if activeTab === 'all'}
       <div class="flex flex-col gap-2 p-3">
         {#if assistant}
-          <button
-            type="button"
-            class="flex items-center gap-2 border border-border px-2.5 py-2 text-left text-[0.75rem] transition-colors hover:bg-elevated"
-            title={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
-            aria-label={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
-            onclick={() => void togglePaused()}
-          >
-            {#if assistant.paused}
-              <Play size={13} strokeWidth={1.8} class="text-muted" />
-              <span class="min-w-0 flex-1 text-foreground">Resume assistant</span>
-              <span class="text-[0.625rem]" style="color: var(--color-warning)">Paused</span>
-            {:else}
-              <Pause size={13} strokeWidth={1.8} class="text-muted" />
-              <span class="min-w-0 flex-1 text-foreground">Pause assistant</span>
-              <span class="text-[0.625rem] text-dimmed">Running</span>
-            {/if}
-          </button>
-
-          <div class="flex flex-col gap-2 border border-border px-2.5 py-2">
+          <div class="flex flex-col gap-2 border border-border bg-surface px-2.5 py-2">
             <div class="flex items-center gap-2">
               <button
                 type="button"
@@ -918,7 +1009,7 @@
                 disabled={running || !knowledgeComplete}
                 onclick={() => void runNow()}
               >
-                <RotateCcw size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
+                <CioUndo size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
                 Run now
               </button>
               <span class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
@@ -927,60 +1018,96 @@
                   : 'Save a knowledge first.'}
               </span>
             </div>
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.625rem] text-dimmed">
-              <span title="The last time a run was dispatched">Last run: {lastRunLabel}</span>
-              <span title="The last time a run finished successfully">
-                Last success: {lastSuccessLabel}
-              </span>
-            </div>
+            <dl class="flex flex-wrap gap-x-5 gap-y-1">
+              <div class="flex flex-col gap-0.5">
+                <dt
+                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                  title="The last time a run was dispatched"
+                >
+                  Last run
+                </dt>
+                <dd class="text-[0.75rem] text-foreground">{lastRunLabel}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt
+                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                  title="The last time a run finished successfully"
+                >
+                  Last success
+                </dt>
+                <dd class="text-[0.75rem] text-foreground">{lastSuccessLabel}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt
+                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                  title="The next time this assistant is due to run"
+                >
+                  Next run
+                </dt>
+                <dd class="text-[0.75rem] text-foreground">{nextRunLabel}</dd>
+              </div>
+            </dl>
           </div>
 
-          {@render summaryRow({
-            title: 'Assistant',
-            detail: knowledgeComplete
-              ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
-              : 'No knowledge yet. Describe the assistant to the agent in its task.',
-            target: 'assistant',
-            warn: !knowledgeComplete
-          })}
-
-          {@render summaryRow({
-            title: 'Connections',
-            detail:
-              connectionViews.length === 0
-                ? 'No connections yet.'
-                : connectionProblems === 0
-                  ? `${connectionViews.length} connected and ready.`
-                  : `${connectionProblems} of ${connectionViews.length} need setup.`,
-            target: 'connections',
-            warn: connectionProblems > 0
-          })}
-
-          {@render summaryRow({
-            title: 'Agents',
-            detail: agentsComplete
-              ? `${1 + (assistant.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
-              : 'No model set. Add a primary and fallbacks on the Agents tab.',
-            target: 'agents',
-            warn: !agentsComplete
-          })}
-
-          {@render summaryRow({
-            title: 'Reporting',
-            detail: reportingBrief,
-            target: 'assistant',
-            warn: !deliveryReady
-          })}
-
-          {@render summaryRow({
-            title: 'Issues',
-            detail:
-              issueCount === 0
-                ? 'Nothing needs attention.'
-                : `${missedRuns.length} missed · ${runIssues.length} run issue${runIssues.length === 1 ? '' : 's'}.`,
-            target: 'issues',
-            warn: issueCount > 0
-          })}
+          <ul class="flex flex-col gap-2">
+            <li>
+              {@render glanceRow({
+                title: 'Assistant',
+                icon: 'knowledge',
+                detail: knowledgeComplete
+                  ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
+                  : 'No knowledge yet. Describe the assistant to the agent in its task.',
+                target: 'assistant',
+                warn: !knowledgeComplete
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Connections',
+                icon: 'connection',
+                detail:
+                  connectionViews.length === 0
+                    ? 'No connections yet.'
+                    : connectionProblems === 0
+                      ? `${connectionViews.length} connected and ready.`
+                      : `${connectionProblems} of ${connectionViews.length} need setup.`,
+                target: 'connections',
+                warn: connectionProblems > 0
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Agents',
+                icon: 'agent',
+                detail: agentsComplete
+                  ? `${1 + (assistant.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
+                  : 'No model set. Add a primary and fallbacks on the Agents tab.',
+                target: 'agents',
+                warn: !agentsComplete
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Reporting',
+                icon: 'assistant',
+                detail: reportingBrief,
+                target: 'assistant',
+                warn: !deliveryReady
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Issues',
+                icon: 'run',
+                detail:
+                  issueCount === 0
+                    ? 'Nothing needs attention.'
+                    : `${missedRuns.length} missed · ${runIssues.length} run issue${runIssues.length === 1 ? '' : 's'}.`,
+                target: 'issues',
+                warn: issueCount > 0
+              })}
+            </li>
+          </ul>
         {:else}
           {@render noAssistantState()}
         {/if}
@@ -988,31 +1115,148 @@
     {:else if activeTab === 'assistant'}
       {#if !assistant}
         {@render noAssistantState()}
-      {:else if !knowledgeComplete}
-        {@render assistantEmptyState()}
       {:else}
-        <div class="flex flex-col gap-1.5 p-3">
-          {#if assistant.personality?.trim()}
-            <div class="mb-1 bg-elevated px-2.5 py-2">
-              <p
-                class="mb-1 text-[0.625rem] font-medium text-dimmed"
-                title="How this assistant behaves and sounds"
-              >
-                Personality
+        <div class="flex flex-col gap-2 p-3">
+          {#if !knowledgeComplete}
+            {@render assistantEmptyState()}
+          {:else}
+            {#if assistant.personality?.trim()}
+              <div class="border border-border bg-surface px-2.5 py-2">
+                <p
+                  class="mb-1 text-[0.625rem] font-medium text-dimmed"
+                  title="How this assistant behaves and sounds"
+                >
+                  Personality
+                </p>
+                <p class="text-[0.6875rem] leading-relaxed text-muted">{assistant.personality}</p>
+              </div>
+            {/if}
+            <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <h2 class="text-[0.875rem] font-semibold text-foreground">What it knows</h2>
+                <span class="text-[0.625rem] text-dimmed"
+                  >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
+                >
+              </div>
+              <p class="text-[0.6875rem] leading-relaxed text-muted">
+                The instructions this assistant follows on every run. The agent follows them
+                literally, so anything not written here does not happen.
               </p>
-              <p class="text-[0.6875rem] leading-relaxed text-muted">{assistant.personality}</p>
+              <ol class="flex flex-col gap-2">
+                {#each sections as section (section.id)}
+                  {@const folded = collapsed.has(section.id) && editingId !== section.id}
+                  <li class="border-t border-border first:border-t-0">
+                    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+                      <button
+                        type="button"
+                        class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                        aria-expanded={!folded}
+                        title={folded ? `Expand ${section.title}` : `Fold ${section.title}`}
+                        onclick={() => toggleSection(section.id)}
+                      >
+                        <CioForward
+                          size={12}
+                          strokeWidth={1.8}
+                          class="shrink-0 text-dimmed transition-transform duration-150 {folded
+                            ? ''
+                            : 'rotate-90'}"
+                        />
+                        <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
+                          {section.title}
+                        </span>
+                      </button>
+                      {#if editingId !== section.id}
+                        <button
+                          type="button"
+                          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                          title="Edit {section.title}"
+                          aria-label="Edit {section.title}"
+                          onclick={() => startEdit(section)}
+                        >
+                          <CioPencil size={12} strokeWidth={1.8} />
+                        </button>
+                      {/if}
+                    </div>
+
+                    {#if editingId === section.id}
+                      <div class="border-t border-border p-2">
+                        <!-- The editor grows with its content (no `max-h` cap) so a long
+                       section keeps the same tall box the read view showed instead
+                       of collapsing into a short scroll pane on edit. The panel's
+                       content already scrolls, so an overlong body is still safe. -->
+                        <RichMarkdownEditor
+                          id="assistant-section-{section.id}"
+                          value={editDraft}
+                          onValueChange={(value) => (editDraft = value)}
+                          placeholder="Write this section in Markdown…"
+                          ariaLabel="Edit {section.title}"
+                          autofocus
+                          onSubmit={() => void saveSection(section.id)}
+                          containerClass="border border-border bg-surface"
+                          class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
+                        />
+                        <div class="mt-1.5 flex justify-end gap-1.5">
+                          <button
+                            type="button"
+                            class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            onclick={cancelEdit}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                            onclick={() => void saveSection(section.id)}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    {:else if !folded}
+                      <div class="border-t border-border px-2.5 py-2">
+                        <MarkdownView text={section.body} class="text-[0.75rem]" />
+                      </div>
+                    {:else if sectionSummary(section)}
+                      <!-- A folded section keeps one line of its own prose, so folding
+                     hides detail without hiding what the section is about. -->
+                      <p class="border-t border-border px-2.5 py-1.5 text-[0.6875rem] text-dimmed">
+                        {sectionSummary(section)}
+                      </p>
+                    {/if}
+                  </li>
+                {/each}
+              </ol>
             </div>
           {/if}
-          <p
-            class="mb-1 text-[0.625rem] text-dimmed"
-            title="What you and the assistant agreed it keeps to"
-          >
-            Schedule: {scheduleLabel}
-          </p>
 
-          <div class="mb-1 flex flex-col gap-2 border border-border px-2.5 py-2">
+          <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+            <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
+            <dl class="flex flex-col">
+              <div
+                class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"
+              >
+                <dt class="text-[0.75rem] text-muted">Runs</dt>
+                <dd class="text-right text-[0.75rem] text-foreground">{scheduleLabel}</dd>
+              </div>
+              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                <dt class="text-[0.75rem] text-muted">Next run</dt>
+                <dd class="text-right text-[0.75rem] text-foreground">
+                  {nextRunLabel}
+                  {#if nextRunRelative && nextRunRelative !== 'now'}
+                    <span class="ml-1 text-dimmed">{nextRunRelative}</span>
+                  {/if}
+                </dd>
+              </div>
+              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                <dt class="text-[0.75rem] text-muted">If a run is missed</dt>
+                <dd class="text-right text-[0.75rem] text-foreground">{missedRunPolicyLabel}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
             <div class="flex items-center gap-1.5">
-              <span class="text-[0.75rem] text-foreground">Reporting</span>
+              <h2 class="text-[0.875rem] font-semibold text-foreground">Reporting</h2>
               {#if !deliveryReady}
                 <span
                   class="flex items-center"
@@ -1021,176 +1265,112 @@
                   aria-label="The delivery channel needs a connection"
                   title="The delivery channel needs a connection"
                 >
-                  <AlertTriangle size={11} strokeWidth={2} />
+                  <CioAttention size={11} strokeWidth={2} />
                 </span>
               {/if}
             </div>
-            <p class="text-[0.625rem] leading-relaxed text-dimmed">
+            <p class="text-[0.6875rem] leading-relaxed text-muted">
               Where this assistant's output goes, and how urgent it is. Agree it with the agent, or
               set it here.
             </p>
-
-            <div class="flex flex-col gap-1.5">
-              <div class="flex items-center gap-1.5">
-                <EnumSelect
-                  options={deliveryChoices}
-                  value={assistant.delivery?.channel ?? null}
-                  onChange={setDeliveryChannel}
-                  placeholder="Delivery channel"
-                  ariaLabel="Delivery channel"
-                  title="Where this assistant's output is delivered"
-                  class="flex-1"
-                />
-                {#if assistant.delivery}
-                  <button
-                    type="button"
-                    class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Clear the delivery channel"
-                    aria-label="Clear the delivery channel"
-                    onclick={clearDelivery}
-                  >
-                    Clear
-                  </button>
-                {/if}
+            <div class="flex flex-col">
+              <div
+                class="flex items-center justify-between gap-3 border-t border-border py-2 first:border-t-0"
+              >
+                <span class="shrink-0 text-[0.75rem] text-muted">Deliver to</span>
+                <div class="flex min-w-0 flex-1 items-center gap-1">
+                  <EnumSelect
+                    options={deliveryChoices}
+                    value={assistant.delivery?.channel ?? null}
+                    onChange={setDeliveryChannel}
+                    placeholder="Delivery channel"
+                    ariaLabel="Delivery channel"
+                    title="Where this assistant's output is delivered"
+                    class="flex-1"
+                  />
+                  {#if assistant.delivery}
+                    <button
+                      type="button"
+                      class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Clear the delivery channel"
+                      aria-label="Clear the delivery channel"
+                      onclick={clearDelivery}
+                    >
+                      Clear
+                    </button>
+                  {/if}
+                </div>
               </div>
 
               {#if assistant.delivery && assistant.delivery.channel !== 'in-app'}
-                <input
-                  type="text"
-                  class="w-full border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
-                  placeholder="Destination: a chat, a channel, an address"
-                  aria-label="Delivery destination"
-                  title="The concrete destination, for example #eng-alerts"
-                  value={assistant.delivery.target ?? ''}
-                  onblur={(event) => commitDeliveryTarget(event.currentTarget.value)}
-                  onkeydown={(event) => {
-                    if (event.key === 'Enter') event.currentTarget.blur()
-                  }}
-                />
+                <div class="border-t border-border py-2">
+                  <input
+                    type="text"
+                    class="w-full border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
+                    placeholder="Destination: a chat, a channel, an address"
+                    aria-label="Delivery destination"
+                    title="The concrete destination, for example #eng-alerts"
+                    value={assistant.delivery.target ?? ''}
+                    onblur={(event) => commitDeliveryTarget(event.currentTarget.value)}
+                    onkeydown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    }}
+                  />
+                </div>
               {/if}
 
               {#if assistant.delivery && !deliveryReady}
-                <p class="text-[0.625rem] leading-relaxed" style="color: var(--color-warning)">
+                <p
+                  class="border-t border-border py-2 text-[0.625rem] leading-relaxed"
+                  style="color: var(--color-warning)"
+                >
                   {assistantDeliveryChannelLabel(assistant.delivery.channel)} is not connected yet. Add
                   it on the Connections tab; until then runs deliver in CodeInOven.
                 </p>
               {/if}
-            </div>
 
-            <div class="flex items-center gap-1.5">
-              <EnumSelect
-                options={ASSISTANT_TIMELINESS_OPTIONS}
-                value={assistant.priority?.timeliness ?? null}
-                onChange={setPriorityTimeliness}
-                placeholder="Timeliness"
-                ariaLabel="Time-based priority"
-                title="How soon this assistant's output matters"
-                class="flex-1"
-              />
-              <EnumSelect
-                options={ASSISTANT_IMPACT_OPTIONS}
-                value={assistant.priority?.impact ?? null}
-                onChange={setPriorityImpact}
-                placeholder="Impact"
-                ariaLabel="Scope-based priority"
-                title="How far this assistant's output reaches"
-                class="flex-1"
-              />
-              {#if assistant.priority}
-                <button
-                  type="button"
-                  class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  title="Clear the priority"
-                  aria-label="Clear the priority"
-                  onclick={clearPriority}
-                >
-                  Clear
-                </button>
-              {/if}
-            </div>
-          </div>
-          <div class="mt-1 flex items-baseline justify-between px-0.5">
-            <p class="text-[0.75rem] text-foreground">What {assistant.name} knows</p>
-            <span class="text-[0.625rem] text-dimmed"
-              >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
-            >
-          </div>
-          {#each sections as section (section.id)}
-            {@const folded = collapsed.has(section.id) && editingId !== section.id}
-            <div class="border border-border">
-              <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-                <button
-                  type="button"
-                  class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                  aria-expanded={!folded}
-                  title={folded ? `Expand ${section.title}` : `Fold ${section.title}`}
-                  onclick={() => toggleSection(section.id)}
-                >
-                  <ChevronRight
-                    size={12}
-                    strokeWidth={1.8}
-                    class="shrink-0 text-dimmed transition-transform duration-150 {folded
-                      ? ''
-                      : 'rotate-90'}"
+              <div class="flex items-center justify-between gap-3 border-t border-border py-2">
+                <span class="shrink-0 text-[0.75rem] text-muted">Timeliness</span>
+                <div class="flex min-w-0 flex-1 items-center gap-1">
+                  <EnumSelect
+                    options={ASSISTANT_TIMELINESS_OPTIONS}
+                    value={assistant.priority?.timeliness ?? null}
+                    onChange={setPriorityTimeliness}
+                    placeholder="Timeliness"
+                    ariaLabel="Time-based priority"
+                    title="How soon this assistant's output matters"
+                    class="flex-1"
                   />
-                  <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
-                    {section.title}
-                  </span>
-                </button>
-                {#if editingId !== section.id}
-                  <button
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Edit {section.title}"
-                    aria-label="Edit {section.title}"
-                    onclick={() => startEdit(section)}
-                  >
-                    <Pencil size={12} strokeWidth={1.8} />
-                  </button>
-                {/if}
+                </div>
               </div>
 
-              {#if editingId === section.id}
-                <div class="border-t border-border p-2">
-                  <!-- The editor grows with its content (no `max-h` cap) so a long
-                       section keeps the same tall box the read view showed instead
-                       of collapsing into a short scroll pane on edit. The panel's
-                       content already scrolls, so an overlong body is still safe. -->
-                  <RichMarkdownEditor
-                    id="assistant-section-{section.id}"
-                    value={editDraft}
-                    onValueChange={(value) => (editDraft = value)}
-                    placeholder="Write this section in Markdown…"
-                    ariaLabel="Edit {section.title}"
-                    autofocus
-                    onSubmit={() => void saveSection(section.id)}
-                    containerClass="border border-border bg-surface"
-                    class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
+              <div class="flex items-center justify-between gap-3 border-t border-border py-2">
+                <span class="shrink-0 text-[0.75rem] text-muted">Impact</span>
+                <div class="flex min-w-0 flex-1 items-center gap-1">
+                  <EnumSelect
+                    options={ASSISTANT_IMPACT_OPTIONS}
+                    value={assistant.priority?.impact ?? null}
+                    onChange={setPriorityImpact}
+                    placeholder="Impact"
+                    ariaLabel="Scope-based priority"
+                    title="How far this assistant's output reaches"
+                    class="flex-1"
                   />
-                  <div class="mt-1.5 flex justify-end gap-1.5">
+                  {#if assistant.priority}
                     <button
                       type="button"
-                      class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                      onclick={cancelEdit}
+                      class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Clear the priority"
+                      aria-label="Clear the priority"
+                      onclick={clearPriority}
                     >
-                      Cancel
+                      Clear
                     </button>
-                    <button
-                      type="button"
-                      class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                      onclick={() => void saveSection(section.id)}
-                    >
-                      Save
-                    </button>
-                  </div>
+                  {/if}
                 </div>
-              {:else if !folded}
-                <div class="border-t border-border px-2.5 py-2">
-                  <MarkdownView text={section.body} class="text-[0.75rem]" />
-                </div>
-              {/if}
+              </div>
             </div>
-          {/each}
+          </div>
         </div>
       {/if}
     {:else if activeTab === 'connections'}
@@ -1198,21 +1378,18 @@
         {@render noAssistantState()}
       {:else}
         <div class="flex flex-col gap-2 p-3">
-          {#if connectionViews.length === 0}
-            <p class="text-[0.6875rem] leading-relaxed text-dimmed">
-              No connections yet. Add the tools this assistant needs, or let the agent name them as
-              it writes the knowledge.
-            </p>
-          {:else}
-            {#each connectionViews as view (view.connection.utilityId)}
-              <ConnectionRow
-                {view}
-                onRemove={removeConnection}
-                onSetup={openConnectionSetup}
-                onView={openConnectionDetails}
-              />
-            {/each}
-          {/if}
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            The services this assistant reaches out to. A connection that is not ready pauses only
+            the step that depends on it.
+          </p>
+          {#each connectionViews as view (view.connection.utilityId)}
+            <ConnectionRow
+              {view}
+              onRemove={removeConnection}
+              onSetup={openConnectionSetup}
+              onView={openConnectionDetails}
+            />
+          {/each}
           <UtilityPicker
             entries={connectionLibrary}
             {connectedIds}
@@ -1226,10 +1403,18 @@
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-4 p-3">
+        <div class="flex flex-col gap-3 p-3">
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            Which model does the work, and what to fall back to when it cannot.
+          </p>
           {#key assistant.id}
-            <AssistantExecutionPicker assistantId={assistant.id} execution={assistant.execution} />
-            <div class="border-t border-border pt-4">
+            <div class="border border-border bg-surface p-2.5">
+              <AssistantExecutionPicker
+                assistantId={assistant.id}
+                execution={assistant.execution}
+              />
+            </div>
+            <div class="border border-border bg-surface p-2.5">
               <AssistantAgentPicker
                 agents={assistant.agents}
                 {providers}
@@ -1242,27 +1427,29 @@
       {/if}
     {:else}
       <div class="flex flex-col gap-3 p-3">
-        <section aria-label="Missed runs">
-          <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Missed runs</h2>
+        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+          <h2 class="text-[0.875rem] font-semibold text-foreground">Missed runs</h2>
           {#if missedRuns.length === 0}
             <p class="text-[0.6875rem] text-dimmed">No scheduled run has been missed.</p>
           {:else}
-            <div class="flex flex-col gap-1.5">
+            <div class="flex flex-col gap-2">
               {#each missedRuns as run (run.id)}
-                <div class="border border-border p-2.5">
+                <div class="flex flex-col gap-1.5 bg-elevated p-2.5">
                   <div class="flex items-center gap-2">
-                    <AlertTriangle size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
+                    <CioAttention size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
                     <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
                       {run.title}
                     </span>
                   </div>
-                  <p class="mt-1 text-[0.625rem] text-dimmed">
+                  <p class="text-[0.625rem] text-dimmed">
                     Was due {formatDateTime(run.dueAt)}. {missedRunReasonText(run.reason)}
                   </p>
-                  <div class="mt-2 flex justify-end gap-1.5">
+                  <div class="flex justify-end gap-1.5">
                     <button
                       type="button"
                       class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Dismiss this missed run"
+                      aria-label="Dismiss the missed run {run.title}"
                       onclick={() => void dismissRun(run.id)}
                     >
                       Dismiss
@@ -1270,9 +1457,11 @@
                     <button
                       type="button"
                       class="flex items-center gap-1 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                      title="Run this missed sweep now"
+                      aria-label="Run the missed run {run.title} now"
                       onclick={() => void runMissedNow(run)}
                     >
-                      <RotateCcw size={12} strokeWidth={1.8} />
+                      <CioUndo size={12} strokeWidth={1.8} />
                       Run now
                     </button>
                   </div>
@@ -1280,20 +1469,20 @@
               {/each}
             </div>
           {/if}
-        </section>
+        </div>
 
-        <section aria-label="Run issues">
-          <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Run issues</h2>
+        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+          <h2 class="text-[0.875rem] font-semibold text-foreground">Run problems</h2>
           {#if runIssues.length === 0}
             <p class="text-[0.6875rem] text-dimmed">
-              No waiting runs, rate limits, failures, or interruptions.
+              No waiting runs, rate limits, failures or interruptions.
             </p>
           {:else}
-            <div class="flex flex-col gap-1.5">
+            <div class="flex flex-col">
               {#each runIssues as issue (issue.id)}
                 <button
                   type="button"
-                  class="flex items-start gap-2 border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                  class="flex items-start gap-2 border-t border-border py-2 text-left transition-colors first:border-t-0 hover:bg-elevated"
                   title="Open {issue.task.title}"
                   aria-label="Open {issue.task.title}"
                   onclick={() => onOpenTask(issue.task)}
@@ -1302,9 +1491,9 @@
                     {#if issue.kind === 'Rate limited'}
                       <Gauge size={13} strokeWidth={1.8} />
                     {:else if issue.kind === 'Interrupted'}
-                      <Ban size={13} strokeWidth={1.8} />
+                      <CioBan size={13} strokeWidth={1.8} />
                     {:else}
-                      <AlertTriangle size={13} strokeWidth={1.8} />
+                      <CioAttention size={13} strokeWidth={1.8} />
                     {/if}
                   </span>
                   <span class="min-w-0 flex-1">
@@ -1320,20 +1509,20 @@
               {/each}
             </div>
           {/if}
-        </section>
+        </div>
 
-        <section aria-label="Unattended run history">
-          <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Run history</h2>
+        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+          <h2 class="text-[0.875rem] font-semibold text-foreground">Run history</h2>
           {#if backgroundRuns.length === 0}
             <p class="text-[0.6875rem] text-dimmed">No unattended runs recorded yet.</p>
           {:else}
-            <div class="flex flex-col gap-1.5">
+            <div class="flex flex-col">
               {#each previewRuns(backgroundRuns, showAllBackgroundRuns) as run (run.runThreadId)}
                 {@const thread = runThreadFor(run)}
                 {#if thread}
                   <button
                     type="button"
-                    class="flex items-start gap-2 border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                    class="flex items-start gap-2 border-t border-border py-2 text-left transition-colors first:border-t-0 hover:bg-elevated"
                     title="Open this run"
                     aria-label="Open unattended run for {runTaskTitle(run)}"
                     onclick={() => onOpenTask(thread)}
@@ -1342,7 +1531,7 @@
                   </button>
                 {:else}
                   <div
-                    class="flex items-start gap-2 border border-border px-2.5 py-2"
+                    class="flex items-start gap-2 border-t border-border py-2 first:border-t-0"
                     title="The run's thread was deleted; this record is the evidence it ran"
                   >
                     {@render backgroundRunRowBody(run, null)}
@@ -1352,7 +1541,7 @@
               {#if backgroundRuns.length > TASK_RUN_PREVIEW}
                 <button
                   type="button"
-                  class="self-start px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="self-start border-t border-border px-2 py-1 text-[0.6875rem] text-muted transition-colors first:border-t-0 hover:bg-elevated hover:text-foreground"
                   title={showAllBackgroundRuns ? 'Show fewer runs' : 'Show every recorded run'}
                   aria-label={showAllBackgroundRuns
                     ? 'Show fewer runs'
@@ -1364,7 +1553,7 @@
               {/if}
             </div>
           {/if}
-        </section>
+        </div>
       </div>
     {/if}
   </div>
@@ -1394,6 +1583,7 @@
 
 {#if !fullscreen}
   <div class="flex h-full min-h-0 flex-col" aria-label="Assistant panel">
+    {@render panelHead()}
     {@render panelHeader()}
     {@render panelContent()}
     {@render knowledgeThreadAction()}
@@ -1416,6 +1606,7 @@
     onMinimize={() => (fullscreen = false)}
   >
     <div class="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+      {@render panelHead()}
       {@render panelContent()}
     </div>
     {@render knowledgeThreadAction()}

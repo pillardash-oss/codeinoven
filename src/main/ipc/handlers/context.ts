@@ -43,6 +43,7 @@ import type { HarnessManifestService } from '../../agents/harness-manifest-servi
 import type { PowerWakeService } from '../../system/power-wake-service'
 import type { BackgroundLifecycleService } from '../../system/background-lifecycle-service'
 import type { RetrySchedulerService } from '../../system/retry-scheduler-service'
+import type { ConnectivityService } from '../../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../../system/heartbeat-scheduler-service'
 import type { AttachmentGrantRepo } from '../../database/repositories/attachment-grant-repo'
 import type { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
@@ -71,6 +72,12 @@ export interface RegisterIpcHandlersOptions {
   backgroundLifecycle?: BackgroundLifecycleService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService
+  /**
+   * Verified device connectivity. The renderer's connection events wake it
+   * here; they never decide for it, and the handler prefers it over the
+   * renderer's own guess.
+   */
+  connectivity?: ConnectivityService
   /** Timed usage-window "keep warm" ping scheduler backing the Heartbeat settings page. */
   heartbeatScheduler?: HeartbeatSchedulerService
   /** Assistant View's assistant scheduler (app-open-only firing, missed-run records). */
@@ -171,6 +178,8 @@ export interface IpcHandlerContext {
   updaterService: UpdaterService | undefined
   chatEngine: IpcChatEngine | undefined
   options: RegisterIpcHandlersOptions
+  /** Verified device connectivity, so a reconnection wakes the resume queue. */
+  connectivity: ConnectivityService | undefined
   projectManager: ProjectManager
   threadCreation: ThreadCreationCoordinator
   threadDeletion: ThreadDeletionCoordinator

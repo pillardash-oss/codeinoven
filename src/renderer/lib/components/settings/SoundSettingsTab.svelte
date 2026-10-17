@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { onMount } from 'svelte'
-  import { RefreshCw, Search, X } from '@lucide/svelte'
+
   import type { AppConfigPatch } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
@@ -82,7 +85,7 @@
       aria-label="Refresh Sound settings"
       onclick={() => void speech.load()}
     >
-      <RefreshCw size={14} class={speech.loading ? 'animate-spin' : ''} aria-hidden="true" />
+      <CioRefresh size={14} class={speech.loading ? 'animate-spin' : ''} aria-hidden="true" />
     </button>
   </div>
 
@@ -103,8 +106,7 @@
         type="button"
         role="tab"
         aria-selected={activeTab === tab.id}
-        class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {activeTab ===
-        tab.id
+        class="flex-1 px-3 py-1.5 text-sm font-medium transition-colors {activeTab === tab.id
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
         onclick={() => {
@@ -122,7 +124,7 @@
       <span class="sr-only"
         >Search {activeTab === 'history' ? 'recording history' : 'learned lessons'}</span
       >
-      <Search
+      <CioSearch
         size={15}
         class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
         aria-hidden="true"
@@ -141,7 +143,7 @@
           class="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground"
           title="Clear search"
           aria-label="Clear search"
-          onclick={() => (searchQuery = '')}><X size={13} aria-hidden="true" /></button
+          onclick={() => (searchQuery = '')}><CioClose size={13} aria-hidden="true" /></button
         >
       {/if}
     </label>

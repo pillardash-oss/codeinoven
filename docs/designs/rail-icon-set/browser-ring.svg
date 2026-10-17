@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <!--
+    The browser mark. One filled circle (the planet) and one stroked ellipse
+    (the ring), inclined. Single colour, so it takes the theme's ink like every
+    other glyph in the set and needs no second tone.
+  -->
+  <symbol id="x-browser" viewBox="0 0 24 24" fill="none">
+    <!-- the mark: planet r5.701, opening 9.620x6.770, band 2.240, 28 degrees -->
+<circle cx="12" cy="12" r="5.701" fill="currentColor"/><ellipse cx="12" cy="12" rx="10.740" ry="7.889" transform="rotate(28 12 12)" fill="none" stroke="currentColor" stroke-width="2.240"/>
+  </symbol>
+  <symbol id="x-browser-flat" viewBox="0 0 24 24" fill="none">
+    <!-- shallower incline: planet r5.598, opening 9.447x6.648, band 2.199, 22 degrees -->
+<circle cx="12" cy="12" r="5.598" fill="currentColor"/><ellipse cx="12" cy="12" rx="10.547" ry="7.748" transform="rotate(22 12 12)" fill="none" stroke="currentColor" stroke-width="2.199"/>
+  </symbol>
+  <symbol id="x-browser-steep" viewBox="0 0 24 24" fill="none">
+    <!-- steeper incline: planet r5.826, opening 9.832x6.919, band 2.289, 34 degrees -->
+<circle cx="12" cy="12" r="5.826" fill="currentColor"/><ellipse cx="12" cy="12" rx="10.976" ry="8.063" transform="rotate(34 12 12)" fill="none" stroke="currentColor" stroke-width="2.289"/>
+  </symbol>
+</svg>

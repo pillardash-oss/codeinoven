@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronRight, Folder, FolderPlus, Home, Loader2 } from '@lucide/svelte'
+  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
+  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { Home } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenFile } from '$shared/ovens'
 
@@ -217,7 +221,7 @@
         if (parent) void open(parent)
       }}
     >
-      <ChevronRight size={14} class="rotate-[-90deg]" />
+      <CioForward size={14} class="rotate-[-90deg]" />
     </button>
     <input
       type="text"
@@ -304,7 +308,7 @@
         disabled={disabled || loading || !current}
         onclick={startCreate}
       >
-        <FolderPlus size={13} />
+        <CioFolderPlus size={13} />
         New folder
       </button>
     </div>
@@ -321,7 +325,7 @@
   >
     {#if loading}
       <p class="flex items-center gap-2 px-3 py-3 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Reading folders…
       </p>
     {:else if error}
@@ -337,7 +341,7 @@
           {disabled}
           onclick={() => void open(joinPath(current, entry.path, separator))}
         >
-          <Folder size={14} class="shrink-0 text-muted" />
+          <CioFolder size={14} class="shrink-0 text-muted" />
           <span class="min-w-0 flex-1 truncate">{entry.path}</span>
         </button>
       {/each}

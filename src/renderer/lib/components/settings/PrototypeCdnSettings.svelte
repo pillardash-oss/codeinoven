@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Plus, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import { toast } from 'svelte-sonner'
   import { APP_NAME } from '$shared/brand'
   import {
@@ -71,7 +72,11 @@
 </script>
 
 <div id="settings-block-browser-prototype-cdn" class="border bg-surface p-4">
-  <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Prototype previews</h3>
+  <h3
+    class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Prototype previews
+  </h3>
   <div class="flex items-center justify-between gap-4">
     <div>
       <p class="text-sm font-medium">Allow external CDNs</p>
@@ -118,7 +123,7 @@
                   disabled={!settingsReady}
                   onclick={() => removeOrigin(origin)}
                 >
-                  <X size={12} />
+                  <CioClose size={12} />
                 </button>
               </li>
             {/each}
@@ -142,7 +147,7 @@
           aria-label="Approve this CDN for prototype previews"
           disabled={!settingsReady || !canAdd}
         >
-          <Plus size={13} />
+          <CioPlus size={13} />
           Add
         </button>
       </form>

@@ -1,4 +1,21 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
+  import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioZap from '$lib/components/icons/cio/CioZap.svelte'
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import {
     latestWorkingTraceParts,
@@ -6,6 +23,8 @@
     shouldMountWorkingTrace
   } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
+  import { formatKeyCombo } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
@@ -17,27 +36,7 @@
     CONVERSATION_METADATA_ICONS
   } from './conversation-metadata-badges'
 
-  import {
-    AudioLines,
-    Check,
-    ChevronDown,
-    Copy,
-    FileText,
-    FileDown,
-    FolderInput,
-    GitFork,
-    Loader2,
-    MessageSquare,
-    Network,
-    Pencil,
-    ShieldCheck,
-    Target,
-    Trash2,
-    TriangleAlert,
-    Undo2,
-    Video,
-    Zap
-  } from '@lucide/svelte'
+  import { AudioLines, Video } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
   import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
@@ -174,11 +173,14 @@
   import {
     assistantDisplayText,
     connectionsFromPlan,
-    extractKnowledgeDraft,
     isAssistantConfirmation,
-    latestAssistantPlanDraft as latestAssistantPlanDraftIn,
     type AssistantPlanDraft
   } from '$lib/components/assistant/assistant-view'
+  import {
+    latestAssistantRecap,
+    assistantSetupRecapIssue
+  } from '$lib/components/assistant/assistant-recap'
+  import { assistantResultText } from '$shared/assistant-result'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
@@ -211,6 +213,7 @@
   } from '$lib/stores/response-references.svelte'
   import { isTodoToolPart, latestAgentTodo, todoSnapshotMatchesTurn } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
@@ -545,7 +548,7 @@
    *  tail with the newest `mountedCount` messages. */
   let windowStartId = $state<string | null>(null)
   /** Absolute index of the first mounted message. If the anchored message
-   *  left the store (truncated/deleted), fall back without touching state  
+   *  left the store (truncated/deleted), fall back without touching state
    *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
    *  current working page ([prompt][trace][output]) and the previous page,
    *  even when it sits out of the viewport. */
@@ -718,7 +721,7 @@
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   /** Composer recall texts: the merged full history, minus blank entries that
-   *  would only produce an empty recall step. Keyed on the structure snapshot  
+   *  would only produce an empty recall step. Keyed on the structure snapshot
    *  a user message's text only ever changes through a merge that reports
    *  itself structural, so recall never lags behind what the user typed. */
   let composerHistoryTexts = $derived(
@@ -1179,7 +1182,7 @@
   }
 
   /** Stop the Engineering lifecycle from the prominent failure card. The failed
-   *  stage already ended, so no in-flight turn needs the replacement guard  
+   *  stage already ended, so no in-flight turn needs the replacement guard
    *  cancelling reveals the normal card for the stage underneath. */
   async function cancelEngineeringFailure(): Promise<void> {
     try {
@@ -3840,7 +3843,8 @@
       projectId: thread.projectId,
       threadId: coordinatorDockThreadId,
       label,
-      icon: kind === 'assignment' ? Network : kind === 'achievement' ? Target : ShieldCheck,
+      icon:
+        kind === 'assignment' ? CioNetwork : kind === 'achievement' ? CioTarget : CioShieldCheck,
       panel
     })
     // Docks itself the first time a thread starts coordinating, unless the user
@@ -5923,9 +5927,15 @@
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
         // Record what the harness reported before closing the window, so this
-        // request's own count teaches the characters-per-token calibration.
+        // request's own count teaches the characters-per-token calibration, and
+        // in the scope the harness declared: a per-request count is summed
+        // across the message's requests instead of keeping the largest.
         if (event.tokens && generatedTokens(event.tokens) > 0) {
-          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+          liveTokenRate.noteReported(
+            event.messageId,
+            generatedTokens(event.tokens),
+            event.tokenUsageScope ?? 'message'
+          )
         }
         // The request's generation window ends here, so the next request starts
         // a fresh one and the tool wait between them is never counted.
@@ -5953,7 +5963,11 @@
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
         if (event.tokens && generatedTokens(event.tokens) > 0) {
-          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+          liveTokenRate.noteReported(
+            event.messageId,
+            generatedTokens(event.tokens),
+            event.tokenUsageScope ?? 'message'
+          )
         }
         break
       }
@@ -6567,9 +6581,6 @@
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
-  /** Folds the queued-message card down to its header so the conversation above
-   *  the composer stays readable while a message waits in the queue. */
-  let queuedFolded = $state(false)
   /** Count of messages waiting in the thread's FIFO queue (from the store). */
   const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
   /** The rest of the queue behind the head entry, listed inside its card, with
@@ -6582,16 +6593,60 @@
   )
 
   /**
-   * True when a stack sits on the composer's top edge: the task list renders
-   * immediately above it, and the queued-message card renders above that. Each
-   * boundary between those surfaces is a broken line, and the composer carries
-   * the last one with its dashed top rule, which is the design's composer-edge
-   * rule.
+   * The cards that stack on the composer's top edge, top to bottom. Each drops
+   * its own bottom rule so the surface below carries the join: another card's
+   * broken top rule, or the composer's dashed one. They render flush, so the
+   * whole stack reads as one surface with a broken line at every boundary.
    */
+  type ComposerStackSlot =
+    | 'worker'
+    | 'provider'
+    | 'compaction'
+    | 'queued'
+    | 'account'
+    | 'foreign-run'
+    | 'image-descriptor'
+    | 'assistant-recap'
+    | 'todo'
   let queuedCardVisible = $derived(
     (queuedMessage !== '' || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread
   )
-  let composerStackedAbove = $derived(visibleTodo !== null || queuedCardVisible)
+  let composerStackSlots = $derived.by((): ComposerStackSlot[] => {
+    const slots: ComposerStackSlot[] = []
+    if (assignmentWorkerAttentionItems.length > 0) slots.push('worker')
+    if (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) {
+      slots.push('provider')
+    }
+    if (compactionInterruptedNotice !== '') slots.push('compaction')
+    if (queuedCardVisible) slots.push('queued')
+    if (aiAccountPromptVisible) slots.push('account')
+    if (assistantForeignRunThreadId) slots.push('foreign-run')
+    if (pendingImageDescriptorError !== null && !achievementAutonomous) {
+      slots.push('image-descriptor')
+    }
+    if (assistantRecapVisible && assistantDraft) slots.push('assistant-recap')
+    if (visibleTodo !== null && !failureRetryVisible) slots.push('todo')
+    return slots
+  })
+  /** True when any card sits on the composer's top edge, so the composer's top
+   *  rule breaks into the dashed line that carries the join and it stops opening
+   *  a gap above itself. */
+  let composerStackedAbove = $derived(composerStackSlots.length > 0)
+  /** Whether a card sits above the named slot, so its own top rule is the broken
+   *  join rather than a solid edge. */
+  function stackedAboveSlot(slot: ComposerStackSlot): boolean {
+    return composerStackSlots.indexOf(slot) > 0
+  }
+  /** The compaction notice owns no card component, so its fold preference is read
+   *  and written here, per thread, like every other stack card. */
+  const compactionFold = {
+    get folded(): boolean {
+      return threadCardFold.isFolded(thread.id, 'compaction')
+    },
+    set folded(value: boolean) {
+      threadCardFold.setFolded(thread.id, 'compaction', value)
+    }
+  }
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -6609,22 +6664,13 @@
     }
   })
   /** Where the scroll-to-latest button floats within the bottom-chrome wrapper.
-   *  The button is 1.75rem tall, so the first two spots centre it on the edge it
-   *  perches on: a fixed gutter (worker/provider/compaction card, no top padding)
-   *  puts that edge at the stack top, and the queued message card and the
-   *  in-composer image-descriptor card both start 8px below it (pt-2). With
-   *  nothing above the composer it floats clear of the top rule, its lower edge
-   *  0.5rem above it. Change the button's height and these three move with it. */
-  const scrollButtonTop = $derived(
-    assignmentWorkerAttentionItems.length > 0 ||
-      (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) ||
-      compactionInterruptedNotice !== ''
-      ? '-0.875rem'
-      : ((queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread) ||
-          (pendingImageDescriptorError !== null && !achievementAutonomous)
-        ? '-0.375rem'
-        : '-2.25rem'
-  )
+   *  The button is 1.75rem tall. A stack on the composer starts at the wrapper's
+   *  top edge (the cards are flush, with no top padding), so the button centres
+   *  on that edge at half its own height: -0.875rem. With nothing above the
+   *  composer the wrapper's top edge *is* the composer's top rule, so the button
+   *  floats clear of it, its lower edge 0.5rem above: -(1.75rem + 0.5rem).
+   *  Change the button's height and both spots move with it. */
+  const scrollButtonTop = $derived(composerStackedAbove ? '-0.875rem' : '-2.25rem')
 
   /** The mounted composer, used to focus the editor in place (no remount). */
   let composer: ChatComposer | undefined = $state(undefined)
@@ -7207,6 +7253,14 @@
    */
   const assistantUnnamed = $derived(assistantName === ASSISTANT_PLACEHOLDER_NAME)
 
+  /**
+   * The app's own shortcut for starting a task with an assistant, for the copy
+   * that sends the user to a new task rather than a message in this thread.
+   */
+  const assistantNewTaskShortcut = $derived(
+    formatKeyCombo(keymapState.keysFor('assistant-new-task'))
+  )
+
   /** The assistant's own connection labels, for the recap card's kept ones. */
   const existingAssistantConnections = $derived(
     assistant?.connections.map((connection) => connection.label) ?? []
@@ -7234,9 +7288,9 @@
       plan: AssistantPlanDraft | null
     } | null => {
       if (!assistantMode || !assistantId || busy) return null
-      const draft = latestKnowledgeDraft()
+      const draft = latestAssistantRecap(messages, messageText)
       if (!draft) return null
-      const plan = latestAssistantPlanDraft()
+      const plan = draft.plan
       if (assistantKnowledgeComplete && !isAssistantRevision(draft, plan)) return null
       return { knowledge: draft.knowledge, plan }
     }
@@ -7321,33 +7375,6 @@
   }
 
   /**
-   * The knowledge the agent last drafted for this assistant, with the time it was
-   * written: the newest knowledge fenced block in the newest assistant message that
-   * carries one. The authoring contract asks for a `knowledge` fence, but a bare
-   * fence whose body starts with a `knowledge: <title>` line is accepted too. The
-   * time is what tells a revision from the authoring draft the app already saved.
-   */
-  function latestKnowledgeDraft(): { knowledge: string; at: number } | null {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]
-      if (!message || message.role !== 'assistant') continue
-      const knowledge = extractKnowledgeDraft(messageText(message))
-      if (knowledge) return { knowledge, at: message.createdAt }
-    }
-    return null
-  }
-
-  /** The machine-readable assistant plan the agent last emitted, if any. */
-  function latestAssistantPlanDraft(): ReturnType<typeof latestAssistantPlanDraftIn> {
-    const assistantTexts: string[] = []
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      assistantTexts.push(messageText(message))
-    }
-    return latestAssistantPlanDraftIn(assistantTexts)
-  }
-
-  /**
    * Keep the assistant's primary in step with the model the user is working on
    * while the knowledge is still being written. The primary is the model that
    * triggers the knowledge, so a model switched in the composer before the first
@@ -7402,8 +7429,8 @@
   /**
    * Commit the agent-drafted knowledge, schedule, and connections to the assistant
    * once the user agrees. Called by the recap card and by the `/save-knowledge`
-   * fallback. The plan block is optional: without it the knowledge is saved on its
-   * own and the existing schedule is left untouched.
+   * fallback. Initial setup requires valid settings. A knowledge-only revision
+   * preserves the saved schedule, connections and reporting agreement.
    */
   async function saveAssistantKnowledge(draftOverride?: {
     knowledge: string
@@ -7413,6 +7440,25 @@
     const draft = draftOverride ?? assistantDraft
     if (!draft) {
       errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
+      return false
+    }
+    const setupIssue = assistantKnowledgeComplete
+      ? null
+      : assistantSetupRecapIssue(assistant, draft.plan)
+    if (setupIssue) {
+      await sendMessage(
+        `The application could not save this setup: ${setupIssue} Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block and an assistant block containing actual values for name, personality, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.`,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        [],
+        [],
+        {
+          action: 'Repair setup recap',
+          body: 'Complete the settings already agreed before saving.'
+        }
+      )
       return false
     }
     assistantSaving = true
@@ -12783,7 +12829,7 @@
       <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
         {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
-            <Loader2 size={16} class="animate-spin" />
+            <CioSpinner size={16} class="animate-spin" />
             Loading conversation...
           </div>
         {:else}
@@ -12825,7 +12871,7 @@
               {:else if kind === 'renderable'}
                 <FileTypeIcon path={name} size={12} class="shrink-0" />
               {:else}
-                <FileText size={11} class="shrink-0" />
+                <CioFileText size={11} class="shrink-0" />
               {/if}
               <span class="max-w-32 truncate">{name}</span>
             </button>
@@ -13049,7 +13095,7 @@
                                 ? `${reference.comment}\n\n${reference.text}`
                                 : reference.text}
                             >
-                              <MessageSquare size={11} class="shrink-0 text-accent" />
+                              <CioMessage size={11} class="shrink-0 text-accent" />
                               <span class="font-medium text-foreground">{reference.label}</span>
                               <span class="max-w-56 truncate text-muted">{reference.text}</span>
                               {#if reference.comment}
@@ -13188,7 +13234,7 @@
                             title="Undo   the agent never receives a steered message that is undone"
                             onclick={() => void undoHeldSteer(msg)}
                           >
-                            <Undo2 size={12} />
+                            <CioUndo size={12} />
                           </button>
                         {/if}
                         <button
@@ -13198,9 +13244,9 @@
                           onclick={() => copyMessage(msg)}
                         >
                           {#if copiedMessageId === msg.id}
-                            <Check size={12} class="text-success" />
+                            <CioCheck size={12} class="text-success" />
                           {:else}
-                            <Copy size={12} />
+                            <CioCopy size={12} />
                           {/if}
                         </button>
                         {#if !explicitPresentation}
@@ -13211,7 +13257,7 @@
                             disabled={busy}
                             onclick={() => editMessage(msg)}
                           >
-                            <Pencil size={12} />
+                            <CioPencil size={12} />
                           </button>
                           <button
                             class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
@@ -13220,7 +13266,7 @@
                             disabled={busy}
                             onclick={() => requestDeleteMessage(msg)}
                           >
-                            <Trash2 size={12} />
+                            <CioTrash size={12} />
                           </button>
                         {/if}
                       </div>
@@ -13403,6 +13449,14 @@
                         isTransparentTurnMessage
                       )}
                       {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
+                      {@const deliveredClosingText = assistantMode
+                        ? assistantSetupThread
+                          ? assistantDisplayText(turnClosingText?.text ?? messageText(msg))
+                          : assistantResultText(
+                              turnClosingText?.text ?? messageText(msg),
+                              !msg.completedAt
+                            )
+                        : (turnClosingText?.text ?? messageText(msg))}
                       {#if turnClosingVisible && turnClosingText}
                         {@const isReadingThisTurn =
                           'messageId' in speechController.playback &&
@@ -13437,9 +13491,7 @@
                                  document rather than a code block, so it is shown as
                                  the finished markdown it is. -->
                             <MarkdownView
-                              text={assistantMode
-                                ? assistantDisplayText(turnClosingText.text)
-                                : turnClosingText.text}
+                              text={deliveredClosingText}
                               citationThread={citationThreadContext}
                               annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                               onCiteFile={openFileCitation}
@@ -13473,17 +13525,17 @@
                                 class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
-                                onclick={() => copyMessage(msg, turnClosingText?.text)}
+                                onclick={() => copyMessage(msg, deliveredClosingText)}
                               >
                                 {#if copiedMessageId === msg.id}
-                                  <Check size={12} class="text-success" />
+                                  <CioCheck size={12} class="text-success" />
                                 {:else}
-                                  <Copy size={12} />
+                                  <CioCopy size={12} />
                                 {/if}
                               </button>
                               <SpeechPlaybackButton
                                 messageId={msg.id}
-                                markdown={turnClosingText?.text ?? messageText(msg)}
+                                markdown={deliveredClosingText}
                                 scope={{
                                   kind: 'project',
                                   projectId: thread.projectId,
@@ -13499,9 +13551,9 @@
                                   onclick={() => void continueInThread()}
                                 >
                                   {#if continuingInThread}
-                                    <Loader2 size={12} class="animate-spin" />
+                                    <CioSpinner size={12} class="animate-spin" />
                                   {:else}
-                                    <MessageSquare size={12} />
+                                    <CioMessage size={12} />
                                   {/if}
                                 </button>
                               {/if}
@@ -13514,9 +13566,9 @@
                                   onclick={() => forkFromMessage(msg)}
                                 >
                                   {#if forkingMessageId === msg.id}
-                                    <Loader2 size={12} class="animate-spin" />
+                                    <CioSpinner size={12} class="animate-spin" />
                                   {:else}
-                                    <GitFork size={12} />
+                                    <CioFork size={12} />
                                   {/if}
                                 </button>
                               {/if}
@@ -13527,7 +13579,7 @@
                                   title="Continue in a project"
                                   onclick={() => openContinueInProject()}
                                 >
-                                  <FolderInput size={12} />
+                                  <CioFolderInput size={12} />
                                 </button>
                               {/if}
                               <button
@@ -13536,7 +13588,7 @@
                                 title="Export transcript"
                                 onclick={openTranscriptExport}
                               >
-                                <FileDown size={12} />
+                                <CioDownload size={12} />
                               </button>
                             </div>
                             <div
@@ -13559,7 +13611,7 @@
                                   />
                                   {modelLabel}
                                   {#if fastVariant}
-                                    <Zap
+                                    <CioZap
                                       size={10}
                                       class="text-accent"
                                       fill="currentColor"
@@ -13721,7 +13773,7 @@
           onclick={scrollToLatest}
           transition:fly={{ y: -8, duration: 140 }}
         >
-          <ChevronDown
+          <CioChevronDown
             size={12}
             class="shrink-0 text-muted transition-colors group-hover:text-foreground"
           />
@@ -13731,8 +13783,8 @@
       <div class="flex min-w-0 flex-col">
         <!-- Assignment worker failures stay visible on the coordinator, but their
          actions target the owning durable worker rather than this thread. -->
-        {#each assignmentWorkerAttentionItems as item (item.task.id)}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+        {#each assignmentWorkerAttentionItems as item, index (item.task.id)}
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={assignmentWorkerAttentionStatus(item.task, item.worker)}
@@ -13747,6 +13799,10 @@
                 sourceDetail={item.task.title}
                 retryLabel="Retry worker"
                 retrying={assignmentWorkerRetryingId === item.worker.id}
+                stackedAbove={index > 0}
+                joinsBelow
+                threadId={thread.id}
+                foldKey={`worker:${item.worker.id}`}
                 onModelChange={(selected) =>
                   void changeAssignmentWorkerModel(item.worker, selected)}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -13762,10 +13818,13 @@
         <!-- Provider status   between messages and composer, always visible. A
          matching bubbled worker error is replaced by the attributed card above. -->
         {#if visibleProviderStatus && !coordinatorErrorMatchesAssignmentWorker}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={visibleProviderStatus}
+                stackedAbove={stackedAboveSlot('provider')}
+                joinsBelow
+                threadId={thread.id}
                 providerName={statusCardProviderName}
                 settings={statusCardSettings ??
                   (chatMode
@@ -13822,35 +13881,43 @@
        stopped before it saved a summary. A top-of-thread card: it reports, it
        never blocks the composer. -->
         {#if compactionInterruptedNotice}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <div out:slide={dismissSlide()} role="status" aria-live="polite">
-                <CardFrame placement="top" label="Compaction interrupted">
+                <CardFrame
+                  placement="top"
+                  label="Compaction interrupted"
+                  stackedAbove={stackedAboveSlot('compaction')}
+                  joinsBelow
+                >
                   <CardHead
-                    icon={TriangleAlert}
+                    icon={CioAttention}
                     title="Compaction interrupted"
                     chip={{
                       text: 'Stopped',
                       tone: 'urgent',
                       title: 'The summary was never saved'
                     }}
+                    bind:folded={compactionFold.folded}
                     foldLabel="compaction notice"
                   />
-                  <div class="space-y-2 px-3 py-2.5">
-                    <CardNotice icon={TriangleAlert} tone="warn">
-                      {compactionInterruptedNotice}
-                    </CardNotice>
-                  </div>
-                  <CardFoot>
-                    {#snippet left()}
-                      <CardButton
-                        label="Dismiss"
-                        title="Dismiss the compaction notice"
-                        variant="ghost"
-                        onclick={() => (compactionInterruptedNotice = '')}
-                      />
-                    {/snippet}
-                  </CardFoot>
+                  {#if !compactionFold.folded}
+                    <div class="space-y-2 px-3 py-2.5">
+                      <CardNotice icon={CioAttention} tone="warn">
+                        {compactionInterruptedNotice}
+                      </CardNotice>
+                    </div>
+                    <CardFoot>
+                      {#snippet left()}
+                        <CardButton
+                          label="Dismiss"
+                          title="Dismiss the compaction notice"
+                          variant="ghost"
+                          onclick={() => (compactionInterruptedNotice = '')}
+                        />
+                      {/snippet}
+                    </CardFoot>
+                  {/if}
                 </CardFrame>
               </div>
             </div>
@@ -13863,7 +13930,7 @@
        follows, the composer's dashed top rule when the composer is. The head names
        what waits, and Send now (the steer key) is a head control. -->
         {#if queuedCardVisible}
-          <div class="conversation-gutter shrink-0 px-6 pt-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <ComposerQueuedCard
                 text={queuedMessage}
@@ -13876,7 +13943,8 @@
                 presentation={queuedPresentation}
                 startAfterThreads={queuedStartAfterThreads}
                 {steerModifierLabel}
-                bind:folded={queuedFolded}
+                threadId={thread.id}
+                stackedAbove={stackedAboveSlot('queued')}
                 onPreviewAttachment={openQueuedAttachment}
                 onSteer={() => void steerQueuedMessage()}
                 onEdit={editQueuedMessage}
@@ -13896,7 +13964,7 @@
        whatever this slot shows, so it keeps its own top spacing and gives up the
        padding here rather than opening a gap in the middle of the stack. -->
         <div
-          class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 {queuedCardVisible
+          class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 {composerStackedAbove
             ? 'pt-0'
             : 'pt-2'}"
         >
@@ -13914,6 +13982,10 @@
                     {:else if assistantName && !assistantKnowledgeComplete}
                       Tell {assistantName} what you want it to handle. It asks what it needs, and writes
                       down what it learns so every run follows it.
+                    {:else if assistantName && assistantSetupThread}
+                      This conversation is where you teach {assistantName} and change what it knows. To
+                      give it a task, start a new one with the New task button in the header, or press
+                      {assistantNewTaskShortcut}.
                     {:else if assistantName}
                       This task runs on what <span class="text-foreground">{assistantName}</span> knows.
                       Send a message to run it now, or change anything in What it knows.
@@ -13952,12 +14024,15 @@
               {/if}
             {/if}
             {#if aiAccountPromptVisible}
-              <div class="mb-2">
+              <div>
                 <AiAccountSetupCard
                   harnessName={harnessDisplayName(settings.harnessId)}
                   {providers}
                   {settings}
                   projectId={thread.projectId}
+                  stackedAbove={stackedAboveSlot('account')}
+                  joinsBelow
+                  threadId={thread.id}
                   favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
                   recentModels={rendererRecovery.modelRecentsFor(modelScope())}
                   onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
@@ -13980,10 +14055,12 @@
               </div>
             {/if}
             {#if assistantForeignRunThreadId}
-              <div class="mb-3">
+              <div>
                 <ForeignRunCard
                   projectId={thread.projectId}
                   threadId={assistantForeignRunThreadId}
+                  stackedAbove={stackedAboveSlot('foreign-run')}
+                  joinsBelow
                 />
               </div>
             {/if}
@@ -14014,6 +14091,9 @@
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  stackedAbove={stackedAboveSlot('image-descriptor')}
+                  joinsBelow
+                  threadId={thread.id}
                 />
               {/key}
             {/if}
@@ -14038,20 +14118,21 @@
               />
             {/if}
             {#if assistantRecapVisible && assistantDraft}
-              <div class="conversation-gutter shrink-0 px-6 pb-2">
-                <div class="mx-auto max-w-3xl">
-                  <AssistantRecapCard
-                    assistantName={assistant?.name ?? assistantName ?? thread.title}
-                    knowledge={assistantDraft.knowledge}
-                    plan={assistantDraft.plan}
-                    update={assistantKnowledgeComplete}
-                    scheduled={assistant ? assistantIsScheduled(assistant) : true}
-                    existingConnections={existingAssistantConnections}
-                    saving={assistantSaving}
-                    onSave={() => void confirmAssistantSave()}
-                    onKeepEditing={keepEditingAssistant}
-                  />
-                </div>
+              <div>
+                <AssistantRecapCard
+                  assistantName={assistant?.name ?? assistantName ?? thread.title}
+                  knowledge={assistantDraft.knowledge}
+                  plan={assistantDraft.plan}
+                  update={assistantKnowledgeComplete}
+                  scheduled={assistant ? assistantIsScheduled(assistant) : true}
+                  existingConnections={existingAssistantConnections}
+                  saving={assistantSaving}
+                  onSave={() => void confirmAssistantSave()}
+                  onKeepEditing={keepEditingAssistant}
+                  stackedAbove={stackedAboveSlot('assistant-recap')}
+                  joinsBelow
+                  threadId={thread.id}
+                />
               </div>
             {/if}
             {#if isAssignmentAuditorThread}
@@ -14411,7 +14492,8 @@
                     {busy}
                     stopped={todoRunStopped}
                     foreign={foreignRunActive}
-                    stackedAbove={queuedCardVisible}
+                    stackedAbove={stackedAboveSlot('todo')}
+                    threadId={thread.id}
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}

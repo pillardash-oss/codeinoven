@@ -6,6 +6,7 @@ import type { DirectoryPreviewService } from '../preview/directory-preview-servi
 import type { VideoCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import { currentWorkRoot } from '../design/work-roots-state'
 import { openVideoPreview } from './video-preview-session'
+import { DesignRepo } from '../database/repositories/design-repo'
 
 /**
  * What the video capability's `preview` operation needs from the app.
@@ -70,9 +71,15 @@ export function createVideoPreviewExecutor(
         projectPath: project.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory: input['directory'],
+        directory:
+          typeof input['directory'] === 'string'
+            ? new DesignRepo(options.database).resolveDirectory(
+                context.projectId,
+                input['directory']
+              )
+            : input['directory'],
         entry: input['entry'],
-        defaultRoot: currentWorkRoot('video'),
+        defaultRoot: currentWorkRoot('video', context.projectId),
         attention,
         reveal: false
       }

@@ -14,12 +14,37 @@
  */
 export type CardFramePlacement = 'replace' | 'top'
 
-export function cardFrameClass(placement: CardFramePlacement, className = ''): string {
+export interface CardFrameJoin {
+  /**
+   * Another surface sits directly above this card, so its top rule is the broken
+   * line that separates two stacked surfaces rather than a solid edge.
+   */
+  stackedAbove?: boolean
+  /**
+   * The surface below carries the join (another stack card, or the composer with
+   * its dashed top rule), so this card drops its own bottom rule. The surfaces
+   * then touch and one rule marks the boundary instead of two.
+   */
+  joinsBelow?: boolean
+}
+
+export function cardFrameClass(
+  placement: CardFramePlacement,
+  className = '',
+  join: CardFrameJoin = {}
+): string {
   const mark =
     placement === 'replace'
       ? 'border-l-[3px] border-l-foreground'
       : 'border-l-[3px] border-l-dimmed'
-  return ['flex min-w-0 flex-col border border-border bg-surface', mark, className]
+  return [
+    'flex min-w-0 flex-col border bg-surface',
+    'border-border',
+    join.joinsBelow ? 'border-b-0' : '',
+    join.stackedAbove ? 'border-t-border-strong [border-top-style:dashed]' : '',
+    mark,
+    className
+  ]
     .filter((part) => part.length > 0)
     .join(' ')
 }

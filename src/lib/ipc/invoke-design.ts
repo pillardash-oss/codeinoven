@@ -1,5 +1,7 @@
 import type {
   AuthoredWorkKind,
+  UpdateWorkDetails,
+  UpdateWorkDetailsResult,
   DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
@@ -36,6 +38,15 @@ export const invokeDesignContract = {
   'video:jobs': {} as Contract<[projectId: string, threadId: string], VideoJob[]>,
   'video:cancel': {} as Contract<[projectId: string, threadId: string, jobId: string], void>,
   'video:export': {} as Contract<[projectId: string, threadId: string, directory: string], unknown>,
+  /**
+   * The export one composition already has, as a project-relative path, or null
+   * when it has never been exported.
+   *
+   * Read rather than remembered: the board asks this for the folder in front, so
+   * an export made in another thread of the same project, or before a restart,
+   * still answers for the composition that produced it.
+   */
+  'video:latestExport': {} as Contract<[projectId: string, directory: string], string | null>,
   /**
    * A waveform picture for one audio source's used range, as a data URL.
    *
@@ -139,7 +150,12 @@ export const invokeDesignContract = {
    * moved. Read straight after a save, because both surfaces that change a root
    * have to report what the move did with the work already on disk.
    */
-  'design:workRootState': {} as Contract<[], WorkRootState>,
+  'design:workRootState': {} as Contract<[projectId?: string], WorkRootState>,
+  'design:removeMissing': {} as Contract<[projectId: string, directory: string], void>,
+  'design:updateDetails': {} as Contract<
+    [projectId: string, details: UpdateWorkDetails],
+    UpdateWorkDetailsResult
+  >,
   /**
    * One design or composition folder's history, captured up to the present.
    *

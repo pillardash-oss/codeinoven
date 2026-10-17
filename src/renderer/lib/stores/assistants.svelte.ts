@@ -355,6 +355,16 @@ class AssistantsState {
   }
 
   /**
+   * Open a form-created assistant's first conversation. The assistant already
+   * carries the name and personality the user typed, so this posts the opening
+   * turn in which it greets them, asks what to call them, and says where a task
+   * goes.
+   */
+  async startManualSetup(assistantId: string): Promise<void> {
+    await invoke('assistant:startManualSetup', assistantId)
+  }
+
+  /**
    * An assistant's knowledge ("Getting started") thread, hidden or not. Hidden rows
    * never reach the hydrated thread list, so the knowledge panel asks for its own
    * assistant's thread here instead of reading the workspace's rows.

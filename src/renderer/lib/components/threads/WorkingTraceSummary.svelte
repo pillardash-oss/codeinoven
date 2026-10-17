@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Archive, Cog } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import { Cog } from '@lucide/svelte'
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import { formatDurationMs } from '$lib/format/duration'
   import type { SubagentPart } from '$lib/working-trace-parts'
@@ -123,7 +124,7 @@
             title="This trace includes compacted context. Forking from here restores the compaction summary."
             aria-label="Compacted context. Forking from here restores the compaction summary."
           >
-            <Archive size={10} />
+            <CioArchive size={10} />
             Compacted
           </span>
         {/if}

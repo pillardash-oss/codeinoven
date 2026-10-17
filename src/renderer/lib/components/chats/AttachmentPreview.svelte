@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { X, Download, FileQuestion, FolderOpen, Loader2, Save, WrapText } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioSave from '$lib/components/icons/cio/CioSave.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { FileQuestion, WrapText } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -228,11 +233,11 @@
         onclick={() => void saveText()}
       >
         {#if saving}
-          <Loader2 size={11} class="animate-spin" />
+          <CioSpinner size={11} class="animate-spin" />
         {:else}
-          <Save size={11} />
+          <CioSave size={11} />
         {/if}
-        Save
+        CioSave
       </button>
       <button
         type="button"
@@ -254,7 +259,7 @@
         title="Download attachment"
         onclick={handleDownload}
       >
-        <Download size={14} />
+        <CioDownload size={14} />
       </button>
       {#if revealable}
         <button
@@ -264,7 +269,7 @@
           title="Reveal path"
           onclick={revealFromButton}
         >
-          <FolderOpen size={14} />
+          <CioFolderOpen size={14} />
         </button>
       {/if}
       <button
@@ -274,7 +279,7 @@
         title="Close attachment editor (Esc)"
         onclick={requestClose}
       >
-        <X size={14} />
+        <CioClose size={14} />
       </button>
     </div>
     <ProjectTextEditor
@@ -319,7 +324,7 @@
           title="Reveal path"
           onclick={revealFromButton}
         >
-          <FolderOpen size={14} />
+          <CioFolderOpen size={14} />
         </button>
       {/if}
       <button
@@ -329,7 +334,7 @@
         title="Download file"
         onclick={downloadFromButton}
       >
-        <Download size={14} />
+        <CioDownload size={14} />
       </button>
       <button
         type="button"
@@ -338,7 +343,7 @@
         title="Close preview (Esc)"
         onclick={closeFromButton}
       >
-        <X size={14} />
+        <CioClose size={14} />
       </button>
     </div>
     <div
@@ -399,7 +404,7 @@
             class="flex h-full w-full items-center justify-center bg-surface text-muted shadow-2xl"
             role="status"
           >
-            <Loader2 size={24} class="animate-spin" />
+            <CioSpinner size={24} class="animate-spin" />
             <span class="sr-only">Loading document preview</span>
           </div>
         {:else if kind === 'markdown' && text !== undefined}

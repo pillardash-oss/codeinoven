@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, ChevronDown } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { memoryScopeSummary, orderMemoryScopes } from '$shared/memory/memory-scopes'
   import type { MemoryScope } from '$shared/types'
@@ -89,7 +90,7 @@
       {disabled}
     >
       <span class="min-w-0 flex-1 truncate">{triggerLabel}</span>
-      <ChevronDown size={14} class="shrink-0 text-dimmed" />
+      <CioChevronDown size={14} class="shrink-0 text-dimmed" />
     </DropdownMenu.Trigger>
 
     <DropdownMenu.Portal>
@@ -109,7 +110,7 @@
         >
           <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
           {#if scopes.length === 0}
-            <Check size={12} class="shrink-0 text-primary" />
+            <CioCheck size={12} class="shrink-0 text-primary" />
           {/if}
         </DropdownMenu.Item>
         <div class="mx-1 my-1 border-t border-border" aria-hidden="true"></div>
@@ -125,7 +126,7 @@
           >
             <span class="min-w-0 flex-1 truncate text-xs font-medium">{option.label}</span>
             {#if selectedSet.has(option.value)}
-              <Check size={12} class="shrink-0 text-primary" />
+              <CioCheck size={12} class="shrink-0 text-primary" />
             {/if}
           </DropdownMenu.Item>
         {/each}

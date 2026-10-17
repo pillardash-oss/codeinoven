@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Expand } from '@lucide/svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import type { Snippet } from 'svelte'
 
   /**
@@ -52,7 +52,7 @@
       aria-label="Expand {filename}"
       onclick={onExpand}
     >
-      <Expand size={13} />
+      <CioMaximize size={13} />
     </button>
   </figcaption>
   {@render children()}

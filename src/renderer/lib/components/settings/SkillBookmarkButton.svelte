@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bookmark } from '@lucide/svelte'
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
   import { skillBookmarkState } from '$lib/stores/skill-bookmarks.svelte'
   import type { SkillMarketEntry } from '$shared/types'
 
@@ -40,6 +40,6 @@
   {className}"
   onclick={toggle}
 >
-  <Bookmark {size} fill={bookmarked ? 'currentColor' : 'none'} />
+  <CioBookmark {size} fill={bookmarked ? 'currentColor' : 'none'} />
   {#if labelled}<span>{bookmarked ? 'Bookmarked' : 'Bookmark'}</span>{/if}
 </button>

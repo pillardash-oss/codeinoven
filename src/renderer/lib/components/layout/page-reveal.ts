@@ -12,6 +12,10 @@ const REVEAL_RISE_PX = 6
 const PANEL_REVEAL_MS = 160
 /** How far a panel rises while it appears. */
 const PANEL_REVEAL_RISE_PX = 4
+/** Reveal time for the conversation when the shell switches threads. */
+const THREAD_REVEAL_MS = 180
+/** How far the conversation rises while the arriving thread appears. */
+const THREAD_REVEAL_RISE_PX = 6
 
 /**
  * The shell's view switch, used as `transition:fly={pageReveal()}` on the
@@ -48,6 +52,31 @@ export function panelReveal(fadeOnly = false): FlyParams {
     y: fadeOnly ? 0 : PANEL_REVEAL_RISE_PX,
     opacity: 0,
     duration: motionDuration(PANEL_REVEAL_MS),
+    easing: cubicOut
+  }
+}
+
+/**
+ * The conversation's thread switch, used as `in:fly={threadReveal()}` on the
+ * keyed conversation pane so selecting another thread reveals the arriving one
+ * instead of snapping to it.
+ *
+ * It is an intro only (`in:`, never `out:`) on purpose. A keyed `out:` makes
+ * Svelte pause the outgoing subtree and defer its destruction until the
+ * transition ends, and `ThreadView`'s teardown clears the shared shell state the
+ * arriving thread has just published (`messageCount`, `userMessages`, `sources`,
+ * `jumpToMessage`). A deferred teardown would therefore wipe the new thread's
+ * history rail a frame after it appeared. Intro-only destroys the outgoing in
+ * the same frame the new pane fades in, so the switch animates without that
+ * clobber.
+ *
+ * `motionDuration` zeroes the duration when the OS asks for reduced motion.
+ */
+export function threadReveal(): FlyParams {
+  return {
+    y: THREAD_REVEAL_RISE_PX,
+    opacity: 0,
+    duration: motionDuration(THREAD_REVEAL_MS),
     easing: cubicOut
   }
 }

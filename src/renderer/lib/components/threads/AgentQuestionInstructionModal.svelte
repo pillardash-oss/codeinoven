@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Copy } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import { copyText } from '$lib/copy-text'
   import Modal from '../ui/Modal.svelte'
 
@@ -63,10 +64,10 @@
       onclick={() => void copy()}
     >
       {#if copied}
-        <Check size={14} />
+        <CioCheck size={14} />
         Copied
       {:else}
-        <Copy size={14} />
+        <CioCopy size={14} />
         Copy instruction
       {/if}
     </button>

@@ -41,7 +41,8 @@ export const NO_TAB_MARK: BrowserTabMark = Object.freeze({ design: null, composi
 export type TabMarkRecogniser = (
   projectId: string,
   threadId: string,
-  url: string
+  url: string,
+  recordThread: boolean
 ) => Promise<BrowserTabMark>
 
 function sameDesign(left: BrowserDesignTab | null, right: BrowserDesignTab | null): boolean {

@@ -73,6 +73,9 @@ export class ClineDriver extends PersistentCliDriver {
     // Emits per-iteration token, cost and context-occupancy telemetry, and
     // reports the model context window it resolved on every run result.
     contextUsage: true,
+    // Each `usage` event reports one iteration (a request), and a run's
+    // `run_result.usage` total is never a message's own count.
+    tokenUsageScope: 'request',
     compaction: false,
     subagents: false,
     nativeUtilities: ['web_search', 'web_fetch']

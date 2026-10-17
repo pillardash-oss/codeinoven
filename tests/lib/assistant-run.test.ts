@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import {
-  ASSISTANT_NEXT_STEPS_PROMPT,
-  isAssistantNextStepsPrompt
-} from '$shared/assistant-next-steps'
+import { assistantNextStepsPrompt, isAssistantNextStepsPrompt } from '$shared/assistant-next-steps'
 import {
   composeAssistantInstruction,
   assistantRunContext,
   assistantRunPrompt
 } from '$shared/assistant-run'
 import type { AssistantConnection } from '$shared/types'
+import {
+  ASSISTANT_BRIEF_REPLY_INSTRUCTION,
+  ASSISTANT_VOICE_INSTRUCTION
+} from '$shared/assistant-voice'
 
 function connection(overrides: Partial<AssistantConnection> = {}): AssistantConnection {
   return {
@@ -137,10 +138,68 @@ describe('assistantRunPrompt', () => {
   })
 })
 
-describe('isAssistantNextStepsPrompt', () => {
-  it('matches only the app-owned next-steps message', () => {
-    expect(isAssistantNextStepsPrompt(ASSISTANT_NEXT_STEPS_PROMPT)).toBe(true)
+describe('assistantNextStepsPrompt', () => {
+  it('matches only the app-owned next-steps message, in both variants', () => {
+    for (const scheduled of [true, false]) {
+      const prompt = assistantNextStepsPrompt(scheduled)
+      expect(isAssistantNextStepsPrompt(prompt)).toBe(true)
+      expect(isAssistantNextStepsPrompt(`${prompt} `)).toBe(false)
+    }
     expect(isAssistantNextStepsPrompt('Run this scheduled task now: Getting started')).toBe(false)
-    expect(isAssistantNextStepsPrompt(`${ASSISTANT_NEXT_STEPS_PROMPT} `)).toBe(false)
+  })
+  it('leads a scheduled assistant with fallbacks and an on-demand one with starting a task', () => {
+    expect(assistantNextStepsPrompt(true)).toContain('fallback models')
+    expect(assistantNextStepsPrompt(true)).not.toContain('New task button')
+    expect(assistantNextStepsPrompt(false)).toContain('New task button')
+    expect(assistantNextStepsPrompt(false)).not.toContain('fallback models')
+  })
+  it('never invites the user to run the assistant from the Getting started thread', () => {
+    for (const scheduled of [true, false]) {
+      expect(assistantNextStepsPrompt(scheduled)).toContain('not where work is run')
+    }
+  })
+})
+
+describe('concise assistant delivery', () => {
+  it.each([
+    undefined,
+    { channel: 'in-app' as const },
+    { channel: 'email' as const, target: 'reports@example.com' }
+  ])(
+    'keeps brevity and result delivery after connection instructions for every delivery route: %j',
+    (delivery) => {
+      const context = assistantRunContext({
+        name: 'Judge',
+        connections: [connection({ setup: 'Verify the source account.' })],
+        delivery,
+        priority: { timeliness: 'today', impact: 'company' }
+      })
+      expect(context.indexOf(ASSISTANT_BRIEF_REPLY_INSTRUCTION)).toBeGreaterThan(
+        context.indexOf('Verify the source account.')
+      )
+      expect(context).toContain('<assistant_result>')
+      expect(context).toContain('<assistant_detail>')
+      expect(context).not.toContain('complete report itself')
+      expect(context).toContain('at most 80 words')
+      expect(context).toContain('Keep planning, self-talk, drafts')
+      expect(context).toContain('Never append a translation')
+      expect(context).toContain('Expand only when the user explicitly asks for detail')
+    }
+  )
+  it('applies the same brevity rule to setup and follow-up persona layers', () => {
+    expect(ASSISTANT_VOICE_INSTRUCTION).toContain(ASSISTANT_BRIEF_REPLY_INSTRUCTION)
+  })
+  it('keeps the urgency out of the message instead of asking for a label', () => {
+    // A user reported `[whenever · just-me]` prefixes in assistant messages: the
+    // old contract said to label the report with the bracket, so the model wrote
+    // the tag into the message. Urgency is guidance, not message text.
+    const context = assistantRunContext({
+      name: 'Judge',
+      connections: [],
+      delivery: { channel: 'in-app' },
+      priority: { timeliness: 'whenever', impact: 'just-me' }
+    })
+    expect(context).not.toContain('Label the report')
+    expect(context).toContain('It never appears in your message')
   })
 })

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { MessageCircle } from '@lucide/svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
 
   interface Props {
     x: number
@@ -29,6 +30,6 @@
   aria-pressed={active}
   onclick={onClick}
 >
-  <MessageCircle size={12} class="shrink-0" />
+  <CioMessage size={ICON_SIZE.inline} class="shrink-0" />
   <span class="text-[0.6875rem] leading-none font-semibold tabular-nums">{number}</span>
 </button>

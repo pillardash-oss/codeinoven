@@ -4,9 +4,10 @@
    * Git scope it will run in, mirroring the model picker's popover mechanism so
    * it escapes the review card's scroll container.
    */
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import { onMount } from 'svelte'
   import { Popover } from 'bits-ui'
-  import { FolderTree } from '@lucide/svelte'
+
   import ScopeBadge from './ScopeBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -100,7 +101,7 @@
       {disabled}
     >
       <span class="flex shrink-0 items-center" aria-hidden="true">
-        <FolderTree size={12} class={worktreeTone} />
+        <CioFiles size={12} class={worktreeTone} />
       </span>
       {#if selectedBucket}
         <ScopeBadge bucket={selectedBucket} size="sm" />
@@ -132,8 +133,7 @@
             hint: inheritHint,
             createLabel: 'New worktree for this worker',
             createHint: 'At dispatch',
-            createTitle:
-              'Create a git worktree and branch for this worker when its task starts'
+            createTitle: 'Create a git worktree and branch for this worker when its task starts'
           }}
           {value}
           autofocusSearch

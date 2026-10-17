@@ -1,21 +1,17 @@
 <script lang="ts">
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import type { Snippet } from 'svelte'
   import { ContextMenu } from 'bits-ui'
-  import {
-    ClipboardPaste,
-    Copy,
-    FilePlus2,
-    FolderOpen,
-    FolderPlus,
-    Globe,
-    Info,
-    Pencil,
-    Scissors,
-    ShieldCheck,
-    ShieldOff,
-    Terminal,
-    Trash2
-  } from '@lucide/svelte'
+  import { FilePlus2, Scissors, ShieldOff } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
   import type { CioCleanupCategoryId } from '$shared/types/cio-cleanup'
   import type { WorkRoots } from '$shared/design/work-roots'
@@ -145,30 +141,30 @@
           New file
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCreateFolder}>
-          <FolderPlus size={13} class="text-muted" />
+          <CioFolderPlus size={13} class="text-muted" />
           New folder
         </ContextMenu.Item>
       {/if}
 
       {#if canOpenInBrowser}
         <ContextMenu.Item class={itemClass} onSelect={onOpenInBrowser}>
-          <Globe size={13} class="text-muted" />
+          <CioBrowser size={13} class="text-muted" />
           Open in browser
         </ContextMenu.Item>
       {/if}
 
       <ContextMenu.Item class={itemClass} onSelect={onOpenInTerminal}>
-        <Terminal size={13} class="text-muted" />
+        <CioTerminal size={13} class="text-muted" />
         Open in terminal
       </ContextMenu.Item>
 
       {#if entry}
         <ContextMenu.Item class={itemClass} disabled={!canPaste} onSelect={onPaste}>
-          <ClipboardPaste size={13} class="text-muted" />
+          <CioClipboardPaste size={13} class="text-muted" />
           Paste
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCopy}>
-          <Copy size={13} class="text-muted" />
+          <CioCopy size={13} class="text-muted" />
           Copy{itemSuffix}
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCut}>
@@ -176,12 +172,12 @@
           Move{itemSuffix}
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCopyPath}>
-          <Copy size={13} class="text-muted" />
+          <CioCopy size={13} class="text-muted" />
           {selectedCount > 1 ? `Copy ${selectedCount} paths` : 'Copy path'}
         </ContextMenu.Item>
         {#if canReveal}
           <ContextMenu.Item class={itemClass} onSelect={onReveal}>
-            <FolderOpen size={13} class="text-muted" />
+            <CioFolderOpen size={13} class="text-muted" />
             Show in File Manager
           </ContextMenu.Item>
         {/if}
@@ -193,13 +189,13 @@
               disabled
               title="This folder is excluded from CIO Cleanup in Settings"
             >
-              <ShieldCheck size={13} class="text-muted" />
+              <CioShieldCheck size={13} class="text-muted" />
               Protected from CIO Cleanup
             </ContextMenu.Item>
           {:else}
             <ContextMenu.Item class={itemClass} onSelect={onToggleCioCleanupExclusion}>
               {#if cioCleanupExcluded}
-                <ShieldCheck size={13} class="text-muted" />
+                <CioShieldCheck size={13} class="text-muted" />
                 Include in CIO Cleanup
               {:else}
                 <ShieldOff size={13} class="text-muted" />
@@ -211,7 +207,7 @@
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         {#if isSingle}
           <ContextMenu.Item class={itemClass} onSelect={onRename}>
-            <Pencil size={13} class="text-muted" />
+            <CioPencil size={13} class="text-muted" />
             Rename
           </ContextMenu.Item>
         {/if}
@@ -219,7 +215,7 @@
           class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
           onSelect={onDelete}
         >
-          <Trash2 size={13} />
+          <CioTrash size={13} />
           Delete{itemSuffix}
         </ContextMenu.Item>
       {/if}
@@ -227,7 +223,7 @@
       {#if entry && isSingle}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         <ContextMenu.Item class={itemClass} onSelect={onInfo}>
-          <Info size={13} class="text-muted" />
+          <CioTabInfo size={13} class="text-muted" />
           File info
         </ContextMenu.Item>
       {/if}

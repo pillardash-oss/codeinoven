@@ -32,6 +32,64 @@ export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
  */
 export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
 
+/** Optional app APIs remain callable through the core invocation tool. */
+export const GATEWAY_CAPABILITY_ID = 'cio:gateway'
+export const CORE_GATEWAY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_DOCS_TOOL_NAME,
+  ASK_SECRET_TOOL_NAME,
+  UTILITY_DIAGNOSTICS_TOOL_NAME
+])
+export const GATEWAY_DISCOVERY_INSTRUCTION =
+  'Optional app, workstation, engineering and utility-setup tools are available through the built-in cio:gateway capability, already active. Use cio_util_use with utility_id "cio:gateway", operation "catalog", and input {names:["tool_name"]} to load only the needed schemas, or input {} for a compact index. Then operation "call" with input {tool:"tool_name",arguments:{...}} executes it with the original permissions. Operation "batch" accepts input {calls:[{tool,arguments}]} for up to eight independent read-only calls. Inspect every result; dependent calls, mutations and approvals remain sequential. Do not call optional tool names directly or use shell gateway requests.'
+
+export function initialGatewayTools(
+  tools: readonly GatewayToolDefinition[]
+): GatewayToolDefinition[] {
+  return tools.filter(({ name }) => CORE_GATEWAY_TOOL_NAMES.has(name))
+}
+
+/** Model-facing summaries; complete schemas and route policy remain unchanged. */
+const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  cio_orchestrate_targets:
+    'Read exact Oven, harness, provider, model, profile and account ids plus defaults before dispatch. Use filters to avoid unused catalogs.',
+  cio_orchestrate_dispatch:
+    'Start a real project thread on the chosen Oven. Use ids from cio_orchestrate_targets, resolve missing required choices with the question tool, and report acceptance, not completion. Results arrive asynchronously.',
+  cio_orchestrate_status: 'Read a previously dispatched thread status and latest result by id.',
+  cio_app_catalog:
+    'Read exact app IPC channels, argument order, UI actions and current context before cio_app_call. Filter by domain.',
+  cio_app_call:
+    'Invoke one catalog-listed IPC channel or UI action. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
+  cio_create_brainstorm:
+    'Create a durable Brainstorm draft from this conversation and optional constraints for review.',
+  cio_create_prd: 'Create a PRD draft from the finalized Brainstorm or conversation for review.',
+  cio_create_spec:
+    'Create an implementation-ready engineering specification draft for review. Does not approve or implement it.',
+  cio_create_assignment:
+    'Draft independently promptable worker tasks for user review and model selection. Nothing runs until sign-off. If preference is unknown, ask whether the user wants promptable Assignment workers or inline sub-agents.',
+  cio_util_find:
+    'Find app-managed capabilities by task or name. Evaluate candidates semantically. Only notFound:true proves absence. Known eligible ids may be activated directly.',
+  cio_util_init:
+    'Activate an installed utility and read its operations. Registration persists in this thread; later turns can invoke its id directly.',
+  cio_util_use: 'Invoke an operation on an activated or banked utility by id.',
+  cio_util_docs_lookup:
+    'Retrieve full documentation for a registered utility when it has left context.',
+  cio_ask_secret:
+    'Collect all missing credentials together through the encrypted vault. Values never enter chat. Use returned environment names or secret paths without printing values; bind utility_id when applicable. An alternative answer reuses held values, so do not repeat an answered request.',
+  cio_util_manage:
+    'Install or update a secret-free utility bundle only during explicit utility setup. Each entry wraps definition with kind inside it. Collect credentials afterward with cio_ask_secret.',
+  cio_util_diagnose:
+    'Read-only app diagnostics: find threads, read bounded messages or redacted logs, inspect schema, or run bounded SELECT queries. Use for reported app problems. Never changes data.',
+  cio_util_suggest:
+    'Offer a validated, secret-free capability bundle for user installation. Include real MCP transport configuration. Claim connection only after accepted; collect credentials afterward with cio_ask_secret. Handle declined, alternative, invalid and failed results honestly.'
+}
+
+export function gatewayToolForModel(tool: GatewayToolDefinition): GatewayToolDefinition {
+  return { ...tool, description: MODEL_TOOL_DESCRIPTIONS[tool.name] ?? tool.description }
+}
+
 /** One tool the utility gateway MCP exposes to agents. */
 export interface GatewayToolDefinition {
   /** MCP tool name the agent calls via `tools/call`. */

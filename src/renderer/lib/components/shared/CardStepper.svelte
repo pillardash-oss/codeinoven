@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ChevronLeft, ChevronRight } from '@lucide/svelte'
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import { fly } from 'svelte/transition'
   import { tickArrive } from './card-motion'
 
@@ -48,7 +49,7 @@
       title="Previous {subject}"
       aria-label="Previous {subject}"
     >
-      <ChevronLeft size={14} class="shrink-0" />
+      <CioBack size={14} class="shrink-0" />
     </button>
     <button
       type="button"
@@ -58,7 +59,7 @@
       title={advanceHint ? `Next ${subject} (${advanceHint})` : `Next ${subject}`}
       aria-label="Next {subject}"
     >
-      <ChevronRight size={14} class="shrink-0" />
+      <CioForward size={14} class="shrink-0" />
     </button>
     <!-- The reading stays after the pair, so it names where the arrows landed
        rather than sitting between the two controls. It is keyed by the entry

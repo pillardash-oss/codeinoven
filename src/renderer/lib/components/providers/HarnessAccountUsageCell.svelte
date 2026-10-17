@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { BatteryCharging, Loader2, LogIn, RefreshCw } from '@lucide/svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { BatteryCharging, LogIn } from '@lucide/svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
@@ -94,10 +96,10 @@
             onclick={() => harnessAccountUsageCache.schedule([account], { force: true })}
           >
             {#if probing}
-              <Loader2 size={10} class="animate-spin" aria-hidden="true" />
+              <CioSpinner size={10} class="animate-spin" aria-hidden="true" />
               Retrying…
             {:else}
-              <RefreshCw size={10} aria-hidden="true" />
+              <CioRefresh size={10} aria-hidden="true" />
               Retry
             {/if}
           </button>

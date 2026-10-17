@@ -1,19 +1,16 @@
 <script lang="ts">
+  import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import {
-    Braces,
-    Check,
-    Ellipsis,
-    Info,
-    ListOrdered,
-    Maximize2,
-    Pencil,
-    Redo2,
-    RefreshCw,
-    Trash2,
-    Undo2,
-    WrapText
-  } from '@lucide/svelte'
+  import { ListOrdered, WrapText } from '@lucide/svelte'
 
   interface Props {
     diffView: boolean
@@ -88,7 +85,7 @@
     title="Undo (Cmd+Z)"
     onclick={onUndo}
   >
-    <Undo2 size={13} />
+    <CioUndo size={13} />
   </button>
   <button
     type="button"
@@ -97,7 +94,7 @@
     title="Redo (Shift+Cmd+Z)"
     onclick={onRedo}
   >
-    <Redo2 size={13} />
+    <CioRedo size={13} />
   </button>
 {/if}
 {#if !diffView}
@@ -120,7 +117,7 @@
     title={`Beautify ${beautifyLabel}`}
     onclick={onBeautify}
   >
-    <Braces size={13} />
+    <CioBraces size={13} />
   </button>
 {/if}
 {#if !fullscreen}
@@ -131,7 +128,7 @@
     title="Fullscreen"
     onclick={onFullscreen}
   >
-    <Maximize2 size={13} />
+    <CioMaximize size={13} />
   </button>
 {/if}
 {#if !diffView}
@@ -145,7 +142,7 @@
         open = true
       }}
     >
-      <Ellipsis size={13} />
+      <CioEllipsis size={13} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -157,36 +154,36 @@
         class="z-50 min-w-52 border border-border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
-          <RefreshCw size={13} class="text-muted" />
+          <CioRefresh size={13} class="text-muted" />
           Reload file
         </DropdownMenu.Item>
         <DropdownMenu.Item class={itemClass} onSelect={onToggleLineNumbers}>
           <ListOrdered size={13} class="text-muted" />
           <span class="flex-1">{lineNumbers ? 'Hide line numbers' : 'Show line numbers'}</span>
           {#if lineNumbers}
-            <Check size={12} class="text-primary" />
+            <CioCheck size={12} class="text-primary" />
           {/if}
         </DropdownMenu.Item>
         <DropdownMenu.Item class={itemClass} onSelect={onToggleWrap}>
           <WrapText size={13} class="text-muted" />
           <span class="flex-1">Wrap</span>
           {#if wrap}
-            <Check size={12} class="text-primary" />
+            <CioCheck size={12} class="text-primary" />
           {/if}
         </DropdownMenu.Item>
         {#if beautifyLabel}
           <DropdownMenu.Item class={itemClass} onSelect={onBeautify}>
-            <Braces size={13} class="text-muted" />
+            <CioBraces size={13} class="text-muted" />
             Beautify {beautifyLabel}
           </DropdownMenu.Item>
         {/if}
         <DropdownMenu.Item class={itemClass} disabled={infoDisabled} onSelect={onInfo}>
-          <Info size={13} class="text-muted" />
+          <CioTabInfo size={13} class="text-muted" />
           File info
         </DropdownMenu.Item>
         <DropdownMenu.Separator class="my-1 h-px bg-border" />
         <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
-          <Pencil size={13} class="text-muted" />
+          <CioPencil size={13} class="text-muted" />
           Rename
         </DropdownMenu.Item>
         <DropdownMenu.Item
@@ -194,7 +191,7 @@
           disabled={mutationDisabled}
           onSelect={onDelete}
         >
-          <Trash2 size={13} />
+          <CioTrash size={13} />
           Delete
         </DropdownMenu.Item>
       </DropdownMenu.Content>

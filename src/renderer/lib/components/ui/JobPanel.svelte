@@ -10,7 +10,11 @@
    * and one dockable behaviour instead of three copies that drift: a run that
    * spends minutes in the background is the same experience whoever started it.
    */
-  import { Circle, CircleCheck, Loader2, TriangleAlert } from '@lucide/svelte'
+
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import DockableModal from './DockableModal.svelte'
   import type { JobStatus, JobStepView } from './job-view'
@@ -82,13 +86,13 @@
   <div class="space-y-3">
     <p class="flex items-center gap-1.5 text-xs font-medium" aria-live="polite">
       {#if running}
-        <Loader2 size={13} class="animate-spin text-info" aria-hidden="true" />
+        <CioSpinner size={13} class="animate-spin text-info" aria-hidden="true" />
         <span class="text-info">{statusLabel}</span>
       {:else if done}
-        <CircleCheck size={13} class="text-success" aria-hidden="true" />
+        <CioCheckCircle size={13} class="text-success" aria-hidden="true" />
         <span class="text-success">{statusLabel}</span>
       {:else}
-        <TriangleAlert size={13} class="text-danger" aria-hidden="true" />
+        <CioAttention size={13} class="text-danger" aria-hidden="true" />
         <span class="text-danger">{statusLabel}</span>
       {/if}
     </p>
@@ -97,13 +101,17 @@
       {#each steps as step (step.id)}
         <li class="flex items-start gap-2 text-[0.6875rem]">
           {#if step.state === 'complete'}
-            <CircleCheck size={12} class="mt-0.5 shrink-0 text-success" aria-hidden="true" />
+            <CioCheckCircle size={12} class="mt-0.5 shrink-0 text-success" aria-hidden="true" />
           {:else if step.state === 'active'}
-            <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner
+              size={12}
+              class="mt-0.5 shrink-0 animate-spin text-info"
+              aria-hidden="true"
+            />
           {:else if step.state === 'failed'}
-            <TriangleAlert size={12} class="mt-0.5 shrink-0 text-danger" aria-hidden="true" />
+            <CioAttention size={12} class="mt-0.5 shrink-0 text-danger" aria-hidden="true" />
           {:else}
-            <Circle size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
+            <CioCircle size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
           {/if}
           <span class="min-w-0 flex-1">
             <span
@@ -139,9 +147,7 @@
     </ol>
 
     {#if error}
-      <p
-        class="border border-danger/30 bg-danger/10 px-3 py-2 text-[0.6875rem] text-danger"
-      >
+      <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-[0.6875rem] text-danger">
         {error}
       </p>
     {/if}

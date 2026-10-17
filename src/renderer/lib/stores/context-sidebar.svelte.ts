@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { coordinatorDockState } from './coordinator-dock.svelte'
 import { SidebarBrowserTabs } from './context-sidebar-browser.svelte'
 import type { BrowserTabRuntime } from './browser-tab-status'
 import type { BrowserPageState } from '$shared/ipc-contract'
@@ -408,6 +409,15 @@ class ContextSidebarState {
       this.attentionScope.projectId === projectId &&
       this.attentionScope.threadId === threadId
     const projectChanged = this.activeProjectId !== projectId
+    const previousTab = this.sidebarActiveTab
+    const inheritedWork =
+      !projectChanged && previousTab?.kind === 'coordinator'
+        ? coordinatorDockState.inheritWork(
+            projectId,
+            this.activeRowThreadId ?? '',
+            rowThreadId ?? threadId
+          )
+        : null
     // Capture before `activeProjectId` moves: the native view (if any) belongs
     // to the outgoing project and must be detached from the store layer so the
     // floating view never outlives its sidebar visibility.
@@ -422,6 +432,8 @@ class ContextSidebarState {
     this.tabContexts.ensureContext(projectId, contextThreadId)
     this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
     this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)
+    if (inheritedWork)
+      this.tabContexts.openCoordinator(projectId, contextThreadId, inheritedWork.label)
     this.notificationsVisible = keepNotificationsVisible
     this.stickyNotesVisible = keepStickyNotesVisible
     if (!keepAttentionVisible) this.attentionScope = null

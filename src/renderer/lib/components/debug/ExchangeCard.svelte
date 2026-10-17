@@ -1,4 +1,12 @@
 <script module lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { APP_LOCALE } from '$shared/date-time-format'
 
   const TIME_WITH_SECONDS = new Intl.DateTimeFormat(APP_LOCALE, {
@@ -11,17 +19,7 @@
 <script lang="ts">
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
   import { copyText } from '$lib/copy-text'
-  import {
-    ChevronDown,
-    ChevronRight,
-    Copy,
-    Check,
-    MessageSquare,
-    SquareTerminal,
-    Sparkles,
-    List,
-    AlertTriangle
-  } from '@lucide/svelte'
+  import { List } from '@lucide/svelte'
 
   interface Props {
     ex: DebugExchange
@@ -36,12 +34,12 @@
 
   const Icon = $derived(
     ex.channel === 'agent:sendPrompt'
-      ? MessageSquare
+      ? CioMessage
       : ex.channel === 'agent:generateSpec'
-        ? Sparkles
+        ? CioSparkles
         : ex.channel === 'agent:runCommand'
-          ? SquareTerminal
-          : MessageSquare
+          ? CioTerminal
+          : CioMessage
   )
 
   async function copyExchange(): Promise<void> {
@@ -162,9 +160,9 @@
     </span>
     <span class="shrink-0 text-dimmed">
       {#if expanded}
-        <ChevronDown size={12} />
+        <CioChevronDown size={12} />
       {:else}
-        <ChevronRight size={12} />
+        <CioForward size={12} />
       {/if}
     </span>
   </button>
@@ -176,7 +174,7 @@
         <span
           class="flex items-center gap-1 bg-danger/10 px-1.5 py-0.5 font-mono text-[0.5625rem] text-danger"
         >
-          <AlertTriangle size={9} />
+          <CioAttention size={9} />
           {ex.error}
         </span>
       {/if}
@@ -284,10 +282,10 @@
           onclick={() => void copyExchange()}
         >
           {#if copiedId === ex.id}
-            <Check size={9} class="text-success" />
+            <CioCheck size={9} class="text-success" />
             <span class="text-success">Copied</span>
           {:else}
-            <Copy size={9} />
+            <CioCopy size={9} />
             Copy JSON
           {/if}
         </button>

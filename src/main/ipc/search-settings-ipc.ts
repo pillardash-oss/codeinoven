@@ -1,4 +1,5 @@
-import { BrowserWindow, dialog } from 'electron'
+import { dialog } from '../system/file-dialogs'
+import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import type { SearchService } from '../search/search-service'
 import { validateSearchModelPath } from '../search/search-path-validation'

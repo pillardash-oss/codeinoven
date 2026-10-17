@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, ChevronDown, FolderKanban, Search } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { scopeState, type ScopeProject } from '$lib/stores/scope.svelte'
@@ -123,15 +126,13 @@
                 onerror={projectIconOnError(project)}
               />
             {:else}
-              <FolderKanban size={11} />
+              <CioProjects size={11} />
             {/if}
           </span>
         {/each}
         {#if selectedMultiProjects.length === 0}
-          <span
-            class="flex h-5 w-5 items-center justify-center border bg-raised text-dimmed"
-          >
-            <FolderKanban size={11} />
+          <span class="flex h-5 w-5 items-center justify-center border bg-raised text-dimmed">
+            <CioProjects size={11} />
           </span>
         {/if}
       </span>
@@ -140,7 +141,7 @@
           ? allLabel
           : `${selectedMultiProjects.length} project${selectedMultiProjects.length === 1 ? '' : 's'}`}
       </span>
-      <ChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
+      <CioChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
     {:else}
       <span
         class="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden border bg-raised text-dimmed"
@@ -155,7 +156,7 @@
             onerror={projectIconOnError(selectedProject)}
           />
         {:else}
-          <FolderKanban size={13} />
+          <CioProjects size={13} />
         {/if}
       </span>
       {#if selectedProject}
@@ -167,7 +168,7 @@
       {:else}
         <span class="min-w-0 flex-1 truncate text-dimmed">{placeholder}</span>
       {/if}
-      <ChevronDown size={14} class="shrink-0 text-dimmed" />
+      <CioChevronDown size={14} class="shrink-0 text-dimmed" />
     {/if}
   </DropdownMenu.Trigger>
 
@@ -187,7 +188,7 @@
           onclick={(event: MouseEvent) => event.stopPropagation()}
           onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
         />
-        <Search
+        <CioSearch
           size={12}
           class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -204,7 +205,7 @@
         >
           <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
           {#if selectedIds.length === 0}
-            <Check size={12} class="shrink-0 text-primary" />
+            <CioCheck size={12} class="shrink-0 text-primary" />
           {/if}
         </DropdownMenu.Item>
         <div class="mx-1 my-1 border-t border-border" aria-hidden="true"></div>
@@ -225,10 +226,7 @@
           }}
         >
           {#if project.color}
-            <span
-              class="w-0.5 shrink-0 self-stretch"
-              style:background-color={project.color}
-            ></span>
+            <span class="w-0.5 shrink-0 self-stretch" style:background-color={project.color}></span>
           {/if}
           {#if project.iconUrl}
             <img
@@ -244,7 +242,7 @@
             showLocation={hasProjectNameCollision(project, availableProjects)}
           />
           {#if multiSelect ? selectedIds.includes(project.id) : activeProjectId === project.id}
-            <Check size={12} class="shrink-0 text-primary" />
+            <CioCheck size={12} class="shrink-0 text-primary" />
           {/if}
         </DropdownMenu.Item>
       {/each}

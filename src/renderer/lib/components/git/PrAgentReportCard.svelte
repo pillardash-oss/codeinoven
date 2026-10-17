@@ -1,13 +1,11 @@
 <script lang="ts">
-  import {
-    Bot,
-    ChevronDown,
-    ExternalLink,
-    FileText,
-    MessageSquare,
-    MessagesSquare,
-    Send
-  } from '@lucide/svelte'
+  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import type { Attachment } from 'svelte/attachments'
   import { formatCompactAge } from '$shared/date-time-format'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -116,7 +114,7 @@
   -->
   <header class="border-b border-border/60 bg-elevated/50 px-2.5 py-1.5">
     <div class="flex items-center gap-1.5">
-      <Bot size={13} class="shrink-0 {hasBody ? 'text-primary' : 'text-dimmed'}" />
+      <CioSubagent size={13} class="shrink-0 {hasBody ? 'text-primary' : 'text-dimmed'}" />
       <p
         class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
         title={report.title}
@@ -139,7 +137,7 @@
             title="Show the comment this assignment answered in the conversation"
             onclick={() => onShowInConversation(report)}
           >
-            <MessageSquare size={11} class="shrink-0" />
+            <CioMessage size={11} class="shrink-0" />
             Show comment
           </button>
         {/if}
@@ -150,7 +148,7 @@
             title="Open the agent thread this assignment runs in"
             onclick={() => onOpenThread(threadId)}
           >
-            <MessagesSquare size={11} class="shrink-0" />
+            <CioChat size={11} class="shrink-0" />
             Thread
           </button>
         {/if}
@@ -160,7 +158,7 @@
           title="Open the report file in the file tree"
           onclick={openReportFile}
         >
-          <FileText size={11} class="shrink-0" />
+          <CioFileText size={11} class="shrink-0" />
           Report
         </button>
         {#if externalUrl}
@@ -172,7 +170,7 @@
             aria-label={externalLabel}
             onclick={() => void openInBrowser(externalUrl)}
           >
-            <ExternalLink size={11} />
+            <CioExternalLink size={11} />
           </button>
         {/if}
       </div>
@@ -198,7 +196,7 @@
           title={expanded ? 'Fold this report to five lines' : 'Show the whole report'}
           onclick={() => (expanded = !expanded)}
         >
-          <ChevronDown
+          <CioChevronDown
             size={12}
             class="shrink-0 transition-transform {expanded ? 'rotate-180' : ''}"
           />
@@ -212,7 +210,7 @@
         disabled={posting}
         onclick={() => onPostReport(report)}
       >
-        <Send size={12} />
+        <CioSend size={12} />
         Post to PR
       </button>
     </footer>

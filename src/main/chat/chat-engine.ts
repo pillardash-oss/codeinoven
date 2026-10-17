@@ -1,3 +1,5 @@
+import { deliverWithWorkPathNotices } from '../design/work-path-notices'
+import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { validateModelRuntimeSettings } from '../../lib/model-runtime-settings'
 import { BrowserWindow, net, powerMonitor } from 'electron'
 import { readdir, readFile, rm, stat } from 'fs/promises'
@@ -18,7 +20,10 @@ import {
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
 import { AssistantAuthoringCheckpoints } from './assistant-authoring-checkpoints'
-import { broadcastAssistantCheckpointChanged } from '../scheduler/assistant-events'
+import {
+  broadcastAssistantCheckpointChanged,
+  broadcastAssistantsChanged
+} from '../scheduler/assistant-events'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_CREATE_DOCUMENT_ANSWER,
@@ -158,6 +163,7 @@ import {
 } from '../speech/lesson-protocol'
 import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { ConnectivitySource } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
 import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
@@ -470,7 +476,7 @@ import {
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
-import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
+import { GenerationClock, generatedTokens, windowCoversOutput } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   LEGACY_CHATS_ARTIFACTS_DIRECTORY,
@@ -597,6 +603,8 @@ import {
 } from './chat-engine/chat-engine-message-text'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
+  CONNECTION_LOSS_GRACE_MS,
+  CONNECTION_WAIT_MESSAGE,
   CONTINUATION_REQUEST_PAGE_MESSAGES,
   COORDINATOR_HANDOFF_QUEUE_DIR,
   CURRENT_SPEC_GENERATION_VERSION,
@@ -1313,6 +1321,8 @@ export class ChatEngine {
 
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
+  /** Verified device connectivity; null only before boot attaches it. */
+  private connectivity: ConnectivitySource | null = null
 
   /**
    * Resolves the model set an assistant task's assistant runs on. Attached by the
@@ -3785,6 +3795,7 @@ export class ChatEngine {
     await this.utilityRuntime.dispose()
     this.retryScheduler?.dispose()
     this.retryScheduler = null
+    this.connectivity = null
     this.sessionRegistry.clear()
     this.childSessionOwners.clear()
     this.childCaptureTasks.clear()
@@ -3919,19 +3930,21 @@ export class ChatEngine {
    * scanning every listed thread's persisted messages for the session tag, which
    * read the whole `parts` column through a LIKE on every sidebar render. The
    * thread knows the moment it enters a session, so the kind is written here and
-   * the existing `thread:updated` broadcast carries it to the row. Guarded on the
-   * current value so an unchanged kind never re-broadcasts, and best-effort: the
-   * marker is cosmetic and a failed write must never fail a turn.
+   * the existing `thread:updated` broadcast carries it to the row.
+   *
+   * The row draws one marker per session the thread has entered, so this records
+   * the kind in the durable set as well as naming the session it is in now: a
+   * thread that designed something and later cut a video about it keeps both
+   * marks. The manager writes nothing for a kind the thread already holds.
+   * Best-effort: the marker is cosmetic and a failed write must never fail a turn.
    */
   private async rememberAuthoredWorkKind(
     projectId: string,
     threadId: string,
-    kind: AuthoredWorkKind,
-    current: AuthoredWorkKind | undefined
+    kind: AuthoredWorkKind
   ): Promise<void> {
-    if (current === kind) return
     try {
-      await this.threadManager.updateThread(projectId, threadId, { authoredWorkKind: kind })
+      await this.threadManager.recordAuthoredWorkKind(projectId, threadId, kind)
     } catch (error) {
       Logger.dev('Authored-work kind persist failed:', error)
     }
@@ -4159,7 +4172,11 @@ export class ChatEngine {
         ...(authoringAssistantId
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
-                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantReporting: (reporting: AssistantReportingPatch) =>
+                this.saveAssistantReporting(authoringAssistantId, reporting),
+              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+                this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
         budgetContext,
@@ -4491,7 +4508,11 @@ export class ChatEngine {
         ...(authoringAssistantId
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
-                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantReporting: (reporting: AssistantReportingPatch) =>
+                this.saveAssistantReporting(authoringAssistantId, reporting),
+              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+                this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
         budgetContext,
@@ -8119,6 +8140,39 @@ export class ChatEngine {
       .join('\n\n')
   }
 
+  /** Save settled reporting fields and publish the live panel state. */
+  private async saveAssistantReporting(
+    assistantId: string,
+    reporting: AssistantReportingPatch
+  ): Promise<void> {
+    if (!(await this.assistantRepo.getViaWorker(assistantId))) {
+      throw new Error('The assistant no longer exists')
+    }
+    this.assistantRepo.updateReporting(assistantId, reporting, Date.now())
+    broadcastAssistantsChanged(await this.assistantRepo.listViaWorker())
+  }
+
+  /**
+   * Record who the assistant is, the moment the conversation settles it.
+   *
+   * The user names their assistant in the first answer of the setup conversation,
+   * and waiting for the recap to save would leave every surface calling it "New
+   * assistant" for the whole interview. This writes the name, and the personality
+   * once they have described how they want it to behave, straight onto the row and
+   * broadcasts the assistant list, so the sidebar, the panel, the tab and the
+   * thread's own head start rename themselves as the answer lands. The capability
+   * that calls it is bound to the live authoring turn, so the write is app-owned
+   * and the agent never names an id.
+   */
+  private async saveAssistantIdentity(
+    assistantId: string,
+    identity: { name?: string; personality?: string }
+  ): Promise<void> {
+    const updated = this.assistantRepo.updateIdentity(assistantId, identity, Date.now())
+    if (!updated) return
+    broadcastAssistantsChanged(this.assistantRepo.list())
+  }
+
   /**
    * Replace an assistant's Getting started checkpoint. The capability that calls
    * this is bound to the live authoring turn, so the write is app-owned and the
@@ -8942,7 +8996,7 @@ export class ChatEngine {
         ? 'design'
         : null
     if (steeredKind) {
-      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind, thread.authoredWorkKind)
+      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind)
     }
     await this.rearmSteerUtilities(
       driver,
@@ -8964,10 +9018,44 @@ export class ChatEngine {
       isolated?: IsolatedSessionHandle
     ) => Promise<void>
     const deliverNow = async (): Promise<void> => {
-      if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
-        await steer(projectPath, steerOptions, activeBrainstorm.isolated)
-      } else {
-        await steer(projectPath, steerOptions)
+      try {
+        await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+          const options = { ...steerOptions, text }
+          if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
+            await steer(projectPath, options, activeBrainstorm.isolated)
+          } else {
+            await steer(projectPath, options)
+          }
+        })
+      } catch (error) {
+        if (error instanceof SteerDeliveryFailedError) throw error
+        // The turn can settle inside the race window between the working check
+        // above and this delivery (auto-compaction, silent continue, retry)
+        // pi considers compaction part of the working trace but the driver's
+        // registered turn is already gone. A settled trace must never reject the
+        // user's message: deliver it as the next regular turn instead. The
+        // driver's own registered-turn probe is authoritative over the cached
+        // status, which can lag a compaction or process exit by seconds.
+        const state = this.sessionStatuses.get(activeSessionId)?.state
+        const turnStillLive = driver.hasActiveTurn
+          ? driver.hasActiveTurn(activeSessionId)
+          : state === 'working' || state === 'waiting'
+        if (turnStillLive) throw error
+        Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
+          projectId,
+          threadId,
+          sessionId: activeSessionId,
+          error: rawErrorMessage(error)
+        })
+        if (previousPendingMemoryDecision) {
+          this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
+        } else {
+          this.pendingMemoryDecisions.delete(activeSessionId)
+        }
+        this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+        this.handleSessionIdleSignal(activeSessionId)
+        await this.awaitSessionIdleFinalization(activeSessionId)
+        await deliverAsRegularSend()
       }
     }
     // CodeInOven owns steer delivery timing for every harness: while the turn
@@ -9012,38 +9100,7 @@ export class ChatEngine {
       })
       return withoutTransportParts(userMessage)
     }
-    try {
-      await deliverNow()
-    } catch (error) {
-      if (error instanceof SteerDeliveryFailedError) throw error
-      // The turn can settle inside the race window between the working check
-      // above and this delivery (auto-compaction, silent continue, retry)
-      // pi considers compaction part of the working trace but the driver's
-      // registered turn is already gone. A settled trace must never reject the
-      // user's message: deliver it as the next regular turn instead. The
-      // driver's own registered-turn probe is authoritative over the cached
-      // status, which can lag a compaction or process exit by seconds.
-      const state = this.sessionStatuses.get(activeSessionId)?.state
-      const turnStillLive = driver.hasActiveTurn
-        ? driver.hasActiveTurn(activeSessionId)
-        : state === 'working' || state === 'waiting'
-      if (turnStillLive) throw error
-      Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
-        projectId,
-        threadId,
-        sessionId: activeSessionId,
-        error: rawErrorMessage(error)
-      })
-      if (previousPendingMemoryDecision) {
-        this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
-      } else {
-        this.pendingMemoryDecisions.delete(activeSessionId)
-      }
-      this.sessionStatuses.set(activeSessionId, { state: 'idle' })
-      this.handleSessionIdleSignal(activeSessionId)
-      await this.awaitSessionIdleFinalization(activeSessionId)
-      return deliverAsRegularSend()
-    }
+    await deliverNow()
     return withoutTransportParts(userMessage)
   }
 
@@ -9921,12 +9978,20 @@ export class ChatEngine {
       const deliverFallbackSteer = (): Promise<void> => {
         const steer = driver.steerPrompt
         if (!steer) return Promise.reject(new Error('steer unavailable'))
-        return steer.call(driver, projectPath, {
-          sessionId,
-          text: driverText,
-          attachments,
-          userMessageId: messageId
-        })
+        return this.deliverWorkPrompt(
+          projectId,
+          threadId,
+          userMessage,
+          driverText,
+          async (text) => {
+            await steer.call(driver, projectPath, {
+              sessionId,
+              text,
+              attachments,
+              userMessageId: messageId
+            })
+          }
+        )
       }
       // Same undo window as steerPrompt: hold while a tool call is in flight.
       if (this.hasInFlightTool(sessionId)) {
@@ -10052,12 +10117,7 @@ export class ChatEngine {
           ? 'design'
           : null
     if (authoredWorkKind) {
-      await this.rememberAuthoredWorkKind(
-        projectId,
-        threadId,
-        authoredWorkKind,
-        targetThread?.authoredWorkKind
-      )
+      await this.rememberAuthoredWorkKind(projectId, threadId, authoredWorkKind)
     }
     // The assistant knowledge authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
@@ -10460,7 +10520,9 @@ export class ChatEngine {
           ...(historyRecap ? { historyRecap } : {}),
           userMessageId: messageId
         }
-        await driver.sendPrompt(projectPath, prompt)
+        await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+          await driver.sendPrompt(projectPath, { ...prompt, text })
+        })
         this.sessionModelIds.set(sessionId, {
           providerId: settings.providerId,
           modelId: settings.modelId,
@@ -10526,44 +10588,46 @@ export class ChatEngine {
       // browser chatbot: no file-system tools, internet-first answers. File
       // operations are granted only when the user explicitly enables the
       // File System mode for the thread.
-      await driver.sendPrompt(projectPath, {
-        sessionId,
-        settings,
-        text: driverText,
-        attachments,
-        readOnly: isChatThread && !chatFileSystemEnabled,
-        systemPrompt:
-          composeTurnSystemPrompt({
-            chatPrompt: chatSystemPrompt,
-            memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
-            imageDescriptorNote,
-            assignmentCoordinatorSystemPrompt,
-            behaviorPrompt,
-            utilityInstructions,
-            assistantInstruction,
-            behaviorMode
-          }) || undefined,
-        allowedTools:
-          isChatThread &&
-          !chatFileSystemEnabled &&
-          (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
-            ? [
-                ...CHAT_WEB_ONLY_TOOLS,
-                ...chatGatewayAllowedTools(driverId),
-                ...(projectId === GLOBAL_BROWSER_PROJECT_ID
-                  ? ['read', 'write', 'edit', 'glob', 'grep']
-                  : [])
-              ]
-            : undefined,
-        agent: utilitySetupRequested
-          ? leanAgentNameForMode('utility-setup')
-          : isAssistantTask
-            ? leanAgentNameForMode('assistant')
-            : isChatThread
-              ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+      await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+        await driver.sendPrompt(projectPath, {
+          sessionId,
+          settings,
+          text,
+          attachments,
+          readOnly: isChatThread && !chatFileSystemEnabled,
+          systemPrompt:
+            composeTurnSystemPrompt({
+              chatPrompt: chatSystemPrompt,
+              memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
+              imageDescriptorNote,
+              assignmentCoordinatorSystemPrompt,
+              behaviorPrompt,
+              utilityInstructions,
+              assistantInstruction,
+              behaviorMode
+            }) || undefined,
+          allowedTools:
+            isChatThread &&
+            !chatFileSystemEnabled &&
+            (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
+              ? [
+                  ...CHAT_WEB_ONLY_TOOLS,
+                  ...chatGatewayAllowedTools(driverId),
+                  ...(projectId === GLOBAL_BROWSER_PROJECT_ID
+                    ? ['read', 'write', 'edit', 'glob', 'grep']
+                    : [])
+                ]
               : undefined,
-        ...(historyRecap ? { historyRecap } : {}),
-        userMessageId: messageId
+          agent: utilitySetupRequested
+            ? leanAgentNameForMode('utility-setup')
+            : isAssistantTask
+              ? leanAgentNameForMode('assistant')
+              : isChatThread
+                ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+                : undefined,
+          ...(historyRecap ? { historyRecap } : {}),
+          userMessageId: messageId
+        })
       })
       if (utilitySetupRequested || isChatThread || isAssistantTask) {
         traceLeanAgent(
@@ -12378,6 +12442,30 @@ export class ChatEngine {
     }
   }
 
+  /** Add pending relocation updates only when a message reaches its harness. */
+  private async deliverWorkPrompt(
+    projectId: string,
+    threadId: string,
+    userMessage: AgentMessage,
+    text: string,
+    deliver: (text: string) => Promise<void>
+  ): Promise<void> {
+    await deliverWithWorkPathNotices({
+      database: this.database,
+      projectId,
+      threadId,
+      text,
+      deliver,
+      recordTransport: async (transportText) => {
+        const part = userMessage.transportParts?.find((part) => part.type === 'text')
+        if (part?.type !== 'text') throw new Error('Outbound message has no transport text')
+        part.text = transportText
+        userMessage.transportOrigin = 'orchestrator'
+        await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
+      }
+    })
+  }
+
   /**
    * Persist a user message to the mirror immediately so thread navigation
    * cannot lose the latest message while the driver is still starting or
@@ -12538,6 +12626,13 @@ export class ChatEngine {
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
+    // The first-message title is already visible. Spend on refinement only
+    // when the user has assigned an auxiliary model for this harness.
+    const titleSelection = auxiliarySelectionFor(
+      (await this.storage.getConfig()).auxiliaryAgents,
+      driverId
+    )
+    if (!titleSelection) return
     Logger.dev('Thread auto-title generation started', { projectId, threadId, driverId })
 
     let generated: string | null
@@ -18588,6 +18683,16 @@ export class ChatEngine {
         await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
           read: false
         })
+        // Park the coordinator on `spec` while the report is under review: the
+        // same settle the implementation and Achievement audits end on, because
+        // a ready report is a finished artifact waiting on the user. Landing on
+        // `completed` instead read as done, so the audited thread stayed in the
+        // Done group with no spec mark and no review-ready count on its project
+        // strip. `setStatus` also advances the thread's activity and clears its
+        // manual sort anchor, so the report bubbling up is the same write.
+        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
+          read: false
+        })
         await this.loadMessages(projectId, auditorThread.id)
         await this.notifyIndependentAuditCompletion(projectId, coordinatorThreadId, 'completed')
         return {
@@ -18662,6 +18767,11 @@ export class ChatEngine {
         version: report.version
       })
       await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+        read: false
+      })
+      // Same settle as the validated path above: a partial report is still a
+      // report the user has to read, so its thread parks on `spec` too.
+      await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
       await this.loadMessages(projectId, auditorThread.id)
@@ -23158,6 +23268,12 @@ export class ChatEngine {
       // reported by the thread's current harness and provider, so an
       // unattributed row is invisible to it for the whole run.
       event.harnessId ??= driverId
+      // What one reported count covers, declared by the owning driver. A count
+      // that spans a turn or the whole harness session must never be divided by
+      // one message's generation window, so consumers need to know its scope.
+      event.tokenUsageScope ??=
+        this.driverForRuntime(driverId, eventOwner.accountId)?.capabilities.tokenUsageScope ??
+        'message'
       if (selection) event.providerId ??= selection.providerId
       if (event.contextWindow === undefined && selection) {
         const contextWindow = this.modelContextWindow(
@@ -23217,6 +23333,17 @@ export class ChatEngine {
         Date.now(),
         event.partId,
         event.delta.length
+      )
+    }
+    // A harness that reports accounting before its turn closes (opencode's
+    // per-step totals) teaches the clock the same way the renderer already
+    // learns it, so the two processes keep one view of the message.
+    if (event.type === 'usage.updated' && generatedTokens(event.tokens) > 0) {
+      this.generationClock.noteReported(
+        GenerationClock.key(event.sessionId, event.messageId),
+        generatedTokens(event.tokens),
+        Date.now(),
+        event.tokenUsageScope ?? 'message'
       )
     }
     if (
@@ -23377,11 +23504,9 @@ export class ChatEngine {
         // harnesses that schedule their own retry (OpenCode). Their native
         // resume emits `working` and clears the record; the recorded wait keeps
         // the thread retryable after an app restart.
-        void (
-          event.status.issue.kind === 'network' && event.status.issue.retryAt === undefined
-            ? Promise.resolve(false)
-            : this.scheduleAutomaticRetry(event.sessionId, event.status.issue)
-        ).catch((error) => Logger.dev('Retry scheduling failed for waiting session:', error))
+        void this.scheduleAutomaticRetry(event.sessionId, event.status.issue).catch((error) =>
+          Logger.dev('Retry scheduling failed for waiting session:', error)
+        )
       }
       if (event.status.state === 'working' || event.status.state === 'idle') {
         updateRetryWakeWindow(event.sessionId, null)
@@ -23566,7 +23691,12 @@ export class ChatEngine {
       if (event.type === 'message.completed') {
         const clockKey = GenerationClock.key(event.sessionId, event.messageId)
         if ((event.tokens?.output ?? 0) > 0) {
-          this.generationClock.noteReported(clockKey, generatedTokens(event.tokens), now)
+          this.generationClock.noteReported(
+            clockKey,
+            generatedTokens(event.tokens),
+            now,
+            event.tokenUsageScope ?? 'message'
+          )
         }
         this.generationClock.completeRequest(clockKey, now)
       } else {
@@ -25044,13 +25174,40 @@ export class ChatEngine {
   }
 
   /**
+   * Register the verified connectivity tracker, and drain the resume queue on
+   * every transition into a verified online state.
+   *
+   * A wait parked on the device's connection is resumed from here rather than
+   * from the renderer's own event. The renderer relays what the operating
+   * system believes, and that belief can stay wrong in both directions (an
+   * associated access point with no uplink still reports online); only a probe
+   * that actually reached the network may start a harness turn again.
+   */
+  attachConnectivity(connectivity: ConnectivitySource): () => void {
+    this.connectivity = connectivity
+    return connectivity.onRestored(() => this.connectionRestored())
+  }
+
+  /**
+   * Whether the device can reach the outside right now.
+   *
+   * The verified answer once boot has attached the tracker, the Chromium hint
+   * as the floor before that. Failing towards "online" is deliberate: a resume
+   * fired against a dead link costs one attempt and a cooldown, while a resume
+   * that never fires strands the thread and the promise its card made.
+   */
+  private deviceOnline(): boolean {
+    return this.connectivity ? this.connectivity.isOnline() : net.isOnline()
+  }
+
+  /**
    * Register the auto-resume scheduler. Its resume callback routes back into
    * this engine so a timed retry flows through the same sendPrompt pipeline as
    * a manual Retry.
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
-    scheduler.attachNetworkTest(() => net.isOnline())
+    scheduler.attachNetworkTest(() => this.deviceOnline())
     scheduler.attachStoppedThreadTest((projectId, threadId) =>
       this.threadManager.wasStoppedByUser(projectId, threadId)
     )
@@ -25576,10 +25733,18 @@ export class ChatEngine {
       return false
     }
     const driver = this.driverForRuntime(info.driverId, info.accountId)
-    if (!driver) return false
+    // A device connection failure outlives the driver it killed: that is
+    // exactly what a Wi-Fi drop leaves behind, and refusing the record here is
+    // what stranded the thread on an error card nothing was listening to. The
+    // wait is the device's connectivity and the resume goes through the
+    // thread's own settings like any other send, so no driver is needed to arm
+    // it. Every other kind still needs its driver: both the reset time it
+    // waits on and the resume come from it.
+    if (!driver && issue.kind !== 'network') return false
     // Allow the failed turn to finish tearing down before admitting a continuation.
     let retryAt = issue.kind === 'network' ? Date.now() + 3_000 : issue.retryAt
     if (retryAt === undefined) {
+      if (!driver) return false
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
       // its account endpoint)   ask the provider-scoped account telemetry for
@@ -25798,6 +25963,15 @@ export class ChatEngine {
     issue: AgentProviderIssue,
     error?: string
   ): Promise<void> {
+    const connectionWait = this.asConnectionWaitIssue(issue)
+    if (connectionWait !== issue) {
+      // The device explains this failure, so it is the connection wait it is:
+      // the same card, the same ledger entry, and the same automatic resume a
+      // transport failure gets. Parking the thread here is what keeps the
+      // reconnection worth anything.
+      this.enterRetryWait(sessionId, connectionWait, error ?? issue.message)
+      return
+    }
     const retryScheduled = await this.scheduleAutomaticRetry(sessionId, issue)
     // Fallback: if scheduling did not produce a pending retry but the issue is
     // a retryable usage reset, still treat as paused so the thread does not
@@ -25807,10 +25981,15 @@ export class ChatEngine {
     // A user-stopped thread is exempt: schedule refused the record, and the
     // fallback here must not re-persist working-paused (or a later launch's
     // orphan-repair scan would re-arm a timer for the stopped thread).
+    //
+    // A connection wait is paused here for the same reason and with a stronger
+    // one: its resume is not a clock the thread can wait out, it is the device
+    // coming back, and a terminal error card is what stops the app from
+    // listening for that. The wait never requires the failed turn to have been
+    // retryable   the device, not the provider, owns whether it can run.
     const shouldStayPaused =
       !retryScheduled &&
-      isUsageResetWaitIssue(issue) &&
-      issue.retryable &&
+      (issue.kind === 'network' || (isUsageResetWaitIssue(issue) && issue.retryable)) &&
       !(await this.threadManager.wasStoppedByUser(
         this.sessionRegistry.get(sessionId)?.projectId ?? '',
         this.sessionRegistry.get(sessionId)?.threadId ?? ''
@@ -25834,6 +26013,37 @@ export class ChatEngine {
   }
 
   /**
+   * A provider failure the device itself explains.
+   *
+   * A turn that dies while the device has no connectivity did not fail because
+   * of the provider, and it was not the provider's verdict that surfaced: it is
+   * the connection. Harnesses report that loss in their own words (a process
+   * exit, an empty stream, a transport reset inside a driver-specific string)
+   * and most of those classify as `unknown`, which used to end the thread on a
+   * terminal error card with nothing listening for the reconnection. Any
+   * `unknown` failure landing inside the connection-loss window is therefore
+   * re-read as the connection wait it is.
+   *
+   * Only `unknown` is re-read. A provider that stated a verdict (sign-in
+   * required, billing, a usage window) keeps it: those need the user, not the
+   * network, and masking them behind a connection card would hide the one
+   * action that fixes them.
+   */
+  private asConnectionWaitIssue(issue: AgentProviderIssue): AgentProviderIssue {
+    const connectivity = this.connectivity
+    if (!connectivity || issue.kind !== 'unknown') return issue
+    if (!connectivity.isOffline() && !connectivity.wasOfflineWithin(CONNECTION_LOSS_GRACE_MS))
+      return issue
+    return {
+      ...issue,
+      kind: 'network',
+      retryable: true,
+      retryAt: undefined,
+      message: CONNECTION_WAIT_MESSAGE
+    }
+  }
+
+  /**
    * Re-surface a terminal usage/rate-limit outcome as the unified waiting card
    * with a retry time. Also schedules the auto-resume for every harness (native
    * retry harnesses included) so the wait survives an app restart, and routes
@@ -25847,8 +26057,7 @@ export class ChatEngine {
         retryable: true,
         retryAt: undefined,
         rawError: issue.rawError ?? error ?? issue.message,
-        message:
-          'Connection interrupted. This thread will resume automatically when the device reconnects.'
+        message: CONNECTION_WAIT_MESSAGE
       }
     }
     this.sessionStatuses.set(sessionId, { state: 'waiting', issue })
@@ -25998,11 +26207,26 @@ export class ChatEngine {
     const threadId = validateEntityId(record.threadId, 'Thread ID')
     const { sessionId } = record
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
+    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) {
+      // The thread moved on (a newer session, an archive, a delete). This wait
+      // can never be admitted, and leaving it in the ledger turns every tick
+      // into a no-op attempt for a thread that is no longer waiting.
+      if (this.retryScheduler?.getPendingRetry(sessionId) === record) {
+        this.retryScheduler.clear(sessionId)
+      }
+      this.retryScheduler?.resumed(sessionId)
+      return
+    }
     const current = this.sessionStatuses.get(sessionId)
     if (current?.state === 'working') return
     if (record.issueKind === 'network') {
-      if (!net.isOnline()) throw new Error('Device disconnected before thread recovery')
+      if (!this.deviceOnline()) {
+        // The link the resume was armed on is gone again. Keep the wait and
+        // re-verify connectivity: firing the rest of a reconnect queue against
+        // a flapping network is what turns a recovery into a stampede.
+        this.connectivity?.invalidate('connection wait resume attempted offline')
+        throw new Error('Device disconnected before thread recovery')
+      }
       const info = this.sessionRegistry.get(sessionId)
       const driver = info ? this.driverForRuntime(info.driverId, info.accountId) : undefined
       if (
@@ -29144,12 +29368,19 @@ export class ChatEngine {
   /**
    * Apply the accumulated generation window to loaded assistant messages,
    * persisting the model-active duration as `generationMs`.
+   *
+   * A message whose output mostly arrived as buffered flushes is left without a
+   * window: the clock measured no generation to divide its tokens by, and a
+   * stamped window would outlive this process as a rate nobody can read
+   * correctly. The renderer withholds a rate for exactly the same samples, so the
+   * live figure and the reopened figure agree.
    */
   private applyGenerationStamps(sessionId: string, messages: AgentMessage[]): void {
     for (const msg of messages) {
       if (msg.role !== 'assistant' || msg.generationMs !== undefined) continue
       const sample = this.generationClock.sample(GenerationClock.key(sessionId, msg.id))
       if (!sample || sample.activeMs <= 0) continue
+      if (!windowCoversOutput(sample)) continue
       msg.generationMs = Math.round(sample.activeMs)
     }
   }

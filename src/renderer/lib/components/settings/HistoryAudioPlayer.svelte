@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onDestroy, tick } from 'svelte'
-  import { Download, LoaderCircle, Play } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { osFileManagerLabel, revealExportedPathInOsFileManager } from '$lib/os-file-manager'
@@ -180,10 +183,10 @@
         onclick={() => void handlePlay()}
       >
         {#if preparing}
-          <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+          <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
           Preparing…
         {:else}
-          <Play size={12} aria-hidden="true" />
+          <CioPlay size={12} aria-hidden="true" />
           Play
         {/if}
       </button>
@@ -203,9 +206,9 @@
         onclick={() => void saveRecording()}
       >
         {#if saving}
-          <LoaderCircle size={11} class="animate-spin" aria-hidden="true" /> Saving…
+          <CioSpinner size={11} class="animate-spin" aria-hidden="true" /> Saving…
         {:else}
-          <Download size={11} aria-hidden="true" /> Download
+          <CioDownload size={11} aria-hidden="true" /> Download
         {/if}
       </button>
     </div>

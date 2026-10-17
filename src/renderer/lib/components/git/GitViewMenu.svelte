@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, ChevronDown, GitBranch } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 
@@ -8,7 +10,7 @@
     tabs: Array<{
       id: GitPanelTabId
       label: string
-      icon: typeof GitBranch
+      icon: typeof CioTabGit
       count: number | null
     }>
     activeTab: GitPanelTabId
@@ -61,7 +63,7 @@
         {activeCount}
       </span>
     {/if}
-    <ChevronDown size={10} class="shrink-0 text-dimmed" />
+    <CioChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
@@ -84,7 +86,7 @@
                 {tab.count}
               </span>
             {/if}
-            <Check
+            <CioCheck
               size={12}
               class={['shrink-0', tab.id === activeTab ? 'text-primary' : 'invisible']}
               aria-hidden="true"

@@ -1,17 +1,16 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioGrip from '$lib/components/icons/cio/CioGrip.svelte'
+  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
   import { tick } from 'svelte'
   import { on } from 'svelte/events'
   import { SvelteSet } from 'svelte/reactivity'
-  import {
-    Check,
-    ChevronRight,
-    GripVertical,
-    Plug,
-    RefreshCw,
-    Search,
-    Star,
-    X
-  } from '@lucide/svelte'
+
   import { modelKey, parseModelKey } from '$lib/model-keys'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -639,7 +638,7 @@
       {/if}
     {:else}
       <div class="flex shrink-0 items-center gap-2 border-b px-2.5 py-2">
-        <Search size={12} class="shrink-0 text-dimmed" />
+        <CioSearch size={12} class="shrink-0 text-dimmed" />
         <input
           id={searchId}
           {@attach attachSearchInput}
@@ -697,7 +696,7 @@
             aria-label="Clear model search"
             onclick={() => (search = '')}
           >
-            <X size={11} />
+            <CioClose size={11} />
           </button>
         {/if}
         {#if canRefresh}
@@ -709,7 +708,7 @@
             disabled={refreshing}
             onclick={onRefresh}
           >
-            <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
+            <CioRefresh size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
           </button>
         {/if}
       </div>
@@ -736,7 +735,7 @@
               class="mt-1.5 inline-flex h-7 items-center gap-1.5 bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
               onclick={onOpenConnectFlow}
             >
-              <Plug size={12} />
+              <CioPlug size={12} />
               Connect your AI account
             </button>
           </div>
@@ -795,7 +794,7 @@
 </div>
 
 {#snippet groupHeader(
-  Icon: typeof Star,
+  Icon: typeof CioStar,
   id: string,
   text: string,
   iconClass: string,
@@ -809,7 +808,7 @@
     title={collapsed ? `Expand ${text}` : `Collapse ${text}`}
     onclick={() => toggleGroup(id)}
   >
-    <ChevronRight
+    <CioForward
       size={11}
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
@@ -832,7 +831,7 @@
     title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
     onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
   >
-    <ChevronRight
+    <CioForward
       size={11}
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
@@ -880,7 +879,7 @@
               item.favorite.harnessId ?? ''
             )}
         >
-          <X size={11} />
+          <CioClose size={11} />
         </button>
       {/if}
     </div>
@@ -903,7 +902,7 @@
             class="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-dimmed"
             aria-hidden="true"
           >
-            <GripVertical size={11} />
+            <CioGrip size={11} />
           </span>
         {/if}
         {@render modelRow(item.entry, item.key)}
@@ -1019,7 +1018,7 @@
       {/if}
       <span class="ml-auto flex shrink-0 items-center gap-1 text-[0.5625rem] text-dimmed">
         {#if multiSelect && isSelectedModel(entry)}
-          <Check size={11} class="text-primary" aria-label="Selected" />
+          <CioCheck size={11} class="text-primary" aria-label="Selected" />
         {/if}
         {#if onToggleFavorite}
           <span
@@ -1038,7 +1037,7 @@
               }
             }}
           >
-            <Star
+            <CioStar
               size={11}
               class={favoriteModelsSet.has(key) ? 'fill-amber-400 text-amber-400' : ''}
             />
@@ -1063,7 +1062,7 @@
               }
             }}
           >
-            <X size={11} />
+            <CioClose size={11} />
           </span>
         {/if}
       </span>

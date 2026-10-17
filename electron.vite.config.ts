@@ -168,6 +168,17 @@ function standaloneOvenService(): Plugin {
         mode,
         logLevel: 'warn',
         ssr: { noExternal: true },
+        // Root operations run in a disposable remote Node process, never the
+        // Electron main process. Keep its one-file bundle free of Vite's
+        // desktop-only worker factory while reusing the same index logic.
+        resolve: {
+          alias: [
+            {
+              find: /^.*\/project-file-index-service(?:\.ts)?$/u,
+              replacement: resolve(__dirname, 'src/main/editor/project-file-index-core.ts')
+            }
+          ]
+        },
         build: {
           ssr: resolve(__dirname, 'src/main/ovens/remote/oven-service-entry.ts'),
           write: false,

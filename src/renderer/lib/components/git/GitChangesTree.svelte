@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Check, ChevronDown, ChevronRight, Folder, FolderOpen, GitMerge } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
   import Switch from '../ui/Switch.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
@@ -170,7 +175,7 @@
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStagePaths(allPathsFor(node), false)}
   >
-    <Check size={12} class="text-success" />
+    <CioCheck size={12} class="text-success" />
     Stage all
   </ContextMenu.Item>
   <ContextMenu.Item
@@ -210,7 +215,7 @@
       class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
       onSelect={() => onResolveConflict?.(change.path)}
     >
-      <GitMerge size={12} class="text-warning" />
+      <CioMerge size={12} class="text-warning" />
       Resolve conflict…
     </ContextMenu.Item>
     <ContextMenu.Item
@@ -229,7 +234,7 @@
         <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
         Unstage file
       {:else}
-        <Check size={12} class="text-success" />
+        <CioCheck size={12} class="text-success" />
         Stage file
       {/if}
     </ContextMenu.Item>
@@ -347,9 +352,9 @@
         {#if loadingDiff[key]}
           <span class="shrink-0 text-[0.5625rem] text-dimmed">…</span>
         {:else if expanded[key]}
-          <ChevronDown size={12} class="shrink-0 text-dimmed" />
+          <CioChevronDown size={12} class="shrink-0 text-dimmed" />
         {:else}
-          <ChevronRight size={12} class="shrink-0 text-dimmed" />
+          <CioForward size={12} class="shrink-0 text-dimmed" />
         {/if}
       </div>
     </ContextMenu.Trigger>
@@ -433,11 +438,11 @@
           />
         </span>
         {#if isOpen}
-          <ChevronDown size={12} class="shrink-0 text-dimmed" />
-          <FolderOpen size={13} class="shrink-0 text-warning" />
+          <CioChevronDown size={12} class="shrink-0 text-dimmed" />
+          <CioFolderOpen size={13} class="shrink-0 text-warning" />
         {:else}
-          <ChevronRight size={12} class="shrink-0 text-dimmed" />
-          <Folder size={13} class="shrink-0 text-warning" />
+          <CioForward size={12} class="shrink-0 text-dimmed" />
+          <CioFolder size={13} class="shrink-0 text-warning" />
         {/if}
         <span class="min-w-0 flex-1 truncate text-[0.625rem] font-medium text-foreground">
           {node.name}

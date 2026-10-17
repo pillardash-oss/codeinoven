@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { BrainCircuit, Eye, Hammer, Loader2, RefreshCw, ShieldCheck, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioHammer from '$lib/components/icons/cio/CioHammer.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -31,25 +37,25 @@
       id: 'seniorEngineer',
       label: 'Sr. Engineer',
       description: 'Plans the specification and coordinates Assignment work.',
-      icon: BrainCircuit
+      icon: CioMemory
     },
     {
       id: 'worker',
       label: 'Worker',
       description: 'Implements Assignment tasks when a task or phase has no override.',
-      icon: Hammer
+      icon: CioHammer
     },
     {
       id: 'auditor',
       label: 'Auditor',
       description: 'Independently audits completed Engineering and Achievement work.',
-      icon: ShieldCheck
+      icon: CioShieldCheck
     }
   ] satisfies Array<{
     id: AgentRole
     label: string
     description: string
-    icon: typeof BrainCircuit
+    icon: typeof CioMemory
   }>
 
   let providers = $state<ProviderCatalog[]>([])
@@ -340,7 +346,7 @@
                 aria-label={`Clear ${role.label} default`}
                 onclick={() => void clearModel(role.id)}
               >
-                <X size={14} />
+                <CioClose size={14} />
               </button>
             {/if}
           </div>
@@ -350,7 +356,7 @@
 
     {#if loading}
       <div class="flex items-center gap-2 border-t px-4 py-3 text-xs text-muted">
-        <Loader2 size={14} class="animate-spin" /> Loading models…
+        <CioSpinner size={14} class="animate-spin" /> Loading models…
       </div>
     {:else if providers.length === 0}
       <p class="border-t px-4 py-3 text-xs text-muted">
@@ -378,7 +384,7 @@
 
   <section class="border bg-surface" aria-label="Image descriptor default">
     <div class="flex items-center gap-4 p-4">
-      <div class="bg-primary/10 p-2 text-primary"><Eye size={18} /></div>
+      <div class="bg-primary/10 p-2 text-primary"><CioEye size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Image descriptor</h2>
         <p class="mt-0.5 text-xs text-muted">
@@ -429,13 +435,13 @@
             aria-label="Clear image descriptor default"
             onclick={() => void clearImageDescriptor()}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         {/if}
       </div>
     </div>
     <div class="flex items-center gap-4 border-t p-4">
-      <div class="bg-elevated p-2 text-muted"><RefreshCw size={18} /></div>
+      <div class="bg-elevated p-2 text-muted"><CioRefresh size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Fallback</h2>
         <p class="mt-0.5 text-xs text-muted">
@@ -490,7 +496,7 @@
             aria-label="Clear image descriptor fallback default"
             onclick={() => void clearImageDescriptorFallback()}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         {/if}
       </div>

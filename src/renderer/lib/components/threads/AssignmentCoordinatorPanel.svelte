@@ -1,14 +1,11 @@
 <script lang="ts">
-  import {
-    ArrowLeft,
-    ArrowUpRight,
-    ClipboardCheck,
-    Loader2,
-    Network,
-    Play,
-    Rows3,
-    Square
-  } from '@lucide/svelte'
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowUpRight from '$lib/components/icons/cio/CioArrowUpRight.svelte'
+  import CioClipboardCheck from '$lib/components/icons/cio/CioClipboardCheck.svelte'
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { Rows3, Square } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
@@ -202,7 +199,7 @@
 >
   <header class="shrink-0 border-b border-border p-4">
     <div class="flex min-w-0 items-center gap-2 text-primary">
-      <Network size={15} class="shrink-0" />
+      <CioNetwork size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Assignment coordinator</h2>
     </div>
     <h3 class="mt-3 text-sm font-semibold text-foreground">{assignment.content.title}</h3>
@@ -222,7 +219,7 @@
           <span class="assignment-label-full">Review Assignment</span>
           <span class="assignment-label-short">Assignment</span>
         {/if}
-        <ArrowUpRight size={13} />
+        <CioArrowUpRight size={13} />
       </button>
       {#if assignment.status === 'stopped'}
         <button
@@ -233,9 +230,9 @@
           onclick={() => void resumeStoppedAssignment()}
         >
           {#if resumeBusy}
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
           {:else}
-            <Play size={12} fill="currentColor" />
+            <CioPlay size={12} fill="currentColor" />
           {/if}
           {resumeBusy ? 'Resuming…' : 'Resume'}
         </button>
@@ -333,7 +330,7 @@
           title="Ask the Sr. Engineer to review blockers and continue coordination"
           onclick={onResume}
         >
-          <Play size={12} />
+          <CioPlay size={12} />
           Resume coordination
         </button>
       </section>
@@ -443,10 +440,10 @@
           onclick={() => void reportToCoordinator()}
         >
           {#if reportBusy}
-            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Reporting…
           {:else}
-            <ClipboardCheck size={13} aria-hidden="true" />
+            <CioClipboardCheck size={13} aria-hidden="true" />
             Report to Sr. Engineer
           {/if}
         </button>
@@ -459,7 +456,7 @@
           aria-label="Back to the Sr. Engineer thread that owns this Assignment"
           onclick={onBackToCoordinator}
         >
-          <ArrowLeft size={13} aria-hidden="true" />
+          <CioArrowLeft size={13} aria-hidden="true" />
           Back to Sr. Engineer
         </button>
       {/if}
@@ -500,7 +497,7 @@
       disabled={stopBusy}
       onclick={() => void confirmStop()}
     >
-      {#if stopBusy}<Loader2 size={14} class="animate-spin" />{/if}
+      {#if stopBusy}<CioSpinner size={14} class="animate-spin" />{/if}
       {stopBusy ? 'Stopping…' : 'Stop Assignment'}
     </button>
   {/snippet}

@@ -1,6 +1,10 @@
 <script lang="ts" module>
   // Aliased: this file also imports the component itself, and the type is the
   // union the component renders while the value is the component.
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioClipboardCheck from '$lib/components/icons/cio/CioClipboardCheck.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import type { ComposerIdentity as ComposerIdentityData } from './ComposerIdentity.svelte'
 
   /**
@@ -73,7 +77,7 @@
 
 <script lang="ts">
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
-  import { ChevronDown, ClipboardCheck, ClipboardX, FolderTree, GitBranch } from '@lucide/svelte'
+  import { ClipboardX } from '@lucide/svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -332,7 +336,7 @@
             aria-label="Managed Git worktree scope on {bucket.root.branch}"
             title="Managed Git worktree scope on {bucket.root.branch}"
           >
-            <FolderTree size={12} class="text-warning" />
+            <CioFiles size={12} class="text-warning" />
           </span>
         {/if}
         <ScopeBadge {bucket} size="sm" variant="mark" />
@@ -340,7 +344,7 @@
           <span
             class="shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
           >
-            <ChevronDown size={11} />
+            <CioChevronDown size={11} />
           </span>
         {/if}
       </button>
@@ -400,7 +404,7 @@
       class="flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted"
       title={branchTitle}
     >
-      <GitBranch size={11} class="shrink-0 text-dimmed" />
+      <CioTabGit size={11} class="shrink-0 text-dimmed" />
       <span class="shoe-branch-label truncate">{project.branch}</span>
     </span>
   {/if}
@@ -425,7 +429,7 @@
         onclick={toggleReportMenu}
       >
         {#if report.enabled}
-          <ClipboardCheck size={12} class="shrink-0" />
+          <CioClipboardCheck size={12} class="shrink-0" />
         {:else}
           <ClipboardX size={12} strokeWidth={2.75} class="shrink-0" />
         {/if}
@@ -464,7 +468,7 @@
             aria-checked={report.enabled}
             onclick={() => selectReport(true)}
           >
-            <ClipboardCheck size={12} class="shrink-0 text-success" />
+            <CioClipboardCheck size={12} class="shrink-0 text-success" />
             Report
           </button>
           <button

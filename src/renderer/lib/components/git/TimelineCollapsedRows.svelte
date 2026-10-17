@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import TimelineRailItem from './TimelineRailItem.svelte'
 
   /**
@@ -26,7 +26,7 @@
 <TimelineRailItem>
   {#snippet gutter()}
     <span class="flex size-5 shrink-0 items-center justify-center bg-elevated text-dimmed">
-      <ChevronDown size={12} class="shrink-0" aria-hidden="true" />
+      <CioChevronDown size={12} class="shrink-0" aria-hidden="true" />
     </span>
   {/snippet}
   <button

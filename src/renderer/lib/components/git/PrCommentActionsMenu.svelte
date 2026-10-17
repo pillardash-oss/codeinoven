@@ -17,20 +17,17 @@
    * have to happen; the rows stay here so the menu is complete and the user is
    * not left wondering where the action went.
    */
-  import {
-    Ban,
-    Bot,
-    ClipboardCopy,
-    Flag,
-    Link2,
-    MessageCircleDashed,
-    MessageSquareDashed,
-    MessageSquareQuote,
-    MessageSquarePlus,
-    MessageSquareReply,
-    Pencil,
-    Trash2
-  } from '@lucide/svelte'
+  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioLink from '$lib/components/icons/cio/CioLink.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import { Flag } from '@lucide/svelte'
   import { DropdownMenu as Menu } from 'bits-ui'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import type { PrMinimizeReason } from '$shared/types'
@@ -144,19 +141,19 @@
 -->
 {#if onExplain}
   <Menu.Item class={itemClass} onSelect={onExplain} disabled={busy}>
-    <MessageCircleDashed size={12} class="shrink-0 text-dimmed" />
+    <CioTemporaryChat size={12} class="shrink-0 text-dimmed" />
     Explain
   </Menu.Item>
 {/if}
 {#if onQuickChat}
   <Menu.Item class={itemClass} onSelect={onQuickChat} disabled={busy}>
-    <MessageSquareDashed size={12} class="shrink-0 text-dimmed" />
+    <CioTemporaryChat size={12} class="shrink-0 text-dimmed" />
     Quick chat
   </Menu.Item>
 {/if}
 {#if onAssignAgent}
   <Menu.Item class={itemClass} onSelect={onAssignAgent} disabled={busy}>
-    <Bot size={12} class="shrink-0 text-dimmed" />
+    <CioSubagent size={12} class="shrink-0 text-dimmed" />
     Assign to an agent
   </Menu.Item>
 {/if}
@@ -165,20 +162,20 @@
 {/if}
 
 <Menu.Item class={itemClass} onSelect={onCopyLink} disabled={busy}>
-  <Link2 size={12} class="shrink-0 text-dimmed" />
+  <CioLink size={12} class="shrink-0 text-dimmed" />
   Copy link
 </Menu.Item>
 <Menu.Item class={itemClass} onSelect={onCopyMarkdown} disabled={busy}>
-  <ClipboardCopy size={12} class="shrink-0 text-dimmed" />
+  <CioCopy size={12} class="shrink-0 text-dimmed" />
   Copy Markdown
 </Menu.Item>
 <Menu.Item class={itemClass} onSelect={onQuote} disabled={busy}>
-  <MessageSquareQuote size={12} class="shrink-0 text-dimmed" />
+  <CioMessage size={ICON_SIZE.inline} class="shrink-0 text-dimmed" />
   Quote reply
 </Menu.Item>
 {#if onReply}
   <Menu.Item class={itemClass} onSelect={onReply} disabled={busy}>
-    <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+    <CioMessage size={12} class="shrink-0 text-dimmed" />
     Reply here
   </Menu.Item>
 {/if}
@@ -188,7 +185,7 @@
   onSelect={onReferenceInNewIssue}
   disabled={busy}
 >
-  <MessageSquarePlus size={12} class="shrink-0 text-dimmed" />
+  <CioMessagePlus size={12} class="shrink-0 text-dimmed" />
   Reference in new issue
 </Menu.Item>
 
@@ -198,7 +195,7 @@
 
 {#if canEdit}
   <Menu.Item class={itemClass} onSelect={onEdit} disabled={busy}>
-    <Pencil size={12} class="shrink-0 text-dimmed" />
+    <CioPencil size={12} class="shrink-0 text-dimmed" />
     Edit
   </Menu.Item>
 {/if}
@@ -206,7 +203,7 @@
 {#if canHide}
   <Menu.Sub>
     <Menu.SubTrigger class={itemClass} disabled={busy}>
-      <Ban size={12} class="shrink-0 text-dimmed" />
+      <CioBan size={12} class="shrink-0 text-dimmed" />
       Hide
     </Menu.SubTrigger>
     <Menu.SubContent
@@ -230,7 +227,7 @@
     onSelect={onDelete}
     disabled={busy}
   >
-    <Trash2 size={12} class="shrink-0" />
+    <CioTrash size={12} class="shrink-0" />
     Delete
   </Menu.Item>
 {/if}
@@ -253,7 +250,7 @@
     onSelect={onBlock}
     disabled={busy}
   >
-    <Ban size={12} class="shrink-0 text-dimmed" />
+    <CioBan size={12} class="shrink-0 text-dimmed" />
     Block @{githubDisplayLogin(author)}
   </Menu.Item>
 {/if}

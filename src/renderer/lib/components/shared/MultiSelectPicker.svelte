@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, ChevronDown, ListFilter, Search } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { MultiSelectOption } from './multi-select-option'
@@ -248,7 +251,7 @@
       {/each}
       {#if selectedOptions.length === 0}
         <span class="flex h-5 w-5 items-center justify-center border bg-raised text-dimmed">
-          <ListFilter size={11} />
+          <CioFilter size={11} />
         </span>
       {/if}
     </span>
@@ -259,7 +262,7 @@
           ? (selectedOptions[0]?.label ?? allLabel)
           : `${selectedOptions.length} selected`}
     </span>
-    <ChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
+    <CioChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
   </button>
 
   {#if open}
@@ -277,7 +280,7 @@
           oninput={refitMenu}
           onkeydown={handleSearchKeydown}
         />
-        <Search
+        <CioSearch
           size={12}
           class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -294,7 +297,7 @@
           >
             <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
             {#if selectedIds.length === 0}
-              <Check size={12} class="shrink-0 text-primary" />
+              <CioCheck size={12} class="shrink-0 text-primary" />
             {/if}
           </button>
         </li>
@@ -338,7 +341,7 @@
                 {/if}
               </span>
               {#if selectedIdSet.has(option.id)}
-                <Check size={12} class="shrink-0 text-primary" />
+                <CioCheck size={12} class="shrink-0 text-primary" />
               {/if}
             </button>
           </li>

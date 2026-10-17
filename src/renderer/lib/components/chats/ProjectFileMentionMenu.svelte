@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronRight, Film, ListTodo, Palette, Wrench } from '@lucide/svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
+  import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
+  import { Film, ListTodo } from '@lucide/svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
@@ -105,11 +108,11 @@
         >
           {#if mention.type === 'utility'}
             {#if mention.entry.id === 'cio-design'}
-              <Palette size={13} class="shrink-0 text-primary" />
+              <CioPalette size={13} class="shrink-0 text-primary" />
             {:else if mention.entry.id === 'cio-video'}
               <Film size={13} class="shrink-0 text-primary" />
             {:else}
-              <Wrench size={13} class="shrink-0 text-primary" />
+              <CioWrench size={13} class="shrink-0 text-primary" />
             {/if}
           {:else if mention.type === 'task'}
             <ListTodo size={13} class="shrink-0 text-info" />
@@ -137,7 +140,7 @@
             {/if}
           </span>
           {#if mention.type === 'project' && mention.entry.kind === 'directory'}
-            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+            <CioForward size={12} class="shrink-0 text-dimmed" />
           {/if}
         </button>
       {/each}

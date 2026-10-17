@@ -7,11 +7,24 @@ import { Logger } from '../src/main/system/logger'
 // 100%, 125%, 150%, 175%, 200%, 250%, 300%, and 400% of the
 // Windows 16px notification-area icon. Render each directly from vector art.
 const TRAY_SIZES = [16, 20, 24, 28, 32, 40, 48, 64]
-const SOURCE_SIZE = 1254
+/** Raster size used only to measure where the artwork's ink ends. */
+const MEASURE_PX = 1024
 
-/** Remove the brand artwork's transparent margins, leaving one pixel at 100%. */
+/**
+ * Fit the artwork to the notification-area slot by cropping to its ink and
+ * re-framing it on a square that leaves one pixel at 100% display scaling.
+ * Without this the mark floats at whatever margin the drawing used, so the two
+ * states (brackets and exclamation) would not sit at the same optical size.
+ */
 function frameTrayArtwork(svg: string): string {
-  const rendered = new Resvg(svg, { fitTo: { mode: 'width', value: SOURCE_SIZE } }).render()
+  const viewBox = svg.match(/viewBox="([^"]*)"/)
+  if (!viewBox) throw new Error('Windows tray artwork has no viewBox to re-frame')
+  const rawViewBox = viewBox[1]
+  if (!rawViewBox) throw new Error('Windows tray artwork has an empty viewBox')
+  const [viewX, viewY, viewWidth, viewHeight] = rawViewBox.split(/\s+/).map(Number)
+  const rendered = new Resvg(svg, { fitTo: { mode: 'width', value: MEASURE_PX } }).render()
+  const scaleX = rendered.width / viewWidth
+  const scaleY = rendered.height / viewHeight
   const pixels = rendered.pixels
   let left = rendered.width
   let top = rendered.height
@@ -27,21 +40,33 @@ function frameTrayArtwork(svg: string): string {
     }
   }
   if (right < left) throw new Error('Windows tray artwork is empty')
-  const extent = Math.max(right - left + 1, bottom - top + 1) * (16 / 14)
-  const x = (left + right + 1 - extent) / 2
-  const y = (top + bottom + 1 - extent) / 2
-  return svg.replace('viewBox="0 0 1254 1254"', `viewBox="${x} ${y} ${extent} ${extent}"`)
+  // Pixel bounds must return to SVG user units before changing viewBox. Using
+  // the measured raster coordinates directly makes the mark nearly vanish in
+  // the corner because the original artwork uses a much smaller coordinate grid.
+  const inkWidth = (right - left + 1) / scaleX
+  const inkHeight = (bottom - top + 1) / scaleY
+  const extent = Math.max(inkWidth, inkHeight) * (16 / 14)
+  const centerX = viewX + (left + right + 1) / (2 * scaleX)
+  const centerY = viewY + (top + bottom + 1) / (2 * scaleY)
+  const x = centerX - extent / 2
+  const y = centerY - extent / 2
+  return svg.replace(viewBox[0], `viewBox="${x} ${y} ${extent} ${extent}"`)
 }
 
 /**
- * Build native Windows ICOs from the same normal/attention mark as macOS,
- * weighted for the notification area.
+ * Build the Windows notification-area ICOs from the small-size mono marks
+ * (`icon-mono-small.svg` and its attention sibling), one ICO per state and
+ * taskbar theme.
  *
- * The caller passes artwork already stroked at `WINDOWS_TRAY_STROKE_WIDTH`,
- * which is lighter than the macOS menu bar template. Windows draws the 16px
- * entry at 100% display scaling, where the macOS weight inks over the artwork's
- * own sub-pixel walls and closes the gaps between the oven's window, handle, and
- * code glyph. Do not pass the macOS masters here.
+ * The artwork arrives already at tray weight, so nothing here strokes or scales
+ * it: a solid slab with one knockout is bold at 16px by construction. Every size
+ * uses that same art on purpose. A tray glyph is drawn at roughly 16pt whatever
+ * the display scaling, so the extra device pixels in the 40/48/64 entries buy
+ * resolution, not room for a second, more detailed mark. Those detailed masters
+ * are for the app icon, not the tray.
+ *
+ * Ink is taken from the art's `#000000`: the light ICOs keep it, the dark ICOs
+ * swap it for white, so one drawing covers both taskbar themes.
  */
 export async function buildWindowsTrayIcons(
   normal: string,

@@ -1,4 +1,12 @@
 <script module lang="ts">
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import type { AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -464,17 +472,6 @@
 </script>
 
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-    Eye,
-    FileDiff,
-    Loader2,
-    RefreshCw,
-    RotateCcw,
-    RotateCw
-  } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileDiffView from './FileDiffView.svelte'
@@ -543,7 +540,7 @@
         disabled={controller.selectedIndex >= controller.turns.length - 1}
         onclick={() => controller.selectTurn(controller.selectedIndex + 1)}
       >
-        <ChevronLeft size={13} />
+        <CioBack size={13} />
       </button>
       <span class="text-[0.625rem] font-medium tabular-nums text-muted">
         Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
@@ -556,7 +553,7 @@
         disabled={controller.selectedIndex <= 0}
         onclick={() => controller.selectTurn(controller.selectedIndex - 1)}
       >
-        <ChevronRight size={13} />
+        <CioForward size={13} />
       </button>
     </div>
   {/if}
@@ -602,14 +599,14 @@
       disabled={controller.loading}
       onclick={() => void controller.refresh()}
     >
-      <RefreshCw size={13} class={controller.loading ? 'animate-spin' : ''} />
+      <CioRefresh size={13} class={controller.loading ? 'animate-spin' : ''} />
     </button>
   </div>
 
   <div {@attach bindScrollContainer} class="min-h-0 flex-1 overflow-auto p-2">
     {#if controller.loading && controller.turns.length === 0}
       <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
         Loading changes
       </div>
     {:else if controller.error}
@@ -619,7 +616,7 @@
     {:else if controller.turns.length === 0}
       <div class="flex h-full items-center justify-center px-6 text-center">
         <div>
-          <FileDiff size={22} class="mx-auto mb-2 text-dimmed" />
+          <CioDiff size={22} class="mx-auto mb-2 text-dimmed" />
           <p class="text-xs font-medium text-muted">No recorded changes</p>
           <p class="mt-1 text-[0.625rem] text-dimmed">
             Changes appear here the moment a run edits a file.
@@ -645,7 +642,7 @@
             {/if}
             {#if controller.loadingDiffs && controller.fileDiffs.length === 0}
               <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
-                <Loader2 size={14} class="animate-spin" />
+                <CioSpinner size={14} class="animate-spin" />
                 Loading diffs
               </div>
             {:else if controller.fileDiffs.length === 0}
@@ -699,9 +696,9 @@
                         <span class="shrink-0 text-[0.5625rem] text-dimmed">undone</span>
                       {/if}
                       {#if expanded}
-                        <ChevronDown size={12} class="shrink-0 text-dimmed" />
+                        <CioChevronDown size={12} class="shrink-0 text-dimmed" />
                       {:else}
-                        <ChevronRight size={12} class="shrink-0 text-dimmed" />
+                        <CioForward size={12} class="shrink-0 text-dimmed" />
                       {/if}
                     </button>
                     {#if checkpoint.status !== 'active'}
@@ -712,7 +709,7 @@
                         title={`Open ${fileDiff.path} in the changes sidebar`}
                         onclick={() => void controller.openChange(checkpoint.id, fileDiff.path)}
                       >
-                        <Eye size={13} />
+                        <CioEye size={13} />
                       </button>
                       <button
                         type="button"
@@ -730,11 +727,11 @@
                             : controller.requestUndoPath(checkpoint.id, fileDiff.path)}
                       >
                         {#if controller.busyPath === fileDiff.path}
-                          <Loader2 size={13} class="animate-spin" />
+                          <CioSpinner size={13} class="animate-spin" />
                         {:else if undone}
-                          <RotateCw size={13} />
+                          <CioRefresh size={13} />
                         {:else}
-                          <RotateCcw size={13} />
+                          <CioUndo size={13} />
                         {/if}
                       </button>
                     {/if}
@@ -752,7 +749,7 @@
           <div class="space-y-2">
             <section class="border border-border bg-surface">
               <div class="flex min-h-10 items-center gap-2 px-3 py-2">
-                <FileDiff size={13} class="shrink-0 text-info" />
+                <CioDiff size={13} class="shrink-0 text-info" />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-center gap-1.5">
                     <span
@@ -853,11 +850,11 @@
                               : controller.requestUndoPath(checkpoint.id, change.path)}
                         >
                           {#if controller.busyPath === change.path}
-                            <Loader2 size={13} class="animate-spin" />
+                            <CioSpinner size={13} class="animate-spin" />
                           {:else if undone}
-                            <RotateCw size={13} />
+                            <CioRefresh size={13} />
                           {:else}
-                            <RotateCcw size={13} />
+                            <CioUndo size={13} />
                           {/if}
                         </button>
                       {/if}

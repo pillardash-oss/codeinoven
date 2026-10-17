@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
@@ -259,7 +259,7 @@
         onclick={() => void createIssue()}
       >
         {#if creatingBusy}
-          <Loader2 size={14} class="animate-spin" />
+          <CioSpinner size={14} class="animate-spin" />
         {/if}
         Create issue
       </button>

@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, Cpu, MemoryStick } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
+  import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
 
@@ -63,9 +66,9 @@ so the task manager tree has one node contract instead of several. -->
       onclick={ontoggle}
     >
       {#if expanded}
-        <ChevronDown size={14} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={14} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronRight size={14} class="shrink-0 text-dimmed" />
+        <CioForward size={14} class="shrink-0 text-dimmed" />
       {/if}
       {#if icon}
         {@render icon()}
@@ -84,7 +87,7 @@ so the task manager tree has one node contract instead of several. -->
           class="inline-flex items-center gap-1 text-[0.625rem] text-muted tabular-nums"
           title="Memory used by everything under {label}"
         >
-          <MemoryStick size={11} aria-hidden="true" />
+          <CioDisk size={11} aria-hidden="true" />
           {memoryLabel}
         </span>
       {/if}
@@ -93,7 +96,7 @@ so the task manager tree has one node contract instead of several. -->
           class="inline-flex items-center gap-1 text-[0.625rem] text-muted tabular-nums"
           title="CPU used by everything under {label}"
         >
-          <Cpu size={11} aria-hidden="true" />
+          <CioCpu size={11} aria-hidden="true" />
           {cpuLabel}
         </span>
       {/if}

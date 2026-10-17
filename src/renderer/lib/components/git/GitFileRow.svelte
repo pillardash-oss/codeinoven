@@ -1,23 +1,22 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
+  import CioMinus from '$lib/components/icons/cio/CioMinus.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type {
     GitDiff,
     GitFileChange,
     GitRestoreTarget,
     TurnCheckpointFileDiff
   } from '$shared/types'
-  import { Check } from '@lucide/svelte'
+
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/FileDiffView.svelte'
-  import {
-    ChevronDown,
-    ChevronRight,
-    FileMinus,
-    GitMerge,
-    Loader2,
-    Minus,
-    Plus
-  } from '@lucide/svelte'
+  import { FileMinus } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
 
   interface Props {
@@ -197,11 +196,11 @@
             <span class="shrink-0 text-[0.5625rem] text-dimmed">binary</span>
           {/if}
           {#if loadingDiff}
-            <Loader2 size={11} class="shrink-0 animate-spin text-dimmed" />
+            <CioSpinner size={11} class="shrink-0 animate-spin text-dimmed" />
           {:else if expanded}
-            <ChevronDown size={12} class="shrink-0 text-dimmed" />
+            <CioChevronDown size={12} class="shrink-0 text-dimmed" />
           {:else}
-            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+            <CioForward size={12} class="shrink-0 text-dimmed" />
           {/if}
         </button>
         {#if !readonly}
@@ -237,9 +236,9 @@
               onclick={onToggleStage}
             >
               {#if change.staged}
-                <Minus size={12} aria-hidden="true" />
+                <CioMinus size={12} aria-hidden="true" />
               {:else}
-                <Plus size={12} aria-hidden="true" />
+                <CioPlus size={12} aria-hidden="true" />
               {/if}
             </button>
           {/if}
@@ -262,7 +261,7 @@
                 class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => onResolveConflict?.(change.path)}
               >
-                <GitMerge size={12} class="text-warning" />
+                <CioMerge size={12} class="text-warning" />
                 Resolve conflict…
               </ContextMenu.Item>
             {/if}
@@ -285,7 +284,7 @@
                   <span class="inline-block w-3 text-center text-[0.625rem] text-danger">−</span>
                   Unstage file
                 {:else}
-                  <Check size={12} class="text-success" />
+                  <CioCheck size={12} class="text-success" />
                   Stage file
                 {/if}
               </ContextMenu.Item>
@@ -367,7 +366,7 @@
     <div class="border-t border-border bg-app/50">
       {#if loadingDiff}
         <div class="flex items-center gap-2 px-2 py-3 text-dimmed">
-          <Loader2 size={12} class="animate-spin" />
+          <CioSpinner size={12} class="animate-spin" />
           <span class="text-[0.625rem]">Loading diff…</span>
         </div>
       {:else if error}

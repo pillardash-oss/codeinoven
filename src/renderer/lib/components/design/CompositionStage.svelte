@@ -30,15 +30,28 @@
    */
   interface Props {
     tab: VideoCompositionTab
+    active?: boolean
+    /**
+     * Whether one of the board's own menus is open over this pane.
+     *
+     * A menu cannot be raised above a native view, so the page has to step aside
+     * for it. Only the pane is published, because the store's answer is per
+     * surface: there is nothing finer to hide than the whole page.
+     */
+    covered?: boolean
   }
 
-  let { tab }: Props = $props()
+  let { tab, active = true, covered = false }: Props = $props()
 
   const surface = 'panel' as const
   // The tab identity is snapshotted at construction: the key is this stage's entry
   // in the store's frame list, and a re-keyed tab builds a new stage.
   // svelte-ignore state_referenced_locally
   const nativeFrameKey = `native-panel-${tab.tabId}`
+  /** This pane's entry in the store's list of floating overlays, for as long as
+   *  one of the board's menus is over it. Snapshotted with the frame key above. */
+  // svelte-ignore state_referenced_locally
+  const occlusionKey = `composition-pane-${tab.tabId}`
 
   let host = $state<HTMLDivElement>()
   /** The pane's on-screen rectangle, which is the area the frame is fitted into. */
@@ -154,6 +167,37 @@
   })
 
   /**
+   * Put the page back on this frame when this surface owns the view again, and
+   * take it off screen when it does not.
+   *
+   * Placing is not enough on its own. A native view composites above every DOM
+   * node, so a page left attached draws over whatever covered it: a board menu, a
+   * modal, or the full screen surface. Hiding it here is also what makes the pane
+   * recover, because the same effect places it again the moment the store hands
+   * the view back rather than waiting for a resize that may never come.
+   */
+  $effect(() => {
+    if (!placed) {
+      void invoke('browser:hide', tab.tabId).catch(() => {})
+      return
+    }
+    void showAtCurrentBounds().catch(() => {})
+  })
+
+  /**
+   * Publish this pane as covered while one of the board's menus is open.
+   *
+   * The rectangle is only what the store measures with: its answer is whether the
+   * surface may show its page at all, so any overlap takes the whole pane off
+   * screen, which is what makes the menu readable.
+   */
+  $effect(() => {
+    if (!covered || !paneRect) return
+    browserVisibility.publishOcclusion(occlusionKey, paneRect)
+    return () => browserVisibility.clearOcclusion(occlusionKey)
+  })
+
+  /**
    * The pane's frame, and the observers that keep the native view on it.
    *
    * The measurement follows the rectangle rather than a single placement: the
@@ -193,7 +237,7 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col overflow-hidden border border-border bg-surface">
-  <BrowserCompositionTransport tabId={tab.tabId} composition={tab} active={placed} />
+  <BrowserCompositionTransport tabId={tab.tabId} composition={tab} active={active && placed} />
   <div
     {@attach attachHost}
     data-native-composition-stage

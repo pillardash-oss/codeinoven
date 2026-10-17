@@ -3,6 +3,8 @@
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { threadReveal } from '$lib/components/layout/page-reveal'
+  import { fly } from 'svelte/transition'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -83,8 +85,16 @@
   data-onboarding="conversation"
 >
   {#if selectedThread}
-    <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      {#key selectedThread.id}
+    {#key selectedThread.id}
+      <!-- The container is the keyed child, so the arriving thread fades and
+           rises in on its own (`threadReveal`) instead of the switch being a hard
+           swap. The reveal is intro-only on purpose: a keyed `out:` would defer
+           ThreadView's teardown past the switch and let it clear the history
+           state the arriving thread just published. -->
+      <div
+        class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+        in:fly={threadReveal()}
+      >
         <svelte:boundary onerror={handleConversationRenderError}>
           <ThreadView
             thread={selectedThread}
@@ -129,8 +139,8 @@
             </div>
           {/snippet}
         </svelte:boundary>
-      {/key}
-    </div>
+      </div>
+    {/key}
   {:else if mode === 'chats'}
     <WelcomeStart
       variant="chats"

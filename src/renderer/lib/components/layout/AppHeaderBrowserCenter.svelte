@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Globe, Loader2, Mic, Volume2, VolumeX } from '@lucide/svelte'
+  import CioMic from '$lib/components/icons/cio/CioMic.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
+  import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
 
@@ -26,11 +30,11 @@
     >
       <span class="flex h-4 w-4 shrink-0 items-center justify-center">
         {#if runtime.loading}
-          <Loader2 size={13} class="animate-spin text-muted" />
+          <CioSpinner size={13} class="animate-spin text-muted" />
         {:else if tab.favicon}
           <img src={tab.favicon} alt="" class="h-4 w-4 object-contain" />
         {:else}
-          <Globe size={13} class="text-dimmed" />
+          <CioBrowser size={13} class="text-dimmed" />
         {/if}
       </span>
       <h1
@@ -46,7 +50,7 @@
           title={BROWSER_TAB_CAPTURE_LABEL}
           aria-label={BROWSER_TAB_CAPTURE_LABEL}
         >
-          <Mic size={13} />
+          <CioMic size={13} />
         </span>
       {/if}
       {#if runtime.audible || runtime.muted}
@@ -59,9 +63,9 @@
           onclick={() => globalBrowser.toggleMute(tab.id)}
         >
           {#if runtime.muted}
-            <VolumeX size={13} />
+            <CioVolumeX size={13} />
           {:else}
-            <Volume2 size={13} />
+            <CioVolume size={13} />
           {/if}
         </button>
       {/if}

@@ -1,4 +1,5 @@
 import { APP_SLUG } from '$shared/brand'
+import { projectWorkState } from './project-work.svelte'
 import type { Component } from 'svelte'
 import type {
   AchievementCoordinatorPanelProps,
@@ -100,6 +101,27 @@ class CoordinatorDockState {
     const current = this.registration
     if (current && current.projectId === projectId && current.threadId === threadId) return current
     return this.recalled.get(coordinatorRowKey(projectId, threadId)) ?? null
+  }
+
+  /** Carry the visible work into an unregistered thread without changing its owner. */
+  inheritWork(
+    projectId: string,
+    fromThreadId: string,
+    threadId: string
+  ): CoordinatorDockRegistration | null {
+    const known = this.forThread(projectId, threadId)
+    if (known?.panel.component !== 'design' && known) return null
+    if (
+      known?.panel.component === 'design' &&
+      (known.panel.props.threadId === threadId ||
+        projectWorkState.hasSelection(projectId, threadId))
+    )
+      return known
+    const previous = this.forThread(projectId, fromThreadId)
+    if (previous?.panel.component !== 'design') return null
+    const inherited = { ...previous, threadId }
+    this.register(inherited)
+    return inherited
   }
 
   /**

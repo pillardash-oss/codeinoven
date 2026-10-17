@@ -1,4 +1,5 @@
-import { CloudOff, SearchX, ShieldAlert, WifiOff } from '@lucide/svelte'
+import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
+import { CloudOff, SearchX, WifiOff } from '@lucide/svelte'
 import type { Component } from 'svelte'
 import type { GitRemoteIssueKind } from '$shared/types'
 
@@ -12,7 +13,7 @@ import type { GitRemoteIssueKind } from '$shared/types'
 /** The shape of the failure, readable at a glance before the sentence is read. */
 export const REMOTE_ISSUE_ICONS: Readonly<Record<GitRemoteIssueKind, Component>> = {
   offline: WifiOff,
-  denied: ShieldAlert,
+  denied: CioShieldAlert,
   missing: SearchX,
   unknown: CloudOff
 }

@@ -1,26 +1,24 @@
 <script lang="ts">
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioLock from '$lib/components/icons/cio/CioLock.svelte'
+  import CioLockOpen from '$lib/components/icons/cio/CioLockOpen.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+  import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
+  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import {
-    ArrowLeft,
-    ArrowRight,
-    Check,
-    ChevronDown,
-    ChevronRight,
-    Globe,
-    Loader2,
-    Lock,
-    LockOpen,
-    Pin,
-    PinOff,
-    Plus,
-    Puzzle,
-    RotateCw,
-    Search,
-    Settings2,
-    Star,
-    X
-  } from '@lucide/svelte'
+  import { PinOff } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserViewBounds } from '$shared/ipc-contract'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -638,7 +636,7 @@
           title="Go back"
           onclick={() => activeTab && void invoke('browser:goBack', activeTab.id).catch(() => {})}
         >
-          <ArrowLeft size={15} />
+          <CioArrowLeft size={15} />
         </button>
       {/if}
       {#if runtime?.canGoForward}
@@ -650,7 +648,7 @@
           onclick={() =>
             activeTab && void invoke('browser:goForward', activeTab.id).catch(() => {})}
         >
-          <ArrowRight size={15} />
+          <CioArrowRight size={15} />
         </button>
       {/if}
       <!-- Reload is shown only when there is a page to act on: an empty tab has
@@ -667,9 +665,9 @@
           oncontextmenu={onReloadContextMenu}
         >
           {#if runtime?.loading}
-            <X size={15} />
+            <CioClose size={15} />
           {:else}
-            <RotateCw size={14} />
+            <CioRefresh size={14} />
           {/if}
         </button>
       {/if}
@@ -688,13 +686,13 @@
             onclick={openSiteMenu}
           >
             {#if secure}
-              <Lock size={12} />
+              <CioLock size={12} />
             {:else}
-              <LockOpen size={12} />
+              <CioLockOpen size={12} />
             {/if}
           </button>
         {:else}
-          <Globe size={12} class="shrink-0 text-dimmed" />
+          <CioBrowser size={12} class="shrink-0 text-dimmed" />
         {/if}
         <!-- The page's address is a control rather than a field: clicking it opens
              the address spotlight, where the address is replaced and the pages
@@ -729,11 +727,11 @@
             onclick={actOnStoreOffer}
           >
             {#if storeOfferInstall !== null && !storeOffer.installed}
-              <Loader2 size={12} class="animate-spin" />
+              <CioSpinner size={12} class="animate-spin" />
             {:else if storeOffer.installed}
-              <Check size={12} />
+              <CioCheck size={12} />
             {:else}
-              <Puzzle size={12} />
+              <CioTabExtensions size={12} />
             {/if}
           </button>
         {/if}
@@ -749,7 +747,7 @@
           title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
           onclick={toggleBookmark}
         >
-          <Star size={12} class={bookmarked ? 'fill-current' : ''} />
+          <CioStar size={12} class={bookmarked ? 'fill-current' : ''} />
         </button>
       </div>
     </div>
@@ -762,7 +760,7 @@
     {#key globalBrowser.tabSearchFocusRequest}
       <div class="shrink-0 px-3 py-2">
         <div class="flex items-center gap-1.5 bg-elevated px-2.5">
-          <Search size={13} class="shrink-0 text-dimmed" />
+          <CioSearch size={13} class="shrink-0 text-dimmed" />
           <input
             {@attach attachSearchInput}
             type="text"
@@ -786,7 +784,7 @@
               title="Clear search"
               onclick={() => globalBrowser.clearTabSearch()}
             >
-              <X size={13} />
+              <CioClose size={13} />
             </button>
           {/if}
         </div>
@@ -815,7 +813,7 @@
         <p
           class="flex items-center gap-1 px-2 pt-1 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
         >
-          <Pin size={10} aria-hidden="true" />
+          <CioPin size={10} aria-hidden="true" />
           Pinned
         </p>
         <div class="ml-2 border-l pl-1.5">
@@ -875,9 +873,9 @@
                 onclick={() => globalBrowser.toggleGroupCollapsed(group.id)}
               >
                 {#if group.collapsed}
-                  <ChevronRight size={12} class="shrink-0 text-muted" />
+                  <CioForward size={12} class="shrink-0 text-muted" />
                 {:else}
-                  <ChevronDown size={12} class="shrink-0 text-muted" />
+                  <CioChevronDown size={12} class="shrink-0 text-muted" />
                 {/if}
                 {#if iconUrl}
                   <img
@@ -887,14 +885,13 @@
                     draggable="false"
                   />
                 {:else}
-                  <span class="h-2 w-2 shrink-0" style="background-color: {accent}"
-                  ></span>
+                  <span class="h-2 w-2 shrink-0" style="background-color: {accent}"></span>
                 {/if}
                 <span class="truncate text-[0.6875rem] font-semibold" style="color: {accent}">
                   {group.name}
                 </span>
                 {#if group.pinned}
-                  <Pin size={10} class="shrink-0" style="color: {accent}" aria-hidden="true" />
+                  <CioPin size={10} class="shrink-0" style="color: {accent}" aria-hidden="true" />
                 {/if}
                 <span class="shrink-0 text-[0.625rem] text-dimmed">
                   {tabsFor(group.id).length}
@@ -912,7 +909,7 @@
                       title={`New tab in ${group.name}`}
                       onclick={() => newTab(group.id)}
                     >
-                      <Plus size={13} />
+                      <CioPlus size={13} />
                     </button>
                   {/snippet}
                 </BrowserNewTabMenu>
@@ -923,7 +920,7 @@
                   title={`Search in ${group.name}`}
                   onclick={() => scopeSearch(group.id)}
                 >
-                  <Search size={12} />
+                  <CioSearch size={12} />
                 </button>
                 <button
                   type="button"
@@ -936,7 +933,7 @@
                   onclick={() => globalBrowser.toggleGroupPin(group.id)}
                 >
                   {#if group.pinned}
-                    <Pin size={12} />
+                    <CioPin size={12} />
                   {:else}
                     <PinOff size={12} />
                   {/if}
@@ -948,7 +945,7 @@
                   title={`Edit ${group.name}`}
                   onclick={() => (editorGroupId = group.id)}
                 >
-                  <Settings2 size={12} />
+                  <CioTabSettings size={12} />
                 </button>
               </div>
             </div>

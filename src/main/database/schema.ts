@@ -104,6 +104,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','spec','executing','working-paused','interrupted','completed','failed')),
   pinned               INTEGER NOT NULL DEFAULT 0,
   pinned_at            INTEGER,
+  bookmarked           INTEGER NOT NULL DEFAULT 0,
   sort_order           INTEGER,
   scope_sort_order     INTEGER,
   archived             INTEGER NOT NULL DEFAULT 0,
@@ -111,6 +112,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   branch               TEXT,
   feature_slug         TEXT,
   authored_work_kind   TEXT CHECK(authored_work_kind IN ('design','video')),
+  authored_work_kinds  TEXT,
   scope_bucket_id      TEXT DEFAULT 'default',
   settings             TEXT,
   context_usage        TEXT,
@@ -346,6 +348,20 @@ export const LEGACY_RUBRIC_VERSION = 'legacy-1to5-map-v1'
  * distinguishable in analytics.
  */
 export const MODEL_RANKING_CALC_VERSION = 'sum-count-v1'
+
+/**
+ * Most a single ranked conversation may plausibly cost, in USD.
+ *
+ * The aggregate's cost columns are running sums that can never be decomposed:
+ * a snapshot is hard-deleted the moment its score lands, so one absurd addend
+ * poisons the "spent across ranked conversations" headline permanently. A live
+ * pi session once folded its own cumulative session spend back into
+ * per-response cost and doubled it on every usage refresh (fixed 2026-10-10),
+ * which landed a single $11.97 conversation at $3.4e46. Priced conversations in
+ * this app run from cents to tens of dollars, so one exchange above this
+ * ceiling is arithmetic corruption rather than spend.
+ */
+export const MAX_PLAUSIBLE_SHOT_COST_USD = 1_000
 
 export const MODEL_RANKING_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_model_rankings_updated
@@ -1198,6 +1214,31 @@ CREATE TABLE IF NOT EXISTS design_history_heads (
 
 /** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS work_path_notices (
+    project_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    PRIMARY KEY(project_id, thread_id, directory)
+  );
+  CREATE INDEX IF NOT EXISTS idx_work_path_notices_thread ON work_path_notices(thread_id);`,
+  `CREATE TABLE IF NOT EXISTS work_folder_relocations (
+    project_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    PRIMARY KEY(project_id, directory)
+  );`,
+  `CREATE TABLE IF NOT EXISTS authored_work_folders (
+    project_id TEXT NOT NULL,
+    directory TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('design','video')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    missing INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(project_id, directory)
+  );
+  CREATE INDEX IF NOT EXISTS idx_authored_work_folders_kind ON authored_work_folders(project_id, kind);`,
   `CREATE TABLE IF NOT EXISTS design_reviews (
     id TEXT PRIMARY KEY NOT NULL,
     project_id TEXT NOT NULL,

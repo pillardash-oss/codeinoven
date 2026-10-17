@@ -171,3 +171,16 @@ export function authoredWorkKindOf(directory: string, roots: WorkRoots): Authore
   }
   return null
 }
+
+/** A folder segment safe to paste into URLs on every supported platform. */
+export function sanitizeWorkName(value: string): string {
+  const slug = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 100)
+    .replace(/-+$/u, '')
+  return /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/u.test(slug) ? `${slug}-design` : slug
+}

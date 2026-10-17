@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CircleCheck, GitPullRequest, Loader2, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -105,7 +108,7 @@
             {#if dock.iconUrl}
               <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0" />
             {:else}
-              <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+              <CioPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
             {/if}
             <span class="flex min-w-0 flex-col">
               {#if dock.projectName}
@@ -126,16 +129,16 @@
               {/if}
             </span>
             {#if dock.status === 'working'}
-              <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+              <CioSpinner size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
             {:else if dock.status === 'attention'}
-              <TriangleAlert
+              <CioAttention
                 size={12}
                 class="shrink-0 text-warning"
                 title="Needs attention"
                 aria-hidden="true"
               />
             {:else if dock.status === 'composed' || dock.status === 'created'}
-              <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
+              <CioCheckCircle size={12} class="shrink-0 text-success" aria-hidden="true" />
             {/if}
           </button>
         {/if}

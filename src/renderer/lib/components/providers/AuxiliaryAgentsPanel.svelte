@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Cpu, Loader2, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -179,7 +181,7 @@
 
   {#if loading}
     <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading auxiliary agents…
+      <CioSpinner size={14} class="animate-spin" /> Loading auxiliary agents…
     </div>
   {:else}
     {#if error}
@@ -191,7 +193,7 @@
     {#if rows.length === 0}
       <div class="border border-dashed bg-surface">
         <EmptyState
-          icon={Cpu}
+          icon={CioCpu}
           title="No harnesses installed"
           description="Install a harness to assign an auxiliary model."
         />
@@ -269,7 +271,7 @@
                     aria-label={`Clear the auxiliary model for ${row.name}`}
                     onclick={() => void clearAssignment(row.id)}
                   >
-                    <X size={14} />
+                    <CioClose size={14} />
                   </button>
                 {/if}
               </div>

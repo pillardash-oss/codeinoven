@@ -88,6 +88,11 @@ export const invokeAssistantContract = {
    * is told to run the setup conversation.
    */
   'assistant:startChatSetup': {} as Contract<[assistantId: string], void>,
+  /**
+   * Open a form-created assistant's first conversation: the user sees one line,
+   * and the model is told its own name and personality and greets the user.
+   */
+  'assistant:startManualSetup': {} as Contract<[assistantId: string], void>,
   'assistant:listMissedRuns': {} as Contract<[], MissedRun[]>,
   /** Read user-skipped scheduled slots used to calculate each task's next run. */
   'assistant:listSkippedRuns': {} as Contract<[], SkippedRun[]>,

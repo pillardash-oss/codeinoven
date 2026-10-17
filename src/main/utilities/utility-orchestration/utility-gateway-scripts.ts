@@ -1,9 +1,10 @@
+import { designMotionTools } from '../../design/design-motion-tools'
 import type {
   HarnessUtilityBinding,
   ResolvedUtility,
   UtilityDefinitionFor
 } from '../../../lib/types'
-import { GATEWAY_TOOLS } from '../../../lib/gateway-tools'
+import { GATEWAY_TOOLS, gatewayToolForModel, initialGatewayTools } from '../../../lib/gateway-tools'
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
@@ -253,6 +254,7 @@ function authoredWorkCheckpointTool(): McpTool {
 export function designUtilityTools(roots: WorkRoots): McpTool[] {
   const designRoot = workRootForKind(roots, 'design')
   return [
+    ...designMotionTools(),
     {
       name: 'read-contract',
       description:
@@ -525,8 +527,10 @@ export function gatewayUtility(
  *  waiting on a human, a long browser or computer-use operation) must never queue the calls
  *  behind it. Each call answers on its own by JSON-RPC id, and a client cancellation aborts
  *  exactly the call it names. */
-export function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
-  const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
+export function buildUtilityGatewayScript(
+  gatewayTools = initialGatewayTools(GATEWAY_TOOLS)
+): string {
+  const tools = gatewayTools.map(gatewayToolForModel).map(({ name, description, inputSchema }) => ({
     name,
     description,
     inputSchema

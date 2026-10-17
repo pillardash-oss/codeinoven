@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { GitFork, Loader2, Unplug } from '@lucide/svelte'
+  import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
   import { gitState } from '$lib/stores/git.svelte'
 
   interface Props {
@@ -13,13 +15,13 @@
 
 {#if repoState === 'loading'}
   <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-    <Loader2 size={14} class="animate-spin" />
+    <CioSpinner size={14} class="animate-spin" />
     Checking repository
   </div>
 {:else if repoState === 'git_unavailable'}
   <div class="flex h-full flex-col items-center justify-center px-6 text-center">
     <div class="mb-2 flex h-10 w-10 items-center justify-center bg-elevated">
-      <Unplug size={18} class="text-dimmed" />
+      <CioUnplug size={18} class="text-dimmed" />
     </div>
     <p class="text-xs font-medium text-muted">Git is not available</p>
     <p class="mt-1 max-w-[28ch] text-[0.625rem] leading-relaxed text-dimmed">
@@ -34,7 +36,7 @@
 {:else}
   <div class="flex h-full flex-col items-center justify-center px-6 text-center">
     <div class="mb-2 flex h-10 w-10 items-center justify-center bg-elevated">
-      <GitFork size={18} class="text-dimmed" />
+      <CioFork size={18} class="text-dimmed" />
     </div>
     <p class="text-xs font-medium text-muted">Not a Git repository</p>
     <p class="mt-1 max-w-[28ch] text-[0.625rem] leading-relaxed text-dimmed">
@@ -47,9 +49,9 @@
       onclick={onInitialize}
     >
       {#if gitState.isBusy('init')}
-        <Loader2 size={12} class="animate-spin" />
+        <CioSpinner size={12} class="animate-spin" />
       {:else}
-        <GitFork size={12} />
+        <CioFork size={12} />
       {/if}
       Initialize repository
     </button>

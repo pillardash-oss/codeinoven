@@ -5,9 +5,10 @@
    * component renders only the panel: positioning, the click-away overlay and
    * any creation modal belong to the caller.
    */
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import PickerMenuShell from './PickerMenuShell.svelte'
   import { onMount, tick } from 'svelte'
-  import { FolderTree } from '@lucide/svelte'
+
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -209,7 +210,7 @@
     onclick={() => onSelect({ mode: 'inherit' })}
   >
     {#if target.bucket?.root.kind === 'worktree'}
-      <FolderTree size={12} class="shrink-0 text-warning" />
+      <CioFiles size={12} class="shrink-0 text-warning" />
     {/if}
     <span class="min-w-0 flex-1 truncate">{inheritName}</span>
     <span class="shrink-0 text-[0.625rem] text-dimmed">{target.hint}</span>
@@ -264,7 +265,7 @@
       onclick={() => onSelect({ mode: 'scope', bucketId: candidate.id })}
     >
       {#if candidate.root.kind === 'worktree'}
-        <FolderTree size={12} class="shrink-0 text-warning" />
+        <CioFiles size={12} class="shrink-0 text-warning" />
       {/if}
       <span class="min-w-0 flex-1 truncate">{candidate.name}</span>
     </button>

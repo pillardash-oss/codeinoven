@@ -1,4 +1,12 @@
 <script lang="ts">
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import {
@@ -18,7 +26,10 @@
   } from '$lib/components/shared/thread-hover-popover-layout'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
-  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import {
+    threadUsesEngineeringTooling,
+    type ThreadIndicator
+  } from '$lib/components/threads/thread-indicator'
   import {
     markDrawsRail,
     THREAD_FOREIGN_MARK,
@@ -27,6 +38,7 @@
     type ThreadRowSecondary
   } from '$lib/components/threads/thread-state-marks'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { longPress } from '$lib/long-press.svelte'
@@ -63,7 +75,7 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import { Eye, Check, GitBranch, MessageCircleDashed, Monitor, Pin, Server } from '@lucide/svelte'
+
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -82,6 +94,8 @@
     hideProjectName?: boolean
     /** Presentation-only row for searchable thread pickers. */
     picker?: boolean
+    /** Surface label for compact switcher rows. */
+    pickerBadge?: string
     /** Project icon URL to show before the status indicator. */
     projectIconUrl?: string | null
     /** Mark shown in the project-icon slot when the thread's container has no
@@ -94,6 +108,8 @@
     onOpen?: (t: Thread) => void
     onRename?: (t: Thread, newName: string) => Promise<void>
     onTogglePin?: (t: Thread) => void
+    onBookmark?: (t: Thread) => void
+    showBookmark?: boolean
     onDelete?: (t: Thread) => Promise<void>
     onFork?: (t: Thread) => void
     /** Optional callback fired when the rename input changes (for move-on-edit behaviour). */
@@ -109,6 +125,7 @@
     detailed = false,
     hideProjectName = false,
     picker = false,
+    pickerBadge,
     projectIconUrl = null,
     projectIconGlyph = null,
     showChangeScope = true,
@@ -116,6 +133,8 @@
     onOpen = () => {},
     onRename = async () => {},
     onTogglePin = () => {},
+    onBookmark = () => {},
+    showBookmark = false,
     onDelete = async () => {},
     onFork = () => {},
     onRenameInputChange,
@@ -314,6 +333,8 @@
     getThread: () => thread,
     onRename: (t, newName) => onRename(t, newName),
     onTogglePin: (t) => onTogglePin(t),
+    onBookmark: (t) => onBookmark(t),
+    showBookmark: () => showBookmark,
     onFork: (t) => onFork(t),
     onDelete: (t) => onDelete(t),
     onDeleteError: (error) =>
@@ -488,7 +509,10 @@
     }
     if (isUsingComputerUse) live.push('computer-use')
     if (browserAudioAt !== null) live.push('browser-audio')
-    if (thread.engineering === true) live.push('engineering')
+    // The Engineering mark covers both halves of the tooling: the lifecycle
+    // marker, and the independent audit, which is locked out of that lifecycle
+    // and therefore carries its own durable flags.
+    if (threadUsesEngineeringTooling(thread)) live.push('engineering')
     return live
   })
 
@@ -713,11 +737,13 @@
     if (isRemote) void ovens.ensure()
   })
 
-  /** The authored-work session this thread is in, or null when it is in none.
-   *  Drawn from the persisted thread field: main writes it the moment the thread
-   *  enters a session and pushes the row over `thread:updated`, so no scan and no
-   *  per-row round trip stands behind the marker. */
-  let authoredWorkKind = $derived(thread.authoredWorkKind ?? null)
+  /** The authored-work sessions this thread has entered, in the canonical order
+   *  the markers are drawn in. Drawn from the persisted set: main records every
+   *  session the thread enters, so a thread that designed something and later cut
+   *  a video about it draws both marks rather than the last one over the first. */
+  let authoredWorkKinds = $derived(
+    thread.authoredWorkKinds ?? (thread.authoredWorkKind ? [thread.authoredWorkKind] : [])
+  )
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 
@@ -725,7 +751,7 @@
    *  thread always shows it: the Oven and the branch belong on every row of it,
    *  and a temporary chat's mark lives on that line. */
   let showBottomRow = $derived(
-    authoredWorkKind !== null ||
+    authoredWorkKinds.length > 0 ||
       scopeBucket !== null ||
       harnessIds.length > 1 ||
       hasNote ||
@@ -754,7 +780,7 @@
       isRemote ||
       hasNote ||
       hasTemporaryChat ||
-      authoredWorkKind !== null
+      authoredWorkKinds.length > 0
   )
 
   let scopeColor = $derived(
@@ -893,13 +919,13 @@
       role="img"
       class="flex shrink-0 items-center text-accent"
       title="Peek open in this thread"
-      aria-label="Peek open in this thread"><Eye size={12} /></span
+      aria-label="Peek open in this thread"><CioEye size={12} /></span
     >
   {/if}
 {/snippet}
 
-{#snippet authoredWorkMarker(kind: AuthoredWorkKind | null)}
-  {#if kind}
+{#snippet authoredWorkMarker(kinds: readonly AuthoredWorkKind[])}
+  {#each kinds as kind (kind)}
     {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
     <span
       class="flex shrink-0 items-center text-muted"
@@ -908,7 +934,7 @@
     >
       <WorkIcon size={11} strokeWidth={1.8} aria-hidden="true" />
     </span>
-  {/if}
+  {/each}
 {/snippet}
 
 {#snippet temporaryChatMarker()}
@@ -922,7 +948,7 @@
       aria-label={temporaryChatLabel}
       title={temporaryChatLabel}
     >
-      <MessageCircleDashed size={11} strokeWidth={2} aria-hidden="true" />
+      <CioTemporaryChat size={11} strokeWidth={2} aria-hidden="true" />
     </span>
   {/if}
 {/snippet}
@@ -946,7 +972,7 @@
         />
       {/if}
       {#if scopeBucket.pinned}
-        <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
+        <CioPin size={8} class="shrink-0 text-accent" aria-hidden="true" />
       {/if}
       <!-- The scope is shortened at its own punctuation before the chip ever
            truncates, so a long name keeps its distinguishing head instead of
@@ -1004,16 +1030,19 @@
         }
       }}
     >
-      <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
+      {#if thread.bookmarked}<CioBookmark size={11} class="text-accent" />{:else}<CioPin
+          size={11}
+          class={effectivePinned ? 'text-accent' : 'text-dimmed'}
+        />{/if}
     </span>
   </span>
 {/snippet}
 
 {#if picker}
   <div
-    class="flex min-h-11 w-full flex-col gap-1 px-2.5 py-1.5 text-left transition-colors {selected
-      ? 'bg-selected'
-      : ''}"
+    class="flex w-full flex-col justify-center gap-1 px-2.5 py-1.5 {compact
+      ? 'h-9'
+      : 'min-h-11'} text-left transition-colors {selected ? 'bg-selected' : ''}"
     title={displayTitle}
   >
     <span class="flex w-full min-w-0 items-center gap-2">
@@ -1055,7 +1084,7 @@
         {displayTitle}
       </span>
       {@render peekIndicator()}
-      {#if !showBottomRow}
+      {#if compact || !showBottomRow}
         {#if activeIndicators.length > 0}
           {#each activeIndicators as live (live)}
             <ThreadIndicatorSlot indicator={live} />
@@ -1082,12 +1111,17 @@
           />
         </span>
       {/if}
+      {#if pickerBadge}
+        <StatusPill
+          ><span class={selected ? 'text-accent' : undefined}>{pickerBadge}</span></StatusPill
+        >
+      {/if}
       {#if selected}
-        <Check size={13} class="shrink-0 text-primary" />
+        <CioCheck size={13} class="shrink-0 text-primary" />
       {/if}
     </span>
 
-    {#if showBottomRow}
+    {#if showBottomRow && !compact}
       <!-- Scope is the track that gives way: the harness track keeps its icons
            (`max-content` minimum) and the marks track keeps its own content, so
            a crowded row narrows the scope instead of overlapping it. -->
@@ -1119,7 +1153,7 @@
               {#if oven?.iconUrl}
                 <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
               {:else}
-                <Server size={11} class="shrink-0" />
+                <CioServer size={11} class="shrink-0" />
               {/if}
             </span>
           {/if}
@@ -1128,7 +1162,7 @@
               class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
               title={`Branch: ${branch}`}
             >
-              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+              <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
               <span>{branchLabel}</span>
             </span>
           {/if}
@@ -1141,7 +1175,7 @@
               <ThreadNoteIcon size={11} />
             </span>
           {/if}
-          {@render authoredWorkMarker(authoredWorkKind)}
+          {@render authoredWorkMarker(authoredWorkKinds)}
           {#each activeIndicators as live (live)}
             <ThreadIndicatorSlot indicator={live} />
           {/each}
@@ -1239,12 +1273,14 @@
             }
           }}
         >
-          <Pin
-            size={14}
-            fill={effectivePinned ? 'currentColor' : 'none'}
-            class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
-            aria-hidden="true"
-          />
+          {#if thread.bookmarked}
+            <CioBookmark size={14} class="text-thread-pinned" aria-hidden="true" />
+          {:else}<CioPin
+              size={14}
+              fill={effectivePinned ? 'currentColor' : 'none'}
+              class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
+              aria-hidden="true"
+            />{/if}
         </span>
         <span
           class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
@@ -1381,7 +1417,7 @@
                 {#if oven?.iconUrl}
                   <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
                 {:else}
-                  <Server size={11} class="shrink-0" />
+                  <CioServer size={11} class="shrink-0" />
                 {/if}
               </span>
             {/if}
@@ -1390,7 +1426,7 @@
                 class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
                 title={`Branch: ${branch}`}
               >
-                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
                 <span>{branchLabel}</span>
               </span>
             {/if}
@@ -1404,7 +1440,7 @@
               </span>
             {/if}
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKind)}
+            {@render authoredWorkMarker(authoredWorkKinds)}
             {#each activeIndicators as live (live)}
               <ThreadIndicatorSlot indicator={live} />
             {/each}
@@ -1555,10 +1591,10 @@
                 {#if oven?.iconUrl}
                   <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
                 {:else}
-                  <Server size={11} class="shrink-0" />
+                  <CioServer size={11} class="shrink-0" />
                 {/if}
               {:else}
-                <Monitor size={10} class="shrink-0" aria-hidden="true" />
+                <CioDisplay size={10} class="shrink-0" aria-hidden="true" />
               {/if}
             </span>
             {#if branch}
@@ -1566,7 +1602,7 @@
                 class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
                 title={`Branch: ${branch}`}
               >
-                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
                 <span class="truncate">{branchLabel}</span>
               </span>
             {/if}
@@ -1580,7 +1616,7 @@
               </span>
             {/if}
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKind)}
+            {@render authoredWorkMarker(authoredWorkKinds)}
             <span
               class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
               title={`Edited ${formatDateTime(thread.lastActivity)}`}

@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    ClipboardPaste,
-    Download,
-    ExternalLink,
-    LoaderCircle,
-    Trash2,
-    Upload
-  } from '@lucide/svelte'
+  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { listRowMove } from '$lib/motion'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
@@ -170,8 +168,7 @@
         type="button"
         role="tab"
         aria-selected={activeModelSubTab === sub.id}
-        class="flex-1 px-3 py-2 text-sm font-medium transition-colors {activeModelSubTab ===
-        sub.id
+        class="flex-1 px-3 py-2 text-sm font-medium transition-colors {activeModelSubTab === sub.id
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
         onclick={() => {
@@ -221,7 +218,7 @@
           aria-label="Paste a {activeSubTab.label} model path"
           onclick={() => (pasteOpen = true)}
         >
-          <ClipboardPaste size={12} aria-hidden="true" />
+          <CioClipboardPaste size={12} aria-hidden="true" />
           Paste path
         </button>
         <button
@@ -233,9 +230,9 @@
           onclick={() => void pickImport()}
         >
           {#if importing}
-            <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
           {:else}
-            <Upload size={12} aria-hidden="true" />
+            <CioUpload size={12} aria-hidden="true" />
           {/if}
           Import
         </button>
@@ -330,7 +327,7 @@
     aria-label="Remove {label}"
     onclick={() => removeInstalled(row)}
   >
-    <Trash2 size={13} aria-hidden="true" />
+    <CioTrash size={13} aria-hidden="true" />
   </button>
 {/snippet}
 
@@ -363,7 +360,7 @@
             rel="noreferrer"
             class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
           >
-            Hugging Face <ExternalLink size={10} aria-hidden="true" />
+            Hugging Face <CioExternalLink size={10} aria-hidden="true" />
           </a>
         {/if}
       </div>
@@ -376,7 +373,7 @@
           disabled={isRetired}
           onclick={() => void downloadAndActivate(artifact)}
         >
-          <Download size={12} aria-hidden="true" />
+          <CioDownload size={12} aria-hidden="true" />
           {download?.state === 'failed' ? 'Retry' : 'Download'}
         </button>
       {/if}

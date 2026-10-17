@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Volume2 } from '@lucide/svelte'
+  import RailAudioBadge from './RailAudioBadge.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type { Component, Snippet } from 'svelte'
 
   interface Props {
@@ -110,7 +111,7 @@
       </span>
     </span>
   {:else}
-    <Icon size={16} strokeWidth={1.8} class={spin ? 'animate-spin' : undefined} />
+    <Icon size={ICON_SIZE.rail} class={spin ? 'animate-spin' : undefined} />
   {/if}
   {#if playing}
     <!-- The speaker rides the opposite corner from the badge stack, so a view can
@@ -118,14 +119,7 @@
          hiding the other. It is a status, not a control: the mute toggle lives
          on the tab row the sound actually belongs to. Like the badge row above,
          it clears the glyph band on the way out, so the item's icon reads. -->
-    <span
-      class="absolute -bottom-2 -right-2 flex h-3.5 w-3.5 items-center justify-center border border-border bg-elevated text-info shadow-sm"
-      role="status"
-      aria-label={`${label} is playing audio`}
-      title={`${label} is playing audio`}
-    >
-      <Volume2 size={9} strokeWidth={2.6} aria-hidden="true" />
-    </span>
+    <RailAudioBadge {label} />
   {/if}
   {@render badge?.()}
 </button>

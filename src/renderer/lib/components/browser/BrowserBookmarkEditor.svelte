@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { pickAppearanceImage } from '$lib/appearance-image.svelte'
@@ -229,7 +229,7 @@
       title="Save this bookmark"
       onclick={save}
     >
-      <Check size={13} />
+      <CioCheck size={13} />
       Save
     </button>
   </div>

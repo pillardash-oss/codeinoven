@@ -20,7 +20,7 @@ import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { recentVisits, threadVisitKey } from './recent-visits.svelte'
-import type { WorkspaceTourView } from '$lib/components/onboarding/onboarding-tour-steps'
+import type { WorkspaceTourView } from '$lib/guide/guide-stops'
 
 // Thread navigation history is shared with the browser tab visits so the Ctrl+Tab
 // switcher can interleave both kinds of surface in one recency order. The keys
@@ -598,22 +598,12 @@ export function wouldThreadChangePosition(prev: Thread, next: Thread): boolean {
 }
 
 /**
- * The key a thread sorts by inside its own bucket: the newer of the thread's
- * last activity and its manual drag anchor.
- *
- * Any new activity (a send, rename, status change, a working thread) always
- * pushes the thread to the top, because its `lastActivity` (epoch time, always
- * growing) outranks an older manual anchor. A manual drag sets a newer anchor so
- * the thread holds its place, until something moves again, at which point it can
- * be dragged back above. Threads without an anchor fall back to last activity,
- * so the default is pure recency ordering.
- *
- * Both sidebar orders (the project folders' and the Threads view's) and the drop
- * handler that writes the anchor share this one function, so an anchor means the
- * same thing everywhere it is read or written.
+ * Manual positions override recency in either direction. Activity clears the
+ * anchor in persistence, returning the thread to ordinary recency ordering.
+ * Shared by the sidebar sorters and the drop handler's neighbor calculation.
  */
 export function threadOrderKey(thread: Thread): number {
-  return Math.max(thread.sortOrder ?? 0, thread.lastActivity)
+  return thread.sortOrder ?? thread.lastActivity
 }
 
 export function threadSort(
@@ -621,14 +611,15 @@ export function threadSort(
   b: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
+  // Bookmarks belong at the head of their project strip, ahead of unsent drafts.
+  if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1
   // Unsent drafts and the empty "New Thread" placeholder stay pinned at the top.
   const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
   const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false
   if (aDraft !== bDraft) return aDraft ? -1 : 1
   if (a.status === 'created' && b.status !== 'created') return -1
   if (b.status === 'created' && a.status !== 'created') return 1
-  // Order by the newer of the thread's last activity and its manual sort-order
-  // anchor; see {@link threadOrderKey}.
+  // Order by the explicit position, falling back to last activity.
   const aKey = threadOrderKey(a)
   const bKey = threadOrderKey(b)
   if (aKey !== bKey) return bKey - aKey

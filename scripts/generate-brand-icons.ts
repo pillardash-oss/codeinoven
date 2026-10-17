@@ -143,13 +143,10 @@ writeFileSync(
 )
 Logger.dev(`[generate-brand-icons] Wrote vendored opencode mark to ${vendorOutDir}.`)
 
-// CodeInOven is a citizen of its own bundle — its vendor mark is the bare
-// transparent oven+code artwork (`icon-mark.svg`), whose ink strokes are flat
-// pure #000000 on light surfaces and pure #ffffff on dark (the SVG carries its
-// own embedded style keyed off the app's `.dark` document class, keeping the
-// mark sharp at small sizes). Serves the model picker, custom `cio-` providers,
-// and the about-screen identity/link rows. The squircle-tile app icon
-// (`icon.svg`) is a second, separate in-app identity and is generated below.
+// CodeInOven's vendor mark is the bare transparent C/O Relay
+// (`icon-mark.svg`), with currentColor structure and its auric endpoint. It
+// serves the model picker, custom `cio-` providers, and about-screen identity
+// rows. The same mark appears on a flat obsidian tile in `icon.svg`.
 let cioMark = readFileSync(join(root, 'src/renderer/static/icon-mark.svg'), 'utf8')
 cioMark = cioMark
   .replace(/^<\?[\s\S]*?\?>\s*/i, '')
@@ -167,17 +164,13 @@ Logger.dev(`[generate-brand-icons] Wrote vendored CodeInOven mark to ${vendorOut
 // same reason every vendor and agent mark above is a committed copy.
 //
 // Framing is the only edit: the XML declaration and comments are dropped (they
-// would ride into the `data:` URI and the inline badge markup) and the viewBox
-// is tightened from the 1024-unit canvas to the 800-unit tile, so a file-tree
-// row does not spend a fifth of its slot on transparent padding. No path,
-// colour, gradient or transform is touched — verified pixel-identical to the
-// master tile with `magick compare -metric AE` (0).
+// would ride into the `data:` URI and the inline badge markup). The opaque
+// square tile fills the 1024-unit canvas, so the file-tree icon uses that full
+// viewBox.
 const appIconOutFile = join(root, 'src/renderer/lib/components/files/cio-app-icon.svg')
 const appIcon = readFileSync(join(root, 'src/renderer/static/icon.svg'), 'utf8')
   .replace(/^<\?[\s\S]*?\?>\s*/, '')
   .replace(/<!--[\s\S]*?-->/g, '')
-  .replace('viewBox="0 0 1024 1024"', 'viewBox="112 112 800 800"')
-  .replace('width="1024" height="1024"', 'width="800" height="800"')
   .trimEnd()
 writeFileSync(appIconOutFile, `${appIcon}\n`, 'utf8')
 Logger.dev(`[generate-brand-icons] Wrote the framed app icon to ${appIconOutFile}.`)

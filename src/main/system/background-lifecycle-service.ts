@@ -52,8 +52,9 @@ import { join } from 'node:path'
 import type { AppConfig, BackgroundMode, InstanceRole } from '../../lib/types'
 import type { UpdaterStatus } from '../../lib/ipc-contract'
 import { getConfigRoot, isBackgroundRegistrationDisabled } from '../../lib/utils'
-import { APP_NAME } from '../../lib/brand'
+import { APP_ID, APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
+import { forceRestartMenuItem } from './force-restart'
 import { instanceRegistry } from './instance-registry'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -522,6 +523,7 @@ export class BackgroundLifecycleService {
       { type: 'separator' },
       this.updateMenuItem(),
       { type: 'separator' },
+      forceRestartMenuItem(() => this.deps.quitApp()),
       { label: `Quit ${APP_NAME}`, click: () => this.deps.quitApp() }
     ])
   }
@@ -599,7 +601,7 @@ export class BackgroundLifecycleService {
   private notifyUpdate(title: string, body: string): void {
     if (!Notification.isSupported()) return
     try {
-      new Notification({ title, body }).show()
+      new Notification({ groupId: APP_ID, title, body }).show()
     } catch (error) {
       Logger.dev('Update notification could not be shown (non-fatal):', error)
     }
@@ -849,6 +851,7 @@ export class BackgroundLifecycleService {
     if (!Notification.isSupported()) return
     try {
       const notification = new Notification({
+        groupId: APP_ID,
         title: `${APP_NAME} is still running`,
         body: 'It stays in the menu bar so your schedules keep firing. Quit it from the menu bar icon.'
       })

@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import type { Snippet } from 'svelte'
-  import { TriangleAlert } from '@lucide/svelte'
+
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from './NoticeDismissButton.svelte'
 
@@ -69,7 +70,7 @@
     role="status"
     data-panel-scope-stale={reason}
   >
-    <TriangleAlert size={12} class="shrink-0" aria-hidden="true" />
+    <CioAttention size={12} class="shrink-0" aria-hidden="true" />
     <span class={wrap ? 'min-w-0' : 'min-w-0 truncate'} title={sentence}>{sentence}</span>
     {#if action}
       {@render action()}

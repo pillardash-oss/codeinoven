@@ -1,17 +1,13 @@
 <script lang="ts">
-  import {
-    FolderGit2,
-    FolderPlus,
-    GraduationCap,
-    MessageSquarePlus,
-    PanelLeft,
-    Settings2
-  } from '@lucide/svelte'
+  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
+  import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
+  import { FolderGit2, GraduationCap, PanelLeft } from '@lucide/svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
-  import type { WorkspaceTourView } from '../onboarding/onboarding-tour-steps'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
-  import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
+  import type { WorkspaceTourView } from '$lib/guide/guide-stops'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
 
   interface Props {
     /**
@@ -79,7 +75,7 @@
 
   const settingsAction = (): ActionItem => ({
     id: 'settings',
-    icon: Settings2,
+    icon: CioTabSettings,
     title: 'Open settings',
     description: 'Configure agents, models, and preferences',
     run: () => onOpenSettings?.()
@@ -133,7 +129,7 @@
     if (onNewChat) {
       items.push({
         id: 'new-chat',
-        icon: MessageSquarePlus,
+        icon: CioMessagePlus,
         title: 'New chat',
         description: 'Start a conversation with an agent',
         run: () => onNewChat?.(),
@@ -171,7 +167,7 @@
     if (onAddProject) {
       items.push({
         id: 'add-project',
-        icon: FolderPlus,
+        icon: CioFolderPlus,
         title: 'Add project',
         description: 'Create one from a local folder',
         run: () => onAddProject?.()
@@ -190,7 +186,7 @@
     if (onNewChat) {
       items.push({
         id: 'new-chat',
-        icon: MessageSquarePlus,
+        icon: CioMessagePlus,
         title: 'New chat',
         description: 'Start a conversation, no project needed',
         run: () => onNewChat?.()
@@ -214,7 +210,11 @@
   <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">CodeInOven</h1>
   <p class="mt-1 text-[0.8125rem] text-muted">{subtitles[variant]}</p>
 
-  <div class="mt-8 flex w-full max-w-sm flex-col gap-1" data-onboarding="empty-state-actions">
+  <div
+    class="mt-8 flex w-full max-w-sm flex-col gap-1"
+    data-onboarding="empty-state-actions"
+    data-guide="empty-state-actions"
+  >
     {#each actions as action (action.id)}
       <button
         type="button"

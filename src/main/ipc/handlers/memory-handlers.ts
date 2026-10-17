@@ -1,4 +1,5 @@
-import { BrowserWindow, dialog } from 'electron'
+import { dialog } from '../../system/file-dialogs'
+import { BrowserWindow } from 'electron'
 import { readFile, writeFile } from 'fs/promises'
 import { APP_NAME, APP_SLUG } from '../../../lib/brand'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'

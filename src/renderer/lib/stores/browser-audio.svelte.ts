@@ -90,6 +90,19 @@ class BrowserAudioState {
     return startedAt
   }
 
+  /** Sound from a thread's video board or exported-video preview. */
+  videoIsPlaying(threadId: string): boolean {
+    for (const [tabId, tab] of this.tabs) {
+      if (
+        tab.threadId === threadId &&
+        tab.audible &&
+        (tabId.startsWith('browser:board:') || tabId.startsWith('video-export:'))
+      )
+        return true
+    }
+    return false
+  }
+
   /** The families whose thread browser has an audible tab, for a caller that
    *  marks every family at once (the view rail). */
   familiesPlaying(): ReadonlySet<ContentThreadFamily> {

@@ -1,3 +1,4 @@
+import { RECONCILE_THREAD_CONTEXT_USAGE_SQL } from '../thread-context-usage-sql'
 import { Logger } from '../../system/logger'
 import { purgeRowsViaWorker, type RowsPurged } from '../worker-purge'
 import type { Database } from '../database'
@@ -243,6 +244,7 @@ export class HarnessUsageRepo {
   recordEvent(event: UsageEvent): void {
     try {
       this.insertEvent(event)
+      this.reconcileContextCost(event)
     } catch (error) {
       Logger.dev('Failed to record usage event; dropping telemetry', {
         feature: event.feature,
@@ -272,6 +274,7 @@ export class HarnessUsageRepo {
         )
         this.insertEvent(event)
       })
+      this.reconcileContextCost(event)
     } catch (error) {
       Logger.dev('Failed to replace usage event; dropping telemetry', {
         feature: event.feature,
@@ -279,6 +282,16 @@ export class HarnessUsageRepo {
         error
       })
     }
+  }
+
+  private reconcileContextCost(event: UsageEvent): void {
+    if (!['main', 'assignment', 'audit'].includes(event.feature)) return
+    void this.db
+      .executeViaWorker(RECONCILE_THREAD_CONTEXT_USAGE_SQL, [event.threadId])
+      .then((result) => {
+        if (!result.ok) Logger.error('Thread usage reconciliation failed:', result.error)
+      })
+      .catch((error: unknown) => Logger.error('Thread usage reconciliation failed:', error))
   }
 
   /** Insert one event row; the SQL body shared by the append and replace paths. */

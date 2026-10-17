@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import { onMount } from 'svelte'
-  import { FileSearch, FolderKanban, Globe, Timeline } from '@lucide/svelte'
+  import { FileSearch, Timeline } from '@lucide/svelte'
   import type {
     CommandPaletteProps,
     PaletteFooterFilter
@@ -26,6 +28,7 @@
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
+  import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { startAppControlResponder } from '$lib/app-control/app-control-responder'
   import { registerShellNavigationActions } from '$lib/app-control/app-control-actions'
   import {
@@ -88,6 +91,7 @@
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
@@ -141,10 +145,8 @@
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
-  import {
-    workspaceTourViewFor,
-    type WorkspaceTourView
-  } from '$lib/components/onboarding/onboarding-tour-steps'
+  import { workspaceTourViewFor, type GuideActionKind } from '$lib/guide/guide-stops'
+  import { guideState } from '$lib/guide/guide-state.svelte'
 
   type View = MainView
 
@@ -189,9 +191,6 @@
   let newProjectSpotlightOpen = $state(false)
   let onboardingOpen = $state(false)
   let onboardingStep = $state(0)
-  /** A content view's own tour, running on its own step counter. */
-  let viewTourView = $state<WorkspaceTourView | null>(null)
-  let viewTourStep = $state(0)
   let onboardingInitialized = false
   let onboardingProjectPickerActive = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
@@ -414,7 +413,7 @@
           title: 'Search browser tabs',
           placeholder: 'Search open tabs by title, address, or group…',
           emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
-          headerIcon: Globe,
+          headerIcon: CioBrowser,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-primary/25 bg-primary/10 text-primary',
           serverFiltered: true,
@@ -433,7 +432,7 @@
           title: 'Switch project',
           placeholder: 'Search projects…',
           emptyLabel: 'No matching projects',
-          headerIcon: FolderKanban,
+          headerIcon: CioProjects,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-success/25 bg-success/10 text-success',
           onBack: backToSpotlightHome,
@@ -500,12 +499,69 @@
     }
   })
 
-  /** A view's empty state, or the palette, can request that view's own tour. */
+  /** A view's empty state, or the palette, can request that view's own guide. */
   $effect(() => {
     const view = workspaceState.consumeViewTourRequest()
     if (!view) return
-    viewTourView = view
-    viewTourStep = 0
+    guideState.start(view)
+  })
+
+  /**
+   * A guide only says what the next step is. The app performs it, because the
+   * app is the only thing that knows how to add a project, connect an agent,
+   * open a settings page, or put the caret in the composer.
+   *
+   * Reports whether the step is actually done. A step that has to hand the user
+   * somewhere to finish (an installer for an agent that is not on this machine)
+   * answers false, and the guide stays on it rather than walking on as if the
+   * agent were connected.
+   */
+  async function runGuideAction(action: GuideActionKind): Promise<boolean> {
+    if (action.kind === 'add-project') {
+      openNewProjectSpotlight()
+      return true
+    }
+    if (action.kind === 'focus-composer') {
+      focusVisibleComposer()
+      return true
+    }
+    if (action.kind === 'connect-harness') {
+      const harness = providerStore.providers.find((entry) => entry.id === action.harnessId)
+      if (harness && harness.status === 'available' && harness.integration === 'ready') return true
+      if (!harness || harness.status !== 'available') {
+        // The agent is not on this machine yet: open its own install guide, the
+        // same page the setup tour offers, and leave the step standing.
+        try {
+          const info = await invoke('harnessInstall:getInfo', action.harnessId)
+          await openInBrowser(info.pageUrl)
+        } catch {
+          navigate(settingsViewForSection('harnesses'))
+        }
+        return false
+      }
+      await providerStore.checkOne(action.harnessId)
+      return true
+    }
+    navigate(settingsViewForSection(action.section))
+    return true
+  }
+
+  /** The dock's own button asks for the step the stop is about. */
+  $effect(() => {
+    const action = guideState.consumeActionRequest()
+    if (!action) return
+    void runGuideAction(action.run).then((done) => {
+      if (done) guideState.completeAction()
+    })
+  })
+
+  /**
+   * A guide explains one view's own app, so it may only run while that view is
+   * the one on screen. Leaving the view ends it right here, which is what keeps
+   * a tip from ever pointing at something the user is no longer looking at.
+   */
+  $effect(() => {
+    guideState.syncView(activeView)
   })
 
   async function loadConfig(): Promise<void> {
@@ -1995,7 +2051,23 @@
         {/await}
       {/if}
     </main>
+
+    <!-- A guide's words, in a column beside the app rather than over it: the app
+         reflows beside the dock, so nothing a guide explains is ever covered. -->
+    {#if guideState.visible}
+      {#await import('$lib/components/guide/GuideDock.svelte') then { default: GuideDock }}
+        <GuideDock />
+      {/await}
+    {/if}
   </div>
+
+  <!-- The marker a guide draws inside the app: one element, a rule to the dock,
+       and the notch where it lands. Fixed to the window, and never in the way. -->
+  {#if guideState.visible}
+    {#await import('$lib/components/guide/GuideMarks.svelte') then { default: GuideMarks }}
+      <GuideMarks />
+    {/await}
+  {/if}
 
   <!-- The instance-role notice sits at the very bottom as a status bar: it is a
        standing condition, so it reads as chrome rather than as content above
@@ -2024,21 +2096,6 @@
         onExisting={handleSpotlightExistingProject}
       />
     {/await}
-  {/if}
-  {#if viewTourView}
-    <!-- A view's own tour: the same spotlight presentation as the setup tour,
-         over that view's steps. Remounted per step so each target is measured
-         once it is on screen. -->
-    {#key viewTourStep}
-      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
-        <OnboardingTour
-          tour={viewTourView}
-          step={viewTourStep}
-          onStepChange={(step) => (viewTourStep = step)}
-          onFinish={() => (viewTourView = null)}
-        />
-      {/await}
-    {/key}
   {/if}
   {#if onboardingOpen}
     {#key onboardingStep}

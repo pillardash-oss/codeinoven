@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import { Loader2, RefreshCw, ScrollText } from '@lucide/svelte'
+  import { ScrollText } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import { formatDate } from '$shared/date-time-format'
@@ -39,7 +41,9 @@
 
 <div id="settings-block-about-changelog" class="mt-4 border bg-surface p-4">
   <div class="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
-    <h3 class="flex items-center gap-1.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+    <h3
+      class="flex items-center gap-1.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+    >
       <ScrollText size={13} />
       Changelog
     </h3>
@@ -55,7 +59,7 @@
 
   {#if loading}
     <div class="flex items-center gap-2 text-xs text-muted">
-      <Loader2 size={13} class="animate-spin" />
+      <CioSpinner size={13} class="animate-spin" />
       Fetching release notes…
     </div>
   {:else if changelog}
@@ -71,7 +75,7 @@
         title="Retry fetching the changelog"
         onclick={() => void load()}
       >
-        <RefreshCw size={12} />
+        <CioRefresh size={12} />
         Retry
       </button>
     </div>

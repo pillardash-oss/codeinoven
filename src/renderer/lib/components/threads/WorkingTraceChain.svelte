@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Archive, Bot, ChevronRight, CodeXml } from '@lucide/svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
@@ -124,7 +127,7 @@
         title={open ? 'Hide the steps behind this output' : 'Show the steps behind this output'}
         onclick={() => (userChoice = !open)}
       >
-        <ChevronRight size={12} class="shrink-0 transition-transform {open ? 'rotate-90' : ''}" />
+        <CioForward size={12} class="shrink-0 transition-transform {open ? 'rotate-90' : ''}" />
         <span class="font-medium">{stepLabel}</span>
         {#if durationLabel}
           <span class="tabular-nums">· {durationLabel}</span>
@@ -136,7 +139,7 @@
                 class="flex items-center gap-1 border border-border bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide uppercase"
                 title="This step compacted earlier context."
               >
-                <Archive size={10} />
+                <CioArchive size={10} />
                 Compacted
               </span>
             {/if}
@@ -147,7 +150,7 @@
                   markers.subagentCount === 1 ? '' : 's'
                 }.`}
               >
-                <Bot size={10} />
+                <CioSubagent size={10} />
                 {markers.subagentCount}
               </span>
             {/if}
@@ -156,7 +159,7 @@
                 class="flex items-center gap-1 border border-border bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide uppercase"
                 title="This step ran code-mode work."
               >
-                <CodeXml size={10} />
+                <CioCode size={10} />
                 Code
               </span>
             {/if}

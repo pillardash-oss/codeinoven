@@ -1,7 +1,8 @@
 <script lang="ts">
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { tick } from 'svelte'
-  import { Toolbox } from '@lucide/svelte'
+  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import Switch from '../ui/Switch.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -163,8 +164,8 @@
     {disabled}
     onclick={() => void toggle()}
   >
-    <Toolbox
-      size={15}
+    <CioTools
+      size={ICON_SIZE.control}
       class={filled ? 'text-thread-spec' : ''}
       fill={filled ? 'var(--color-thread-spec)' : 'none'}
       fill-opacity={filled ? 0.18 : undefined}

@@ -117,6 +117,9 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
+    // Token accounting arrives per completed `step-finish` part, and one
+    // assistant message can span several steps, so the count is per request.
+    tokenUsageScope: 'request',
     compaction: true,
     subagents: true,
     // OpenCode 1.18.10 accepts structured prompts but its history endpoint can

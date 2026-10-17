@@ -1,6 +1,14 @@
 <script lang="ts">
+  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
+  import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
+  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
   import { feature } from '$lib/feature-registry'
   import { subscribe } from '$lib/ipc.svelte'
   import { motionDuration } from '$lib/motion'
@@ -17,16 +25,7 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
-  import {
-    AppWindow,
-    Bookmark,
-    Boxes,
-    Clock,
-    Download,
-    FolderTree,
-    MessagesCircle,
-    Puzzle
-  } from '@lucide/svelte'
+
   import { onDestroy, onMount } from 'svelte'
   import {
     browserAppearanceAccent,
@@ -135,7 +134,7 @@
           unfinishedDownloadCount > 0
             ? `Downloads (${unfinishedDownloadCount} unfinished)`
             : 'Downloads',
-        icon: Download,
+        icon: CioDownload,
         active: globalBrowser.downloadsSidebarShown,
         countBadge: unfinishedDownloadCount > 0 ? String(unfinishedDownloadCount) : undefined,
         onSelect: () => globalBrowser.toggleDownloadsSidebar()
@@ -146,7 +145,7 @@
       {
         id: 'history',
         label: 'History',
-        icon: Clock,
+        icon: CioClock,
         active: globalBrowser.historySidebarShown,
         onSelect: () => globalBrowser.toggleHistorySidebar()
       },
@@ -156,7 +155,7 @@
       {
         id: 'bookmarks',
         label: 'Bookmarks',
-        icon: Bookmark,
+        icon: CioBookmark,
         active: globalBrowser.bookmarksSidebarShown,
         onSelect: () => globalBrowser.toggleBookmarksSidebar()
       },
@@ -171,7 +170,7 @@
       {
         id: 'boxes',
         label: boxesLabel,
-        icon: Boxes,
+        icon: CioTabBoxes,
         appearance: boxesAppearance,
         active: globalBrowser.boxesSidebarShown,
         onSelect: () => globalBrowser.toggleBoxesSidebar()
@@ -187,7 +186,7 @@
       {
         id: 'extensions',
         label: 'Extensions',
-        icon: Puzzle,
+        icon: CioTabExtensions,
         active: globalBrowser.extensionsSidebarShown,
         badge: installableStoreOffer ? 'attention' : undefined,
         badgeTitle: installableStoreOffer
@@ -203,7 +202,7 @@
                 popupWindows.length === 1
                   ? 'Popup window'
                   : `Popup windows (${popupWindows.length})`,
-              icon: AppWindow,
+              icon: CioWindow,
               active: globalBrowser.popupsSidebarShown,
               onSelect: () => globalBrowser.togglePopupsSidebar()
             }
@@ -227,7 +226,7 @@
             label: hasAgent ? 'Agent conversation' : 'Ask the agent',
             // The conversation wears the Chats view's mark: it is a chat, not a
             // status, so it takes no tone either.
-            icon: MessagesCircle,
+            icon: CONTENT_FAMILY_ICONS.chats,
             active:
               globalBrowser.agentSidebarShown &&
               browserAssistant.artifactThreadId !== activeChat?.threadId,
@@ -242,7 +241,7 @@
                 {
                   id: 'artifacts',
                   label: 'Conversation artifacts',
-                  icon: FolderTree,
+                  icon: CioFiles,
                   active:
                     globalBrowser.agentSidebarShown &&
                     browserAssistant.artifactThreadId === activeChat.threadId,

@@ -49,6 +49,8 @@ export interface PersistentCliSession {
   title: string
   projectPathHash: string
   nativeSessionId?: string
+  /** Last provider cumulative counters, scoped to the native Codex thread. */
+  codexUsageCheckpoint?: { nativeThreadId: string; tokens: AgentTokenUsage }
   /** Owning thread, stamped by the engine so sessions survive harness switches. */
   threadId?: string
   messages: AgentMessage[]

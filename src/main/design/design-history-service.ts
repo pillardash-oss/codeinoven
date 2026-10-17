@@ -2,7 +2,7 @@ import { designScreenName, isDesignScreenEntry } from '../../lib/design/screens'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, stat, rename } from 'node:fs/promises'
 import { relative, resolve, sep } from 'node:path'
 import type {
   DesignHistoryFile,
@@ -23,7 +23,11 @@ import { buildProcessEnvironment } from '../drivers/cli-environment'
 import type { CheckpointFile, ProjectCheckpoint } from '../git/change-tracking-service'
 import { ChangeTrackingService } from '../git/change-tracking-service'
 import { Logger } from '../system/logger'
-import { DesignHistoryBlobStore, destroyDesignHistoryProjectBlobs } from './design-history-blobs'
+import {
+  DesignHistoryBlobStore,
+  designHistoryBlobDirectory,
+  destroyDesignHistoryProjectBlobs
+} from './design-history-blobs'
 
 /**
  * The changes a design or composition has been through, and how the user walks them.
@@ -141,7 +145,14 @@ async function folderIsGitBacked(
     GIT_DETECT_TIMEOUT_MS
   )
   if (ignored.code === 0) return false
-  if (ignored.code === 1) return true
+  if (ignored.code === 1) {
+    const tracked = await runGit(
+      ['ls-files', '--error-unmatch', '--', directory],
+      projectPath,
+      GIT_DETECT_TIMEOUT_MS
+    )
+    return tracked.code === 0 && tracked.stdout.trim() !== ''
+  }
   return false
 }
 
@@ -204,6 +215,48 @@ export class DesignHistoryService {
 
   constructor(private readonly database: Database) {
     this.revisions = new DesignRevisionRepo(database)
+  }
+
+  /** Keep undo/redo and blob stores attached when a work folder moves. */
+  async relocateFolder(
+    projectId: string,
+    from: string,
+    to: string,
+    move: () => Promise<void>,
+    undo: () => Promise<void>
+  ): Promise<void> {
+    await this.runExclusive({ projectId, directory: from }, () =>
+      this.runExclusive({ projectId, directory: to }, async () => {
+        await move()
+        const oldBlobs = designHistoryBlobDirectory(projectId, from)
+        const newBlobs = designHistoryBlobDirectory(projectId, to)
+        const exists = await stat(oldBlobs).catch(() => null)
+        let blobsMoved = false
+        try {
+          if (exists) {
+            await rename(oldBlobs, newBlobs)
+            blobsMoved = true
+          }
+          const result = await this.database.transactionViaWorker(
+            ['design_revisions', 'design_history_heads', 'design_history_page_heads'].map(
+              (table) => ({
+                sql: `UPDATE ${table} SET directory = ? WHERE project_id = ? AND directory = ?`,
+                params: [to, projectId, from]
+              })
+            )
+          )
+          if (!result.ok) {
+            throw new Error(result.error ?? 'Could not move work history')
+          }
+        } catch (error) {
+          if (blobsMoved) await rename(newBlobs, oldBlobs)
+          await undo()
+          throw error
+        }
+        this.trackers.delete(`${projectId}\u0000${from}`)
+        this.trackers.delete(`${projectId}\u0000${to}`)
+      })
+    )
   }
 
   /**
@@ -849,6 +902,8 @@ export class DesignHistoryService {
   }
 
   private async isGitBacked(target: DesignHistoryTarget): Promise<boolean> {
+    // Moving work into a tracked tree must not hide its existing snapshots.
+    if ((await this.revisions.countViaWorker(target.projectId, target.directory)) > 0) return false
     return folderIsGitBacked(target.projectPath, target.directory, target.gitMode)
   }
 

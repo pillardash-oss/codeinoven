@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { FileText, GitBranch, Lightbulb, PenLine } from '@lucide/svelte'
+  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import { Lightbulb } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
   import CardButton from '../shared/CardButton.svelte'
@@ -61,7 +64,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Engineer this message">
     <CardHead
-      icon={GitBranch}
+      icon={CioTabGit}
       title="Engineer this message"
       {chip}
       bind:folded
@@ -76,7 +79,7 @@
             message you typed.
           </p>
           <p class="flex min-w-0 items-center gap-1.5 text-[0.6875rem] leading-relaxed text-dimmed">
-            <FileText size={12} class="shrink-0" />
+            <CioFileText size={12} class="shrink-0" />
             Jumping in still lets the Sr. Engineer ask alignment questions it just skips the Brainstorm
             document.
           </p>
@@ -109,7 +112,7 @@
               title={target === 'prd'
                 ? 'Jump straight into the PRD using this message'
                 : 'Jump straight into the Spec using this message'}
-              icon={PenLine}
+              icon={CioPencil}
               variant="primary"
               disabled={busy}
               loading={busy}

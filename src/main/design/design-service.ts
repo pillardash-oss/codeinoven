@@ -1,11 +1,10 @@
+import { WorkFolderRegistry, withWorkRegistryLock } from './work-folder-registry'
+import { updateWorkDetails } from './work-details-service'
+import { rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
-import { isAbsolute, relative, sep } from 'node:path'
-import {
-  DEFAULT_WORK_ROOTS,
-  authoredWorkKindOf,
-  workRootForKind
-} from '../../lib/design/work-roots'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { DEFAULT_WORK_ROOTS, workRootForKind } from '../../lib/design/work-roots'
 import type {
   AuthoredWorkKind,
   DesignEntry,
@@ -21,7 +20,8 @@ import type {
   ProjectWorkState,
   ScreenCanvasState,
   ThreadDesignCurrent,
-  ThreadDesignState
+  ThreadDesignState,
+  UpdateWorkDetails
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
 import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
@@ -42,7 +42,13 @@ import { listDesignScreens } from './design-screens'
 import { readScreenCanvasState } from './screen-canvas-state'
 import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
 import { openDesignPreview } from './design-preview-session'
-import { currentWorkRoot, currentWorkRootReports, currentWorkRoots } from './work-roots-state'
+import {
+  currentWorkRoot,
+  currentWorkRootReports,
+  currentWorkRoots,
+  projectWorkRootPaths,
+  forgetProjectWorkRoots
+} from './work-roots-state'
 
 /**
  * What the app knows about a thread's authored work, and how the user gets back to it.
@@ -158,7 +164,14 @@ function requirePath(value: unknown): string {
  * picture in.
  */
 function emptyScreenShot(screen: DesignScreen): DesignScreenShot {
-  return { entry: screen.entry, name: screen.name, dataUrl: null, width: 0, height: 0 }
+  return {
+    entry: screen.entry,
+    name: screen.name,
+    dataUrl: null,
+    width: 0,
+    height: 0,
+    updatedAt: screen.updatedAt
+  }
 }
 
 /**
@@ -181,14 +194,22 @@ function screenShotKey(
 export interface DesignServiceOptions {
   database: Database
   onHistoryChanged?: (projectId: string, directory: string) => void
+  onWorkRelocated?: (projectId: string, moves: Array<{ from: string; to: string }>) => void
   /**
-   * Mirror a thread's authored-work kind to live UI the moment it is recorded.
+   * Mirror a thread's authored-work kinds to live UI the moment they are recorded.
    *
-   * The row is what the sidebar draws its marker from, and the agent can open a
+   * The row is what the sidebar draws its markers from, and the agent can open a
    * design or video session on its own (a preview into a work root) with no tag,
-   * so this write has to reach the renderer just like the tag path's does.
+   * so this write has to reach the renderer just like the tag path's does. The set
+   * is what the markers draw, because a thread that designed something and later
+   * cut a video about it has done both.
    */
-  onThreadKindChanged?: (projectId: string, threadId: string, kind: AuthoredWorkKind) => void
+  onThreadKindChanged?: (
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    kinds: readonly AuthoredWorkKind[]
+  ) => void
   previews: DirectoryPreviewService
   browser: () => BrowserService | null
 }
@@ -256,7 +277,14 @@ export class DesignService {
         requireId(rawProjectId, 'project id')
       )
       const { exportDesign } = await import('./design-export-service')
-      return exportDesign(project.path, directory, entry, format, this.options.previews)
+      return exportDesign(
+        project.path,
+        directory,
+        entry,
+        format,
+        this.options.previews,
+        currentWorkRoot('design', requireId(rawProjectId, 'project id'))
+      )
     })
     ipcMain.handle('design:state', async (_event, rawProjectId, rawThreadId) =>
       this.stateFor(requireId(rawProjectId, 'project id'), requireId(rawThreadId, 'thread id'))
@@ -313,11 +341,62 @@ export class DesignService {
     // Read rather than pushed, because both surfaces that change a root (the
     // Design settings card and the board's own save path) ask immediately after
     // the save that caused the move.
-    ipcMain.handle('design:workRootState', async () => ({
-      roots: currentWorkRoots(),
+    ipcMain.handle('design:workRootState', async (_event, projectId?: string) => ({
+      roots: currentWorkRoots(projectId),
       defaults: { ...DEFAULT_WORK_ROOTS },
       reports: currentWorkRootReports()
     }))
+    ipcMain.handle('design:removeMissing', async (_event, rawProjectId, rawDirectory) => {
+      const projectId = requireId(rawProjectId, 'project id')
+      const directory = requirePath(rawDirectory)
+      const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+      await new WorkFolderRegistry(this.options.database).removeMissing(
+        projectId,
+        project.path,
+        directory
+      )
+    })
+    ipcMain.handle(
+      'design:updateDetails',
+      async (_event, rawProjectId, details: UpdateWorkDetails) => {
+        const projectId = requireId(rawProjectId, 'project id')
+        const project = await requireLocalProjectViaWorker(this.options.database, projectId)
+        return updateWorkDetails({
+          database: this.options.database,
+          projectId,
+          projectPath: project.path,
+          details,
+          onRelocated: (moves) => this.options.onWorkRelocated?.(projectId, moves),
+          list: async () => (await this.projectWork(projectId))[details.kind],
+          relocate: async (from, to) => {
+            await this.history.relocateFolder(
+              projectId,
+              from,
+              to,
+              () => rename(resolve(project.path, from), resolve(project.path, to)),
+              () => rename(resolve(project.path, to), resolve(project.path, from))
+            )
+            try {
+              await this.options.previews.relocate(
+                resolve(project.path, from),
+                resolve(project.path, to)
+              )
+            } catch (error) {
+              await this.history.relocateFolder(
+                projectId,
+                to,
+                from,
+                () => rename(resolve(project.path, to), resolve(project.path, from)),
+                () => rename(resolve(project.path, from), resolve(project.path, to))
+              )
+              throw error
+            }
+            this.options.browser()?.relocateWorkFolder(projectId, from, to)
+            this.screenShots.clear()
+          }
+        })
+      }
+    )
     // The history behind Undo and Redo. Reading captures the present first, so a
     // change the app has not seen yet becomes a point the user can return to; the
     // restore is what Undo, Redo and clicking a revision all run.
@@ -379,8 +458,10 @@ export class DesignService {
     directory: unknown,
     cause: DesignRevisionCause
   ): Promise<DesignHistoryState> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    return this.history.state(target, cause)
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      return this.history.state(target, cause)
+    })
   }
 
   /** Move a folder to one point in its history, which is what Undo and Redo do. */
@@ -390,10 +471,12 @@ export class DesignService {
     directory: unknown,
     revisionId: string
   ): Promise<DesignHistoryState> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    const result = await this.history.restore(target, revisionId)
-    this.options.onHistoryChanged?.(projectId, target.directory)
-    return result
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      const result = await this.history.restore(target, revisionId)
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return result
+    })
   }
 
   /** Agent checkpointing uses the same durable timeline as the board. */
@@ -406,18 +489,20 @@ export class DesignService {
     const entry = requirePath(input['entry'])
     const label = requireId(input['label'], 'checkpoint label')
     const directory = requirePath(input['directory'])
-    const target = await this.historyTarget(projectId, threadId, directory)
-    const state = await this.history.checkpoint(target, entry, label)
-    this.recordPreview({ projectId, threadId, directory: target.directory, entry, kind })
-    this.options.onHistoryChanged?.(projectId, target.directory)
-    return {
-      directory: target.directory,
-      entry,
-      label,
-      revisionId: state.cursorId,
-      checkpointed: !state.gitBacked,
-      gitBacked: state.gitBacked
-    }
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      const state = await this.history.checkpoint(target, entry, label)
+      this.recordPreview({ projectId, threadId, directory: target.directory, entry, kind })
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return {
+        directory: target.directory,
+        entry,
+        label,
+        revisionId: state.cursorId,
+        checkpointed: !state.gitBacked,
+        gitBacked: state.gitBacked
+      }
+    })
   }
 
   /** One page's own line through a folder's history. */
@@ -427,8 +512,10 @@ export class DesignService {
     directory: unknown,
     path: string
   ): Promise<DesignPageHistoryState> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    return this.history.pageState(target, path)
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      return this.history.pageState(target, path)
+    })
   }
 
   /** Move one page to one point in its own history. */
@@ -439,10 +526,12 @@ export class DesignService {
     path: string,
     revisionId: string
   ): Promise<DesignHistoryRestoreFileResult> {
-    const target = await this.historyTarget(projectId, threadId, directory)
-    const result = await this.history.restoreFile(target, revisionId, path)
-    this.options.onHistoryChanged?.(projectId, target.directory)
-    return result
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(projectId, threadId, directory)
+      const result = await this.history.restoreFile(target, revisionId, path)
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return result
+    })
   }
 
   /**
@@ -469,7 +558,17 @@ export class DesignService {
   ): Promise<DesignHistoryTarget> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const kind = await this.resolveKind(threadId)
-    const folder = resolveServedFolder(project.path, directory, currentWorkRoot(kind))
+    const requested = resolveServedFolder(project.path, directory, currentWorkRoot(kind, projectId))
+    const relocated = await this.options.database.queryViaWorker(
+      'SELECT destination FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+      [projectId, requested.display],
+      1
+    )
+    if (!relocated.ok) throw new Error('Could not resolve the current work folder')
+    const destination = relocated.rows[0] as { destination: string } | undefined
+    const folder = destination
+      ? resolveServedFolder(project.path, destination.destination, currentWorkRoot(kind, projectId))
+      : requested
     return {
       projectId,
       projectPath: project.path,
@@ -534,25 +633,36 @@ export class DesignService {
   async observeShownFolder(
     projectId: string,
     threadId: string,
-    url: string
+    url: string,
+    recordThread = true
   ): Promise<BrowserTabMark> {
+    // Capture this before asynchronous reads: a gallery navigation stays a
+    // capture even if its recognition finishes after the sweep has ended.
+    const remember = recordThread && !this.sweepingThreads.has(threadId)
     const origin = originOf(url)
     if (origin === null) return NO_TAB_MARK
     const root = this.options.previews.rootForOrigin(origin)
     if (root === null) return NO_TAB_MARK
-    const directory = this.projectRelativeFolder(
+    const observedDirectory = this.projectRelativeFolder(
       (await requireLocalProjectViaWorker(this.options.database, projectId)).path,
       root
     )
-    if (directory === null) return NO_TAB_MARK
-    const kind = authoredWorkKindOf(directory, currentWorkRoots())
+    if (observedDirectory === null) return NO_TAB_MARK
+    const kind =
+      (await new WorkFolderRegistry(this.options.database).kindFor(projectId, observedDirectory)) ??
+      (['design', 'video'] as const).find((kind) =>
+        projectWorkRootPaths(projectId, kind).some(
+          (root) => observedDirectory === root || observedDirectory.startsWith(`${root}/`)
+        )
+      ) ??
+      null
     if (kind === null) return NO_TAB_MARK
+    const directory = this.designs.resolveDirectory(projectId, observedDirectory)
     // A screen sweep moves the tab through every screen of one design, which is
     // the app taking pictures rather than the agent or the user choosing a folder.
-    // The row is left alone for the sweep and written by the navigation that puts
-    // the tab back, so a gallery over a design cannot re-point the thread at
-    // whichever screen happened to be captured last.
-    if (!this.sweepingThreads.has(threadId)) {
+    // Both capture and restoration leave the row alone, so browsing the
+    // gallery cannot replace the thread's own folder.
+    if (remember) {
       await this.rememberShownFolder({
         projectId,
         threadId,
@@ -564,7 +674,9 @@ export class DesignService {
     if (kind === 'design') return { design: { directory, origin }, composition: null }
     // A composition with no readable manifest has no timeline, so there is nothing
     // to play: it is shown as an ordinary page rather than driven by a guess.
-    const manifest = await readCompositionManifest(root)
+    const manifest = await readCompositionManifest(
+      this.options.previews.rootForOrigin(origin) ?? root
+    )
     if (!manifest) return NO_TAB_MARK
     return {
       design: null,
@@ -593,19 +705,22 @@ export class DesignService {
   /**
    * Mirror a recorded work kind onto the thread row.
    *
-   * The row is what the sidebar draws its marker from, and what the expert card
+   * The row is what the sidebar draws its markers from, and what the expert card
    * and media generation read the session from, so the folder record alone is not
-   * enough. Best-effort: the folder record has already landed, and a failed mirror
-   * must not fail the preview that triggered it. The repository guards the write,
-   * so a navigation that records the same kind churns nothing.
+   * enough. The write adds the kind to the thread's durable set as well as naming
+   * the session it is in now, and the set is what comes back to be announced.
+   * Best-effort: the folder record has already landed, and a failed mirror must
+   * not fail the preview that triggered it. The repository guards the write, so a
+   * navigation that records a kind the thread already holds churns nothing.
    */
   private async rememberThreadKind(
     projectId: string,
     threadId: string,
     kind: AuthoredWorkKind
   ): Promise<void> {
+    let kinds: readonly AuthoredWorkKind[]
     try {
-      await this.threads.setAuthoredWorkKindViaWorker(threadId, kind)
+      kinds = (await this.threads.setAuthoredWorkKindViaWorker(threadId, kind)) ?? [kind]
     } catch (error) {
       Logger.dev('Authored-work kind row update failed:', error)
       return
@@ -613,10 +728,11 @@ export class DesignService {
     // The persisted value is the fact; telling the renderer is what makes the
     // row's marker appear without a refresh, so the agent opening a session on
     // its own reads the same as the user typing the tag.
-    this.options.onThreadKindChanged?.(projectId, threadId, kind)
+    this.options.onThreadKindChanged?.(projectId, threadId, kind, kinds)
   }
 
   forgetProject(projectId: string): void {
+    forgetProjectWorkRoots(this.options.database, projectId)
     this.designs.deleteProject(projectId)
     this.history.forgetProject(projectId)
     for (const key of [...this.screenShots.keys()]) {
@@ -652,15 +768,17 @@ export class DesignService {
     const current = await this.designs.forThreadViaWorker(threadId)
     const thread = await this.threads.getViaWorker(threadId)
     const kind = thread?.authoredWorkKind ?? current?.kind ?? 'design'
-    const root = currentWorkRoot(kind)
+    const root = currentWorkRoot(kind, projectId)
     // The listing reads disk, which knows nothing about authorship; the recorded
     // creators are merged in here so the board can badge a folder as the viewed
     // thread's own and send the user back to the thread that first wrote it.
     const origins = await this.designs.originsViaWorker(projectId)
-    const items = (await this.listWorkFolders(storedProject.path, root)).map((item) => ({
-      ...item,
-      creatorThreadId: origins.get(item.directory) ?? null
-    }))
+    const items = (await this.listProjectFolders(projectId, storedProject.path, kind)).map(
+      (item) => ({
+        ...item,
+        creatorThreadId: origins.get(item.directory) ?? null
+      })
+    )
     return {
       projectId,
       threadId,
@@ -700,6 +818,8 @@ export class DesignService {
   ): Promise<DesignOpenResult> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
     const kind = forcedKind ?? (await this.resolveKind(threadId))
+    const requested = resolveServedFolder(project.path, directory, currentWorkRoot(kind, projectId))
+    directory = this.designs.resolveDirectory(projectId, requested.display)
     const result = await this.serveWork({
       kind,
       projectPath: project.path,
@@ -709,10 +829,11 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal,
-      // A composition is played by the board's own view, never the thread's
-      // browser tab: that is what lets a user watch and edit without opening the
-      // browser. A design screen keeps its own tab, and a design's other routes
-      // keep the thread's.
+      // A composition is played by the board's own view, and only by it: the board
+      // is the control surface and the picture, the browser is the same view shown
+      // full screen, and a second tab would be a second player that the board's own
+      // controls could not reach. A design screen keeps its own tab, and a design's
+      // other routes keep the thread's.
       tab: kind === 'design' ? 'screen' : 'board'
     })
     if (forcedKind === undefined) {
@@ -752,7 +873,7 @@ export class DesignService {
     const path = project.path
     const origins = await this.designs.originsViaWorker(projectId)
     const list = async (kind: AuthoredWorkKind): Promise<DesignEntry[]> =>
-      (await this.listWorkFolders(path, currentWorkRoot(kind))).map((item) => ({
+      (await this.listProjectFolders(projectId, path, kind)).map((item) => ({
         ...item,
         creatorThreadId: origins.get(item.directory) ?? null
       }))
@@ -795,10 +916,8 @@ export class DesignService {
       entry,
       attention: 'background',
       reveal: false,
-      // A composition is pictured through the board's own view, so a still of it
-      // never opens a browser tab the user did not ask for. A design keeps the
-      // thread's tab, which is where its canvas and screens live.
-      tab: kind === 'video' ? 'board' : 'thread',
+      // Pictures browse the project without changing the thread's work link.
+      tab: kind === 'video' ? 'board' : 'screen',
       // A board's picture of a composition is a still, so selecting a video thread
       // must not start playback and sound in a tab the user never asked for. The
       // design kind has no timeline to freeze, so it is unaffected.
@@ -832,6 +951,12 @@ export class DesignService {
    * supersedes the first instead of driving the same tab alongside it. And it
    * leaves the tab where it found it, because a board opened over a design must
    * not change what the user is looking at.
+   *
+   * A sweep whose every screen is already pictured navigates nothing: pictures
+   * are cached against each file's own stamp, and a sweep that never navigated
+   * has nothing to put back. That is what makes this cheap enough for the board
+   * to re-read its screens whenever a turn settles, which is how a screen the
+   * agent has just written appears on its own.
    */
   async screens(
     projectId: string,
@@ -841,7 +966,11 @@ export class DesignService {
     force: boolean
   ): Promise<DesignScreenShot[]> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
-    const folder = resolveServedFolder(project.path, directory, currentWorkRoot('design'))
+    const folder = resolveServedFolder(
+      project.path,
+      directory,
+      currentWorkRoot('design', projectId)
+    )
     // The Screen Canvas is pictured with the screens: the board shows it as the
     // first entry of its screens grid, and that entry is a picture like the rest.
     // It is one more load in the sweep, cached against the file like every other
@@ -861,6 +990,8 @@ export class DesignService {
     const before = await this.designs.forThreadViaWorker(threadId)
     const shots: DesignScreenShot[] = []
     const startedAt = Date.now()
+    /** Whether this sweep navigated the thread's tab, so it must put it back. */
+    let moved = false
     this.sweepingThreads.set(threadId, generation)
     try {
       for (const screen of screens) {
@@ -878,6 +1009,7 @@ export class DesignService {
           shots.push(emptyScreenShot(screen))
           continue
         }
+        moved = true
         const shot = await this.captureScreen({
           projectId,
           threadId,
@@ -898,20 +1030,21 @@ export class DesignService {
       }
       return shots
     } finally {
-      // Only the newest sweep clears the mark: an older one that is still winding
-      // down must leave the suppression in place for the one that superseded it.
-      if (this.sweepingThreads.get(threadId) === generation) {
-        this.sweepingThreads.delete(threadId)
-      }
-      if (this.screenSweeps.get(threadId) === generation) {
-        await this.restoreTab({
-          projectId,
-          threadId,
-          projectPath: project.path,
-          folder: folder.display,
-          screens,
-          before
-        })
+      try {
+        if (this.screenSweeps.get(threadId) === generation && moved && before?.kind === 'design') {
+          await this.restoreTab({
+            projectId,
+            threadId,
+            projectPath: project.path,
+            folder: folder.display,
+            screens,
+            before
+          })
+        }
+      } finally {
+        if (this.sweepingThreads.get(threadId) === generation) {
+          this.sweepingThreads.delete(threadId)
+        }
       }
     }
   }
@@ -931,7 +1064,11 @@ export class DesignService {
     directory: unknown
   ): Promise<ScreenCanvasState | null> {
     const project = await requireLocalProjectViaWorker(this.options.database, projectId)
-    const folder = resolveServedFolder(project.path, directory, currentWorkRoot('design'))
+    const folder = resolveServedFolder(
+      project.path,
+      directory,
+      currentWorkRoot('design', projectId)
+    )
     const screens = await listDesignScreens(folder.absolute)
     return readScreenCanvasState({
       folderAbsolute: folder.absolute,
@@ -940,13 +1077,15 @@ export class DesignService {
     })
   }
 
-  /**
-   * Every folder of one project under `root`, newest first.
-   *
-   * The folder listing is the registry: `.cio/designs/<name>/` and
-   * `.cio/videos/<name>/` are the documented layouts, so a folder another thread
-   * wrote is found here without anything having registered it.
-   */
+  /** Refresh exact registered folders and discover only the canonical default directories. */
+  private async listProjectFolders(
+    projectId: string,
+    path: string,
+    kind: AuthoredWorkKind
+  ): Promise<DesignEntry[]> {
+    return new WorkFolderRegistry(this.options.database).list(projectId, path, kind)
+  }
+
   async listWorkFolders(projectPath: string, root: string): Promise<DesignEntry[]> {
     return listProjectWorkFolders(projectPath, root)
   }
@@ -1074,7 +1213,7 @@ export class DesignService {
       threadId: input.threadId,
       directory: input.directory,
       entry: input.entry,
-      defaultRoot: currentWorkRoot(input.kind),
+      defaultRoot: currentWorkRoot(input.kind, input.projectId),
       attention: input.attention,
       reveal: input.reveal,
       posterSeconds: input.posterSeconds
@@ -1129,7 +1268,12 @@ export class DesignService {
       await browser.waitForTabLoad(result.tabId, SCREEN_LOAD_TIMEOUT_MS)
       const captured = await browser.captureThumbnail(result.tabId, input.width)
       if (captured === null) return emptyScreenShot(input.screen)
-      return { entry: input.screen.entry, name: input.screen.name, ...captured }
+      return {
+        entry: input.screen.entry,
+        name: input.screen.name,
+        updatedAt: input.screen.updatedAt,
+        ...captured
+      }
     } catch (error) {
       Logger.dev('A design screen could not be pictured:', error)
       return emptyScreenShot(input.screen)
@@ -1141,10 +1285,8 @@ export class DesignService {
    *
    * The thread's own record is the target, whatever kind of work it holds, because
    * that record is what the tab was showing. A thread that has no record yet is
-   * left on the design's entry file, which is what the board's own Preview button
-   * would show. Writing the record happens through this navigation rather than
-   * here: the sweep suppressed it for the duration, so this is the one write, and
-   * it is the same guarded write any other navigation makes.
+   * left without a restoration request. Restoration stays inside the sweep's
+   * recording suppression, so browsing another folder cannot rewrite the link.
    */
   private async restoreTab(input: {
     projectId: string
@@ -1159,7 +1301,7 @@ export class DesignService {
         ? { directory: input.before.directory, entry: input.before.entry }
         : { directory: input.folder, entry: input.screens[0]?.entry ?? null }
     try {
-      await this.serveWork({
+      const restored = await this.serveWork({
         kind: 'design',
         projectPath: input.projectPath,
         projectId: input.projectId,
@@ -1170,6 +1312,9 @@ export class DesignService {
         reveal: false,
         tab: 'thread'
       })
+      if (restored.tabId) {
+        await this.options.browser()?.waitForTabLoad(restored.tabId, SCREEN_LOAD_TIMEOUT_MS)
+      }
     } catch (error) {
       Logger.dev('The tab could not be put back after picturing a design:', error)
     }

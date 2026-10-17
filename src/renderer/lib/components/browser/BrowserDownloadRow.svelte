@@ -1,14 +1,12 @@
 <script lang="ts">
-  import {
-    CircleStop,
-    ExternalLink,
-    FileDown,
-    FolderOpen,
-    Pause,
-    Play,
-    RotateCw,
-    X
-  } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
+  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import { CircleStop } from '@lucide/svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import BrowserDownloadProgress from './BrowserDownloadProgress.svelte'
@@ -84,17 +82,11 @@
   })
 </script>
 
-<div
-  class={compact
-    ? 'flex flex-col gap-1.5 px-3 py-2'
-    : 'border border-border bg-elevated p-3'}
->
+<div class={compact ? 'flex flex-col gap-1.5 px-3 py-2' : 'border border-border bg-elevated p-3'}>
   <div class="flex items-start gap-3">
     {#if !compact}
-      <div
-        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-muted"
-      >
-        <FileDown size={15} />
+      <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-muted">
+        <CioDownload size={15} />
       </div>
     {/if}
     <div class="min-w-0 flex-1">
@@ -135,7 +127,7 @@
             title={`Resume ${download.fileName}`}
             onclick={() => browserDownloads.resume(download)}
           >
-            <Play size={actionIcon} />
+            <CioPlay size={actionIcon} />
           </button>
         {:else}
           <button
@@ -145,7 +137,7 @@
             title={`Pause ${download.fileName}`}
             onclick={() => browserDownloads.pause(download)}
           >
-            <Pause size={actionIcon} />
+            <CioPause size={actionIcon} />
           </button>
         {/if}
         <button
@@ -166,7 +158,7 @@
             title={`Resume ${download.fileName}`}
             onclick={() => browserDownloads.resume(download)}
           >
-            <Play size={actionIcon} />
+            <CioPlay size={actionIcon} />
           </button>
         {/if}
         {#if canRetry}
@@ -177,7 +169,7 @@
             title={`Start ${download.fileName} over`}
             onclick={() => browserDownloads.retry(download)}
           >
-            <RotateCw size={actionIcon} />
+            <CioRefresh size={actionIcon} />
           </button>
         {/if}
         {#if canOpen}
@@ -188,7 +180,7 @@
             title={`Open ${download.fileName}`}
             onclick={() => browserDownloads.open(download)}
           >
-            <ExternalLink size={actionIcon} />
+            <CioExternalLink size={actionIcon} />
           </button>
         {/if}
         {#if canReveal}
@@ -199,7 +191,7 @@
             title={`Reveal ${download.fileName} in file manager`}
             onclick={() => browserDownloads.reveal(download)}
           >
-            <FolderOpen size={actionIcon} />
+            <CioFolderOpen size={actionIcon} />
           </button>
         {/if}
         {#if canRemove}
@@ -210,7 +202,7 @@
             title={`Remove ${download.fileName} from the list`}
             onclick={() => browserDownloads.remove(download)}
           >
-            <X size={actionIcon} />
+            <CioClose size={actionIcon} />
           </button>
         {/if}
       {/if}

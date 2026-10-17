@@ -1,28 +1,28 @@
+import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
+import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
+import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
+import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
 import {
-  BrainCircuit,
   ChartColumn,
-  Cloud,
-  Download,
-  FolderTree,
-  Globe,
   HeartPulse,
-  Info,
   Keyboard,
-  MessageSquareCode,
   MonitorUp,
-  Palette,
-  Plug,
   Router,
-  Server,
-  Search,
-  ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
-  UsersRound,
-  Volume2,
-  type LucideIcon
+  UsersRound
 } from '@lucide/svelte'
 import { feature } from '$lib/feature-registry'
+import type { Component } from 'svelte'
 import type { SettingsSection } from './stores/renderer-recovery'
 import type { HarnessesTab } from './stores/settings-ui.svelte'
 
@@ -40,7 +40,8 @@ export interface SettingsSearchEntry {
   title: string
   description: string
   keywords: readonly string[]
-  icon: LucideIcon
+  /** Any glyph component: the canonical set draws every mark the settings pages list. */
+  icon: Component
   /**
    * DOM id suffix of the block to reveal on the section page
    * (rendered as `settings-block-<blockId>`). Absent = the whole page.
@@ -69,7 +70,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Ovens',
     description: 'SSH connections, credentials, remote service setup, and harness discovery.',
     keywords: ['ssh', 'remote', 'container', 'server', 'keys'],
-    icon: Server
+    icon: CioServer
   },
   {
     id: 'browser',
@@ -77,7 +78,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Browser',
     description: 'Link routing, the search engine, tab hibernation, and prototype previews.',
     keywords: ['search', 'address bar', 'duckduckgo', 'google', 'links', 'tabs', 'cdn'],
-    icon: Globe
+    icon: CioBrowser
   },
   {
     id: 'memory',
@@ -85,7 +86,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Memory',
     description: 'What the agent remembers across threads and projects.',
     keywords: ['remember', 'context'],
-    icon: BrainCircuit
+    icon: CioMemory
   },
   {
     id: 'audits',
@@ -111,7 +112,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'move',
       'output'
     ],
-    icon: FolderTree
+    icon: CioFiles
   },
   {
     id: 'design-generation',
@@ -120,7 +121,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Generation backend',
     description: 'The provider that generates images, clips and sound.',
     keywords: ['replicate', 'generation', 'image', 'video', 'audio', 'token', 'api key', 'media'],
-    icon: Sparkles
+    icon: CioSparkles
   },
   {
     id: 'design-video-packages',
@@ -138,7 +139,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'transformers',
       'install'
     ],
-    icon: Download
+    icon: CioDownload
   },
   {
     id: 'design',
@@ -163,7 +164,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'background removal',
       'video pack'
     ],
-    icon: Palette
+    icon: CioPalette
   },
   {
     id: 'cio-prompts',
@@ -171,7 +172,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'CIO Prompts',
     description: 'Prompts CodeInOven injects into agent sessions.',
     keywords: ['prompts', 'instructions'],
-    icon: MessageSquareCode
+    icon: CioMessage
   },
   {
     id: 'heartbeat',
@@ -194,7 +195,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'background model',
       'cheap model'
     ],
-    icon: Plug
+    icon: CioPlug
   },
   {
     id: 'harnesses-typesafe',
@@ -204,7 +205,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'TypeSafe decisions',
     description: 'The API key CodeInOven uses for TypeSafe judgments, and its connection state.',
     keywords: ['typesafe', 'jev', 'api key', 'credits', 'decision', 'auxiliary'],
-    icon: Sparkles
+    icon: CioSparkles
   },
   {
     id: 'utilities',
@@ -236,7 +237,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Sound',
     description: 'Local speech models, dictation, cleanup, history, and spoken responses.',
     keywords: ['microphone', 'voice', 'asr', 'tts', 'recording', 'models', 'import', 'cleanup'],
-    icon: Volume2
+    icon: CioVolume
   },
   {
     id: 'search',
@@ -257,7 +258,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'model',
       'import'
     ],
-    icon: Search
+    icon: CioSearch
   },
   {
     id: 'keymap',
@@ -273,7 +274,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Cloud Deployments',
     description: 'Cloud environments and deployments.',
     keywords: ['cloud', 'environments'],
-    icon: Cloud
+    icon: CioCloud
   },
   {
     id: 'profile',
@@ -289,7 +290,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'About',
     description: 'Build information, storage, diagnostics, and updates.',
     keywords: ['version', 'build'],
-    icon: Info
+    icon: CioTabInfo
   },
   // ── Blocks on General ────────────────────────────────────────────────────
   {
@@ -440,7 +441,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Link routing',
     description: 'Which links open in CIO’s browser instead of your default browser.',
     keywords: ['localhost', 'links', 'open', 'system browser', 'workspace'],
-    icon: Globe
+    icon: CioBrowser
   },
   {
     id: 'browser-search',
@@ -457,7 +458,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'custom engine',
       'template'
     ],
-    icon: Search
+    icon: CioSearch
   },
   {
     id: 'browser-tabs',
@@ -467,7 +468,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description:
       'Free a browser tab’s memory after it sits unused, and choose whether a website may override the app’s shortcuts.',
     keywords: ['tab', 'memory', 'hibernate', 'idle', 'shortcut', 'keyboard', 'keymap', 'page'],
-    icon: Globe
+    icon: CioBrowser
   },
   {
     id: 'browser-prototype-cdn',
@@ -476,7 +477,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Prototype previews',
     description: 'Approve the external CDNs prototype previews may load.',
     keywords: ['prototype', 'preview', 'cdn', 'fonts', 'allowlist'],
-    icon: Globe
+    icon: CioBrowser
   },
   // ── Blocks on About ──────────────────────────────────────────────────────
   {
@@ -486,7 +487,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Storage',
     description: 'Where all projects, threads, and history are stored.',
     keywords: ['data directory', 'disk'],
-    icon: Info
+    icon: CioTabInfo
   },
   {
     id: 'about-diagnostics',
@@ -495,7 +496,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Diagnostics',
     description: 'Export a redacted failure report.',
     keywords: ['export', 'failure report', 'logs'],
-    icon: Info
+    icon: CioTabInfo
   },
   {
     id: 'about-updates',
@@ -504,7 +505,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Updates',
     description: 'Update channel, nightly builds, and auto-install.',
     keywords: ['nightly', 'auto-download', 'auto-install', 'channel'],
-    icon: Info
+    icon: CioTabInfo
   },
   {
     id: 'about-changelog',
@@ -513,7 +514,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Changelog',
     description: 'Release notes for the latest published build.',
     keywords: ['release notes', 'what’s new', 'changes'],
-    icon: Info
+    icon: CioTabInfo
   },
   {
     id: 'about-community',
@@ -531,6 +532,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: 'Share anonymous daily active ping',
     description: 'Share one anonymous daily active ping.',
     keywords: ['privacy', 'analytics', 'telemetry', 'posthog', 'usage statistics'],
-    icon: ShieldCheck
+    icon: CioShieldCheck
   }
 ]

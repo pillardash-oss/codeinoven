@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Eye, Globe, Loader2, Mic, Moon, Pin, Volume2, VolumeX, X } from '@lucide/svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioMic from '$lib/components/icons/cio/CioMic.svelte'
+  import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
+  import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
+  import { Moon } from '@lucide/svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -101,7 +109,9 @@
   })
   const groups = $derived(globalBrowser.groups)
   /** The group this row's tab is filed under, when it has one. */
-  const group = $derived(tab.groupId ? (groups.find((entry) => entry.id === tab.groupId) ?? null) : null)
+  const group = $derived(
+    tab.groupId ? (groups.find((entry) => entry.id === tab.groupId) ?? null) : null
+  )
   /**
    * The colour the tab on screen wears. A tab's own colour wins, and a tab with
    * none borrows its group's accent, so an active tab filed under a group reads
@@ -372,11 +382,11 @@
       {#if customIconUrl}
         <img src={customIconUrl} alt="" class="h-4 w-4 object-contain" />
       {:else if runtime.loading}
-        <Loader2 size={13} class="animate-spin text-muted" />
+        <CioSpinner size={13} class="animate-spin text-muted" />
       {:else if tab.favicon}
         <img src={tab.favicon} alt="" class="h-4 w-4 object-contain" />
       {:else}
-        <Globe size={12} class="text-dimmed" />
+        <CioBrowser size={12} class="text-dimmed" />
       {/if}
     </span>
     <span class="flex min-w-0 flex-1 flex-col">
@@ -427,7 +437,7 @@
         title="Pinned tab"
         aria-label="Pinned tab"
       >
-        <Pin size={12} />
+        <CioPin size={12} />
       </span>
     {/if}
     {#if threadNotesState.has(tab.id)}
@@ -446,7 +456,7 @@
         role="img"
         class="flex h-6 w-6 items-center justify-center text-accent"
         title="Peek open on this tab"
-        aria-label="Peek open on this tab"><Eye size={12} /></span
+        aria-label="Peek open on this tab"><CioEye size={12} /></span
       >
     {/if}
     {#if runtime.capturing}
@@ -456,7 +466,7 @@
         title={BROWSER_TAB_CAPTURE_LABEL}
         aria-label={BROWSER_TAB_CAPTURE_LABEL}
       >
-        <Mic size={12} />
+        <CioMic size={12} />
       </span>
     {/if}
     {#if runtime.audible || runtime.muted}
@@ -472,9 +482,9 @@
         }}
       >
         {#if runtime.muted}
-          <VolumeX size={12} />
+          <CioVolumeX size={12} />
         {:else}
-          <Volume2 size={12} />
+          <CioVolume size={12} />
         {/if}
       </button>
     {:else if tab.hibernated}
@@ -494,7 +504,7 @@
       title={`Close ${label}`}
       onclick={closeTab}
     >
-      <X size={12} />
+      <CioClose size={12} />
     </button>
   </div>
 </div>

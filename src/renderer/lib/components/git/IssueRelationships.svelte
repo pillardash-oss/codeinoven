@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Ban, CornerDownRight, Link2, ListTree, Plus, X } from '@lucide/svelte'
+  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioLink from '$lib/components/icons/cio/CioLink.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import { CornerDownRight, ListTree } from '@lucide/svelte'
   import { issueStateIcon } from './issue-view'
   import type {
     IssueRelationshipItem,
@@ -92,7 +96,7 @@
       aria-label={label}
       onclick={() => onAdd(mode)}
     >
-      <Plus size={9} />
+      <CioPlus size={9} />
       Add
     </button>
   {/if}
@@ -129,7 +133,7 @@
           aria-label="Unlink {item.repository}#{item.number}"
           onclick={() => onRemove(mode, item)}
         >
-          <X size={8} />
+          <CioClose size={8} />
         </button>
       {/if}
     </div>
@@ -139,7 +143,7 @@
 {#snippet group(
   labelText: string,
   items: IssueRelationshipItem[],
-  Icon: typeof Ban,
+  Icon: typeof CioBan,
   tone: string,
   mode: IssueRelationshipMode
 )}
@@ -212,13 +216,13 @@
       </div>
 
       {#if relationships.blockedBy.length > 0}
-        {@render group('Blocked by', relationships.blockedBy, Ban, 'text-warning', 'blocked-by')}
+        {@render group('Blocked by', relationships.blockedBy, CioBan, 'text-warning', 'blocked-by')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <Ban size={9} class="text-warning" />
+            <CioBan size={9} class="text-warning" />
             Blocked by
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">
@@ -228,13 +232,13 @@
       {/if}
 
       {#if relationships.blocking.length > 0}
-        {@render group('Blocking', relationships.blocking, Link2, '', 'blocking')}
+        {@render group('Blocking', relationships.blocking, CioLink, '', 'blocking')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <Link2 size={9} />
+            <CioLink size={9} />
             Blocking
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">

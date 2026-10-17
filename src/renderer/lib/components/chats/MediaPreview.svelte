@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { X, Download, FolderOpen } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
   import type { Snippet } from 'svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -126,7 +128,7 @@
         title="Reveal path"
         onclick={revealFromButton}
       >
-        <FolderOpen size={14} />
+        <CioFolderOpen size={14} />
       </button>
     {/if}
     <a
@@ -136,7 +138,7 @@
       aria-label={downloadLabel}
       title={downloadLabel}
     >
-      <Download size={14} />
+      <CioDownload size={14} />
     </a>
     <button
       type="button"
@@ -145,7 +147,7 @@
       title="Close (Esc)"
       onclick={onClose}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
   <div

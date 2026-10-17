@@ -1,15 +1,13 @@
 <script lang="ts">
-  import {
-    ArrowLeft,
-    ClipboardPaste,
-    Copy,
-    Gauge,
-    Loader2,
-    Plus,
-    RefreshCw,
-    Server,
-    X
-  } from '@lucide/svelte'
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import { Gauge } from '@lucide/svelte'
   import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
   import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -765,7 +763,7 @@
           aria-label={dockRestoreLabel}
           onclick={() => (docked = false)}
         >
-          <Server size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioServer size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
           <span class="flex min-w-0 flex-col">
             <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
               {provider ? 'Edit base URL provider' : 'Add base URL provider'}
@@ -784,7 +782,7 @@
           disabled={submitting}
           onclick={onClose}
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       </div>
     </DockRow>
@@ -802,7 +800,7 @@
             disabled={submitting}
             onclick={onBack}
           >
-            <ArrowLeft size={13} /> Back
+            <CioArrowLeft size={13} /> Back
           </button>
         {/if}
         <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
@@ -824,7 +822,7 @@
           form="base-url-provider-form"
           disabled={baseUrlProviderStore.saving || readingIcon || submitting}
         >
-          {#if baseUrlProviderStore.saving || submitting}<Loader2
+          {#if baseUrlProviderStore.saving || submitting}<CioSpinner
               size={13}
               class="animate-spin"
             />{/if}
@@ -877,7 +875,7 @@
             title="Copy this provider (including API key) to the clipboard"
             onclick={() => void copyProviderDraft()}
           >
-            <Copy size={12} /> Copy
+            <CioCopy size={12} /> Copy
           </button>
           <button
             class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
@@ -885,7 +883,7 @@
             title="Paste a copied provider over this form"
             onclick={() => void pasteProviderFromClipboard()}
           >
-            <ClipboardPaste size={12} /> Paste
+            <CioClipboardPaste size={12} /> Paste
           </button>
         </span>
       </div>
@@ -1007,7 +1005,7 @@
           onclick={() => void testUsage()}
         >
           {#if testingUsage}
-            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Testing…
           {:else}
             <Gauge size={13} aria-hidden="true" />
@@ -1096,9 +1094,9 @@
             onclick={() => void discoverModels(true)}
           >
             {#if discoveringModels}
-              <Loader2 size={11} class="animate-spin" />
+              <CioSpinner size={11} class="animate-spin" />
             {:else}
-              <RefreshCw size={11} />
+              <CioRefresh size={11} />
             {/if}
             Refresh models
           </button>
@@ -1108,14 +1106,14 @@
             title="Paste a copied model from the clipboard"
             onclick={() => void pasteModelFromClipboard()}
           >
-            <ClipboardPaste size={11} /> Paste model
+            <CioClipboardPaste size={11} /> Paste model
           </button>
           <button
             class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
             type="button"
             onclick={addModel}
           >
-            <Plus size={11} /> Add model
+            <CioPlus size={11} /> Add model
           </button>
         </div>
       </div>
@@ -1128,7 +1126,7 @@
           <p class="text-[0.6875rem] text-danger">{discoverError}</p>
         {:else if discoveringModels}
           <p class="flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
-            <Loader2 size={11} class="animate-spin" /> Searching {draft.baseURL}/models…
+            <CioSpinner size={11} class="animate-spin" /> Searching {draft.baseURL}/models…
           </p>
         {:else if discoveredModels.length > 0}
           <div class="space-y-1">
@@ -1163,7 +1161,7 @@
                 type="button"
                 onclick={() => copyModelDraft(model)}
               >
-                <Copy size={12} />
+                <CioCopy size={12} />
               </button>
               <button
                 class="flex h-6 w-6 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
@@ -1172,7 +1170,7 @@
                 type="button"
                 onclick={() => removeModel(index)}
               >
-                <X size={12} />
+                <CioClose size={12} />
               </button>
             </div>
           </div>

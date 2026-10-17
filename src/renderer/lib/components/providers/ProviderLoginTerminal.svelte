@@ -17,8 +17,8 @@
     environment?: Record<string, string>
     cancelled?: boolean
     startingLabel?: string
-    /** Invoked once the login process exits. */
-    onExit: (exitCode: number) => void
+    /** Invoked once the login process exits, with what it printed. */
+    onExit: (exitCode: number, output: string) => void
   }
 
   let {
@@ -35,6 +35,9 @@
   let error = $state('')
   let started = $state(false)
   let destroyed = false
+  /** Tail of what the process printed, so a failure can report the CLI's reason. */
+  let printed = ''
+  const PRINTED_LIMIT = 8_000
 
   function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
     return styles.getPropertyValue(token).trim()
@@ -131,12 +134,14 @@
           unregisterHost()
         },
         subscribe(`pty:data:${terminalId}`, (data) => {
-          terminal.write(data as string)
+          const chunk = data as string
+          printed = (printed + chunk).slice(-PRINTED_LIMIT)
+          terminal.write(chunk)
         }),
         subscribe(`pty:exit:${terminalId}`, (exitCode) => {
           const code = typeof exitCode === 'number' ? exitCode : 0
           terminal.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
-          onExit(code)
+          onExit(code, printed)
         })
       )
 
@@ -170,7 +175,7 @@
     } catch (initError) {
       if (!destroyed) {
         error = initError instanceof Error ? initError.message : 'The terminal failed to start.'
-        onExit(1)
+        onExit(1, error)
       }
     }
   }

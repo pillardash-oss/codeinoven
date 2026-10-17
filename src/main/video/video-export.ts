@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto'
+import { snapshotVideoSource, digestVideoOutput } from './video-evidence'
 import { BrowserWindow } from 'electron'
 import { join, relative } from 'node:path'
-import { rm, rename } from 'node:fs/promises'
+import { rm, rename, mkdir, opendir, stat } from 'node:fs/promises'
 import { videoCaptureUrl, type VideoProjectManifest } from '../../lib/video/project'
 import { videoCaptionsSrt } from '../../lib/video/studio'
 import { atomicWrite } from '../../lib/utils'
@@ -10,9 +12,10 @@ import {
   type VideoExportEncoderDrain,
   type VideoExportEncoderSupport
 } from './video-export-encoder'
-import { videoFile, readVideoStudio, videoOutput } from './video-paths'
+import { checkVideoExport, keepFailedExport, type VideoExportCheck } from './video-export-check'
+import { videoFile, readVideoStudio, videoExportFolder } from './video-paths'
 import { loadCompositionManifest } from './video-manifest'
-import { startVideoProcess } from './video-process'
+import { startVideoProcess, videoProcess } from './video-process'
 import type { VideoJobContext } from './video-jobs'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import { servedFileUrl, resolveServedEntry } from '../preview/served-folder'
@@ -113,15 +116,21 @@ export async function exportVideo(
   folder: string,
   previews: DirectoryPreviewService,
   context: VideoJobContext
-): Promise<{ files: string[]; encoder: VideoExportEncoderPath }> {
+): Promise<{ files: string[]; encoder: VideoExportEncoderPath; check: VideoExportCheck }> {
   context.update(0, 'Validating composition')
+  const sourceEvidence = await snapshotVideoSource(folder, context.signal)
   const manifest = await loadCompositionManifest(folder, relative(root, folder))
   if (manifest.width * manifest.height > 3840 * 2160)
     throw new Error('Export supports up to 4K pixel count')
   const studio = await readVideoStudio(folder)
-  const directory = await videoOutput(root, 'exports')
+  // Named from the composition rather than minted fresh, so this export stays
+  // findable by anything that holds the composition, in this run or a later one.
+  const directory = await videoExportFolder(root, relative(root, folder))
   const partial = join(directory, 'render.partial.mp4'),
-    final = join(directory, 'render.mp4')
+    final = join(directory, 'render.mp4'),
+    failed = join(directory, 'render.failed.mp4')
+  const reviewDirectory = join(directory, `review-${randomUUID()}`)
+  let published = false
   context.update(0, 'Preparing composition preview')
   const registration = await previews.open(folder)
   const entry = await resolveServedEntry(folder, 'index.html')
@@ -308,19 +317,128 @@ export async function exportVideo(
     context.update(0.96, 'Finalizing video and audio')
     await encoder.done
     context.signal.throwIfAborted()
-    await rename(partial, final)
+    context.update(0.98, 'Checking the exported file')
+    let check: VideoExportCheck
+    try {
+      check = await checkVideoExport(
+        root,
+        partial,
+        {
+          width: manifest.width,
+          height: manifest.height,
+          fps: manifest.fps,
+          duration: manifest.duration,
+          audio: manifest.audioPolicy ?? (tracks.length ? 'required' : 'silent'),
+          audioFrom: tracks.length ? Math.min(...tracks.map((track) => track.start)) : 0
+        },
+        context.signal
+      )
+    } catch (error) {
+      // A file that failed its check must not sit where a deliverable belongs, but
+      // it is the only evidence of what went wrong, so it is renamed, not deleted.
+      const kept = await keepFailedExport(root, partial, failed, context.signal)
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        kept
+          ? `${reason} That render was kept as ${kept} for inspection; the composition is unchanged.`
+          : reason,
+        { cause: error }
+      )
+    }
     const files = [relative(root, final).replaceAll('\\', '/')]
+    await mkdir(reviewDirectory)
+    const reviewFrames: { time: number; file: string }[] = []
+    const lastFrame = Math.max(0, Math.ceil(manifest.duration * manifest.fps) - 1)
+    for (const [index, time] of [
+      0,
+      Math.floor(lastFrame / 2) / manifest.fps,
+      lastFrame / manifest.fps
+    ].entries()) {
+      const frameFile = join(reviewDirectory, `frame-${index + 1}.jpg`)
+      await videoProcess(
+        [
+          '-ss',
+          String(time),
+          '-i',
+          partial,
+          '-frames:v',
+          '1',
+          '-vf',
+          'scale=640:-2',
+          '-y',
+          frameFile
+        ],
+        root,
+        context.signal
+      )
+      if (!(await stat(frameFile)).size) throw new Error('No exported review frame was decoded')
+      reviewFrames.push({ time, file: relative(root, frameFile).replaceAll('\\', '/') })
+    }
+    const outputDigest = await digestVideoOutput(partial, context.signal)
+    const verifiedSource = await snapshotVideoSource(folder, context.signal)
+    if (verifiedSource.sha256 !== sourceEvidence.sha256) {
+      await keepFailedExport(root, partial, failed, context.signal)
+      throw new Error('Composition changed while export evidence was captured. Render again.')
+    }
+    const evidence = join(directory, 'export-evidence.json')
+    const pendingEvidence = join(directory, 'export-evidence.pending.json')
+    await atomicWrite(
+      pendingEvidence,
+      JSON.stringify(
+        {
+          version: 1,
+          createdAt: new Date().toISOString(),
+          source: sourceEvidence,
+          limitations: [
+            'Source hashes cover local non-hidden files only; remote assets and hidden resources are not bound.'
+          ],
+          output: relative(root, final).replaceAll('\\', '/'),
+          check,
+          outputSha256: outputDigest.sha256,
+          frames: reviewFrames,
+          captions: studio.captions,
+          visualReview: {
+            status: 'unreviewed',
+            note: 'Captured frames are evidence for inspection, not proof of visual correctness.'
+          }
+        },
+        null,
+        2
+      )
+    )
+    await rm(evidence, { force: true })
+    await rename(partial, final)
+    await rename(pendingEvidence, evidence)
+    published = true
+    // Only our previous review folders; never touch unrelated authored files.
+    const entries = await opendir(directory)
+    let visited = 0
+    for await (const entry of entries) {
+      if (++visited > 64) break
+      if (
+        entry.isDirectory() &&
+        /^review-[0-9a-f-]{36}$/u.test(entry.name) &&
+        join(directory, entry.name) !== reviewDirectory
+      )
+        await rm(join(directory, entry.name), { recursive: true, force: true })
+    }
+    files.push(
+      relative(root, evidence).replaceAll('\\', '/'),
+      ...reviewFrames.map((frame) => frame.file)
+    )
     if (studio.captions.length) {
       const subtitles = join(directory, 'captions.srt')
       await atomicWrite(subtitles, videoCaptionsSrt(studio.captions))
       files.push(relative(root, subtitles).replaceAll('\\', '/'))
     }
-    return { files, encoder: renderer.kind }
+    return { files, encoder: renderer.kind, check }
   } finally {
     context.signal.removeEventListener('abort', abortWindow)
     encoder?.child.kill('SIGKILL')
     if (encoder) await encoder.done.catch(() => undefined)
     if (!window.isDestroyed()) window.destroy()
     await rm(partial, { force: true })
+    await rm(join(directory, 'export-evidence.pending.json'), { force: true })
+    if (!published) await rm(reviewDirectory, { recursive: true, force: true })
   }
 }

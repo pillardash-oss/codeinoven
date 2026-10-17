@@ -768,6 +768,47 @@ export function serializeKnowledgeSections(sections: readonly KnowledgeSection[]
     .join('\n\n')
 }
 
+/**
+ * One line saying what a folded section holds.
+ *
+ * A folded section used to collapse to its title alone, so folding hid what the
+ * section said and the reader had to reopen it to remember. The summary is the
+ * section's first real line of prose with its markdown markers stripped: list
+ * markers, emphasis, headings, link syntax and code fences all come off, so what
+ * is left is the sentence the agent wrote. Returns an empty string for a section
+ * whose body is only structure, and the caller then draws no line rather than an
+ * empty one.
+ */
+export function knowledgeSectionSummary(section: KnowledgeSection): string {
+  let inFence = false
+  for (const raw of section.body.split('\n')) {
+    const line = raw.trim()
+    // A fenced block is code, not prose, so the fence and everything inside it
+    // are skipped rather than summarized.
+    const fence = /^(`{3,}|~{3,})/.exec(line)
+    if (fence) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    if (!line) continue
+    // A horizontal rule or a table row carries no prose to summarize.
+    if (/^([-*_])\1{2,}$/.test(line)) continue
+    if (/^\|/.test(line)) continue
+    const text = line
+      // A leading list marker or blockquote marker, then an ordered marker.
+      .replace(/^[>\s]*([-*+]|\d+[.)])\s+/, '')
+      // Heading markers mid-section, and the emphasis and code marks around words.
+      .replace(/^#{1,6}\s+/, '')
+      .replace(/[*_`]/g, '')
+      // A link keeps its label and drops its target.
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .trim()
+    if (text) return text
+  }
+  return ''
+}
+
 // ─── The agent's structured assistant plan ──────────────────────────────────
 
 /** Fence tag naming a machine-readable assistant plan. */

@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ArrowLeft, ArrowUpRight, FileSearch, RotateCcw, ShieldCheck } from '@lucide/svelte'
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowUpRight from '$lib/components/icons/cio/CioArrowUpRight.svelte'
+  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import { FileSearch } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
@@ -123,7 +127,7 @@
 <div class="independent-audit-panel flex h-full min-h-0 flex-col" aria-label="Audit coordinator">
   <header class="shrink-0 border-b border-border p-4">
     <div class="flex min-w-0 items-center gap-2 text-primary">
-      <ShieldCheck size={15} class="shrink-0" />
+      <CioShieldCheck size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Audit coordinator</h2>
     </div>
     <p class="mt-3 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Scope</p>
@@ -149,7 +153,7 @@
             : auditFailed
               ? 'Resume audit'
               : 'Run audit'}
-          <ShieldCheck size={13} />
+          <CioShieldCheck size={13} />
         </button>
       {/if}
       {#if reportAvailable && onViewReport}
@@ -160,7 +164,7 @@
           onclick={onViewReport}
         >
           View report
-          <ArrowUpRight size={13} />
+          <CioArrowUpRight size={13} />
         </button>
       {/if}
     </div>
@@ -175,7 +179,7 @@
         onclick={() => (newAuditOpen = true)}
       >
         New audit
-        <RotateCcw size={13} />
+        <CioUndo size={13} />
       </button>
     {/if}
   </header>
@@ -271,7 +275,7 @@
         aria-label="Back to the thread that owns this audit"
         onclick={onBackToCoordinator}
       >
-        <ArrowLeft size={13} aria-hidden="true" />
+        <CioArrowLeft size={13} aria-hidden="true" />
         Back to Sr. Engineer
       </button>
     </footer>

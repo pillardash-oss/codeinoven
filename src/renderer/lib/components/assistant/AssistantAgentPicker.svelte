@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Plus, X } from '@lucide/svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import ModelPicker from '$lib/components/shared/ModelPicker.svelte'
   import { modelKey } from '$lib/model-keys'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -198,7 +199,7 @@
           {disabled}
           onclick={() => setPrimary(undefined)}
         >
-          <X size={13} strokeWidth={1.8} />
+          <CioClose size={13} strokeWidth={1.8} />
         </button>
       {/if}
     </div>
@@ -264,7 +265,7 @@
           {disabled}
           onclick={() => removeFallback(index)}
         >
-          <X size={13} strokeWidth={1.8} />
+          <CioClose size={13} strokeWidth={1.8} />
         </button>
       </div>
     {/each}
@@ -277,7 +278,7 @@
         {disabled}
         onclick={addFallback}
       >
-        <Plus size={12} strokeWidth={1.8} />
+        <CioPlus size={12} strokeWidth={1.8} />
         Add fallback
       </button>
     {/if}

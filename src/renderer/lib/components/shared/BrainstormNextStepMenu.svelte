@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown } from '@lucide/svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   export type BrainstormNextStep = 'lofi' | 'hifi' | 'prd' | 'spec' | 'implement'
@@ -19,7 +19,7 @@
     title="Choose what to build next from this Brainstorm"
   >
     {busy ? 'Working…' : 'Next step'}
-    <ChevronDown size={13} />
+    <CioChevronDown size={13} />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content

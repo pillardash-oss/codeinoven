@@ -1,15 +1,13 @@
 <script lang="ts">
+  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import {
-    ArrowLeft,
-    ArrowRight,
-    Download,
-    RotateCw,
-    SquareDashedMousePointer,
-    SquareTerminal,
-    X
-  } from '@lucide/svelte'
+  import { SquareDashedMousePointer } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
@@ -581,7 +579,7 @@
       title="Go back"
       onclick={() => void invoke('browser:goBack', tabId).catch(() => {})}
     >
-      <ArrowLeft size={14} />
+      <CioArrowLeft size={14} />
     </button>
     <button
       type="button"
@@ -591,7 +589,7 @@
       title="Go forward"
       onclick={() => void invoke('browser:goForward', tabId).catch(() => {})}
     >
-      <ArrowRight size={14} />
+      <CioArrowRight size={14} />
     </button>
     <!-- Reload is shown only when there is a page to act on: an empty tab has
          nothing to reload, and the button becomes the stop affordance while a
@@ -606,15 +604,15 @@
         oncontextmenu={onReloadContextMenu}
       >
         {#if pageState.loading}
-          <X size={14} />
+          <CioClose size={14} />
         {:else}
-          <RotateCw size={13} />
+          <CioRefresh size={13} />
         {/if}
       </button>
     {/if}
     <BrowserAddressBar
       bind:this={addressBar}
-      tabId={tabId}
+      {tabId}
       url={address}
       projectId={tabProjectId}
       threadId={tabThreadId}
@@ -642,7 +640,7 @@
       title="Browser downloads"
       onclick={openDownloadsMenu}
     >
-      <Download size={13} />
+      <CioDownload size={13} />
       {#if unfinishedDownloadCount > 0}
         <span
           class="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center bg-accent px-1 text-[0.5625rem] font-semibold tabular-nums text-on-accent"
@@ -665,7 +663,7 @@
       title="Toggle browser DevTools"
       onclick={() => void toggleDevTools()}
     >
-      <SquareTerminal size={13} />
+      <CioTerminal size={13} />
       {#if fullscreen}
         <span>Console</span>
       {/if}
@@ -768,7 +766,7 @@
       />
     {:else if isBlank}
       <BrowserBlankTab
-        tabId={tabId}
+        {tabId}
         projectId={tabProjectId}
         threadId={tabThreadId}
         boxId={tabBoxId}

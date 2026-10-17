@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, Eye, X } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
   import { slide } from 'svelte/transition'
   import CardHead from '../shared/CardHead.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -58,7 +60,7 @@ are the shared card shape. -->
   aria-label="Pick a vision model to describe this image"
 >
   <CardHead
-    icon={Eye}
+    icon={CioEye}
     title="This model can't see images"
     chip={{ text: 'Waiting', tone: 'paused' }}
     bind:folded
@@ -122,7 +124,7 @@ are the shared card shape. -->
             variant="ghost"
             label="Cancel"
             title="Cancel and keep your message and attachment"
-            icon={X}
+            icon={CioClose}
             onclick={onCancel}
           />
         {/snippet}
@@ -132,7 +134,7 @@ are the shared card shape. -->
             variant="primary"
             label="Continue"
             title="Send the image and describe it with the selected vision model"
-            icon={Check}
+            icon={CioCheck}
             disabled={!visionSelection}
             onclick={onConfirm}
           />

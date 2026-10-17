@@ -1,6 +1,10 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { AppWindow, Check, ChevronDown, Loader2 } from '@lucide/svelte'
+
   import type { EditorId } from '$shared/types'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -52,11 +56,11 @@
     onclick={() => void open()}
   >
     {#if opening}
-      <Loader2 size={12} class="shrink-0 animate-spin" />
+      <CioSpinner size={12} class="shrink-0 animate-spin" />
     {:else if preferredIcon}
       <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
     {:else}
-      <AppWindow size={13} class="shrink-0" />
+      <CioWindow size={13} class="shrink-0" />
     {/if}
     <span>Open</span>
   </button>
@@ -68,7 +72,7 @@
       title="Select editor"
       disabled={disabled || opening}
     >
-      <ChevronDown size={11} />
+      <CioChevronDown size={11} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -91,11 +95,11 @@
             {#if editor.iconDataUrl}
               <img src={editor.iconDataUrl} alt="" class="h-4 w-4 shrink-0" />
             {:else}
-              <AppWindow size={14} class="shrink-0 text-muted" />
+              <CioWindow size={14} class="shrink-0 text-muted" />
             {/if}
             <span class="min-w-0 flex-1 truncate">{editor.name}</span>
             {#if editorPreference.preferredEditor === editor.id}
-              <Check size={13} class="shrink-0 text-primary" />
+              <CioCheck size={13} class="shrink-0 text-primary" />
             {/if}
           </DropdownMenu.Item>
         {/each}

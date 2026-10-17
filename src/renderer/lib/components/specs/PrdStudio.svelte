@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, ChevronDown, MessageSquarePlus } from '@lucide/svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
@@ -235,7 +237,7 @@
       savePending={false}
       versionMenuTitle="Choose a PRD version"
       versionItemTitle={(version) => `Open PRD version ${version}`}
-      onSelectVersion={onSelectVersion}
+      {onSelectVersion}
       onUndo={() => undefined}
       onRedo={() => undefined}
       onSave={save}
@@ -250,7 +252,7 @@
         title="Finalize this PRD"
         onclick={() => void onFinalize()}
       >
-        <Check size={13} /> Finalize
+        <CioCheck size={13} /> Finalize
       </button>
     {/if}
     {#if onNextStep && canEdit}
@@ -261,7 +263,7 @@
           title="Choose what to build next from this PRD"
         >
           {nextStepBusy ? 'Working…' : 'Next step'}
-          <ChevronDown size={13} />
+          <CioChevronDown size={13} />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
@@ -323,7 +325,6 @@
         oninput={(event) => {
           content = { ...content, summary: event.currentTarget.value }
           dirty = true
-        
         }}></textarea>
     </section>
     {#each content.sections as section (section.id)}
@@ -340,7 +341,10 @@
           disabled={!canEdit}
           oninput={(event) => updateSection(section.id, event.currentTarget.value)}></textarea>
         {#if annotationsForSection(section.id).length > 0}
-          <div class="mt-2 flex gap-2 overflow-x-auto pb-1" aria-label={`${section.title} comments`}>
+          <div
+            class="mt-2 flex gap-2 overflow-x-auto pb-1"
+            aria-label={`${section.title} comments`}
+          >
             {#each annotationsForSection(section.id) as annotation (annotation.id)}
               <button
                 class="max-w-64 shrink-0 border border-border bg-elevated px-3 py-2 text-left hover:bg-overlay"
@@ -382,7 +386,7 @@
                 annotationDrafts = { ...annotationDrafts, [section.id]: '' }
               }}
             >
-              <MessageSquarePlus size={14} />
+              <CioMessagePlus size={14} />
             </button>
           </div>
         {/if}

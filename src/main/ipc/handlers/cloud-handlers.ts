@@ -1974,6 +1974,9 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     if (!chatEngine?.activeTurnChangeSummary) return null
     return chatEngine.activeTurnChangeSummary(projectId, threadId)
   })
+  ipcMain.handle('checkpoint:latestSummary', (_, projectId: string, threadId: string) =>
+    checkpointManager.latestSummary(projectId, threadId)
+  )
   ipcMain.handle(
     'checkpoint:liveDiff',
     (_, projectId: unknown, threadId: unknown, checkpointId: unknown, path: unknown) =>

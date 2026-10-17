@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
   import type { SvelteMap } from 'svelte/reactivity'
   import { ovenRootKey } from '$lib/oven-root-target'
   import { fly } from 'svelte/transition'
@@ -11,7 +12,7 @@
   // also when its chunk is warmed, so nothing on the first paint waits for it.
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
-  import { Network } from '@lucide/svelte'
+
   import { getProjectIcon } from '$lib/project-icons'
   import { getAssistantIcon, assistantAccentColor } from '$lib/assistant-icons'
   import { assistants } from '$lib/stores/assistants.svelte'
@@ -98,6 +99,10 @@
   let activePanelKey = $derived.by(() => {
     const tab = activeContextTab
     if (!tab) return ''
+    if (tab.kind === 'coordinator' && coordinator?.panel.component === 'design') {
+      const props = coordinator.panel.props
+      return `work:${props.projectId}:${props.threadId}:${props.kind ?? 'session'}`
+    }
     if (tab.kind !== 'files') return tab.id
     const mountThreadId =
       usesThreadWorkspaceMount(tab.projectId) ||
@@ -328,7 +333,13 @@
               {/await}
             {:else if coordinator.panel.component === 'design'}
               {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
-                <DesignCoordinatorPanel {...coordinator.panel.props} />
+                {#key `${coordinator.projectId}:${coordinator.panel.props.threadId}:${coordinator.panel.props.kind ?? 'session'}`}
+                  <DesignCoordinatorPanel
+                    {...coordinator.panel.props}
+                    viewingThreadId={selectedThread?.id ?? coordinator.threadId}
+                    active={active && contextSidebarState.sidebarVisible}
+                  />
+                {/key}
               {/await}
             {:else}
               {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
@@ -337,7 +348,7 @@
             {/if}
           {:else}
             <EmptyState
-              icon={Network}
+              icon={CioNetwork}
               title="Coordinator unavailable"
               description="The coordinator for this thread is not open right now. Close this panel and reopen the coordinator from the rail."
             >

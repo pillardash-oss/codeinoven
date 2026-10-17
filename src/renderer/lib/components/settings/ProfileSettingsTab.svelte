@@ -1,8 +1,15 @@
 <script lang="ts">
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { onMount } from 'svelte'
   import DesignQualityRankings from './DesignQualityRankings.svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, ChevronDown, Loader2, RefreshCw, Sparkles, Trash2 } from '@lucide/svelte'
+
   import { DropdownMenu } from 'bits-ui'
   import type {
     LocalProfileAnalytics,
@@ -459,7 +466,7 @@
         disabled={loading || clearBusy || totalRecords === 0}
         onclick={() => openClear('all')}
       >
-        <Trash2 size={14} />
+        <CioTrash size={14} />
         Clear all records
       </button>
       <button
@@ -470,17 +477,14 @@
         disabled={loading}
         onclick={refresh}
       >
-        <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
+        <CioRefresh size={14} class={loading ? 'animate-spin' : ''} />
         Refresh
       </button>
     </div>
   </div>
 
   {#if errorMessage}
-    <p
-      class="mb-4 border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
-      role="alert"
-    >
+    <p class="mb-4 border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {errorMessage}
     </p>
   {/if}
@@ -505,7 +509,9 @@
 
   <section class="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Local usage totals">
     <div class="border p-4">
-      <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Agent responses</p>
+      <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+        Agent responses
+      </p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatNumber(usage.messageCount)}</p>
       <p class="mt-1 text-xs text-dimmed">Total in the selected period</p>
     </div>
@@ -515,7 +521,9 @@
       <p class="mt-1 text-xs text-dimmed">Models and tracked utilities</p>
     </div>
     <div class="border p-4">
-      <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Estimated cost</p>
+      <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+        Estimated cost
+      </p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatCost(usage.costUsd)}</p>
       <p class="mt-1 text-xs text-dimmed">From available pricing reports</p>
     </div>
@@ -542,7 +550,7 @@
           disabled={loading}
         >
           <span>{rangePresetLabel}</span>
-          <ChevronDown size={13} class="text-dimmed" />
+          <CioChevronDown size={13} class="text-dimmed" />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
@@ -560,7 +568,7 @@
               >
                 <span>{preset.label}</span>
                 {#if rangePreset === preset.id}
-                  <Check size={13} class="text-primary" />
+                  <CioCheck size={13} class="text-primary" />
                 {/if}
               </DropdownMenu.Item>
             {/each}
@@ -572,7 +580,7 @@
             >
               <span>Custom range</span>
               {#if rangePreset === 'custom'}
-                <Check size={13} class="text-primary" />
+                <CioCheck size={13} class="text-primary" />
               {/if}
             </DropdownMenu.Item>
           </DropdownMenu.Content>
@@ -654,10 +662,7 @@
                 {/if}
                 {#each week.days as day (day.date)}
                   <span
-                    class="aspect-square w-full min-w-2 {activityClass(
-                      day,
-                      maxActivity
-                    )}"
+                    class="aspect-square w-full min-w-2 {activityClass(day, maxActivity)}"
                     title={`${day.date}: ${day.count} agent responses${day.selected ? ' · selected range' : ''}`}
                     aria-label={`${day.date}: ${day.count} agent responses${day.selected ? ', selected range' : ''}`}
                   ></span>
@@ -689,11 +694,7 @@
           <h2 id="most-used-heading" class="text-sm font-semibold">Most used models</h2>
           <p class="mt-0.5 text-xs text-muted">Ranked by {modelRankMetricLabel} in this period.</p>
         </div>
-        <div
-          class="flex border bg-surface p-0.5"
-          role="group"
-          aria-label="Rank models by"
-        >
+        <div class="flex border bg-surface p-0.5" role="group" aria-label="Rank models by">
           {#each MODEL_RANK_METRICS as metric (metric)}
             <button
               type="button"
@@ -801,9 +802,7 @@
               <span class="tabular-nums text-muted">{formatUsageDate(day.date)}</span>
               <div class="h-2 overflow-hidden bg-raised">
                 <div
-                  class="h-full {day.date === peakDay?.date
-                    ? 'bg-accent'
-                    : 'bg-primary'}"
+                  class="h-full {day.date === peakDay?.date ? 'bg-accent' : 'bg-primary'}"
                   style:width={usageWidth(day, maxDailyTokens)}
                 ></div>
               </div>
@@ -1012,7 +1011,7 @@
             <div class="flex items-center justify-between gap-4 text-xs">
               <span class="flex min-w-0 items-center gap-2 truncate font-semibold">
                 {#if level.thinkingLevel}
-                  <Brain size={15} class="text-muted" />
+                  <CioMemory size={15} class="text-muted" />
                   {thinkingLevelLabel(level.thinkingLevel)}
                 {:else}
                   Reported without effort metadata
@@ -1077,7 +1076,7 @@
                 aria-pressed={thinkingFilter === level}
                 onclick={() => (thinkingFilter = level)}
               >
-                <Brain size={11} />
+                <CioMemory size={11} />
                 {thinkingLevelLabel(level)}
               </button>
             {/each}
@@ -1104,7 +1103,7 @@
                     title={`Thinking level: ${model.thinkingLevel}`}
                     aria-label={`Thinking level: ${model.thinkingLevel}`}
                   >
-                    <Brain size={9} />
+                    <CioMemory size={9} />
                     {model.thinkingLevel}
                   </span>
                 {/if}
@@ -1114,10 +1113,7 @@
               </span>
             </div>
             <div class="mt-2 h-1 overflow-hidden bg-raised">
-              <div
-                class="h-full bg-primary"
-                style:width={usageWidth(model, maxModelTokens)}
-              ></div>
+              <div class="h-full bg-primary" style:width={usageWidth(model, maxModelTokens)}></div>
             </div>
             <p class="mt-1.5 text-[0.6875rem] tabular-nums text-dimmed">
               {formatNumber(model.messageCount)} responses
@@ -1201,7 +1197,7 @@
                 <span
                   class="flex shrink-0 items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 capitalize"
                 >
-                  <Brain size={9} />
+                  <CioMemory size={9} />
                   {entry.thinkingLevel}
                 </span>
               {/if}
@@ -1289,7 +1285,7 @@
                   class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-[0.6875rem] font-semibold tabular-nums"
                   role="status"
                 >
-                  <Loader2 size={13} class="animate-spin" />
+                  <CioSpinner size={13} class="animate-spin" />
                   {rankingGradeProgressLabel(gradeRun)}
                 </span>
                 <button
@@ -1310,7 +1306,7 @@
                   disabled={loading || gradeBusy}
                   onclick={() => (gradeConfirmOpen = true)}
                 >
-                  <Sparkles size={13} />
+                  <CioSparkles size={13} />
                   Grade now
                 </button>
               {/if}
@@ -1324,7 +1320,7 @@
                 disabled={loading || clearBusy || storeRecords === 0}
                 onclick={() => openClear(store)}
               >
-                <Trash2 size={13} />
+                <CioTrash size={13} />
                 Clear
               </button>
             </div>

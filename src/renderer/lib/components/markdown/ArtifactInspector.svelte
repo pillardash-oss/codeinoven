@@ -35,6 +35,8 @@
    */
   interface Props {
     code: string
+    /** Picking is armed only by the viewer's explicit inspect mode. */
+    enabled: boolean
     artifactKey: string
     projectId: string
     threadId: string
@@ -53,6 +55,7 @@
 
   let {
     code,
+    enabled,
     artifactKey,
     projectId,
     threadId,
@@ -299,6 +302,7 @@
   })
 
   function handlePointerMove(event: PointerEvent): void {
+    if (!enabled) return
     const target = targetUnderPointer(event)
     hoveredElement = target
     hoverName = target ? shortName(target) : null
@@ -321,14 +325,14 @@
   let pressOrigin: { x: number; y: number } | null = null
 
   function handlePointerDown(event: PointerEvent): void {
-    if (event.button !== 0 || !event.isPrimary) return
+    if (!enabled || event.button !== 0 || !event.isPrimary) return
     pressOrigin = { x: event.clientX, y: event.clientY }
   }
 
   function handlePointerUp(event: PointerEvent): void {
     const origin = pressOrigin
     pressOrigin = null
-    if (!origin) return
+    if (!enabled || !origin || panZoom.isPanning) return
     if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > MARK_TAP_SLOP_PX) return
     const target = pickTarget(event)
     if (!target) return
@@ -358,7 +362,7 @@
    * a control rather than a bare click target.
    */
   function handleSurfaceKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Enter' && event.key !== ' ') return
+    if (!enabled || (event.key !== 'Enter' && event.key !== ' ')) return
     const target = hoveredElement ?? shadowRoot?.querySelector<SVGSVGElement>('svg') ?? null
     if (!target) return
     event.preventDefault()
@@ -422,7 +426,7 @@
   }
 
   function handleKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') return
+    if (!enabled || event.key !== 'Escape') return
     // The comment field owns Escape while it is open.
     if (activeEditingId) return
     hoveredElement = null
@@ -444,10 +448,18 @@
    */
   const shadowSheet = $derived(`:host { display: block; height: 100%; }
 .cio-stage { position: relative; box-sizing: border-box; display: flex; height: 100%; align-items: center; justify-content: center; padding: 1.25rem; background: var(--color-app); }
-.cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }`)
+.cio-stage > svg { max-width: 100%; max-height: 100%; height: auto; width: auto; font-family: var(--font-app); color: var(--color-foreground); fill: currentColor; }
+:host([data-inspecting]) .cio-stage, :host([data-inspecting]) svg, :host([data-inspecting]) svg * { cursor: pointer !important; }`)
 
   function artifactMarkup(): string {
-    return `<div class="cio-stage">${sanitizedSvgArtifact(code)}</div>`
+    const template = document.createElement('template')
+    template.innerHTML = sanitizedSvgArtifact(code)
+    // An SVG image has its own :root. Inside a shadow tree those declarations
+    // must belong to the host, or authored aliases such as --ink disappear.
+    for (const style of template.content.querySelectorAll('style')) {
+      style.textContent = (style.textContent ?? '').replace(/:root\b/gu, ':host')
+    }
+    return `<div class="cio-stage">${template.innerHTML}</div>`
   }
 
   function mountInspector(node: HTMLDivElement): void {
@@ -469,7 +481,7 @@
   $effect(() => {
     const root = shadowRoot
     const sheet = shadowSheet
-    const theme = artifactThemeStyles()
+    const theme = artifactThemeStyles().replace(/:root\b/gu, ':host')
     if (!root) return
     root.innerHTML = `<style>${theme}${sheet}</style>${artifactMarkup()}`
   })
@@ -509,23 +521,27 @@
          picker the browser panel uses: an element is chosen by pointing at it. The
          role says so, and the keyboard path is Enter or Space on the element the
          pointer is on, so the interaction is not pointer-only. -->
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
       class="h-full w-full overflow-hidden"
       data-artifact-inspector
-      role="application"
-      aria-label="Artifact element inspector: hover an element and click, or press Enter, to comment on it"
-      tabindex="0"
+      data-inspecting={enabled ? '' : undefined}
+      role={enabled ? 'application' : 'img'}
+      aria-label={enabled
+        ? 'Artifact element inspector: hover an element and click, or press Enter, to comment on it'
+        : 'SVG artifact preview'}
+      tabindex={enabled ? 0 : undefined}
       {@attach mountInspector}
       onpointerdown={handlePointerDown}
       onpointerup={handlePointerUp}
+      onpointercancel={() => (pressOrigin = null)}
       onpointermove={handlePointerMove}
       onpointerleave={handlePointerLeave}
       onkeydown={handleSurfaceKeydown}
     ></div>
   </div>
 
-  {#if hoverRect}
+  {#if enabled && hoverRect}
     <div
       class="pointer-events-none absolute z-10 border border-accent bg-accent/15"
       style:left={`${hoverRect.x}px`}
@@ -557,14 +573,16 @@
     </button>
   {/each}
 
-  <div
-    class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-2 bg-black/55 px-2 py-1 text-[0.625rem] font-medium text-white"
-  >
-    <span aria-live="polite">
-      {hoverName ? `Click ${hoverName} to comment` : 'Hover an element and click to comment'}
-    </span>
-    <span class="opacity-80">Esc to finish</span>
-  </div>
+  {#if enabled}
+    <div
+      class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-2 bg-black/55 px-2 py-1 text-[0.625rem] font-medium text-white"
+    >
+      <span aria-live="polite">
+        {hoverName ? `Click ${hoverName} to comment` : 'Hover an element and click to comment'}
+      </span>
+      <span class="opacity-80">Esc to finish</span>
+    </div>
+  {/if}
 </div>
 
 {#if editingPick && editorAnchor}
@@ -578,7 +596,6 @@
     initialComment={editingPick.comment ?? ''}
     targetId={`svg-element-comment-${threadId}-${editingPick.id}`}
     scope={{ kind: 'project', projectId }}
-    allowEmptyRemove
     onDraftChange={(comment) => draftComment(editingPick.id, comment)}
     onDone={(comment) => saveComment(editingPick.id, comment)}
     onRemove={() => removePick(editingPick.id)}

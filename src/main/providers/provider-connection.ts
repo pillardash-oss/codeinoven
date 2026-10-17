@@ -9,7 +9,10 @@ import {
   listHarnesses,
   type HarnessDescriptor
 } from '../agents/harness-registry'
-import { rememberOpenCodeInstallation } from '../agents/opencode-installation'
+import {
+  rememberOpenCodeInstallation,
+  resolveOpenCodeInstall
+} from '../agents/opencode-installation'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
   discoverHarnessRuntimes,
@@ -223,6 +226,22 @@ export class ProviderConnectionService {
 
     const best = selectNewestCandidate(candidates)
     if (def.id === 'opencode') {
+      // OpenCode has one authority for which install this is: a machine carries
+      // a package manager's copy and the harness's own self-updated copy, and
+      // resolving the name here would silently pick whichever PATH answers first
+      // and report it as this harness's install. The canonical assessment decides
+      // instead, and this pass defers to it.
+      const canonical = await resolveOpenCodeInstall()
+      if (canonical) {
+        return {
+          ...base,
+          status: 'available',
+          resolvedPath: canonical.runtime.resolvedPath,
+          executionTarget: canonical.runtime.target,
+          version: canonical.version,
+          ...(canonical.command === def.command ? {} : { activeCommand: canonical.command })
+        }
+      }
       rememberOpenCodeInstallation(
         best
           ? {
