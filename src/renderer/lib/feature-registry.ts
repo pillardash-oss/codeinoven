@@ -3,7 +3,7 @@ import CioNote from './components/icons/cio/CioNote.svelte'
 import CioNotes from './components/icons/cio/CioNotes.svelte'
 import CioTabSettings from './components/icons/cio/CioTabSettings.svelte'
 import CioTabTasks from './components/icons/cio/CioTabTasks.svelte'
-import CioTabUtilities from './components/icons/cio/CioTabUtilities.svelte'
+import CioPackage from './components/icons/cio/CioPackage.svelte'
 
 /**
  * Every feature's canonical name and mark live here, once.
@@ -26,7 +26,7 @@ export interface FeatureDefinition {
 }
 
 export const FEATURES: Record<FeatureId, FeatureDefinition> = {
-  utilities: { id: 'utilities', name: 'Utilities', icon: CioTabUtilities },
+  utilities: { id: 'utilities', name: 'Utilities', icon: CioPackage },
   'thread-note': { id: 'thread-note', name: 'Thread note', icon: CioNote },
   'tab-note': { id: 'tab-note', name: 'Tab note', icon: CioNote },
   'sticky-notes': { id: 'sticky-notes', name: 'Sticky notes', icon: CioNotes },
