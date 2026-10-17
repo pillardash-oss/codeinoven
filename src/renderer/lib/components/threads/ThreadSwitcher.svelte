@@ -15,6 +15,7 @@
   import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { browserTabLabel } from '$lib/stores/global-browser-types'
   import type { Project } from '$shared/types'
+  import type { Component } from 'svelte'
   import { threadSwitcherEntryKey, type ThreadSwitcherEntry } from './thread-switcher-entries'
 
   interface Props {
@@ -100,6 +101,23 @@
     const project = projectsById.get(entry.thread.projectId)
     if (!project) return null
     return getProjectIcon(project, projectIconUrls.get(project.id))
+  }
+
+  /** The owning project's icon for a panel entry, drawn beside the panel's own
+   *  icon so a terminal or file tab is identified with the project it belongs
+   *  to. */
+  function panelProjectIcon(entry: ThreadSwitcherEntry): string | null {
+    if (entry.kind !== 'panel') return null
+    const project = projectsById.get(entry.tab.projectId)
+    if (!project) return null
+    return getProjectIcon(project, projectIconUrls.get(project.id))
+  }
+
+  /** The container glyph for a panel tab whose project is a hidden container
+   *  (Chats, Assistant), which has no project icon of its own. */
+  function panelProjectGlyph(entry: ThreadSwitcherEntry): Component | null {
+    if (entry.kind !== 'panel') return null
+    return contentFamilyIcon({ projectId: entry.tab.projectId })
   }
 
   /** The hover tooltip for one entry, phrased for the kind of surface it is. */
@@ -461,6 +479,8 @@
               tab={entry.tab}
               selected={entryKey === highlightedKey}
               showBadge={showTypeBadges}
+              projectIconUrl={panelProjectIcon(entry)}
+              projectGlyph={panelProjectGlyph(entry)}
             />
           {/await}
         {:else}
