@@ -1653,7 +1653,7 @@
   {/snippet}
 
   <header class="shrink-0 border-b border-border">
-    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+    <div class="flex items-center gap-1.5 py-1.5 pl-2.5">
       {#if items.length > 1}
         <!--
           One tab holds the design in front, and every other design of the project
@@ -2105,7 +2105,7 @@
     </div>
 
     {#if canvasNotice !== ''}
-      <p class="px-2.5 pb-1.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
+      <p class="pb-1.5 pl-2.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
     {/if}
   </header>
 
@@ -2171,10 +2171,10 @@
         scrolling column with the controls would be drawn past the panel at the
         sizes where the column is taller than the panel.
       -->
-      <div class="flex min-h-0 flex-1 flex-col px-2.5 pt-2">
+      <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
         {@render videoStage()}
       </div>
-      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto px-2.5 py-2">
+      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto py-2 pl-2.5">
         {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
           <VideoTimeline {projectId} {threadId} directory={selected.directory} tabId={boardTabId} />
           {#if liveEditing}
@@ -2190,7 +2190,7 @@
         {/key}
       </div>
     {:else}
-      <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
+      <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
         {#if video}
           <div
             class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
