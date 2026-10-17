@@ -1,20 +1,19 @@
 /**
- * The menu bar figure for working threads: its labels, and the exact grid the
- * menu bar strip is cut on.
+ * The menu bar figure for working threads: its labels, the hand-drawn numerals
+ * it is set in, and the exact grid the menu bar strip is cut on.
  *
- * The tray art ships as one wide strip per resolution, holding every figure the
- * icon can show, and the main process cuts the cell it needs out of it (see
- * `BackgroundLifecycleService.loadTrayCountImage`). Both ends therefore have to
- * agree on the cell grid to the pixel, which is why the grid lives here: the
- * generator that draws the strip and the reader that crops it call the same
- * functions instead of each deriving the layout for itself.
+ * The figure is not typeset. It is drawn in the mark's own language, read off
+ * `src/renderer/static/icon-mono-small.svg`: one uniform heavy stroke, square
+ * terminals, mitred corners, and a rectilinear skeleton, which is what the
+ * squared C/O already is (a squared O frame with a divider bar inside it). A text
+ * face next to that geometry reads as a second voice, so the numerals are the
+ * same voice: every stroke is the same weight as the mark's, and every corner is
+ * the same mitre.
  *
- * The layout is the mark's own frame, unchanged, with the figure added in the
- * slot the attention exclamation occupies: the mark keeps the size and position
- * it has in the plain icon, and the figure is appended to its right, so a busy
- * menu bar reads as "[mark] 12" rather than a shrunken mark. The strip is drawn
- * in pixel space at one target height, so every value below is a whole number
- * and a hundred cells tile without rounding drift.
+ * The glyph outlines live in `scripts/tray-count-digits.ts`, because they are
+ * only needed to draw the strip; this module owns the grid, which both the
+ * generator and the reader need, so the strip that is drawn and the cell that is
+ * cut can never disagree.
  */
 
 /**
@@ -28,52 +27,64 @@ export const TRAY_COUNT_DISPLAY_MAX = 99
 export const TRAY_COUNT_OVERFLOW_LABEL = '99+'
 
 /**
- * The side of the square macOS renders the mark's own `viewBox` into.
- *
- * The macOS tray art squares the mark's viewBox about its own centre before
- * rendering, which is what puts the visible ink in the middle of the native
- * menu bar slot. The figure is laid out against that same square, so the mark
- * lands exactly where the plain icon puts it.
+ * The square the mark is rendered into, in artwork units: its own viewBox
+ * squared about its centre, which is what puts the visible ink in the middle of
+ * the native menu bar slot. Mirrors `icon-mono-small.svg`; the generator fails
+ * if the master no longer matches it.
  */
-const MAC_FRAME_EXTENT = 82
+const FRAME = { x: 10, y: 7, extent: 82 } as const
 
 /**
- * The mark's ink height, stroke included, in artwork units. Measured from the
- * rendered master rather than read off the paths, because the strokes and the
- * mitred joins add to the geometry.
+ * The glyph box, in artwork units. The stroke is the weight the mark is drawn
+ * at, so a figure stroke and a mark stroke are the same line: cap height sets the
+ * figure's height, ink width its width, and the advance the daylight between two
+ * glyphs. Shared with the drawings in `scripts/tray-count-digits.ts`, which is
+ * why they live here rather than beside the outlines.
  */
-const MARK_INK_HEIGHT_UNITS = 71.03
+export const TRAY_COUNT_GLYPH = {
+  capHeight: 40,
+  width: 25,
+  advance: 33,
+  stroke: 6.5
+} as const
 
-/** The figure's cap height as a fraction of the mark's ink height. */
-const FIGURE_CAP_OF_MARK = 0.55
+/** Left edge of the figure, in artwork units, measured from the artwork's own
+ *  origin like the frame above. It clears the mark's ink by the same daylight
+ *  the attention exclamation keeps, so the figure and the exclamation land in
+ *  the slot with the same rhythm. */
+const FIGURE_LEFT = 98
 
-/**
- * JetBrains Mono Bold metrics, as fractions of the font size: the cap height of
- * a digit, and its advance. Measured from the bundled face at build time. The
- * advance is applied by hand (one `text` per glyph at a fixed step) so the cell
- * width is exactly `characters * applier` and never depends on the shaper.
- */
-const CAP_RATIO = 0.76
-const ADVANCE_RATIO = 0.6
-
-/** Clear space between the mark's ink and the figure, in artwork units. */
-const GAP_UNITS = 12
+/** Dead space after the last glyph, in artwork units, so the figure does not
+ *  kiss the edge of the menu bar item. */
+const FIGURE_RIGHT_PAD = 6
 
 /** A menu bar resolution the strip is generated for. */
 export type TrayCountScale = 1 | 2
 
-/** The cell grid for one menu bar resolution, in pixels. */
+/**
+ * The grid for one menu bar resolution.
+ *
+ * `height` is the only value that depends on the resolution; the artwork
+ * geometry is in artwork units and is scaled by the generator, which is what
+ * lets both resolutions be drawn from the same vectors instead of resampled.
+ */
 export interface TrayCountMetrics {
   /** Height of the strip, and of the mark's square slot within it. */
   readonly height: number
-  /** Width reserved for the mark plus the clear space before the figure. */
-  readonly baseWidth: number
-  /** Width one figure glyph occupies. */
-  readonly charWidth: number
-  /** Type size of the figure, in pixels. */
-  readonly fontSize: number
-  /** Baseline of the figure, in pixels from the top of the strip. */
-  readonly baseline: number
+  /** The square the mark is rendered into, in artwork units. */
+  readonly frame: { readonly x: number; readonly y: number; readonly extent: number }
+  /** Left edge of the figure, in artwork units. */
+  readonly figureLeft: number
+  /** Top edge of the figure's glyph box, in artwork units. */
+  readonly figureTop: number
+  /** Ink width of one glyph, in artwork units. */
+  readonly glyphWidth: number
+  /** Step from one glyph's origin to the next, in artwork units. */
+  readonly glyphAdvance: number
+  /** Stroke weight of the figure, in artwork units. */
+  readonly glyphStroke: number
+  /** Dead space after the last glyph, in artwork units. */
+  readonly rightPad: number
 }
 
 /** One cell of the strip: which figure it holds, and where it sits. */
@@ -81,8 +92,7 @@ export interface TrayCountCell {
   readonly label: string
   /** Left edge of the cell, in pixels from the left of the strip. */
   readonly x: number
-  /** Cell width, in pixels: {@link TrayCountMetrics.baseWidth} plus one glyph
-   *  per character. */
+  /** Cell width, in pixels. */
   readonly width: number
 }
 
@@ -101,36 +111,44 @@ export function trayCountLabel(count: number): string | null {
   return TRAY_COUNT_OVERFLOW_LABEL
 }
 
-/**
- * The cell grid for one resolution.
- *
- * The height is the height of the plain macOS menu bar template, so the mark
- * renders at exactly the size and place it does today; everything else is
- * derived from that height and rounded to whole pixels.
- */
+/** The grid for one resolution. */
 export function trayCountMetrics(scale: TrayCountScale): TrayCountMetrics {
-  const height = 16 * scale
-  const unit = height / MAC_FRAME_EXTENT
-  const capHeight = Math.max(1, Math.round(FIGURE_CAP_OF_MARK * MARK_INK_HEIGHT_UNITS * unit))
-  const fontSize = capHeight / CAP_RATIO
   return {
-    height,
-    baseWidth: height + Math.max(1, Math.round(GAP_UNITS * unit)),
-    charWidth: Math.max(1, Math.round(fontSize * ADVANCE_RATIO)),
-    fontSize,
-    // The mark's ink is centred in its frame, which puts its optical centre on
-    // the middle of the strip; the figure's cap is centred on the same line.
-    baseline: height / 2 + capHeight / 2
+    height: 16 * scale,
+    frame: FRAME,
+    figureLeft: FIGURE_LEFT,
+    // The mark's ink is centred on the frame, so the figure's cap is centred on
+    // the same line rather than hung from a baseline.
+    figureTop: FRAME.y + FRAME.extent / 2 - TRAY_COUNT_GLYPH.capHeight / 2,
+    glyphWidth: TRAY_COUNT_GLYPH.width,
+    glyphAdvance: TRAY_COUNT_GLYPH.advance,
+    glyphStroke: TRAY_COUNT_GLYPH.stroke,
+    rightPad: FIGURE_RIGHT_PAD
   }
+}
+
+/** Ink width of a figure of `glyphs` glyphs, in artwork units. */
+function figureInkWidth(glyphs: number): number {
+  return (glyphs - 1) * TRAY_COUNT_GLYPH.advance + TRAY_COUNT_GLYPH.width
+}
+
+/**
+ * Width one cell needs, in pixels, rounded up so the artwork can never be
+ * clipped by the crop that reads it back.
+ */
+function cellWidth(glyphs: number, scale: TrayCountScale): number {
+  const metrics = trayCountMetrics(scale)
+  const unit = metrics.height / FRAME.extent
+  const artworkWidth = FIGURE_LEFT + figureInkWidth(glyphs) + metrics.rightPad - FRAME.x
+  return Math.ceil(artworkWidth * unit)
 }
 
 /** The strip cut into cells, left to right. */
 export function trayCountCells(scale: TrayCountScale): TrayCountCell[] {
-  const metrics = trayCountMetrics(scale)
   const cells: TrayCountCell[] = []
   let x = 0
   for (const label of TRAY_COUNT_LABELS) {
-    const width = metrics.baseWidth + label.length * metrics.charWidth
+    const width = cellWidth([...label].length, scale)
     cells.push({ label, x, width })
     x += width
   }
