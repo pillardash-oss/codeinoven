@@ -1,12 +1,14 @@
 <script lang="ts">
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCalendarClock from '$lib/components/icons/cio/CioCalendarClock.svelte'
+  import CioCalendarOff from '$lib/components/icons/cio/CioCalendarOff.svelte'
   import CioPin from '$lib/components/icons/cio/CioPin.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSwap from '$lib/components/icons/cio/CioSwap.svelte'
   import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-  import { ArrowRightLeft, CalendarClock, CalendarOff } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import { createSubscriber } from 'svelte/reactivity'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -312,6 +314,8 @@
   }
 </script>
 
+import CioSwap from
+
 <div
   class="relative"
   role="listitem"
@@ -424,7 +428,7 @@
         {#if foreignTransfer?.pending}
           <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
         {:else}
-          <ArrowRightLeft size={13} aria-hidden="true" />
+          <CioSwap size={13} aria-hidden="true" />
         {/if}
       </button>
     {/if}
@@ -443,9 +447,9 @@
         onclick={() => onToggleScheduled?.(task)}
       >
         {#if scheduled}
-          <CalendarClock size={13} aria-hidden="true" />
+          <CioCalendarClock size={13} aria-hidden="true" />
         {:else}
-          <CalendarOff size={13} aria-hidden="true" />
+          <CioCalendarOff size={13} aria-hidden="true" />
         {/if}
       </button>
     {/if}

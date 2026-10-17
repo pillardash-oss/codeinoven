@@ -115,7 +115,6 @@
     "@eslint/js": "^10.0.1",
     "@huggingface/transformers": "4.2.0",
     "@lobehub/icons-static-svg": "^1.95.1",
-    "@lucide/svelte": "^1.47.0",
     "@mediabunny/server": "1.61.3",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@remotion/video-matting": "4.0.535",

@@ -1,11 +1,13 @@
 <script lang="ts">
   import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioBellOff from '$lib/components/icons/cio/CioBellOff.svelte'
   import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioBookmarkCheck from '$lib/components/icons/cio/CioBookmarkCheck.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioInbox from '$lib/components/icons/cio/CioInbox.svelte'
   import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { ArchiveRestore, BellOff, BookmarkCheck, Inbox } from '@lucide/svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { onMount } from 'svelte'
@@ -154,6 +156,8 @@
     'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
 </script>
 
+import CioInbox from
+
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-notifications-panel">
   <!--
     The listing: one row of the three views, the filter and ordering, then the
@@ -269,7 +273,7 @@
     </div>
   {:else if githubNotifications.items.length === 0}
     <EmptyState
-      icon={Inbox}
+      icon={CioInbox}
       title={githubNotifications.tab === 'saved'
         ? 'Nothing saved'
         : githubNotifications.tab === 'done'
@@ -355,7 +359,7 @@
                     onclick={() => void githubNotifications.setDone(item.id, !item.done)}
                   >
                     {#if item.done}
-                      <ArchiveRestore size={13} aria-hidden="true" />
+                      <CioArchive size={13} aria-hidden="true" />
                     {:else}
                       <CioArchive size={13} aria-hidden="true" />
                     {/if}
@@ -368,7 +372,7 @@
                     disabled={githubNotifications.busyThreadId === item.id}
                     onclick={() => void githubNotifications.unsubscribe(item.id)}
                   >
-                    <BellOff size={13} aria-hidden="true" />
+                    <CioBellOff size={13} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -379,7 +383,7 @@
                     onclick={() => void githubNotifications.setSaved(item.id, !item.saved)}
                   >
                     {#if item.saved}
-                      <BookmarkCheck size={13} class="text-primary" aria-hidden="true" />
+                      <CioBookmarkCheck size={13} class="text-primary" aria-hidden="true" />
                     {:else}
                       <CioBookmark size={13} aria-hidden="true" />
                     {/if}

@@ -1,9 +1,12 @@
+import CioBoard from '$lib/components/icons/cio/CioBoard.svelte'
 import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
 import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
 import CioEyeOff from '$lib/components/icons/cio/CioEyeOff.svelte'
 import CioFork from '$lib/components/icons/cio/CioFork.svelte'
+import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
 import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
 import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+import CioPinOff from '$lib/components/icons/cio/CioPinOff.svelte'
 import CioSend from '$lib/components/icons/cio/CioSend.svelte'
 import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
 import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
@@ -15,7 +18,6 @@ import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { canMarkThreadUnread } from '$shared/thread-status-policy'
 import { threadTracksReadStatus, type Thread } from '$shared/types'
-import { Kanban, Mail, PinOff } from '@lucide/svelte'
 import { toast } from 'svelte-sonner'
 
 export interface ThreadActionsMenuConfig {
@@ -156,7 +158,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     return [
       { label: 'Rename', icon: CioPencil, onClick: startRename },
       ...(canMarkUnread
-        ? [{ label: 'Mark as unread', icon: Mail, onClick: () => void markUnread() }]
+        ? [{ label: 'Mark as unread', icon: CioMessage, onClick: () => void markUnread() }]
         : []),
       ...(knowledgeThread
         ? [
@@ -183,7 +185,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
               ? [
                   {
                     label: thread.pinned ? 'Unpin' : 'Pin',
-                    icon: thread.pinned ? PinOff : CioPin,
+                    icon: thread.pinned ? CioPinOff : CioPin,
                     onClick: () => void config.onTogglePin(thread)
                   }
                 ]
@@ -199,7 +201,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
             }
           ]
         : []),
-      ...(showScope ? [{ label: 'Change Scope', icon: Kanban, onClick: startChangeScope }] : []),
+      ...(showScope ? [{ label: 'Change Scope', icon: CioBoard, onClick: startChangeScope }] : []),
       ...(showNotesItem
         ? [
             {

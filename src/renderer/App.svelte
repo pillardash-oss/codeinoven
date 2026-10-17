@@ -1,9 +1,9 @@
 <script lang="ts">
   import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioFind from '$lib/components/icons/cio/CioFind.svelte'
   import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import CioThreads from '$lib/components/icons/cio/CioThreads.svelte'
   import { onMount } from 'svelte'
-  import { FileSearch } from '@lucide/svelte'
   import type {
     CommandPaletteProps,
     PaletteFooterFilter
@@ -339,7 +339,7 @@
           title: 'Search files across projects',
           placeholder: 'Type at least two characters…',
           emptyLabel: fileSearch.loading ? 'Searching project files…' : 'No matching files',
-          headerIcon: FileSearch,
+          headerIcon: CioFind,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,

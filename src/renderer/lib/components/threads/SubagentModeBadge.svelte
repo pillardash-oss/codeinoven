@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CornerDownRight, Layers3 } from '@lucide/svelte'
+  import CioEnter from '$lib/components/icons/cio/CioEnter.svelte'
+  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
   import { subagentModeLabel, subagentModeTitle } from '$lib/subagent-presentation'
 
   interface Props {
@@ -18,6 +19,8 @@
   const title = $derived(subagentModeTitle(background))
 </script>
 
+import CioLayers from
+
 {#if variant === 'chip'}
   <span
     class="flex shrink-0 items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"
@@ -25,14 +28,14 @@
     aria-label={title}
   >
     {#if background}
-      <Layers3 size={9} />
+      <CioLayers size={9} />
     {:else}
-      <CornerDownRight size={9} />
+      <CioEnter size={9} />
     {/if}
     {subagentModeLabel(background)}
   </span>
 {:else if background}
   <span class="flex shrink-0 items-center" {title} aria-label={title}>
-    <Layers3 size={9} class="text-dimmed" />
+    <CioLayers size={9} class="text-dimmed" />
   </span>
 {/if}

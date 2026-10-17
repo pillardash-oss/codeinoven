@@ -3,12 +3,12 @@
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCode from '$lib/components/icons/cio/CioCode.svelte'
+  import CioFilePen from '$lib/components/icons/cio/CioFilePen.svelte'
   import CioSave from '$lib/components/icons/cio/CioSave.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { onMount, tick } from 'svelte'
-  import { FilePenLine } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     CIO_PROMPT_TEMPLATE_TAGS,
@@ -242,7 +242,7 @@
             {#each promptsInGroup(group) as prompt (prompt.id)}
               <article>
                 <div class="flex items-start gap-4 p-4">
-                  <div class="bg-elevated p-2 text-muted"><FilePenLine size={16} /></div>
+                  <div class="bg-elevated p-2 text-muted"><CioFilePen size={16} /></div>
                   <div class="min-w-0 flex-1">
                     <div class="flex flex-wrap items-center gap-2">
                       <h3 class="text-sm font-semibold text-foreground">{prompt.title}</h3>

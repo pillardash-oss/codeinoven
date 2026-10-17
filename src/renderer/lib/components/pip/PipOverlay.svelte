@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioCursor from '$lib/components/icons/cio/CioCursor.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import { MousePointer2, PictureInPicture2 } from '@lucide/svelte'
+  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -73,7 +74,7 @@
   let overlaySize = $state({ width: 0, height: 0 })
   let overlayElement = $state<HTMLDivElement | undefined>()
   let userMoved = $state(false)
-  /** Scale that pins every dimension: preview, cursor projection and the
+  /** Scale that pins every dimension: preview, MousePointer2 projection and the
    *  occlusion rectangle all follow it, so the aspect ratio is never negotiable. */
   let scale = $state(MIN_SCALE)
   let resizingEdge = $state<ResizeEdge | null>(null)
@@ -426,6 +427,8 @@
   }
 </script>
 
+import CioWindow from
+
 <svelte:window onresize={onViewportResize} />
 
 {#if visible}
@@ -461,7 +464,7 @@
       title="Drag to move · click preview to bring the app to the front"
     >
       <span class="flex min-w-0 items-center gap-1.5 text-xs font-medium text-foreground">
-        <PictureInPicture2 size={13} class="shrink-0 text-accent" />
+        <CioWindow size={13} class="shrink-0 text-accent" />
         <span class="truncate">{pipState.appName}</span>
       </span>
       <button
@@ -493,7 +496,7 @@
           draggable="false"
         />
         {#if cursorPosition}
-          <MousePointer2
+          <CioCursor
             size={cursorSize}
             strokeWidth={2.5}
             class="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 text-accent drop-shadow-md"

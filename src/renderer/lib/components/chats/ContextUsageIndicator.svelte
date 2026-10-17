@@ -1,10 +1,10 @@
 <script lang="ts">
   import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioBatteryCharging from '$lib/components/icons/cio/CioBatteryCharging.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { BatteryCharging } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -146,7 +146,7 @@
 {#snippet bankedResetRow(resets: AgentBankedResets)}
   <div transition:slide={{ duration: 250 }} class="border border-border bg-app/40 p-2.5">
     <div class="flex items-center gap-2">
-      <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
+      <CioBatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
       <span class="text-base leading-none font-semibold tabular-nums text-foreground">
         {resets.availableCount}
       </span>
@@ -170,7 +170,7 @@
       disabled={!onActivateBankedReset}
       onclick={onActivateBankedReset}
     >
-      <BatteryCharging size={11} aria-hidden="true" />
+      <CioBatteryCharging size={11} aria-hidden="true" />
       Reset usage
     </button>
   </div>

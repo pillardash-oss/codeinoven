@@ -1,5 +1,7 @@
 <script lang="ts">
   import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioCalendar from '$lib/components/icons/cio/CioCalendar.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
@@ -37,7 +39,6 @@
     SkillMarketInstallRequest,
     UtilityActivation
   } from '$shared/types'
-  import { CalendarDays, Earth } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -334,11 +335,13 @@
   })
 </script>
 
+import CioCalendar from
+
 <!--
   One scope destination per row: they are independent choices, so a shared row
   made them read as one segmented selector.
 -->
-{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof Earth)}
+{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof CioBrowser)}
   <button
     type="button"
     class="flex h-9 items-center justify-center gap-2 border px-3 text-xs font-medium transition-colors {scope ===
@@ -514,7 +517,7 @@
           <!-- One destination per row: each scope is a separate decision, and
                side-by-side chips read as one shared choice. -->
           <div class="grid gap-2">
-            {@render scopeOption('global', 'Global', Earth)}
+            {@render scopeOption('global', 'Global', CioBrowser)}
             {@render scopeOption('projects', 'Projects', CioProjects)}
             {#if manager === 'native'}
               {@render scopeOption('harnesses', 'Harnesses', CioTerminal)}
@@ -651,7 +654,7 @@
             <p
               class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
-              <CalendarDays size={11} /> First seen
+              <CioCalendar size={11} /> First seen
             </p>
             <p class="mt-1 font-mono text-xs">{detail?.firstSeen ?? ' '}</p>
           </div>

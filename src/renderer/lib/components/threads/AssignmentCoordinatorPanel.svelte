@@ -4,8 +4,9 @@
   import CioClipboardCheck from '$lib/components/icons/cio/CioClipboardCheck.svelte'
   import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
   import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
+  import CioRows3 from '$lib/components/icons/cio/CioRows3.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { Rows3, Square } from '@lucide/svelte'
+  import CioSquare from '$lib/components/icons/cio/CioSquare.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
@@ -188,6 +189,8 @@
   }
 </script>
 
+import CioSquare from
+
 <!--
   Docked into the context sidebar: the sidebar owns the width, the visibility,
   and the tab chrome, so this panel is just a column that fills whatever space
@@ -244,7 +247,7 @@
           aria-label="Stop the Sr. Engineer, workers, and auditor"
           onclick={() => (showStopConfirmation = true)}
         >
-          <Square size={12} fill="currentColor" />
+          <CioSquare size={12} fill="currentColor" />
           Stop
         </button>
       {/if}
@@ -315,7 +318,7 @@
     {#if stalled}
       <section class="border-b border-border p-4" aria-label="Assignment needs direction">
         <div class="flex items-start gap-2">
-          <Rows3 size={14} class="mt-0.5 shrink-0 text-warning" />
+          <CioRows3 size={14} class="mt-0.5 shrink-0 text-warning" />
           <div class="min-w-0">
             <h3 class="text-xs font-semibold text-foreground">Coordination paused</h3>
             <p class="mt-1 text-xs leading-relaxed text-muted">

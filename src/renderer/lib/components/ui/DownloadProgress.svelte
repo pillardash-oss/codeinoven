@@ -3,7 +3,6 @@
   import CioPause from '$lib/components/icons/cio/CioPause.svelte'
   import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-
   interface Props {
     /** 0-100 when determinate, undefined for indeterminate installing */
     percent?: number

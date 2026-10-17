@@ -12,8 +12,8 @@
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioThumbsUp from '$lib/components/icons/cio/CioThumbsUp.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { ThumbsUp } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -1142,7 +1142,7 @@
           disabled={!open || reviewing}
           onclick={() => void submitReview('APPROVE')}
         >
-          <ThumbsUp size={12} class="shrink-0" />
+          <CioThumbsUp size={12} class="shrink-0" />
           <span class="min-w-0 truncate">Approve</span>
         </button>
         <button

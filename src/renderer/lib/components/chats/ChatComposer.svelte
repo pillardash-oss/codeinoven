@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import CioArrowUp from '$lib/components/icons/cio/CioArrowUp.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
   import CioFlame from '$lib/components/icons/cio/CioFlame.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import CioMinimize from '$lib/components/icons/cio/CioMinimize.svelte'
   import CioStop from '$lib/components/icons/cio/CioStop.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -2238,7 +2238,7 @@
          when it does, so the mic beside it slides instead of the row snapping.
          Its glyphs share one box, so a send morphs into the stop square.
            - Agent idle:       ArrowUp (send)   primary, disabled when empty
-           - Agent working, user typing:  CioClock (queue)   primary, always clickable
+           - Agent working, user typing:  AlarmClock (queue)   primary, always clickable
            - Agent working, no text:      Square (stop)   quiet at rest, danger tint on hover
            - Stop confirmation pending:   "Stop?" danger label -->
     <button

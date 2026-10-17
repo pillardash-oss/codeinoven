@@ -5,10 +5,10 @@
   import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSquare from '$lib/components/icons/cio/CioSquare.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
   import { onMount } from 'svelte'
-  import { Square } from '@lucide/svelte'
   import type { GatewayStatus } from '$shared/gateway-types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
@@ -304,7 +304,7 @@
               title="Stop the {gateway.adapterName} gateway"
               onclick={() => void stopGateway(gateway.pluginId)}
             >
-              <Square size={14} />
+              <CioSquare size={14} />
               Stop
             </button>
           {:else if gateway.enabled}

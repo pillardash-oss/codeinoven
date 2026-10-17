@@ -4,6 +4,7 @@
   import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMinimize from '$lib/components/icons/cio/CioMinimize.svelte'
   import CioSave from '$lib/components/icons/cio/CioSave.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount, tick } from 'svelte'
@@ -11,7 +12,6 @@
   import { cubicOut } from 'svelte/easing'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { Minimize2 } from '@lucide/svelte'
   import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
@@ -157,7 +157,7 @@
   )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
   /** Reload is available for text files with a session and for previewable
-   *  files without one (media, images, SVG, PDF, documents), which re-read
+   *  files without one (media, images, SVG, PDF, Files), which re-read
    *  their preview content instead. */
   let reloadDisabled = $derived(
     deletedAtCheckpoint ||
@@ -268,7 +268,7 @@
   )
   /** The Save button only exists for editable content: a conflicted file being
    *  resolved, or a text session with unsaved changes. Preview-only content
-   *  (images, PDF, media, documents, SVG) and clean sessions show no button. */
+   *  (images, PDF, media, Files, SVG) and clean sessions show no button. */
   let showSaveButton = $derived(
     activeTab !== null &&
       activeTab.view !== 'diff' &&
@@ -1361,7 +1361,7 @@
       title="Minimize fullscreen file viewer"
       onclick={closeFullscreen}
     >
-      <Minimize2 size={14} />
+      <CioMinimize size={14} />
     </button>
   </div>
   <div class="relative flex min-h-0 min-w-0 flex-1">

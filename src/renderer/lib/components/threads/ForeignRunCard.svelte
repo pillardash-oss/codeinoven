@@ -1,6 +1,6 @@
 <script lang="ts">
+  import CioSwap from '$lib/components/icons/cio/CioSwap.svelte'
   import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-  import { ArrowRightLeft } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -77,7 +77,7 @@
         <CardButton
           label="Transfer to this instance"
           title="Move this thread's run to this instance"
-          icon={transfer.pending ? undefined : ArrowRightLeft}
+          icon={transfer.pending ? undefined : CioSwap}
           variant="primary"
           loading={transfer.pending}
           disabled={transfer.pending}

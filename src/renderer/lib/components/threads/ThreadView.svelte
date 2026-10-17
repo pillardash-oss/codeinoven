@@ -1,7 +1,9 @@
 <script lang="ts">
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioAudioLines from '$lib/components/icons/cio/CioAudioLines.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
   import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
@@ -36,7 +38,6 @@
     CONVERSATION_METADATA_ICONS
   } from './conversation-metadata-badges'
 
-  import { AudioLines, Video } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
   import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
@@ -6909,7 +6910,7 @@
     queuedHasContent = true
     // Append to the thread's FIFO queue   a later queued message sends after
     // earlier ones, one per idle turn. The in-memory mirror then follows the
-    // store head so the queue card always shows the next message to send.
+    // Store head so the queue card always shows the next message to send.
     rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
       text: send.text,
       attachments: send.attachments,
@@ -12630,6 +12631,8 @@
   })
 </script>
 
+import CioClapper from
+
 {#snippet ovenPicker()}
   {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
     <OvenControlsComponent
@@ -13097,9 +13100,9 @@
               {onclick}
             >
               {#if kind === 'video'}
-                <Video size={11} class="shrink-0" />
+                <CioClapper size={11} class="shrink-0" />
               {:else if kind === 'audio'}
-                <AudioLines size={11} class="shrink-0" />
+                <CioAudioLines size={11} class="shrink-0" />
               {:else if kind === 'renderable'}
                 <FileTypeIcon path={name} size={12} class="shrink-0" />
               {:else}

@@ -2,11 +2,11 @@
   import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
   import CioDot from '$lib/components/icons/cio/CioDot.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioPackageCheck from '$lib/components/icons/cio/CioPackageCheck.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import { PackageCheck } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { formatDurationSeconds } from '$lib/format/duration'
@@ -264,7 +264,7 @@
       <!-- Linked workflow run -->
       <section class="border-b border-border">
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-          <PackageCheck size={11} class="text-dimmed" />
+          <CioPackageCheck size={11} class="text-dimmed" />
           <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
             Workflow run
           </h3>

@@ -1,14 +1,17 @@
 <script lang="ts">
+  import CioArrowLeftToLine from '$lib/components/icons/cio/CioArrowLeftToLine.svelte'
+  import CioArrowRightToLine from '$lib/components/icons/cio/CioArrowRightToLine.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import CioFileCode from '$lib/components/icons/cio/CioFileCode.svelte'
+  import CioFileWarning from '$lib/components/icons/cio/CioFileWarning.svelte'
   import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
   import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
   import CioSave from '$lib/components/icons/cio/CioSave.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioWrapText from '$lib/components/icons/cio/CioWrapText.svelte'
   import { onMount } from 'svelte'
-  import { ArrowLeftToLine, ArrowRightToLine, FileWarning, WrapText } from '@lucide/svelte'
   import type { GitConflictWorkFile, GitConflictWorkHunkState } from '$shared/types'
   import {
     createFileEditor,
@@ -471,6 +474,8 @@
   }
 </script>
 
+import CioWrapText from
+
 <div class="flex h-full min-h-0 flex-col bg-app" data-region="conflict-editor">
   {#if loading && !workFile}
     <div class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed">
@@ -478,7 +483,7 @@
     </div>
   {:else if error}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-      <FileWarning size={22} class="text-danger" />
+      <CioFileWarning size={22} class="text-danger" />
       <p class="text-xs font-medium text-foreground">Could not prepare this conflict</p>
       <p class="max-w-[48ch] text-[0.625rem] leading-relaxed text-danger">{error}</p>
     </div>
@@ -537,7 +542,7 @@
         ]}
         aria-pressed={wrap}
         title={wrap ? 'Disable line wrapping' : 'Enable line wrapping'}
-        onclick={onToggleWrap}><WrapText size={11} />Wrap</button
+        onclick={onToggleWrap}><CioWrapText size={11} />Wrap</button
       >
       <span class="flex-1"></span>
       <button
@@ -575,7 +580,7 @@
         title="Previous conflict"
         aria-label="Previous conflict"
         disabled={activeHunk === 0}
-        onclick={() => selectHunk(activeHunk - 1)}><ArrowLeftToLine size={12} /></button
+        onclick={() => selectHunk(activeHunk - 1)}><CioArrowLeftToLine size={12} /></button
       >
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {#each hunkStates as state (state.index)}
@@ -602,7 +607,7 @@
         title="Next conflict"
         aria-label="Next conflict"
         disabled={activeHunk >= hunkStates.length - 1}
-        onclick={() => selectHunk(activeHunk + 1)}><ArrowRightToLine size={12} /></button
+        onclick={() => selectHunk(activeHunk + 1)}><CioArrowRightToLine size={12} /></button
       >
     </div>
 

@@ -1,7 +1,4 @@
 <script lang="ts" module>
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
   import type { ComposerProject, Assistant, Thread } from '$shared/types'
 
   /**
@@ -59,6 +56,9 @@
 
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
   import {
     ASSISTANT_ICON_FALLBACK_COLOR,

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
   import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
   import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
@@ -7,7 +8,6 @@
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { Gauge } from '@lucide/svelte'
   import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
   import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -1008,7 +1008,7 @@
             <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Testing…
           {:else}
-            <Gauge size={13} aria-hidden="true" />
+            <CioActions size={13} aria-hidden="true" />
             Test
           {/if}
         </button>

@@ -1,9 +1,11 @@
 <script lang="ts">
+  import CioArrowDown from '$lib/components/icons/cio/CioArrowDown.svelte'
   import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
   import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioChevronUp from '$lib/components/icons/cio/CioChevronUp.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
@@ -12,7 +14,6 @@
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import { ArrowDown, Clock3 } from '@lucide/svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -37,7 +38,7 @@
     projectId: string
     container: CloudDeploymentContainer
     onBack: () => void
-    /** Push an updated status snapshot back into the panel/store cache. */
+    /** Push an updated status snapshot back into the panel/Store cache. */
     onUpdated: (container: CloudDeploymentContainer) => void
     /** Hand the failing deployment to an agent, given its readable log text. */
     onRemediate: (logText: string) => void
@@ -338,6 +339,8 @@
   }
 </script>
 
+import CioClock from
+
 <div class="flex h-full min-h-0 flex-col">
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2">
@@ -412,7 +415,7 @@
           aria-label="Jump to the latest log lines"
           onclick={toggleTail}
         >
-          <ArrowDown size={12} class={tail ? 'text-foreground' : ''} />
+          <CioArrowDown size={12} class={tail ? 'text-foreground' : ''} />
         </button>
       {/if}
       {#if containerUrls(container).length > 0}
@@ -622,7 +625,7 @@
               onclick={() => void selectDeployment(deployment)}
             >
               {#if deployment.status === 'building'}
-                <Clock3 size={14} class="shrink-0 text-warning" />
+                <CioClock size={14} class="shrink-0 text-warning" />
               {:else if deployment.status === 'success'}
                 <CioCheckCircle size={14} class="shrink-0 text-success" />
               {:else if deployment.status === 'failed'}

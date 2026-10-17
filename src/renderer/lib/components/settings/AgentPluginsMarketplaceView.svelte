@@ -3,6 +3,7 @@
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioPackagePlus from '$lib/components/icons/cio/CioPackagePlus.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
@@ -23,7 +24,6 @@
   import { invoke } from '$lib/ipc.svelte'
   import { pluginInitials } from '$lib/plugin-identity'
   import type { AgentPluginMarketEntry, AgentPluginMarketplace } from '$shared/types'
-  import { PackagePlus } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { onMount } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -346,7 +346,7 @@
                     {#if busyId === 'add-source'}<CioSpinner
                         size={12}
                         class="animate-spin"
-                      />{:else}<PackagePlus size={12} />{/if}
+                      />{:else}<CioPackagePlus size={12} />{/if}
                     Add source
                   </button>
                 </form>

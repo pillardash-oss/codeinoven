@@ -1,9 +1,21 @@
 <script lang="ts">
+  import AssistantKnowledgeIcon from '$lib/components/icons/cio/AssistantKnowledgeIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
+  import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
+  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import { contentThreadFamily } from '$lib/content-view-threads'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { feature } from '$lib/feature-registry'
@@ -17,6 +29,7 @@
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
@@ -116,17 +129,6 @@
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
-  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
-  import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
-  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
-  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
-  import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-
   import { tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
@@ -138,8 +140,6 @@
     assistantForeignThread
   } from '../assistant/assistant-view'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import AssistantKnowledgeIcon from '$lib/components/icons/cio/AssistantKnowledgeIcon.svelte'
-  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
   import AssistantCreateControl from '../assistant/AssistantCreateControl.svelte'
   import AssistantOwnerPicker from '../assistant/AssistantOwnerPicker.svelte'
@@ -155,6 +155,7 @@
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import {
     buildThreadSwitcherEntries,
+    type SwitcherPanelTab,
     type ThreadSwitcherEntry
   } from '../threads/thread-switcher-entries'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
@@ -428,7 +429,7 @@
   let typingThreadKeys = $derived.by(() => {
     const keys = new SvelteSet<string>()
     // Only threads that actually hold unsent content belong here, and the draft
-    // store is the authority on which those are. Scanning every thread instead
+    // Store is the authority on which those are. Scanning every thread instead
     // asked `hasTypedContent` about each one, which materialized an empty draft
     // entry (six arrays) per thread and subscribed to a draft slot per thread,
     // on every keystroke. A stored entry is dropped the moment it holds nothing,
@@ -2046,14 +2047,35 @@
   let recentSwitcherEntries = $derived.by(() =>
     buildThreadSwitcherEntries({
       // One recency order across every switchable surface: a project thread, a
-      // chat, an assistant task or an open browser tab, interleaved by when each
-      // was last visited.
+      // chat, an assistant task, an open browser tab or a panel tab, interleaved
+      // by when each was last visited.
       visits: recentVisits.all,
       threads: allThreads.filter((thread) => !thread.archived),
       tabs: switcherBrowserTabs(),
+      panelTabs: switcherPanelTabs,
       currentBrowserTabId
     })
   )
+
+  /**
+   * The panel tabs the switcher may list: the open terminal, file and
+   * thread-browser tabs of the active context, each gated by its setting so a
+   * user who does not want a panel's tabs in the switcher never sees them. The
+   * empty "Open file" browser a Files panel starts on is not a file the user
+   * opened and is left out.
+   */
+  let switcherPanelTabs = $derived.by(() => {
+    const includeTerminal = appConfigState.switcherTerminalTabs
+    const includeFiles = appConfigState.switcherFileTabs
+    const includeBrowser = appConfigState.switcherThreadBrowserTabs
+    if (!includeTerminal && !includeFiles && !includeBrowser) return []
+    return contextSidebarState.tabs.filter((tab): tab is SwitcherPanelTab => {
+      if (tab.kind === 'terminal') return includeTerminal
+      if (tab.kind === 'files') return includeFiles && tab.fileTabId !== null
+      if (tab.kind === 'browser') return includeBrowser
+      return false
+    })
+  })
 
   /** The entry the switcher starts cycling from: the active browser tab while the
    *  browser view is on screen, otherwise the selected thread. */
@@ -3336,7 +3358,7 @@
       // commits) must surface too, even when they fell outside the bounded
       // first-paint slice: a thread being dictated in another window can never
       // be dropped from the listing. Their drafts seed the local recovery
-      // store whenever this window does not hold a newer local draft.
+      // Store whenever this window does not hold a newer local draft.
       const draftingThreads = await invoke('thread:listDrafting').catch(() => [] as Thread[])
       for (const thread of draftingThreads) {
         rendererRecovery.importDbDraft(thread.projectId, thread.id, thread.draftJson ?? null)
@@ -4845,6 +4867,14 @@
       // this resolves immediately; asking through the access seam is what keeps
       // that fact out of this component's imports.
       void loadBrowser().then((browser) => browser.switchTo(entry.tab.id))
+      return
+    }
+    if (entry.kind === 'panel') {
+      // A panel tab lives in the workspace surface (the right sidebar or the
+      // bottom terminal dock), so leave the full screen browser first, exactly as
+      // opening a project file does, then focus the tab so its panel reveals.
+      if (!active) navigate(mode)
+      contextSidebarState.focus(entry.tab.id)
       return
     }
     await openThreadFromSwitcher(entry.thread)

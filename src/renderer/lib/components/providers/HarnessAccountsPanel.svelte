@@ -3,6 +3,7 @@
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
   import CioKey from '$lib/components/icons/cio/CioKey.svelte'
+  import CioLogIn from '$lib/components/icons/cio/CioLogIn.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
@@ -12,7 +13,6 @@
   import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import { LogIn } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
@@ -873,7 +873,7 @@
             title={`Sign in to ${providerLabel(account)} again for ${account.label}`}
             onclick={() => startSignIn(account)}
           >
-            <LogIn size={13} aria-hidden="true" />
+            <CioLogIn size={13} aria-hidden="true" />
             Sign in again
           </button>
         {/if}

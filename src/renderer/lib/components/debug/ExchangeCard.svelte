@@ -1,12 +1,4 @@
 <script module lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { APP_LOCALE } from '$shared/date-time-format'
 
   const TIME_WITH_SECONDS = new Intl.DateTimeFormat(APP_LOCALE, {
@@ -17,10 +9,17 @@
 </script>
 
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioThreads from '$lib/components/icons/cio/CioThreads.svelte'
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
   import { copyText } from '$lib/copy-text'
-  import { List } from '@lucide/svelte'
-
   interface Props {
     ex: DebugExchange
     open?: boolean
@@ -198,7 +197,7 @@
         <span
           class="flex items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
         >
-          <List size={9} />
+          <CioThreads size={9} />
           {eventSummary(ex.events)}
         </span>
       {/if}

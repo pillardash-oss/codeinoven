@@ -1,11 +1,11 @@
 <script lang="ts">
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   /**
    * The scope chooser panel shared by the composer shoe and the Assignment
    * worker scope picker, so both surfaces offer the exact same menu. This
    * component renders only the panel: positioning, the click-away overlay and
    * any creation modal belong to the caller.
    */
-  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import PickerMenuShell from './PickerMenuShell.svelte'
   import { onMount, tick } from 'svelte'
 

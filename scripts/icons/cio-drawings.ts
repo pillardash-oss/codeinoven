@@ -1367,5 +1367,869 @@ export const CIO_GLYPHS: GlyphEntry[] = [
       note: 'Instant: a solid bolt. It is one of the few glyphs that is entirely solid, because a stroked bolt closes up at 12px.',
       shapes: `<path d="M13.6 3.6 5.8 13.4h5l-.4 7 7.8-9.8h-5Z" fill="currentColor" stroke="none" />`
     }
+  },
+  {
+    id: 'activity',
+    title: 'Activity',
+    glyph: {
+      kind: 'drawn',
+      note: 'Activity: one line that rises, dips and recovers, which is a heartbeat rather than a chart. A column set said "a measure"; the trace says "a thing still alive".',
+      shapes: `<path d="M3.4 12.4h3.4l2.2-6.6 3.2 12.4 2.6-8.2h5.8" />`
+    }
+  },
+  {
+    id: 'arrow-down',
+    title: 'Down',
+    glyph: {
+      kind: 'drawn',
+      note: 'Down: the up mark turned over, so a pair of controls reads as one gesture either way.',
+      shapes: `<path d="M12 4.6v14.8" /><path d="M5.8 13.2 12 19.4l6.2-6.2" />`
+    }
+  },
+  {
+    id: 'arrow-left-to-line',
+    title: 'To the start',
+    glyph: {
+      kind: 'drawn',
+      note: 'To the start: the back arrow run into a wall, which is the beginning of a run rather than one step back.',
+      shapes: `<path d="M4.6 5.4v13.2" /><path d="M20.4 12H7.2" /><path d="M13.4 5.8 7.2 12l6.2 6.2" />`
+    }
+  },
+  {
+    id: 'arrow-right-to-line',
+    title: 'To the end',
+    glyph: {
+      kind: 'drawn',
+      note: 'To the end: the mirror of the start mark, arrow into wall.',
+      shapes: `<path d="M19.4 5.4v13.2" /><path d="M3.6 12h13.2" /><path d="M10.6 5.8l6.2 6.2-6.2 6.2" />`
+    }
+  },
+  {
+    id: 'arrow-up-circle',
+    title: 'Send in a ring',
+    glyph: {
+      kind: 'drawn',
+      note: 'Send in a ring: the send arrow held in a ring, because the surface it sits on moves something out rather than up.',
+      shapes: `<circle cx="12" cy="12" r="8.2" /><path d="M12 16.6V8.2" /><path d="M8.6 11.4 12 8l3.4 3.4" />`
+    }
+  },
+  {
+    id: 'arrow-up-down',
+    title: 'Sort',
+    glyph: {
+      kind: 'drawn',
+      note: 'Sort: one arrow up and one down on the same baseline, which is a choice of order rather than a direction.',
+      shapes: `<path d="M8.4 19.4V4.6" /><path d="M4.6 8.4 8.4 4.6l3.8 3.8" /><path d="M15.6 4.6v14.8" /><path d="M11.8 15.6 15.6 19.4l3.8-3.8" />`
+    }
+  },
+  {
+    id: 'audio-lines',
+    title: 'Sound',
+    glyph: {
+      kind: 'drawn',
+      note: 'Sound: five bars of alternating height on one centre line, which is a waveform. Nothing else in the set is a band of vertical bars.',
+      shapes: `<path d="M3.6 10.2v3.6" /><path d="M7.8 6.4v11.2" /><path d="M12 8.8v6.4" /><path d="M16.2 4.8v14.4" /><path d="M20.4 10.2v3.6" />`
+    }
+  },
+  {
+    id: 'battery-charging',
+    title: 'Charging',
+    glyph: {
+      kind: 'drawn',
+      note: 'Charging: a cell with a bolt in it, the bolt solid so it survives the smallest size a gauge is drawn at.',
+      shapes: `<rect x="3.4" y="7.4" width="15.6" height="9.2" rx="2" /><path d="M21.4 10.6v2.8" /><path d="M12.4 8.8 8.8 13h3l-.8 3 3.6-4.4h-3Z" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'battery-medium',
+    title: 'Half used',
+    glyph: {
+      kind: 'drawn',
+      note: 'Half used: the same cell with one solid block in it, which is a level rather than a charge.',
+      shapes: `<rect x="3.4" y="7.4" width="15.6" height="9.2" rx="2" /><path d="M21.4 10.6v2.8" /><rect x="6.2" y="10.2" width="5.4" height="3.6" rx="1.2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'bell-off',
+    title: 'Muted',
+    glyph: {
+      kind: 'drawn',
+      note: 'Muted: the bell struck through, the bell kept whole underneath so it still reads as the bell turned off.',
+      shapes: `<path d="M6.4 16.4v-5a5.6 5.6 0 0 1 11.2 0v5" /><path d="M4.6 16.4h14.8" /><path d="M12 5.8V4.2" /><path d="M4.4 19.6 19.6 4.4" />`
+    }
+  },
+  {
+    id: 'bookmark-check',
+    title: 'Saved',
+    glyph: {
+      kind: 'drawn',
+      note: 'Saved: the ribbon with a check where the tab was, which is a bookmark that has landed rather than one held.',
+      shapes: `<path d="M6.4 4.4h11.2a1.6 1.6 0 0 1 1.6 1.6v14.2l-7.2-4.4-7.2 4.4V6a1.6 1.6 0 0 1 1.6-1.6Z" /><path d="M9.2 10.4 11.4 12.6 15.2 8.4" />`
+    }
+  },
+  {
+    id: 'calendar',
+    title: 'Date',
+    glyph: {
+      kind: 'drawn',
+      note: 'Date: a frame with its header inked and two hangers, which is a calendar at a glance. The band is the mass; the day grid dies at 16px.',
+      shapes: `<rect x="3.4" y="5.4" width="17.2" height="15.2" rx="2" /><rect x="3.4" y="5.4" width="17.2" height="4.8" rx="2" fill="currentColor" stroke="none" /><path d="M8.2 3.4v4" /><path d="M15.8 3.4v4" />`
+    }
+  },
+  {
+    id: 'calendar-clock',
+    title: 'Scheduled',
+    glyph: {
+      kind: 'drawn',
+      note: 'Scheduled: the clock set inside the calendar rather than over its corner, so no stroke of one crosses the other. The clock the first pass hung over the edge put its ring through the calendar frame.',
+      shapes: `<rect x="3.4" y="5.4" width="17.2" height="15.2" rx="2" /><rect x="3.4" y="5.4" width="17.2" height="4.8" rx="2" fill="currentColor" stroke="none" /><path d="M8.2 3.4v4" /><path d="M15.8 3.4v4" /><circle cx="15.6" cy="15.2" r="3.6" /><circle cx="15.6" cy="15.2" r="0.9" fill="currentColor" stroke="none" /><path d="M15.6 13.2v2" /><path d="M15.6 15.2h1.6" />`
+    }
+  },
+  {
+    id: 'calendar-off',
+    title: 'No date',
+    glyph: {
+      kind: 'drawn',
+      note: 'No date: the calendar struck through, its header band kept so it is still the calendar underneath.',
+      shapes: `<rect x="3.4" y="5.4" width="17.2" height="15.2" rx="2" /><rect x="3.4" y="5.4" width="17.2" height="4.8" rx="2" fill="currentColor" stroke="none" /><path d="M8.2 3.4v4" /><path d="M15.8 3.4v4" /><path d="M4.4 19.6 19.6 4.4" />`
+    }
+  },
+  {
+    id: 'calendar-plus',
+    title: 'Add a date',
+    glyph: {
+      kind: 'drawn',
+      note: 'Add a date: the calendar with a plus in the day area, the plus solid the way every other plus in the set is.',
+      shapes: `<rect x="3.4" y="5.4" width="17.2" height="15.2" rx="2" /><rect x="3.4" y="5.4" width="17.2" height="4.8" rx="2" fill="currentColor" stroke="none" /><path d="M8.2 3.4v4" /><path d="M15.8 3.4v4" /><rect x="11" y="11.6" width="2" height="7" rx="1" fill="currentColor" stroke="none" /><rect x="8.5" y="14.1" width="7" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'captions',
+    title: 'Captions',
+    glyph: {
+      kind: 'drawn',
+      note: 'Captions: a screen with one solid line of text along the bottom, which is subtitles rather than a message.',
+      shapes: `<rect x="3.4" y="5.4" width="17.2" height="13.2" rx="2" /><rect x="6.6" y="14.2" width="10.8" height="2.2" rx="1.1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'case-sensitive',
+    title: 'Match case',
+    glyph: {
+      kind: 'drawn',
+      note: 'Match case: the two letters the control is about, drawn in strokes so they read at 16px where real glyphs turn to mush.',
+      shapes: `<path d="M3.6 17.6 7.6 7.6l4 10" /><path d="M5.2 13.8h4.8" /><circle cx="17.4" cy="14.4" r="3.2" /><path d="M20.6 11.2v6.4" />`
+    }
+  },
+  {
+    id: 'check-check',
+    title: 'All done',
+    glyph: {
+      kind: 'drawn',
+      note: 'All done: two checks in a rank, the second set lower, which is one acceptance behind another.',
+      shapes: `<path d="M2.8 11.6 6.4 15.2 13.2 6.6" /><path d="M11.6 15.2 15.2 18.8 22 10.2" />`
+    }
+  },
+  {
+    id: 'chevrons-down',
+    title: 'Expand all',
+    glyph: {
+      kind: 'drawn',
+      note: 'Expand all: two chevrons stacked, which is a whole list opening rather than one row.',
+      shapes: `<path d="M6.8 6.4 12 11.6l5.2-5.2" /><path d="M6.8 12.4 12 17.6l5.2-5.2" />`
+    }
+  },
+  {
+    id: 'chevrons-up',
+    title: 'Collapse all',
+    glyph: {
+      kind: 'drawn',
+      note: 'Collapse all: the same pair turned over.',
+      shapes: `<path d="M6.8 11.6 12 6.4l5.2 5.2" /><path d="M6.8 17.6 12 12.4l5.2 5.2" />`
+    }
+  },
+  {
+    id: 'clipboard-list',
+    title: 'Question list',
+    glyph: {
+      kind: 'drawn',
+      note: 'Question list: the clipboard with its solid clip and three lines, which is a set of things to answer.',
+      shapes: `<path d="M8.6 4.8H6.4a1.8 1.8 0 0 0-1.8 1.8v12a1.8 1.8 0 0 0 1.8 1.8h11.2a1.8 1.8 0 0 0 1.8-1.8v-12a1.8 1.8 0 0 0-1.8-1.8h-2.2" /><rect x="9.2" y="3.4" width="5.6" height="3" rx="1.3" fill="currentColor" stroke="none" /><rect x="7.8" y="11" width="8.4" height="2" rx="1" fill="currentColor" stroke="none" /><rect x="7.8" y="14.6" width="5.6" height="2" rx="1" fill="currentColor" stroke="none" /><rect x="7.8" y="18.2" width="7" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'clipboard-x',
+    title: 'Nothing to paste',
+    glyph: {
+      kind: 'drawn',
+      note: 'Nothing to paste: the clipboard with a cross where the lines were, which is an empty hand rather than an empty board.',
+      shapes: `<path d="M8.6 4.8H6.4a1.8 1.8 0 0 0-1.8 1.8v12a1.8 1.8 0 0 0 1.8 1.8h11.2a1.8 1.8 0 0 0 1.8-1.8v-12a1.8 1.8 0 0 0-1.8-1.8h-2.2" /><rect x="9.2" y="3.4" width="5.6" height="3" rx="1.3" fill="currentColor" stroke="none" /><path d="M9.8 11.6 14.2 16" /><path d="M14.2 11.6 9.8 16" />`
+    }
+  },
+  {
+    id: 'cloud-off',
+    title: 'No remote',
+    glyph: {
+      kind: 'drawn',
+      note: 'No remote: the cloud struck through, which is a remote that could not be reached rather than one that is absent.',
+      shapes: `<path d="M7.4 18.4a4.2 4.2 0 0 1-.6-8.4 5.6 5.6 0 0 1 10.8 1.2 3.6 3.6 0 0 1-.4 7.2Z" /><path d="M4.4 19.6 19.6 4.4" />`
+    }
+  },
+  {
+    id: 'cookie',
+    title: 'Cookies',
+    glyph: {
+      kind: 'drawn',
+      note: 'Cookies: a disc with bitten edges and a few solid chips, which is a site storing something rather than a plain setting.',
+      shapes: `<path d="M12 3.6a8.4 8.4 0 1 0 8.4 8.4 4.2 4.2 0 0 1-4.2-4.2A4.2 4.2 0 0 1 12 3.6Z" /><circle cx="9.4" cy="9.6" r="1.4" fill="currentColor" stroke="none" /><circle cx="13.6" cy="13.4" r="1.4" fill="currentColor" stroke="none" /><circle cx="9" cy="15" r="1.4" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'cursor',
+    title: 'Pointer',
+    glyph: {
+      kind: 'drawn',
+      note: 'Pointer: the arrow the machine actually draws, with its tail, which is a shape nothing else in the set has.',
+      shapes: `<path d="M6.4 3.6 19.6 12.4l-6.4 1.2-2.6 5.8Z" />`
+    }
+  },
+  {
+    id: 'eraser',
+    title: 'Erase',
+    glyph: {
+      kind: 'drawn',
+      note: 'Erase: a block laid on the diagonal with the corner it has already cleared, which is rubbing out rather than deleting.',
+      shapes: `<path d="M8.6 4.6a2 2 0 0 1 2.8 0l6.6 6.6-6 6H7l-2.6-2.6a2 2 0 0 1 0-2.8Z" /><path d="M10.6 19.8h9" />`
+    }
+  },
+  {
+    id: 'file',
+    title: 'File',
+    glyph: {
+      kind: 'drawn',
+      note: 'File: the plain page, which is the mark every other file in the set is built on.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" />`
+    }
+  },
+  {
+    id: 'file-audio',
+    title: 'Audio file',
+    glyph: {
+      kind: 'drawn',
+      note: 'Audio file: the page carrying one note, its head, stem and runout meeting at the stem so the three strokes read as a single mark rather than as pieces laid on the page.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><circle cx="11.4" cy="16.4" r="2" fill="currentColor" stroke="none" /><rect x="13.2" y="9.4" width="2" height="7" rx="1" fill="currentColor" stroke="none" /><path d="M15.2 9.4a3.2 3.2 0 0 1 2.4 3.1" />`
+    }
+  },
+  {
+    id: 'file-check',
+    title: 'Checked file',
+    glyph: {
+      kind: 'drawn',
+      note: 'Checked file: the page with a check, which is work that has been read and accepted.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><path d="M8.4 13.4 10.8 15.8 15.4 11" />`
+    }
+  },
+  {
+    id: 'file-minus',
+    title: 'File removed',
+    glyph: {
+      kind: 'drawn',
+      note: 'File removed: the page with one solid bar, the same bar the text marks use, which is a line taken out.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><rect x="8.4" y="13.6" width="7.2" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'file-pen',
+    title: 'File edited',
+    glyph: {
+      kind: 'drawn',
+      note: 'File edited: the page with a pen laid in its lower half, kept inside the page so the two never read as two marks.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><path d="M8.8 15.4 14.2 10a1.8 1.8 0 0 1 2.6 2.6l-5.4 5.4H8.8Z" />`
+    }
+  },
+  {
+    id: 'file-plus',
+    title: 'New file',
+    glyph: {
+      kind: 'drawn',
+      note: 'New file: the page with the set’s solid plus on it, so it stands beside the folder plus as one idea.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><rect x="11" y="11" width="2" height="7" rx="1" fill="currentColor" stroke="none" /><rect x="8.5" y="13.5" width="7" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'file-question',
+    title: 'File to answer',
+    glyph: {
+      kind: 'drawn',
+      note: 'File to answer: the page with a question mark on it, the same stem and dot the attention marks use.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><path d="M9.6 11.4a2.4 2.4 0 1 1 2.8 2.4v1.8" /><circle cx="12.4" cy="18" r="1.2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'file-warning',
+    title: 'File alert',
+    glyph: {
+      kind: 'drawn',
+      note: 'File alert: the page carrying the warning stem and dot, which is the same alert the triangle and the ring carry.',
+      shapes: `<path d="M5.4 5.4a1.6 1.6 0 0 1 1.6-1.6h6.4l5 5v10.2a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6Z" /><path d="M13.4 3.8v5.2h5" /><path d="M12 10.6v4.6" /><circle cx="12" cy="18" r="1.2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'flag',
+    title: 'Flag',
+    glyph: {
+      kind: 'drawn',
+      note: 'Flag: a pole with its pennant inked, which is something marked for attention rather than a bookmark.',
+      shapes: `<path d="M6.2 3.6v16.8" /><path d="M6.2 4.8h11.4l-2.8 4 2.8 4H6.2Z" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'folder-git',
+    title: 'Repository',
+    glyph: {
+      kind: 'drawn',
+      note: 'Repository: the folder with a branch mark inside it, which is a checkout rather than a directory.',
+      shapes: `<path d="M3.6 17.6V7.2a1.8 1.8 0 0 1 1.8-1.8h4l2.2 2.8h7a1.8 1.8 0 0 1 1.8 1.8v7.6a1.8 1.8 0 0 1-1.8 1.8H5.4a1.8 1.8 0 0 1-1.8-1.8Z" /><circle cx="9.4" cy="11.6" r="1.8" /><rect x="8.5" y="13.4" width="1.8" height="3.4" rx="0.9" fill="currentColor" stroke="none" /><circle cx="15.4" cy="15" r="1.8" /><path d="M15.4 13.2v-1" /><path d="M11.2 11.6h2.4a1.8 1.8 0 0 1 1.8 1.8v1.6" />`
+    }
+  },
+  {
+    id: 'frame',
+    title: 'Frame',
+    glyph: {
+      kind: 'drawn',
+      note: 'Frame: two rules each way, which is a crop or a bounding box rather than a panel with a side.',
+      shapes: `<path d="M4.6 7.4h14.8" /><path d="M4.6 16.6h14.8" /><path d="M7.4 4.6v14.8" /><path d="M16.6 4.6v14.8" />`
+    }
+  },
+  {
+    id: 'heart-pulse',
+    title: 'Health',
+    glyph: {
+      kind: 'drawn',
+      note: 'Health: a heartbeat inside an outline, the trace kept to three strokes so the two marks do not fight at 16px.',
+      shapes: `<path d="M12 19.6 4.8 12.4a4.4 4.4 0 0 1 6.2-6.2l1 1 1-1a4.4 4.4 0 0 1 6.2 6.2Z" /><path d="M6.6 12.6h2.6l1.4-2.6 2.2 5.2 1.4-2.6h3.4" />`
+    }
+  },
+  {
+    id: 'home',
+    title: 'Home',
+    glyph: {
+      kind: 'drawn',
+      note: 'Home: a roof over a door, the door solid, which is where a workspace starts rather than a folder.',
+      shapes: `<path d="M3.8 11.4 12 3.8l8.2 7.6" /><path d="M5.8 10.6v9.2h12.4v-9.2" /><rect x="10.4" y="13.6" width="3.2" height="6.2" rx="1.2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'image',
+    title: 'Image',
+    glyph: {
+      kind: 'drawn',
+      note: 'Image: a frame with the sky and a ridge in it, which is a picture rather than a screen.',
+      shapes: `<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2" /><path d="M4.4 17.6 9.8 12.2l3.6 3.6 2.6-2.6 3.6 3.6" /><circle cx="8.6" cy="9.4" r="1.6" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'image-plus',
+    title: 'Add an image',
+    glyph: {
+      kind: 'drawn',
+      note: 'Add an image: the picture standing beside the solid plus rather than carrying it, so neither the frame nor the plus gives up its shape to the other.',
+      shapes: `<rect x="3.4" y="4.6" width="11.2" height="14.8" rx="2" /><circle cx="7" cy="8.8" r="1.4" fill="currentColor" stroke="none" /><path d="M4.4 16.8 7.8 13.4l2.2 2.2 1.6-1.6" /><rect x="17" y="11.6" width="2" height="8" rx="1" fill="currentColor" stroke="none" /><rect x="14.6" y="14.6" width="6.8" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'inbox',
+    title: 'Inbox',
+    glyph: {
+      kind: 'drawn',
+      note: 'Inbox: a tray with its lip, which is where things arrive rather than a drawer they were put in.',
+      shapes: `<path d="M3.6 13.4 6.2 5.2h11.6l2.6 8.2v4.2a2.2 2.2 0 0 1-2.2 2.2H5.8a2.2 2.2 0 0 1-2.2-2.2Z" /><path d="M3.6 13.4h4.6l1.4 2.4h4.8l1.4-2.4h4.6" />`
+    }
+  },
+  {
+    id: 'layout-grid',
+    title: 'Grid',
+    glyph: {
+      kind: 'drawn',
+      note: 'Grid: four even panels, one inked, which is a layout choice rather than a board of columns.',
+      shapes: `<rect x="3.6" y="3.6" width="7.2" height="7.2" rx="1.8" /><rect x="13.2" y="3.6" width="7.2" height="7.2" rx="1.8" /><rect x="3.6" y="13.2" width="7.2" height="7.2" rx="1.8" /><rect x="13.2" y="13.2" width="7.2" height="7.2" rx="1.8" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'lightbulb',
+    title: 'Idea',
+    glyph: {
+      kind: 'drawn',
+      note: 'Idea: a bulb with a solid filament, which is a thought offered rather than a sparkle.',
+      shapes: `<path d="M12 3.6a6 6 0 0 1 3.6 10.8c-.8.6-1.2 1.4-1.3 2.4H9.7c-.1-1-.5-1.8-1.3-2.4A6 6 0 0 1 12 3.6Z" /><path d="M9.8 19.4h4.4" /><circle cx="12" cy="10.4" r="2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'list-checks',
+    title: 'Checklist',
+    glyph: {
+      kind: 'drawn',
+      note: 'Checklist: three rungs on a spine, the top one a check, which is a list of work with something already done.',
+      shapes: `<path d="M5.4 6.4v11.2" /><path d="M8.8 7.6 10.8 9.6 14.6 5.8" /><path d="M8.8 13.2h10.4" /><path d="M8.8 17.6h7" />`
+    }
+  },
+  {
+    id: 'list-clock',
+    title: 'List with a clock',
+    glyph: {
+      kind: 'drawn',
+      note: 'List with a clock: the list holding a small clock, which is a list that runs on a timer.',
+      shapes: `<path d="M3.6 6.6h16.8" /><path d="M3.6 11.8h6.4" /><path d="M3.6 17h6.4" /><circle cx="16.4" cy="15.6" r="4.6" /><circle cx="16.4" cy="15.6" r="1.1" fill="currentColor" stroke="none" /><path d="M16.4 13.6v2" /><path d="M16.4 15.6h1.8" />`
+    }
+  },
+  {
+    id: 'list-ordered',
+    title: 'Numbered list',
+    glyph: {
+      kind: 'drawn',
+      note: 'Numbered list: rungs with the numerals drawn as strokes, because a solid dot would make it the plain list.',
+      shapes: `<path d="M9.4 6.6h11" /><path d="M9.4 12h11" /><path d="M9.4 17.4h11" /><path d="M4.2 5.4 6 4.6v4.2" /><path d="M3.8 11a1.4 1.4 0 0 1 2.8 0c0 1-2.8 1.8-2.8 3.4h2.8" /><path d="M3.8 16.2h2.6l-1.6 1.6c1 .1 1.6.6 1.6 1.4a1.5 1.5 0 0 1-2.6.9" />`
+    }
+  },
+  {
+    id: 'log-in',
+    title: 'Sign in',
+    glyph: {
+      kind: 'drawn',
+      note: 'Sign in: a doorway with the arrow entering it, which is a session starting.',
+      shapes: `<path d="M13.4 4.4H6.6a2 2 0 0 0-2 2v11.2a2 2 0 0 0 2 2h6.8" /><path d="M18.4 12H9.6" /><path d="M14.8 8l4 4-4 4" />`
+    }
+  },
+  {
+    id: 'log-out',
+    title: 'Sign out',
+    glyph: {
+      kind: 'drawn',
+      note: 'Sign out: the same doorway with the arrow leaving, the mirror of the sign-in mark.',
+      shapes: `<path d="M10.6 4.4h6.8a2 2 0 0 1 2 2v11.2a2 2 0 0 1-2 2h-6.8" /><path d="M14.4 12H5.6" /><path d="M9.2 8l-4 4 4 4" />`
+    }
+  },
+  {
+    id: 'marquee',
+    title: 'Select an area',
+    glyph: {
+      kind: 'drawn',
+      note: 'Select an area: a dashed box with the pointer at its corner, because a solid box would be the square mark.',
+      shapes: `<path d="M4.4 4.4h3.2" /><path d="M10.4 4.4h3.2" /><path d="M16.4 4.4h3.2" /><path d="M19.6 7.4v3.2" /><path d="M19.6 13.4v3.2" /><path d="M4.4 7.4v3.2" /><path d="M4.4 13.4v3.2" /><path d="M16.4 19.6h3.2" /><path d="M10.4 19.6h3.2" /><path d="M4.4 19.6h3.2" /><path d="M8.6 8.6 18.4 15l-4.6 1-2 4.6Z" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'moon',
+    title: 'Dark',
+    glyph: {
+      kind: 'drawn',
+      note: 'Dark: a crescent, which is the one shape that says night without a second element. It pairs with the sun.',
+      shapes: `<path d="M20.4 14.4A8.4 8.4 0 0 1 9.6 3.6a8.4 8.4 0 1 0 10.8 10.8Z" />`
+    }
+  },
+  {
+    id: 'panel-left',
+    title: 'Panel left',
+    glyph: {
+      kind: 'drawn',
+      note: 'Panel left: the framed panel with its bar on the left, the mirror of the panel-right mark.',
+      shapes: `<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2" /><path d="M9.8 4.6v14.8" /><rect x="3.4" y="4.6" width="6.4" height="14.8" rx="2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'panels-left-bottom',
+    title: 'Split left and bottom',
+    glyph: {
+      kind: 'drawn',
+      note: 'Split left and bottom: a frame divided once down the left and once across the bottom, which is a three-pane layout.',
+      shapes: `<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2" /><path d="M9.6 4.6v14.8" /><path d="M3.4 13.8h17.2" /><rect x="3.4" y="4.6" width="6.2" height="9.2" rx="2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'pin-off',
+    title: 'Unpin',
+    glyph: {
+      kind: 'drawn',
+      note: 'Unpin: the pin laid on its side with the stroke through it, which is the pin let go rather than a pin absent.',
+      shapes: `<path d="M8.4 4.6h7.2" /><path d="M9.8 4.6v6.2l-2.4 3.6h9.2l-2.4-3.6V4.6" /><path d="M12 14.4v4.8" /><path d="M4.4 19.6 19.6 4.4" />`
+    }
+  },
+  {
+    id: 'pull-request-closed',
+    title: 'Pull request closed',
+    glyph: {
+      kind: 'drawn',
+      note: 'Pull request closed: the pull request with its feed closed by a cross, which is a change refused rather than taken.',
+      shapes: `<circle cx="6.4" cy="6.4" r="2.6" /><rect x="5.4" y="9" width="2" height="8.6" rx="1" fill="currentColor" stroke="none" /><circle cx="17.4" cy="17.6" r="2.6" /><path d="M17.4 15V9" /><path d="M14.6 4.4 20.4 10.2" /><path d="M20.4 4.4 14.6 10.2" />`
+    }
+  },
+  {
+    id: 'pull-request-draft',
+    title: 'Pull request draft',
+    glyph: {
+      kind: 'drawn',
+      note: 'Pull request draft: the pull request with its head node left open, which is the same change with nothing put up for review yet. Dashing the ring in short strokes, as the first pass did, read as a mistake at 16px.',
+      shapes: `<circle cx="6.6" cy="6.4" r="2.6" stroke-dasharray="2.6 2" /><rect x="5.6" y="9" width="2" height="8.6" rx="1" fill="currentColor" stroke="none" /><path d="M17.4 15.4V12a3.4 3.4 0 0 0-3.4-3.4H10.6" /><path d="M13.4 6.2 10.4 8.6l3 2.4" /><circle cx="17.4" cy="18" r="2.4" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'rows-3',
+    title: 'Rows',
+    glyph: {
+      kind: 'drawn',
+      note: 'Rows: one frame ruled into three bands, which is a stacked layout rather than a column set.',
+      shapes: `<rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2" /><path d="M3.4 9.6h17.2" /><path d="M3.4 14.4h17.2" />`
+    }
+  },
+  {
+    id: 'scissors',
+    title: 'Cut',
+    glyph: {
+      kind: 'drawn',
+      note: 'Cut: two blades crossing into two rings, which is the shape a cut has had since it was drawn.',
+      shapes: `<circle cx="6.4" cy="6.6" r="2.8" /><circle cx="6.4" cy="17.4" r="2.8" /><path d="M8.8 8 20.4 18.4" /><path d="M8.8 16 20.4 5.6" />`
+    }
+  },
+  {
+    id: 'shapes',
+    title: 'Shapes',
+    glyph: {
+      kind: 'drawn',
+      note: 'Shapes: a triangle and a square across the top with the disc sitting under them, so the ink fills the box. The first pass left the disc high on the right, which emptied the lower left and made the whole mark lean.',
+      shapes: `<path d="M8 3.8 12.8 11.8H3.2Z" /><rect x="13.2" y="3.8" width="8" height="8" rx="1.8" /><circle cx="12" cy="17.4" r="3.6" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'shield',
+    title: 'Shield',
+    glyph: {
+      kind: 'drawn',
+      note: 'Shield: the plain crest, which is the mark the checked and alerted shields are drawn from.',
+      shapes: `<path d="M12 3.6 19.4 6.6v6.2c0 3.9-2.9 7.1-7.4 8.4-4.5-1.3-7.4-4.5-7.4-8.4V6.6Z" />`
+    }
+  },
+  {
+    id: 'shield-off',
+    title: 'Unguarded',
+    glyph: {
+      kind: 'drawn',
+      note: 'Unguarded: the crest struck through, the crest kept whole underneath so the shape still reads.',
+      shapes: `<path d="M12 3.6 19.4 6.6v6.2c0 3.9-2.9 7.1-7.4 8.4-4.5-1.3-7.4-4.5-7.4-8.4V6.6Z" /><path d="M4.4 19.6 19.6 4.4" />`
+    }
+  },
+  {
+    id: 'skip-back',
+    title: 'Skip back',
+    glyph: {
+      kind: 'drawn',
+      note: 'Skip back: the skip mark mirrored, its bar on the left, so the pair reads as one transport either way.',
+      shapes: `<rect x="6" y="6.4" width="2.4" height="11.2" rx="1.2" fill="currentColor" stroke="none" /><path d="M17.6 6.4 10 12l7.6 5.6Z" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'smile-plus',
+    title: 'Add a reaction',
+    glyph: {
+      kind: 'drawn',
+      note: 'Add a reaction: a face with the solid plus at its shoulder, which is a reaction being put on rather than a face alone.',
+      shapes: `<circle cx="11.4" cy="12.6" r="7.8" /><circle cx="8.6" cy="10.6" r="1.2" fill="currentColor" stroke="none" /><circle cx="14.2" cy="10.6" r="1.2" fill="currentColor" stroke="none" /><path d="M8.4 15.2a4.4 4.4 0 0 0 6 0" /><rect x="18.4" y="3.6" width="2" height="6.4" rx="1" fill="currentColor" stroke="none" /><rect x="16.2" y="5.8" width="6.4" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'square',
+    title: 'Stop box',
+    glyph: {
+      kind: 'drawn',
+      note: 'Square: the sheet’s own frame with nothing in it, which is a region rather than the solid stop the transport draws.',
+      shapes: `<rect x="4.4" y="4.4" width="15.2" height="15.2" rx="2" />`
+    }
+  },
+  {
+    id: 'sun',
+    title: 'Light',
+    glyph: {
+      kind: 'drawn',
+      note: 'Light: a disc with eight even rays, the pair of the crescent.',
+      shapes: `<circle cx="12" cy="12" r="4.4" /><path d="M12 2.8v2.4" /><path d="M12 18.8v2.4" /><path d="M2.8 12h2.4" /><path d="M18.8 12h2.4" /><path d="M5.5 5.5 7.2 7.2" /><path d="M16.8 16.8 18.5 18.5" /><path d="M18.5 5.5 16.8 7.2" /><path d="M7.2 16.8 5.5 18.5" />`
+    }
+  },
+  {
+    id: 'select-all',
+    title: 'Select all',
+    glyph: {
+      kind: 'drawn',
+      note: 'Select all: a frame with everything inside it inked, which is the whole of a thing taken rather than a caret sitting in it. The I-beam it was said where the cursor goes, not what the command does.',
+      shapes: `<rect x="4.4" y="4.4" width="15.2" height="15.2" rx="2" /><rect x="7.2" y="7.2" width="9.6" height="9.6" rx="1.4" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'thermometer',
+    title: 'Heat',
+    glyph: {
+      kind: 'drawn',
+      note: 'Heat: a stem into a bulb, the bulb solid, which is load rather than a measure of time.',
+      shapes: `<path d="M13.8 13.8V5.6a2.8 2.8 0 0 0-5.6 0v8.2a4.6 4.6 0 1 0 5.6 0Z" /><circle cx="11" cy="16.4" r="1.9" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'thumbs-up',
+    title: 'Approved',
+    glyph: {
+      kind: 'drawn',
+      note: 'Approved: a hand with the thumb up over a solid cuff, which is a review given rather than a check made.',
+      shapes: `<path d="M7.6 10.6 10.8 3.8a2.2 2.2 0 0 1 2.9 2.9l-1.3 3.3h4.9a2 2 0 0 1 2 2.4l-1.2 6a2 2 0 0 1-2 1.6H7.6" /><rect x="3.4" y="10.6" width="4.2" height="9.4" rx="1.6" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'timer-reset',
+    title: 'Timer reset',
+    glyph: {
+      kind: 'drawn',
+      note: 'Timer reset: the ring opened into a cycle at its upper left with the set hands in the middle, which is the retry ring with a reading on it. The dial the first pass drew was a dot and a corner, which read as damage.',
+      shapes: `<path d="M4.4 12a7.6 7.6 0 1 0 2.3-5.4" /><path d="M4.4 4.6v4.4h4.4" /><rect x="11" y="8.4" width="2" height="4.2" rx="1" fill="currentColor" stroke="none" /><rect x="12.4" y="11.4" width="3.2" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'wrap-text',
+    title: 'Wrap text',
+    glyph: {
+      kind: 'drawn',
+      note: 'Wrap text: three rules where the middle one turns back on itself, which is a line folding rather than a column set.',
+      shapes: `<path d="M4.4 6h15.2" /><path d="M4.4 11.4h10.4a3.2 3.2 0 0 1 0 6.4H12" /><path d="M4.4 18.6h6" /><path d="M14.2 15.4 11.8 17.8l2.4 2.4" />`
+    }
+  },
+  {
+    id: 'zoom-in',
+    title: 'Zoom in',
+    glyph: {
+      kind: 'drawn',
+      note: 'Zoom in: the lens with a solid plus in it, so it reads as a search being narrowed rather than a plain find.',
+      shapes: `<circle cx="10.6" cy="10.6" r="6.8" /><path d="M15.6 15.6 20.4 20.4" /><rect x="9.6" y="6.6" width="2" height="8" rx="1" fill="currentColor" stroke="none" /><rect x="6.6" y="9.6" width="8" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'zoom-out',
+    title: 'Zoom out',
+    glyph: {
+      kind: 'drawn',
+      note: 'Zoom out: the same lens with one solid bar, which is a search being widened.',
+      shapes: `<circle cx="10.6" cy="10.6" r="6.8" /><path d="M15.6 15.6 20.4 20.4" /><rect x="6.6" y="9.6" width="8" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'snail',
+    title: 'Slow',
+    glyph: {
+      kind: 'drawn',
+      note: 'Slow: a shell with the creature under it. A clock says what time it is and a spanner says a setting; the snail is the only mark that says a thing is taking too long.',
+      shapes: `<circle cx="10.4" cy="11.4" r="5.4" /><circle cx="10.4" cy="11.4" r="1.5" fill="currentColor" stroke="none" /><path d="M3.6 17.4h15.6" /><path d="M16.8 17.4v-3.6" /><circle cx="16.8" cy="12.6" r="1.5" fill="currentColor" stroke="none" /><path d="M18.6 10.8 16.8 12.6" />`
+    }
+  },
+  {
+    id: 'store',
+    title: 'Marketplace',
+    glyph: {
+      kind: 'drawn',
+      note: 'Marketplace: a shop front with its awning inked and a door cut into it, which is somewhere things are offered rather than a box they were shipped in.',
+      shapes: `<path d="M4.6 10.4v8a1.8 1.8 0 0 0 1.8 1.8h11.2a1.8 1.8 0 0 0 1.8-1.8v-8" /><rect x="3.4" y="6" width="17.2" height="4.4" rx="1.4" fill="currentColor" stroke="none" /><rect x="10.4" y="14.4" width="3.2" height="5.8" rx="1.2" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'git-graph',
+    title: 'Commit graph',
+    glyph: {
+      kind: 'drawn',
+      note: 'Commit graph: a trunk with two nodes and a branch curving off to a third, which is history as a shape. The clock the retry mark owns says when, not what happened.',
+      shapes: `<path d="M7.6 4.6v14.8" /><circle cx="7.6" cy="7.6" r="1.9" fill="currentColor" stroke="none" /><circle cx="7.6" cy="16.4" r="1.9" fill="currentColor" stroke="none" /><path d="M7.6 12h4.6a3.8 3.8 0 0 0 3.8-3.8V7.6" /><circle cx="16" cy="7.6" r="1.9" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'git-compare',
+    title: 'Compare',
+    glyph: {
+      kind: 'drawn',
+      note: 'Compare: two panes read side by side, each carrying one solid line at a different height, which is what makes them two versions rather than two files. The crossing arrows said only that two directions exist.',
+      shapes: `<rect x="3.6" y="4.6" width="7.2" height="14.8" rx="1.8" /><rect x="13.2" y="4.6" width="7.2" height="14.8" rx="1.8" /><rect x="5.6" y="8" width="3.2" height="1.8" rx="0.9" fill="currentColor" stroke="none" /><rect x="15.2" y="12.6" width="3.2" height="1.8" rx="0.9" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'git-compare-arrows',
+    title: 'Compare across',
+    glyph: {
+      kind: 'drawn',
+      note: 'Compare across: the two panes with arrows passing between them, which is a comparison that moves a change from one side to the other.',
+      shapes: `<rect x="3.4" y="4.6" width="6.2" height="14.8" rx="1.8" /><rect x="14.4" y="4.6" width="6.2" height="14.8" rx="1.8" /><path d="M10 9.6h4" /><path d="M12.2 7.8 14 9.6l-1.8 1.8" /><path d="M14 14.4h-4" /><path d="M11.8 12.6 10 14.4l1.8 1.8" />`
+    }
+  },
+  {
+    id: 'git-merge-conflict',
+    title: 'Merge conflict',
+    glyph: {
+      kind: 'drawn',
+      note: 'Merge conflict: the branch coming down into its node with a close at its head, which is the close any version control system draws for it. The merge struck out said a join was refused rather than that two lines could not be read together.',
+      shapes: `<path d="M6.4 11.4v9" /><path d="M8.6 3.8 4.2 8.2" /><path d="M8.6 8.2 4.2 3.8" /><path d="M12.4 6h3a2.6 2.6 0 0 1 2.6 2.6v6.6" /><circle cx="18" cy="17.8" r="2.5" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'list-todo',
+    title: 'To do',
+    glyph: {
+      kind: 'drawn',
+      note: 'To do: a spine whose top rung is an open box and whose other rungs are rules, which is a list with something still owed on it. The thread mark carries no box, so it reads as a record rather than as work.',
+      shapes: `<path d="M5.4 7.4v10.2" /><rect x="8.6" y="4.8" width="4.4" height="4.4" rx="1.3" /><path d="M8.6 12.4h10.4" /><path d="M8.6 16.8h7" />`
+    }
+  },
+  {
+    id: 'list-tree',
+    title: 'Tree list',
+    glyph: {
+      kind: 'drawn',
+      note: 'Tree list: a root rung with a spine down from it and two indented rungs, which is a hierarchy read as a list. The workspace tree keeps its own folder mark; this is the shape of the indentation itself.',
+      shapes: `<rect x="4.6" y="5.5" width="4.6" height="2.2" rx="1.1" fill="currentColor" stroke="none" /><path d="M7.2 7.7v9.2" /><path d="M7.2 11h4" /><path d="M7.2 15.8h4" /><rect x="11.2" y="9.9" width="9" height="2.2" rx="1.1" fill="currentColor" stroke="none" /><rect x="11.2" y="14.7" width="7" height="2.2" rx="1.1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'plug-zap',
+    title: 'Powered',
+    glyph: {
+      kind: 'drawn',
+      note: 'Powered: the plug with a bolt beside it, which is a connection that carries energy rather than one that is merely made.',
+      shapes: `<rect x="6.6" y="4.4" width="2" height="4.4" rx="1" /><rect x="9.8" y="4.4" width="2" height="4.4" rx="1" /><rect x="3.6" y="8.8" width="11.2" height="6.4" rx="2" /><path d="M9.2 15.2v5" /><path d="M20.4 4.6 16.2 10.8h3.2l-2.4 6.2 4.6-6.6h-3.2Z" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'replace',
+    title: 'Replace',
+    glyph: {
+      kind: 'drawn',
+      note: 'Replace: a row being taken out over a row going in, the outgoing one dashed, which is one thing swapped for another in place.',
+      shapes: `<rect x="4.4" y="4.6" width="15.2" height="6" rx="2" stroke-dasharray="3 2.2" /><rect x="4.4" y="13.4" width="15.2" height="6" rx="2" /><path d="M12 11.2v2" /><path d="M10.4 11.6 12 13.2l1.6-1.6" />`
+    }
+  },
+  {
+    id: 'replace-all',
+    title: 'Replace all',
+    glyph: {
+      kind: 'drawn',
+      note: 'Replace all: the same swap run down a column, one row going and two already in, which is a replacement made everywhere rather than once.',
+      shapes: `<rect x="4.4" y="3.6" width="15.2" height="4.8" rx="1.8" stroke-dasharray="3 2.2" /><rect x="4.4" y="9.6" width="15.2" height="4.8" rx="1.8" /><rect x="4.4" y="15.6" width="15.2" height="4.8" rx="1.8" />`
+    }
+  },
+  {
+    id: 'server-crash',
+    title: 'Server down',
+    glyph: {
+      kind: 'drawn',
+      note: 'Server down: the bays with their lamps and a close struck into the lower one, the close drawn as two solid bars so it reads at the size the mark is used at. Two strokes were too thin to say it.',
+      shapes: `<rect x="3.4" y="4.4" width="17.2" height="6.4" rx="2" /><circle cx="7.4" cy="7.6" r="1.4" fill="currentColor" stroke="none" /><rect x="3.4" y="13.2" width="17.2" height="6.4" rx="2" /><circle cx="7.4" cy="16.4" r="1.4" fill="currentColor" stroke="none" /><g transform="rotate(45 17.4 16.4)"><rect x="14.9" y="15.3" width="5" height="2.2" rx="1.1" fill="currentColor" stroke="none" /></g><g transform="rotate(-45 17.4 16.4)"><rect x="14.9" y="15.3" width="5" height="2.2" rx="1.1" fill="currentColor" stroke="none" /></g>`
+    }
+  },
+  {
+    id: 'search-x',
+    title: 'No match',
+    glyph: {
+      kind: 'drawn',
+      note: 'No match: the lens with a cross in place of its hub, which is a search that came back with nothing rather than one that is still running.',
+      shapes: `<circle cx="10.4" cy="10.4" r="6.2" /><path d="M15.2 15.2 20.4 20.4" /><path d="M8.2 8.2 12.6 12.6" /><path d="M12.6 8.2 8.2 12.6" />`
+    }
+  },
+  {
+    id: 'shredder',
+    title: 'Shred',
+    glyph: {
+      kind: 'drawn',
+      note: 'Shred: a sheet feeding into a solid machine head with the strips it has made falling out below it, which is a document destroyed from that line onward rather than a bin holding one.',
+      shapes: `<rect x="7.4" y="3.6" width="9.2" height="7.4" rx="1.2" /><rect x="4.4" y="11" width="15.2" height="3.2" rx="1.2" fill="currentColor" stroke="none" /><path d="M7.8 14.2v4.4" /><path d="M12 14.2v5.8" /><path d="M16.2 14.2v4.4" />`
+    }
+  },
+  {
+    id: 'trending-up',
+    title: 'Rising',
+    glyph: {
+      kind: 'drawn',
+      note: 'Rising: a line that steps down once and then climbs away, closed by a corner at its head, which is a direction of travel rather than a column set measured.',
+      shapes: `<path d="M3.4 17.6 8.8 12.2l3.6 3.6 7.8-7.8" /><path d="M15 7.4h5.2v5.2" />`
+    }
+  },
+  {
+    id: 'user-check',
+    title: 'Verified person',
+    glyph: {
+      kind: 'drawn',
+      note: 'Verified person: the account with a check beside its head, so the mark carries the same acceptance every other check carries.',
+      shapes: `<circle cx="9.4" cy="7" r="4" /><path d="M3.4 20.4a6 6 0 0 1 12 0" /><path d="M14.8 6.6 17 8.8 21.4 4.2" />`
+    }
+  },
+  {
+    id: 'user-minus',
+    title: 'Removed person',
+    glyph: {
+      kind: 'drawn',
+      note: 'Removed person: the same account with a solid bar where the check would be, which is an access taken away rather than an account that is simply there.',
+      shapes: `<circle cx="9.4" cy="7" r="4" /><path d="M3.4 20.4a6 6 0 0 1 12 0" /><rect x="15.2" y="6" width="6" height="2" rx="1" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'wifi-off',
+    title: 'Offline',
+    glyph: {
+      kind: 'drawn',
+      note: 'Offline: the wireless arcs with the stroke through them. A plug being pulled says a cable, and this has to say the network was never reached.',
+      shapes: `<path d="M8.4 15.2a5.4 5.4 0 0 1 7.2 0" /><path d="M5.2 11.8a10.4 10.4 0 0 1 13.6 0" /><circle cx="12" cy="18.8" r="1.5" fill="currentColor" stroke="none" /><path d="M4.4 19.6 19.6 4.4" />`
+    }
+  },
+  {
+    id: 'documents',
+    title: 'Files',
+    glyph: {
+      kind: 'drawn',
+      note: 'Files: two pages, the front one folded at its corner and the back one showing behind, which is a set of documents rather than the workspace tree the folder mark owns.',
+      shapes: `<path d="M8.6 4.4h5.6l4.4 4.4v9.4a1.6 1.6 0 0 1-1.6 1.6H8.6a1.6 1.6 0 0 1-1.6-1.6V6a1.6 1.6 0 0 1 1.6-1.6Z" /><path d="M14.2 4.4v4.4h4.4" /><path d="M4.6 7.6v10.4a2.4 2.4 0 0 0 2.4 2.4h7.4" />`
+    }
+  },
+  {
+    id: 'package-plus',
+    title: 'Package added',
+    glyph: {
+      kind: 'drawn',
+      note: 'Package added: the box with the solid plus set in its lower right facet, clear of the fold lines so nothing doubles up, which is a package being added rather than one that exists.',
+      shapes: `<path d="M4.4 8.6 12 4.6l7.6 4v6.8L12 19.4l-7.6-4Z" /><path d="M4.4 8.6 12 12.6l7.6-4" /><path d="M12 12.6v6.8" /><rect x="9.6" y="6.2" width="4.8" height="1.8" rx="0.9" fill="currentColor" stroke="none" /><rect x="15.1" y="11.6" width="1.6" height="4.8" rx="0.8" fill="currentColor" stroke="none" /><rect x="13.5" y="13.2" width="4.8" height="1.6" rx="0.8" fill="currentColor" stroke="none" />`
+    }
+  },
+  {
+    id: 'package-check',
+    title: 'Package checked',
+    glyph: {
+      kind: 'drawn',
+      note: 'Package checked: the same facet carrying a check, which is a package that has arrived and been accepted.',
+      shapes: `<path d="M4.4 8.6 12 4.6l7.6 4v6.8L12 19.4l-7.6-4Z" /><path d="M4.4 8.6 12 12.6l7.6-4" /><path d="M12 12.6v6.8" /><rect x="9.6" y="6.2" width="4.8" height="1.8" rx="0.9" fill="currentColor" stroke="none" /><path d="M14 14.4 15.8 16.2 18.4 13.2" />`
+    }
+  },
+  {
+    id: 'bug-off',
+    title: 'Debug off',
+    glyph: {
+      kind: 'drawn',
+      note: 'Debug off: the debugger mark struck through, which is the debugger turned off rather than a debugger that is not there. Reusing the plain mark said the opposite of what the control does.',
+      shapes: `<rect x="6" y="7.4" width="12" height="12" rx="6" /><path d="M6 10.6H3.6" /><path d="M6 16.4H3.6" /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" /><rect x="8.6" y="12.2" width="6.8" height="2.6" rx="1.3" fill="currentColor" stroke="none" /><path d="M4.4 19.6 19.6 4.4" />`
+    }
+  },
+  {
+    id: 'cable',
+    title: 'Cable',
+    glyph: {
+      kind: 'drawn',
+      note: 'Cable: a plug with its cord running away from it, which is a lead rather than a socket. The plug mark says a connection is made; this says what is running to it.',
+      shapes: `<rect x="15" y="3.4" width="1.8" height="4" rx="0.9" fill="currentColor" stroke="none" /><rect x="17.6" y="3.4" width="1.8" height="4" rx="0.9" fill="currentColor" stroke="none" /><rect x="13.4" y="7.4" width="7.6" height="6.4" rx="2" /><path d="M13.4 13.8c-4.8 0-8.4 1.4-8.4 6.6" />`
+    }
+  },
+  {
+    id: 'ellipsis-vertical',
+    title: 'More, upright',
+    glyph: {
+      kind: 'drawn',
+      note: 'More, upright: the same three dots stood up, for a toolbar that stacks its controls rather than laying them out.',
+      shapes: `<circle cx="12" cy="6.4" r="1.9" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none" /><circle cx="12" cy="17.6" r="1.9" fill="currentColor" stroke="none" />`
+    }
   }
 ]

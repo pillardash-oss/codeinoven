@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioBan from '$lib/components/icons/cio/CioBan.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
@@ -6,7 +7,6 @@
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { onMount } from 'svelte'
-  import { Gauge } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
   import AssistantIcon, {
@@ -997,7 +997,7 @@
 {#snippet panelContent()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if activeTab === 'all'}
-      <div class="flex flex-col gap-2 p-3">
+      <div class="flex flex-col gap-2 pl-3">
         {#if assistant}
           <div class="flex flex-col gap-2 border border-border bg-surface px-2.5 py-2">
             <div class="flex items-center gap-2">
@@ -1116,7 +1116,7 @@
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-2 p-3">
+        <div class="flex flex-col gap pl-3">
           {#if !knowledgeComplete}
             {@render assistantEmptyState()}
           {:else}
@@ -1377,7 +1377,7 @@
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-2 p-3">
+        <div class="flex flex-col gap pl-3">
           <p class="text-[0.6875rem] leading-relaxed text-muted">
             The services this assistant reaches out to. A connection that is not ready pauses only
             the step that depends on it.
@@ -1403,7 +1403,7 @@
       {#if !assistant}
         {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-3 p-3">
+        <div class="flex flex-col gap-3 pl-3">
           <p class="text-[0.6875rem] leading-relaxed text-muted">
             Which model does the work, and what to fall back to when it cannot.
           </p>
@@ -1426,7 +1426,7 @@
         </div>
       {/if}
     {:else}
-      <div class="flex flex-col gap-3 p-3">
+      <div class="flex flex-col gap-3 pl-3">
         <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
           <h2 class="text-[0.875rem] font-semibold text-foreground">Missed runs</h2>
           {#if missedRuns.length === 0}
@@ -1489,7 +1489,7 @@
                 >
                   <span class="mt-0.5 shrink-0" style="color: var(--color-warning)">
                     {#if issue.kind === 'Rate limited'}
-                      <Gauge size={13} strokeWidth={1.8} />
+                      <CioActions size={13} strokeWidth={1.8} />
                     {:else if issue.kind === 'Interrupted'}
                       <CioBan size={13} strokeWidth={1.8} />
                     {:else}

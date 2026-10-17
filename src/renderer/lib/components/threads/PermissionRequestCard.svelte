@@ -1,7 +1,8 @@
 <script lang="ts">
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCheckCheck from '$lib/components/icons/cio/CioCheckCheck.svelte'
+  import CioEnter from '$lib/components/icons/cio/CioEnter.svelte'
   import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
-  import { CheckCheck, CornerDownRight } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -98,6 +99,8 @@
     }
   }
 </script>
+
+import CioEnter from
 
 <section
   out:slide={dismissSlide()}
@@ -251,7 +254,7 @@
             <CardButton
               label="Send alternative"
               title="Reject the request and steer the run with this instruction"
-              icon={CornerDownRight}
+              icon={CioEnter}
               variant="primary"
               disabled={!canSubmitAlternative}
               onclick={() => void submitAlternative()}
@@ -267,7 +270,7 @@
             <CardButton
               label="Allow always"
               title="Allow this kind of request always"
-              icon={CheckCheck}
+              icon={CioCheckCheck}
               variant="secondary"
               disabled={working}
               onclick={() => void allowAlways()}

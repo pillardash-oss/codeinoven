@@ -3,8 +3,11 @@
   import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioBellOff from '$lib/components/icons/cio/CioBellOff.svelte'
   import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioBookmarkCheck from '$lib/components/icons/cio/CioBookmarkCheck.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCheckCheck from '$lib/components/icons/cio/CioCheckCheck.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
@@ -13,9 +16,13 @@
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
   import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioFileMinus from '$lib/components/icons/cio/CioFileMinus.svelte'
+  import CioFolderGit from '$lib/components/icons/cio/CioFolderGit.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioGitGraph from '$lib/components/icons/cio/CioGitGraph.svelte'
   import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
   import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
   import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
@@ -30,6 +37,7 @@
   import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
   import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
@@ -79,17 +87,6 @@
     GitStashEntry,
     ThreadStatus
   } from '$shared/types'
-  import {
-    ArchiveRestore,
-    BellOff,
-    BookmarkCheck,
-    CheckCheck,
-    FileMinus,
-    FolderGit2,
-    GitGraph,
-    NetworkIcon,
-    RotateCcwClock
-  } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -2294,7 +2291,7 @@
     originReplaceConfirm = false
   }
 
-  /** First step of the save button: replace routes through a destructive
+  /** First step of the save button: Replace routes through a destructive
    *  confirmation first; add commits immediately. */
   function requestSetOrigin(): void {
     if (!originUrl.trim() || originBusy) return
@@ -2736,8 +2733,8 @@
         icon: CioDiff,
         count: changes.length > 0 ? changes.length : null
       },
-      { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
-      { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
+      { id: 'history', label: 'History', icon: CioUndo, count: null },
+      { id: 'branches', label: 'Branches', icon: CioNetwork, count: null },
       { id: 'pulls', label: 'PRs', icon: CioPullRequest, count: null },
       { id: 'issues', label: 'Issues', icon: CioDot, count: null }
     ]
@@ -2829,6 +2826,8 @@
     }
   }
 </script>
+
+import CioUndo from
 
 <!--
   The trigger's copy of a state badge: a control, not a mark. The state the user
@@ -2934,7 +2933,7 @@
         disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
         onclick={startAmend}
       >
-        <GitGraph size={12} aria-hidden="true" />
+        <CioGitGraph size={12} aria-hidden="true" />
         <span class="view-action-label">Amend</span>
       </button>
     {/if}
@@ -3022,7 +3021,7 @@
           void githubNotifications.setDone(openNotification.id, !openNotification?.done)}
       >
         {#if openNotification.done}
-          <ArchiveRestore size={12} aria-hidden="true" />
+          <CioArchive size={12} aria-hidden="true" />
         {:else}
           <CioArchive size={12} aria-hidden="true" />
         {/if}
@@ -3035,7 +3034,7 @@
         disabled={notificationBusy}
         onclick={() => void githubNotifications.unsubscribe(openNotification.id)}
       >
-        <BellOff size={12} aria-hidden="true" />
+        <CioBellOff size={12} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -3047,7 +3046,7 @@
           void githubNotifications.setSaved(openNotification.id, !openNotification?.saved)}
       >
         {#if openNotification.saved}
-          <BookmarkCheck size={12} class="text-primary" aria-hidden="true" />
+          <CioBookmarkCheck size={12} class="text-primary" aria-hidden="true" />
         {:else}
           <CioBookmark size={12} aria-hidden="true" />
         {/if}
@@ -3073,7 +3072,7 @@
           githubNotifications.busyThreadId !== null}
         onclick={() => void githubNotifications.markAllRead()}
       >
-        <CheckCheck size={12} aria-hidden="true" />
+        <CioCheckCheck size={12} aria-hidden="true" />
         <span class="view-action-label">Mark all read</span>
       </button>
       <button
@@ -3133,7 +3132,7 @@
       aria-label="Show the changed files as a folder tree"
       onclick={() => (changesView = 'tree')}
     >
-      <FolderGit2 size={12} aria-hidden="true" />
+      <CioFolderGit size={12} aria-hidden="true" />
       <span class="view-action-label">Tree</span>
     </button>
   </div>
@@ -3484,7 +3483,7 @@
               disabled={batchBusy}
               onSelect={() => requestRemoveCommitChanges(selectedPathList)}
             >
-              <FileMinus size={12} class="shrink-0" />
+              <CioFileMinus size={12} class="shrink-0" />
               Remove from commit…
             </DropdownMenu.Item>
           </DropdownMenu.Content>

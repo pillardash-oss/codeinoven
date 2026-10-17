@@ -1,8 +1,10 @@
 <script lang="ts">
   import CioBook from '$lib/components/icons/cio/CioBook.svelte'
   import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioFlame from '$lib/components/icons/cio/CioFlame.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioTrendingUp from '$lib/components/icons/cio/CioTrendingUp.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     cachedSkillMarketLeaderboard,
@@ -13,7 +15,6 @@
   import { installedSkillState } from '$lib/stores/installed-skills.svelte'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
-  import { Flame, TrendingUp } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
@@ -28,8 +29,8 @@
 
   const views: Array<{ id: SkillMarketView; label: string; icon: typeof CioBook }> = [
     { id: 'all-time', label: 'All Time', icon: CioBook },
-    { id: 'trending', label: 'Trending', icon: TrendingUp },
-    { id: 'hot', label: 'Hot', icon: Flame }
+    { id: 'trending', label: 'Trending', icon: CioTrendingUp },
+    { id: 'hot', label: 'Hot', icon: CioFlame }
   ]
 
   const initialLeaderboard = cachedSkillMarketLeaderboard('all-time')
@@ -127,6 +128,8 @@
     }
   })
 </script>
+
+import CioTrendingUp from
 
 <div class="h-full min-h-0 overflow-hidden">
   <div class="flex h-full min-h-0 flex-col px-6 pt-6">

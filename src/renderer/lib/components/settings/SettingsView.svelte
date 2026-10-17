@@ -6,10 +6,12 @@
   import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
   import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioMoon from '$lib/components/icons/cio/CioMoon.svelte'
   import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSun from '$lib/components/icons/cio/CioSun.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -56,7 +58,6 @@
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
-  import { Moon, Sun } from '@lucide/svelte'
   import { onMount, tick, type Component } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
@@ -273,8 +274,8 @@
 
   const themeOptions = [
     { id: 'system' as const, label: 'System', icon: CioDisplay },
-    { id: 'light' as const, label: 'Light', icon: Sun },
-    { id: 'dark' as const, label: 'Dark', icon: Moon }
+    { id: 'light' as const, label: 'Light', icon: CioSun },
+    { id: 'dark' as const, label: 'Dark', icon: CioMoon }
   ]
 
   const slashCommandOptions: Array<{
@@ -595,6 +596,8 @@
     }
   }
 </script>
+
+import CioSun from
 
 <svelte:window onkeydown={escHandler} />
 
@@ -1147,6 +1150,55 @@
                   aria-label="Maximum questions per agent question card"
                   onchange={saveAgentQuestionCap}
                 />
+              </div>
+              <div class="space-y-2 border-t border-border pt-3">
+                <div>
+                  <p class="text-sm font-medium">Switcher panel tabs</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Let Ctrl+Tab also cycle these panels' own tabs
+                  </p>
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Terminal tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open terminal</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherTerminalTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherTerminalTabs: !config.switcherTerminalTabs })}
+                    aria-label="Toggle listing terminal tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Project file tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open file</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherFileTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherFileTabs: !config.switcherFileTabs })}
+                    aria-label="Toggle listing project file tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Thread browser tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open browser tab</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherThreadBrowserTabs}
+                    onchange={() =>
+                      void updateConfig({
+                        switcherThreadBrowserTabs: !config.switcherThreadBrowserTabs
+                      })}
+                    aria-label="Toggle listing thread browser tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Lightbulb } from '@lucide/svelte'
+  import CioLightbulb from '$lib/components/icons/cio/CioLightbulb.svelte'
   import { slide } from 'svelte/transition'
   import type { BrainstormPrototype, ProviderCatalog, ThreadSettings } from '$shared/types'
   import BrainstormNextStepMenu from '../shared/BrainstormNextStepMenu.svelte'
@@ -70,7 +70,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Brainstorm ready">
     <CardHead
-      icon={Lightbulb}
+      icon={CioLightbulb}
       title="Session report · Version {version}"
       {chip}
       bind:folded

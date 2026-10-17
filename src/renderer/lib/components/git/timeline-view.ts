@@ -9,18 +9,16 @@ import CioMilestone from '$lib/components/icons/cio/CioMilestone.svelte'
 import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
 import CioPersonPlus from '$lib/components/icons/cio/CioPersonPlus.svelte'
 import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+import CioPinOff from '$lib/components/icons/cio/CioPinOff.svelte'
+import CioPullRequestDraft from '$lib/components/icons/cio/CioPullRequestDraft.svelte'
+import CioScissors from '$lib/components/icons/cio/CioScissors.svelte'
+import CioSwap from '$lib/components/icons/cio/CioSwap.svelte'
 import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
 import CioTag from '$lib/components/icons/cio/CioTag.svelte'
 import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-import {
-  ArrowRightLeft,
-  GitPullRequestDraft,
-  PinOff,
-  Scissors,
-  SlidersHorizontal,
-  UserCheck,
-  UserMinus
-} from '@lucide/svelte'
+import CioUserCheck from '$lib/components/icons/cio/CioUserCheck.svelte'
+import CioUserMinus from '$lib/components/icons/cio/CioUserMinus.svelte'
 import type { IssueTimelineEvent } from '$shared/types'
 
 /**
@@ -43,7 +41,7 @@ export function timelineEventIcon(event: Pick<IssueTimelineEvent, 'kind'>): type
     case 'assigned':
       return CioPersonPlus
     case 'unassigned':
-      return UserMinus
+      return CioUserMinus
     case 'closed':
       return CioBan
     case 'reopened':
@@ -60,28 +58,28 @@ export function timelineEventIcon(event: Pick<IssueTimelineEvent, 'kind'>): type
     case 'pinned':
       return CioPin
     case 'unpinned':
-      return PinOff
+      return CioPinOff
     case 'referenced':
       return CioCommit
     case 'cross-referenced':
-      return ArrowRightLeft
+      return CioSwap
     case 'marked_as_duplicate':
       return CioCopy
     case 'connected':
       return CioTabGit
     case 'fields':
-      return SlidersHorizontal
+      return CioTabSettings
     case 'merged':
       return CioMerge
     case 'review_requested':
     case 'review_request_removed':
-      return UserCheck
+      return CioUserCheck
     case 'ready_for_review':
       return CioEye
     case 'converted_to_draft':
-      return GitPullRequestDraft
+      return CioPullRequestDraft
     case 'head_ref_deleted':
-      return Scissors
+      return CioScissors
     default:
       return CioTag
   }

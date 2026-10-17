@@ -1,6 +1,6 @@
 <script lang="ts">
+  import CioSwap from '$lib/components/icons/cio/CioSwap.svelte'
   import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
-  import { ArrowLeftRight } from '@lucide/svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 
@@ -53,7 +53,7 @@
       title="Make this the main instance: scheduled work runs here and keeps running here after a restart"
       onclick={onTakeOver}
     >
-      <ArrowLeftRight size={12} aria-hidden="true" />
+      <CioSwap size={12} aria-hidden="true" />
       Make this the main instance
     </button>
     <button

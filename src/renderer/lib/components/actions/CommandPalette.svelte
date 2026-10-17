@@ -1,11 +1,11 @@
 <script lang="ts">
   import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioEnter from '$lib/components/icons/cio/CioEnter.svelte'
   import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import CioZap from '$lib/components/icons/cio/CioZap.svelte'
   import { Command } from 'bits-ui'
-  import CioEnter from '$lib/components/icons/cio/CioEnter.svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'

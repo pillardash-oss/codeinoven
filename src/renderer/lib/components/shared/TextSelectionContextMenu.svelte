@@ -1,13 +1,15 @@
 <script lang="ts">
   import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioEraser from '$lib/components/icons/cio/CioEraser.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
   import CioLink from '$lib/components/icons/cio/CioLink.svelte'
+  import CioScissors from '$lib/components/icons/cio/CioScissors.svelte'
+  import CioSelectAll from '$lib/components/icons/cio/CioSelectAll.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import { SUPPORT_EMAIL } from '$shared/brand'
   import { onMount } from 'svelte'
-  import { Eraser, Scissors, TextSelect } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
@@ -426,6 +428,8 @@
   })
 </script>
 
+import CioSelectAll from
+
 {#if target}
   <div
     {@attach captureMenu}
@@ -443,7 +447,7 @@
         disabled={!target.text}
         onclick={() => cut(target!)}
       >
-        <Scissors class="size-3.5 shrink-0 text-text-muted" />
+        <CioScissors class="size-3.5 shrink-0 text-text-muted" />
         Cut
       </button>
       <button
@@ -461,7 +465,7 @@
         Paste
       </button>
       <button type="button" class={itemClass} role="menuitem" onclick={() => selectAll(target!)}>
-        <TextSelect class="size-3.5 shrink-0 text-text-muted" />
+        <CioSelectAll class="size-3.5 shrink-0 text-text-muted" />
         Select All
       </button>
     {:else if target.kind === 'terminal'}
@@ -490,7 +494,7 @@
         role="menuitem"
         onclick={() => selectAllInTerminal(target!)}
       >
-        <TextSelect class="size-3.5 shrink-0 text-text-muted" />
+        <CioSelectAll class="size-3.5 shrink-0 text-text-muted" />
         Select All
       </button>
       <button
@@ -499,7 +503,7 @@
         role="menuitem"
         onclick={() => clearTerminal(target!)}
       >
-        <Eraser class="size-3.5 shrink-0 text-text-muted" />
+        <CioEraser class="size-3.5 shrink-0 text-text-muted" />
         Clear
       </button>
     {:else}

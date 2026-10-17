@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { openInBrowser } from '$lib/open-in-browser'
 

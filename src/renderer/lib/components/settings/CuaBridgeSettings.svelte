@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioArrowUpCircle from '$lib/components/icons/cio/CioArrowUpCircle.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import CioCode from '$lib/components/icons/cio/CioCode.svelte'
@@ -9,7 +10,6 @@
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import { ArrowUpCircle } from '@lucide/svelte'
   import type {
     CuaBridgeStatus,
     CuaInstallationSource,
@@ -410,7 +410,7 @@
                 title={`Try updating Cua Driver to ${update.latestVersion} again`}
                 onclick={() => (confirmingUpdate = true)}
               >
-                <ArrowUpCircle size={13} /> Try the update again
+                <CioArrowUpCircle size={13} /> Try the update again
               </button>
             {/if}
           </div>
@@ -434,7 +434,7 @@
               title={`Update Cua Driver to ${update.latestVersion}`}
               onclick={() => (confirmingUpdate = true)}
             >
-              <ArrowUpCircle size={14} /> Update to {update.latestVersion}
+              <CioArrowUpCircle size={14} /> Update to {update.latestVersion}
             </button>
             {#if update.releaseNotesUrl}
               <button

@@ -1,37 +1,35 @@
 <script lang="ts">
+  import CioArrowUpDown from '$lib/components/icons/cio/CioArrowUpDown.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
   import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
   import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioFrame from '$lib/components/icons/cio/CioFrame.svelte'
   import CioHistory from '$lib/components/icons/cio/CioHistory.svelte'
   import CioImageOff from '$lib/components/icons/cio/CioImageOff.svelte'
+  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
+  import CioListClock from '$lib/components/icons/cio/CioListClock.svelte'
+  import CioMarquee from '$lib/components/icons/cio/CioMarquee.svelte'
   import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioStore from '$lib/components/icons/cio/CioStore.svelte'
   import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
   import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { onDestroy, onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { LastKnown } from '$lib/last-known'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
-  import {
-    ArrowUpDown,
-    Film,
-    Frame,
-    Inspect,
-    ListClock,
-    PlayingCardsFan,
-    Presentation,
-    Store
-  } from '@lucide/svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -332,7 +330,7 @@
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
-  let WorkIcon = $derived(video ? Film : Frame)
+  let WorkIcon = $derived(video ? CioClapper : CioFrame)
 
   /** Project defaults are separate from the current design or video's own folder. */
   let kind = $derived<AuthoredWorkKind>(requestedKind)
@@ -833,7 +831,7 @@
       // The stage is fed by `browser:state`, and that listener only exists once
       // the browser runtime is wired. Wiring it before the open is what makes the
       // board's own composition arrive: without it the open succeeds in main, the
-      // store never hears about the view, and the stage has nothing to mount.
+      // Store never hears about the view, and the stage has nothing to mount.
       await loadBrowser()
       const opened = await invoke(
         'design:open',
@@ -1370,6 +1368,8 @@
   }
 </script>
 
+import CioStore from
+
 <div class="flex h-full min-h-0 flex-col" {@attach watchViewingThread}>
   {#snippet videoStage()}
     {#if video && selected.directory !== '' && !liveEditing}
@@ -1600,7 +1600,7 @@
   {/snippet}
 
   {#snippet entryCard(input: {
-    icon: typeof Presentation
+    icon: typeof CioDisplay
     name: string
     shot: DesignScreenShot | null
     label: string
@@ -1845,7 +1845,7 @@
               title={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
               aria-label={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
             >
-              <ArrowUpDown size={12} />
+              <CioArrowUpDown size={12} />
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content
@@ -2001,7 +2001,7 @@
                         disabled={canvasBusy !== '' || selected.directory === ''}
                         onSelect={() => void requestDesignAction('tweaks')}
                       >
-                        <Inspect size={13} class="shrink-0 text-muted" />
+                        <CioMarquee size={13} class="shrink-0 text-muted" />
                         Inspect Designs
                       </DropdownMenu.Item>
                     </DropdownMenu.SubContent>
@@ -2023,7 +2023,7 @@
                       'https://github.com/nexu-io/open-design/tree/main/design-templates'
                     )}
                 >
-                  <Store size={13} class="shrink-0 text-muted" />
+                  <CioStore size={13} class="shrink-0 text-muted" />
                   Browse Open Design prompts</DropdownMenu.Item
                 >
               {/if}
@@ -2033,7 +2033,7 @@
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('create')}
                 >
-                  <Presentation size={13} class="shrink-0 text-muted" />
+                  <CioDisplay size={13} class="shrink-0 text-muted" />
                   Generate Screen Canvas
                 </DropdownMenu.Item>
               {/if}
@@ -2043,7 +2043,7 @@
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('live')}
                 >
-                  <PlayingCardsFan size={13} class="shrink-0 text-muted" />
+                  <CioLayers size={13} class="shrink-0 text-muted" />
                   Generate Live Preview
                 </DropdownMenu.Item>
               {/if}
@@ -2128,7 +2128,7 @@
           {#if canvasBusy === 'update'}
             <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <ListClock size={12} />
+            <CioListClock size={12} />
           {/if}
           Sync
         </button>
@@ -2220,7 +2220,7 @@
           <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
             {#if !video}
               {@render entryCard({
-                icon: Presentation,
+                icon: CioDisplay,
                 name: 'Screen Canvas',
                 shot: canvasShot,
                 label: 'Open the Screen Canvas in the in-app browser',
@@ -2230,7 +2230,7 @@
                 onOpen: () => void openCanvas()
               })}
               {@render entryCard({
-                icon: PlayingCardsFan,
+                icon: CioLayers,
                 name: 'Live preview',
                 shot: liveShot,
                 label: `Open the live preview of this ${noun} in the in-app browser`,

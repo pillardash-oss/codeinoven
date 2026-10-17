@@ -1,11 +1,11 @@
 <script lang="ts">
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioDocuments from '$lib/components/icons/cio/CioDocuments.svelte'
   import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
   import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import { Files } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
   import GitCloneModal from './GitCloneModal.svelte'
@@ -291,7 +291,7 @@
         title="Track changes with {APP_NAME} file snapshots"
         onclick={() => void createProjectWithManualTracking()}
       >
-        <Files size={16} class="mt-0.5 shrink-0 text-muted" />
+        <CioDocuments size={16} class="mt-0.5 shrink-0 text-muted" />
         <span>
           <span class="block text-sm font-medium">Track Changes Manually</span>
           <span class="mt-0.5 block text-xs text-dimmed">Use {APP_NAME} file snapshots.</span>

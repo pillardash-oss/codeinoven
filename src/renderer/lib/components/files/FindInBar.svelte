@@ -1,10 +1,12 @@
 <script lang="ts">
+  import CioCaseSensitive from '$lib/components/icons/cio/CioCaseSensitive.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioChevronUp from '$lib/components/icons/cio/CioChevronUp.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioReplace from '$lib/components/icons/cio/CioReplace.svelte'
+  import CioReplaceAll from '$lib/components/icons/cio/CioReplaceAll.svelte'
   import { onDestroy, tick } from 'svelte'
-  import { CaseSensitive, Replace, ReplaceAll } from '@lucide/svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
@@ -142,6 +144,8 @@
   onDestroy(clearDebounce)
 </script>
 
+import CioReplaceAll from
+
 <div
   data-find-exclude
   class={[
@@ -194,7 +198,7 @@
           : 'Ignoring case: click to match case'}
         onclick={onToggleMatchCase}
       >
-        <CaseSensitive size={13} aria-hidden="true" />
+        <CioCaseSensitive size={13} aria-hidden="true" />
       </button>
     {/if}
     {#if draft}
@@ -253,7 +257,7 @@
         disabled={matches === 0 || !onReplaceOne}
         onclick={() => onReplaceOne?.()}
       >
-        <Replace size={13} aria-hidden="true" />
+        <CioReplace size={13} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -263,7 +267,7 @@
         disabled={matches === 0 || !onReplaceAll}
         onclick={() => onReplaceAll?.()}
       >
-        <ReplaceAll size={13} aria-hidden="true" />
+        <CioReplaceAll size={13} aria-hidden="true" />
       </button>
     </div>
   {/if}

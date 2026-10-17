@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
+  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { roomAbove } from '$lib/popover-room'
   import { tick } from 'svelte'
-  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import Switch from '../ui/Switch.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'

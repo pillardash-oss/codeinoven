@@ -2,10 +2,13 @@ import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
 import CioBan from '$lib/components/icons/cio/CioBan.svelte'
 import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
 import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+import CioFileWarning from '$lib/components/icons/cio/CioFileWarning.svelte'
+import CioPlugZap from '$lib/components/icons/cio/CioPlugZap.svelte'
+import CioServerCrash from '$lib/components/icons/cio/CioServerCrash.svelte'
 import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
 import CioUnplug from '$lib/components/icons/cio/CioUnplug.svelte'
+import CioWifiOff from '$lib/components/icons/cio/CioWifiOff.svelte'
 import type { Component } from 'svelte'
-import { FileWarning, PlugZap, ServerCrash, WifiOff } from '@lucide/svelte'
 import type { BrowserLoadError } from '$shared/ipc-contract'
 
 /**
@@ -44,7 +47,7 @@ export function browserLoadErrorHost(url: string): string {
 export function browserLoadErrorCopy(error: BrowserLoadError, host: string): BrowserLoadErrorCopy {
   if (error.kind === 'crashed') {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'This page stopped',
       description: `${host ? `${host} stopped` : 'This page stopped'} running unexpectedly. Reloading usually brings it back.`
     }
@@ -74,7 +77,7 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
   const label = statusText ? `${code} ${statusText}` : `${code}`
   if (code === 400) {
     return {
-      icon: FileWarning,
+      icon: CioFileWarning,
       title: 'Bad request',
       description: `${host ? `${host} rejected` : 'The server rejected'} the browser's request (${label}). Reload to try again.`
     }
@@ -95,7 +98,7 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
   }
   if (code === 404 || code === 410) {
     return {
-      icon: FileWarning,
+      icon: CioFileWarning,
       title: 'Page not found',
       description: `There is no page at this address${host ? ` on ${host}` : ''} (${label}). Check the address for typos.`
     }
@@ -116,34 +119,34 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
   }
   if (code === 502) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'Bad gateway',
       description: `The server reached a gateway that answered wrongly${host ? ` for ${host}` : ''} (${label}). This is often temporary.`
     }
   }
   if (code === 503) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'Service unavailable',
       description: `${host ? `${host} is` : 'The server is'} temporarily unavailable (${label}). Reload in a moment.`
     }
   }
   if (code === 501) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'Not implemented',
       description: `${host ? `${host} does` : 'The server does'} not support this request (${label}).`
     }
   }
   if (code >= 500) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'The server errored',
       description: `${host ? `${host} could` : 'The server could'} not serve this page (${label}). Reloading may help.`
     }
   }
   return {
-    icon: FileWarning,
+    icon: CioFileWarning,
     title: 'The page could not load',
     description: `${host ? `${host} answered` : 'The server answered'} with an error (${label}).`
   }
@@ -152,7 +155,7 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
 function networkErrorCopy(code: number, host: string): BrowserLoadErrorCopy {
   if (code === -106 || code === -21) {
     return {
-      icon: WifiOff,
+      icon: CioWifiOff,
       title: 'You are offline',
       description: 'This device has no network connection. Reconnect, then reload.'
     }
@@ -166,7 +169,7 @@ function networkErrorCopy(code: number, host: string): BrowserLoadErrorCopy {
   }
   if (code === -102) {
     return {
-      icon: PlugZap,
+      icon: CioPlugZap,
       title: 'Connection refused',
       description: `The connection was refused${host ? ` by ${host}` : ''}. The server there may not be running.`
     }
@@ -201,7 +204,7 @@ function networkErrorCopy(code: number, host: string): BrowserLoadErrorCopy {
   }
   if (code === -324) {
     return {
-      icon: FileWarning,
+      icon: CioFileWarning,
       title: 'The server sent nothing',
       description: `The server${host ? ` at ${host}` : ''} closed the connection without sending a page. Reload to try again.`
     }

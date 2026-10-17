@@ -1,10 +1,10 @@
 import CioActions from '$lib/components/icons/cio/CioActions.svelte'
 import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
 import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
+import CioImage from '$lib/components/icons/cio/CioImage.svelte'
 import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
 import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
 import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-import { Image } from '@lucide/svelte'
 import type { Component } from 'svelte'
 import type { UtilityKind } from '$shared/types'
 
@@ -19,7 +19,7 @@ export const UTILITY_KIND_ICONS: Readonly<Record<UtilityKind, Component>> = {
   web_fetch: CioBrowser,
   computer_use: CioActions,
   provider: CioCpu,
-  image_descriptor: Image
+  image_descriptor: CioImage
 }
 
 const UTILITY_KIND_LABELS: Readonly<Record<UtilityKind, string>> = {

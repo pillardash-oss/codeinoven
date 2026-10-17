@@ -7,10 +7,10 @@
   import CioPin from '$lib/components/icons/cio/CioPin.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioStore from '$lib/components/icons/cio/CioStore.svelte'
   import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
   import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { Store } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
@@ -374,7 +374,7 @@
   }[] = [
     {
       id: 'store',
-      icon: Store,
+      icon: CioStore,
       label: 'Chrome Web Store',
       hint: "Open the store, then install from the extension's page with the button beside the address.",
       run: browseStore

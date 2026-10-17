@@ -2,8 +2,9 @@
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioImage from '$lib/components/icons/cio/CioImage.svelte'
+  import CioImagePlus from '$lib/components/icons/cio/CioImagePlus.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import { Image as ImageIcon, ImagePlus } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -198,10 +199,12 @@
   }
 </script>
 
+import CioImagePlus from
+
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Image descriptor error" {stackedAbove} {joinsBelow}>
     <CardHead
-      icon={request.imageId ? ImageIcon : CioAttention}
+      icon={request.imageId ? CioImage : CioAttention}
       title={cardTitle}
       chip={{ text: 'Stopped', tone: 'urgent' }}
       bind:folded={foldState.folded}
@@ -292,7 +295,7 @@
             <CardButton
               label="Pick new image"
               title="Choose a different image and retry the description with it"
-              icon={ImagePlus}
+              icon={CioImagePlus}
               variant="secondary"
               disabled={working}
               onclick={() => void pickNewImage()}

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ClockFading, WavesHorizontal } from '@lucide/svelte'
+  import CioAudioLines from '$lib/components/icons/cio/CioAudioLines.svelte'
+  import CioTimerOff from '$lib/components/icons/cio/CioTimerOff.svelte'
   import type { VoiceSendStage } from '$lib/speech/speech-controller.svelte'
 
   interface Props {
@@ -14,6 +15,8 @@
   const tone = $derived(stage === 'steer' ? 'text-thread-working' : 'text-thread-spec')
 </script>
 
+import CioTimerOff from
+
 <!-- Armed dictation: the same processing pulse the transcribing bars carry, on
      the icon that says how the transcript will be delivered: a wave for
      "queued behind the run", a clock for "steering into it". -->
@@ -25,9 +28,9 @@
   title={decorative ? undefined : label}
 >
   {#if stage === 'steer'}
-    <ClockFading size={14} aria-hidden="true" />
+    <CioTimerOff size={14} aria-hidden="true" />
   {:else}
-    <WavesHorizontal size={14} aria-hidden="true" />
+    <CioAudioLines size={14} aria-hidden="true" />
   {/if}
 </span>
 

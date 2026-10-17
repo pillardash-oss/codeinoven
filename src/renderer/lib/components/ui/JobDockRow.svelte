@@ -1,4 +1,7 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   /**
    * One dock row for every minimized background job.
    *
@@ -7,9 +10,6 @@
    * its jobs to `JobDockEntry`s and says what expanding one means.
    */
 
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { JobDockEntry } from './job-view'
   import DockRow from './DockRow.svelte'
 

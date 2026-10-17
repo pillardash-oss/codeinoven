@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   /**
    * The reply composer for one conversation entry.
    *
@@ -9,8 +11,6 @@
    * never surprised by where their words land.
    */
 
-  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
 
   interface Props {

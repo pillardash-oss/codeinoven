@@ -1,16 +1,17 @@
 <script lang="ts">
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCalendar from '$lib/components/icons/cio/CioCalendar.svelte'
   import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import CioPause from '$lib/components/icons/cio/CioPause.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPinOff from '$lib/components/icons/cio/CioPinOff.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import CioSkipForward from '$lib/components/icons/cio/CioSkipForward.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { CalendarDays, PinOff } from '@lucide/svelte'
   import { DropdownMenu, Portal } from 'bits-ui'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
   import { type ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
@@ -228,6 +229,8 @@
   }
 </script>
 
+import CioPinOff from
+
 <div
   class="group relative flex items-center gap-1 border-l-2 px-1.5 py-2 transition-colors {expanded
     ? 'bg-elevated/70'
@@ -420,7 +423,7 @@
                 class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                 onSelect={() => (skipConfirm = 'today')}
               >
-                <CalendarDays size={14} class="text-muted" />
+                <CioCalendar size={14} class="text-muted" />
                 Skip runs for today
               </DropdownMenu.Item>
             {/if}
@@ -430,7 +433,7 @@
             onSelect={() => onTogglePin(assistant)}
           >
             {#if assistant.pinned}
-              <PinOff size={14} class="text-muted" />
+              <CioPinOff size={14} class="text-muted" />
               Unpin Assistant
             {:else}
               <CioPin size={14} class="text-muted" />

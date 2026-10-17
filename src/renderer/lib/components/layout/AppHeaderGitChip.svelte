@@ -1,8 +1,8 @@
 <script lang="ts">
   import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
+  import CioGitMergeConflict from '$lib/components/icons/cio/CioGitMergeConflict.svelte'
   import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import { GitMergeConflict } from '@lucide/svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { preloadGitPanelChunk } from '$lib/sidebar-panel-preload'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -79,7 +79,7 @@
   onclick={openGitPanel}
 >
   {#if gitState.activePrConflictCount > 0}
-    <GitMergeConflict size={13} class="shrink-0" />
+    <CioGitMergeConflict size={13} class="shrink-0" />
   {:else}
     <CioTabGit size={13} class="shrink-0" />
   {/if}

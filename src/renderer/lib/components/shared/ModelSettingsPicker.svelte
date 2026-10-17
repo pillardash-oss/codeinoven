@@ -1,9 +1,10 @@
 <script lang="ts">
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioSnail from '$lib/components/icons/cio/CioSnail.svelte'
   import CioStar from '$lib/components/icons/cio/CioStar.svelte'
   import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
   import CioZap from '$lib/components/icons/cio/CioZap.svelte'
-  import { Gauge, Snail } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import type { InferenceMode } from '$shared/types'
@@ -40,10 +41,10 @@
   }: Props = $props()
 
   const speeds = [
-    { id: 'normal', label: 'Standard', icon: Snail },
-    { id: 'fast', label: 'Fast', icon: Gauge },
+    { id: 'normal', label: 'Standard', icon: CioSnail },
+    { id: 'fast', label: 'Fast', icon: CioActions },
     { id: 'ultrafast', label: 'Ultrafast', icon: CioZap }
-  ] satisfies { id: InferenceMode; label: string; icon: typeof Snail }[]
+  ] satisfies { id: InferenceMode; label: string; icon: typeof CioSnail }[]
   let availableSpeeds = $derived(
     speeds.filter(
       (speed) => speed.id === 'normal' || (speed.id === 'fast' ? fastSupported : ultrafastSupported)
@@ -64,6 +65,8 @@
     `${currentSpeed.label}${displayedContextWindow ? ` · ${contextLabel(displayedContextWindow)}${contextWindow === undefined ? ' (default)' : ''}` : ''}`
   )
 </script>
+
+import CioSnail from
 
 <DropdownMenu.Root bind:open={menuOpen}>
   <DropdownMenu.Trigger

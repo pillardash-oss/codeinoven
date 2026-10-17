@@ -3,7 +3,6 @@
   import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
   import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
-
   interface Props {
     onChooseCreate: (id: 'skill' | 'mcp' | 'plugin') => void
     onStartSetupThread: () => void

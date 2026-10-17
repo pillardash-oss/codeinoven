@@ -3,11 +3,11 @@
   import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioMarquee from '$lib/components/icons/cio/CioMarquee.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { SquareDashedMousePointer } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
@@ -701,7 +701,7 @@
           : 'Pick an element in this design to comment on'}
         onclick={toggleInspect}
       >
-        <SquareDashedMousePointer size={13} />
+        <CioMarquee size={13} />
         {#if fullscreen}
           <span>Inspect</span>
         {/if}

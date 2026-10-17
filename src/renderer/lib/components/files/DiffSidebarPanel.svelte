@@ -1,12 +1,4 @@
 <script module lang="ts">
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import type { AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -472,6 +464,14 @@
 </script>
 
 <script lang="ts">
+  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileDiffView from './FileDiffView.svelte'

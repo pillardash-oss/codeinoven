@@ -2,9 +2,10 @@
   import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioMarquee from '$lib/components/icons/cio/CioMarquee.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioShapes from '$lib/components/icons/cio/CioShapes.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { Shapes, SquareDashedMousePointer } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import type { PromptReference } from '$shared/types'
   import { referenceHasEditableSurface } from '$lib/stores/response-references.svelte'
@@ -75,6 +76,8 @@
   }
 </script>
 
+import CioShapes from
+
 <div
   class="w-80 border border-border bg-surface p-1.5 shadow-lg"
   role="dialog"
@@ -126,9 +129,9 @@
           <div class="min-w-0 flex-1">
             <p class="flex items-center gap-1 text-[0.6875rem] font-medium text-foreground">
               {#if isElement}
-                <SquareDashedMousePointer size={10} class="shrink-0 text-accent" />
+                <CioMarquee size={10} class="shrink-0 text-accent" />
               {:else if isArtifactElement}
-                <Shapes size={10} class="shrink-0 text-accent" />
+                <CioShapes size={10} class="shrink-0 text-accent" />
               {:else if isAnnotation}
                 <CioFileText size={10} class="shrink-0 text-accent" />
               {:else if isNote}

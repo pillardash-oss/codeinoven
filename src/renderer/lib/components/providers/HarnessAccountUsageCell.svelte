@@ -1,7 +1,8 @@
 <script lang="ts">
+  import CioBatteryCharging from '$lib/components/icons/cio/CioBatteryCharging.svelte'
+  import CioLogIn from '$lib/components/icons/cio/CioLogIn.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { BatteryCharging, LogIn } from '@lucide/svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
@@ -66,7 +67,7 @@
       {/if}
       {#if bankedResets}
         <p class="flex items-center gap-1.5 text-[0.625rem] text-muted" title={bankedDetail}>
-          <BatteryCharging size={11} class="shrink-0 text-info" aria-hidden="true" />
+          <CioBatteryCharging size={11} class="shrink-0 text-info" aria-hidden="true" />
           <span class="truncate">{bankedResets}</span>
         </p>
       {/if}
@@ -83,7 +84,7 @@
             aria-label={`Sign in again to ${account.label}`}
             onclick={() => (signInOpen = true)}
           >
-            <LogIn size={10} aria-hidden="true" />
+            <CioLogIn size={10} aria-hidden="true" />
             Sign in again
           </button>
         {:else}

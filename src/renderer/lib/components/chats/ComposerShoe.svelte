@@ -1,10 +1,6 @@
 <script lang="ts" module>
   // Aliased: this file also imports the component itself, and the type is the
   // union the component renders while the value is the component.
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioClipboardCheck from '$lib/components/icons/cio/CioClipboardCheck.svelte'
-  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import type { ComposerIdentity as ComposerIdentityData } from './ComposerIdentity.svelte'
 
   /**
@@ -78,8 +74,14 @@
 </script>
 
 <script lang="ts">
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioClipboardCheck from '$lib/components/icons/cio/CioClipboardCheck.svelte'
+  import CioClipboardX from '$lib/components/icons/cio/CioClipboardX.svelte'
+  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
-  import { ClipboardX } from '@lucide/svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -89,8 +91,6 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
   import { formatTokenRate, formatTokenRateExact } from '$lib/token-rate.svelte'
-  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { vendorMatches } from '$lib/components/shared/model-picker-helpers'
@@ -443,7 +443,7 @@
         {#if report.enabled}
           <CioClipboardCheck size={12} class="shrink-0" />
         {:else}
-          <ClipboardX size={12} strokeWidth={2.75} class="shrink-0" />
+          <CioClipboardX size={12} strokeWidth={2.75} class="shrink-0" />
         {/if}
         <span class="shoe-report-label min-w-0 truncate"
           >{report.enabled ? 'Reporting' : 'Not reporting'}</span
@@ -494,7 +494,7 @@
             aria-checked={!report.enabled}
             onclick={() => selectReport(false)}
           >
-            <ClipboardX size={12} strokeWidth={2.75} class="shrink-0 text-warning" />
+            <CioClipboardX size={12} strokeWidth={2.75} class="shrink-0 text-warning" />
             Don't report
           </button>
         </div>

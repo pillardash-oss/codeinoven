@@ -9,6 +9,7 @@
   import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPinOff from '$lib/components/icons/cio/CioPinOff.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
@@ -16,7 +17,6 @@
   import { fade, slide, type FadeParams } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { ListRowReflow, listRowArrive } from '$lib/motion'
-  import { PinOff } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -1345,7 +1345,7 @@
                           onSelect={() => toggleProjectPin(project.id)}
                         >
                           {#if project.pinned}
-                            <PinOff size={14} class="text-muted" />
+                            <CioPinOff size={14} class="text-muted" />
                             Unpin Project
                           {:else}
                             <CioPin size={14} class="text-muted" />
@@ -1607,7 +1607,7 @@
                       onSelect={() => toggleProjectPin(project.id)}
                     >
                       {#if project.pinned}
-                        <PinOff size={14} class="text-muted" />
+                        <CioPinOff size={14} class="text-muted" />
                         Unpin Project
                       {:else}
                         <CioPin size={14} class="text-muted" />

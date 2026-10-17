@@ -4,9 +4,9 @@
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
   import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioMarquee from '$lib/components/icons/cio/CioMarquee.svelte'
   import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import { SquareDashedMousePointer } from '@lucide/svelte'
   import AttachmentPill from './AttachmentPill.svelte'
   import ComposerRelocationMenu from './ComposerRelocationMenu.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
@@ -251,7 +251,7 @@
               onclick={onToggleSelectionPopover}
             >
               {#if referenceSummary.noun === 'element'}
-                <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
+                <CioMarquee size={11} class="shrink-0 text-accent" />
               {:else if referenceSummary.noun === 'annotation'}
                 <CioFileText size={11} class="shrink-0 text-accent" />
               {:else if referenceSummary.noun === 'note'}

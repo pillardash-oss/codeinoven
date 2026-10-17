@@ -1,7 +1,7 @@
+import CioChat from '$lib/components/icons/cio/CioChat.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 
 import type { Component } from 'svelte'
-import CioChat from '$lib/components/icons/cio/CioChat.svelte'
 import type { ActionDefinition } from '$lib/actions'
 import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'

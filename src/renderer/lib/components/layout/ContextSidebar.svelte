@@ -17,23 +17,21 @@
 </script>
 
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
-  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import { browserStore } from '$lib/stores/browser-access.svelte'
-  import { feature } from '$lib/feature-registry'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioActions from '$lib/components/icons/cio/CioActions.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
   import CioDebugger from '$lib/components/icons/cio/CioDebugger.svelte'
   import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
+  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
+  import CioNetwork from '$lib/components/icons/cio/CioNetwork.svelte'
   import CioNotifications from '$lib/components/icons/cio/CioNotifications.svelte'
+  import CioPanelBottom from '$lib/components/icons/cio/CioPanelBottom.svelte'
+  import CioPanelRight from '$lib/components/icons/cio/CioPanelRight.svelte'
+  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
   import CioTabBoxes from '$lib/components/icons/cio/CioTabBoxes.svelte'
   import CioTabExtensions from '$lib/components/icons/cio/CioTabExtensions.svelte'
@@ -42,8 +40,12 @@
   import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
   import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import { browserStore } from '$lib/stores/browser-access.svelte'
+  import { feature } from '$lib/feature-registry'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     browserTabIndicators,
@@ -58,7 +60,6 @@
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { PanelBottom, PanelRight } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
@@ -778,9 +779,9 @@
               onclick={() => onTerminalPlacementChange(placement === 'bottom' ? 'right' : 'bottom')}
             >
               {#if placement === 'bottom'}
-                <PanelRight size={13} />
+                <CioPanelRight size={13} />
               {:else}
-                <PanelBottom size={13} />
+                <CioPanelBottom size={13} />
               {/if}
             </button>
           {:else if activeTab}

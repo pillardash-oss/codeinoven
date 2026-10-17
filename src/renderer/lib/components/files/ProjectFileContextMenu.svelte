@@ -1,17 +1,19 @@
 <script lang="ts">
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioFilePlus from '$lib/components/icons/cio/CioFilePlus.svelte'
   import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
   import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
+  import CioScissors from '$lib/components/icons/cio/CioScissors.svelte'
   import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioShieldOff from '$lib/components/icons/cio/CioShieldOff.svelte'
   import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import type { Snippet } from 'svelte'
   import { ContextMenu } from 'bits-ui'
-  import { FilePlus2, Scissors, ShieldOff } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
   import type { CioCleanupCategoryId } from '$shared/types/cio-cleanup'
   import type { WorkRoots } from '$shared/design/work-roots'
@@ -123,6 +125,8 @@
     'flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 </script>
 
+import CioShieldOff from
+
 <ContextMenu.Root>
   <ContextMenu.Trigger class="contents">
     {@render children()}
@@ -137,7 +141,7 @@
     >
       {#if !entry || entry.kind === 'directory'}
         <ContextMenu.Item class={itemClass} onSelect={onCreateFile}>
-          <FilePlus2 size={13} class="text-muted" />
+          <CioFilePlus size={13} class="text-muted" />
           New file
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCreateFolder}>
@@ -168,7 +172,7 @@
           Copy{itemSuffix}
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCut}>
-          <Scissors size={13} class="text-muted" />
+          <CioScissors size={13} class="text-muted" />
           Move{itemSuffix}
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={onCopyPath}>
@@ -198,7 +202,7 @@
                 <CioShieldCheck size={13} class="text-muted" />
                 Include in CIO Cleanup
               {:else}
-                <ShieldOff size={13} class="text-muted" />
+                <CioShieldOff size={13} class="text-muted" />
                 Exclude from CIO Cleanup
               {/if}
             </ContextMenu.Item>

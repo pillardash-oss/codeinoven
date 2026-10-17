@@ -1,10 +1,10 @@
 <script lang="ts">
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCable from '$lib/components/icons/cio/CioCable.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { Cable } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -433,7 +433,7 @@
             disabled={testing}
             onclick={() => void testConnection()}
           >
-            {#if testing}<CioSpinner size={14} class="animate-spin" />{:else}<Cable
+            {#if testing}<CioSpinner size={14} class="animate-spin" />{:else}<CioCable
                 size={14}
               />{/if}
             Test connection

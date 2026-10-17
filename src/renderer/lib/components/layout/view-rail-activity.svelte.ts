@@ -1,7 +1,7 @@
 import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
 import { createSubscriber } from 'svelte/reactivity'
 import type { Component } from 'svelte'
-import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {

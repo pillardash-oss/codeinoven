@@ -3,9 +3,12 @@
   import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
   import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
   import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioGitCompare from '$lib/components/icons/cio/CioGitCompare.svelte'
   import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
+  import CioPanelsLeftBottom from '$lib/components/icons/cio/CioPanelsLeftBottom.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPinOff from '$lib/components/icons/cio/CioPinOff.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
@@ -16,7 +19,6 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { isScopeWorktreeHealthRepairable } from '$shared/scope-worktree-health'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
-  import { ArchiveRestore, GitCompare, PanelsLeftBottom, PinOff } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component, Snippet } from 'svelte'
   import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -118,7 +120,7 @@
       if (!alreadyDocked) {
         list.push({
           label: 'Dock',
-          icon: PanelsLeftBottom,
+          icon: CioPanelsLeftBottom,
           run: () => actions.dock(bucket)
         })
       }
@@ -130,13 +132,13 @@
       if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: bucket.pinned ? 'Unpin scope' : 'Pin scope',
-          icon: bucket.pinned ? PinOff : CioPin,
+          icon: bucket.pinned ? CioPinOff : CioPin,
           run: () => void actions.togglePinned(bucket)
         })
         if (isArchived) {
           list.push({
             label: 'Restore',
-            icon: ArchiveRestore,
+            icon: CioArchive,
             run: () => void actions.setArchived(bucket, false)
           })
         } else {
@@ -184,7 +186,7 @@
         })
         list.push({
           label: 'Sync Worktree',
-          icon: GitCompare,
+          icon: CioGitCompare,
           run: () => actions.askSyncFrom(bucket)
         })
         if (setupFailed || setupStale) {
@@ -211,6 +213,8 @@
     })()
   )
 </script>
+
+import CioPinOff from
 
 <!--
   A portaled `bits-ui` menu, not a positioned child: the sidebar, the scope board

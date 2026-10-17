@@ -2,9 +2,9 @@
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioFork from '$lib/components/icons/cio/CioFork.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioShredder from '$lib/components/icons/cio/CioShredder.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { Shredder } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
@@ -289,7 +289,7 @@
                 disabled={busy}
                 onclick={() => onDelete(message.id, 'up')}
               >
-                <Shredder size={12} />
+                <CioShredder size={12} />
               </button>
             {/if}
             <button
@@ -311,7 +311,7 @@
                 disabled={busy}
                 onclick={() => onDelete(message.id, 'down')}
               >
-                <Shredder size={12} class="rotate-180" />
+                <CioShredder size={12} class="rotate-180" />
               </button>
             {/if}
           </div>

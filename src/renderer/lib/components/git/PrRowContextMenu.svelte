@@ -3,6 +3,7 @@
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
+  import CioListChecks from '$lib/components/icons/cio/CioListChecks.svelte'
   import CioMerge from '$lib/components/icons/cio/CioMerge.svelte'
   import CioMilestone from '$lib/components/icons/cio/CioMilestone.svelte'
   import CioPersonPlus from '$lib/components/icons/cio/CioPersonPlus.svelte'
@@ -12,7 +13,6 @@
   import CioTag from '$lib/components/icons/cio/CioTag.svelte'
   import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { ListChecks } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { PullRequestSummary } from '$shared/types'
@@ -232,7 +232,7 @@
 
       <ContextMenu.Separator class="my-1 h-px bg-border" />
       <ContextMenu.Item class={itemClass} onSelect={onSelectAll}>
-        <ListChecks size={13} class="shrink-0 text-muted" />
+        <CioListChecks size={13} class="shrink-0 text-muted" />
         Select every row
       </ContextMenu.Item>
       <ContextMenu.Item class={itemClass} onSelect={onClearSelection}>

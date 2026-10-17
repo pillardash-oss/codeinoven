@@ -1,9 +1,8 @@
 <script lang="ts">
   import CioFork from '$lib/components/icons/cio/CioFork.svelte'
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
   import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-
+  import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   interface Props {
     text: string
     x: number

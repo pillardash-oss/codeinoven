@@ -1,11 +1,14 @@
 <script lang="ts">
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCode from '$lib/components/icons/cio/CioCode.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
+  import CioLogIn from '$lib/components/icons/cio/CioLogIn.svelte'
+  import CioSquare from '$lib/components/icons/cio/CioSquare.svelte'
+  import CioTimerReset from '$lib/components/icons/cio/CioTimerReset.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { Clock3, LogIn, Square, TimerReset } from '@lucide/svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
@@ -290,12 +293,14 @@
   }
 </script>
 
+import CioTimerReset from
+
 <!-- The live region wraps the frame so a status change still announces the whole
 card, the way it did before the head moved onto the shared primitives. -->
 <div role={waiting ? 'status' : 'alert'} aria-live="polite">
   <CardFrame placement="top" label="Provider status" {stackedAbove} {joinsBelow}>
     <CardHead
-      icon={waiting || autoResume ? Clock3 : CioAttention}
+      icon={waiting || autoResume ? CioClock : CioAttention}
       title={sourceLabel ? 'Worker output error' : title}
       {chip}
       bind:folded={foldState.folded}
@@ -340,7 +345,7 @@ card, the way it did before the head moved onto the shared primitives. -->
           </p>
         {:else if autoRetryEnabled && resumeAt !== undefined}
           <p class="flex items-center gap-1.5 font-medium text-info tabular-nums">
-            <TimerReset size={13} class="shrink-0" aria-hidden="true" />
+            <CioTimerReset size={13} class="shrink-0" aria-hidden="true" />
             {#if queued}
               Queued for auto-resume
             {:else}
@@ -378,7 +383,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label="Stop request"
               title="Stop the waiting request"
-              icon={Square}
+              icon={CioSquare}
               variant="ghost-danger"
               disabled={retrying}
               onclick={onStop}
@@ -435,7 +440,7 @@ card, the way it did before the head moved onto the shared primitives. -->
             <CardButton
               label="Sign in"
               title="Sign in to the AI account"
-              icon={LogIn}
+              icon={CioLogIn}
               variant="primary"
               onclick={beginSignIn}
             />

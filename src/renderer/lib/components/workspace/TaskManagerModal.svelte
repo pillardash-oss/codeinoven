@@ -1,7 +1,7 @@
 <script lang="ts">
+  import CioBatteryCharging from '$lib/components/icons/cio/CioBatteryCharging.svelte'
+  import CioBatteryMedium from '$lib/components/icons/cio/CioBatteryMedium.svelte'
   import CioChat from '$lib/components/icons/cio/CioChat.svelte'
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
   import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
@@ -11,8 +11,11 @@
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioServer from '$lib/components/icons/cio/CioServer.svelte'
   import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioThermometer from '$lib/components/icons/cio/CioThermometer.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
+  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import { BatteryCharging, BatteryMedium, Cog, Thermometer } from '@lucide/svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type { Attachment } from 'svelte/attachments'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -769,6 +772,8 @@
   }
 </script>
 
+import CioTools from
+
 <Modal
   {open}
   title="Task Manager"
@@ -861,7 +866,7 @@
               {:else if service.kind === 'gateway'}
                 <CioNetwork size={15} />
               {:else if service.kind === 'worker'}
-                <Cog size={15} />
+                <CioTools size={15} />
               {:else}
                 <CioServer size={15} />
               {/if}
@@ -1167,14 +1172,14 @@
           </div>
         {:else}
           {#if power.source === 'battery'}
-            <BatteryMedium
+            <CioBatteryMedium
               size={14}
               class="shrink-0 text-muted"
               title="On battery"
               aria-label="On battery"
             />
           {:else}
-            <BatteryCharging
+            <CioBatteryCharging
               size={14}
               class="shrink-0 text-success"
               title="Plugged in"
@@ -1187,7 +1192,7 @@
               title="Current macOS thermal pressure   {thermalLabel()}"
               aria-label="Current macOS thermal pressure   {thermalLabel()}"
             >
-              <Thermometer size={14} />
+              <CioThermometer size={14} />
             </span>
           {/if}
           <p class="min-w-0 truncate text-xs text-dimmed tabular-nums">

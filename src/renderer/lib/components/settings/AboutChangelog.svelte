@@ -1,8 +1,8 @@
 <script lang="ts">
+  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import { ScrollText } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import { formatDate } from '$shared/date-time-format'
@@ -44,7 +44,7 @@
     <h3
       class="flex items-center gap-1.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
     >
-      <ScrollText size={13} />
+      <CioBook size={13} />
       Changelog
     </h3>
     {#if changelog}

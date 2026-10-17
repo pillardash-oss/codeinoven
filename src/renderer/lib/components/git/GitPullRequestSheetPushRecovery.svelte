@@ -2,7 +2,6 @@
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
-
   interface Props {
     head: string
     headIsCurrent: boolean

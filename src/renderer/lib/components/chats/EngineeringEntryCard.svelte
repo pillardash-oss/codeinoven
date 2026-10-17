@@ -1,8 +1,8 @@
 <script lang="ts">
   import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
+  import CioLightbulb from '$lib/components/icons/cio/CioLightbulb.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import { Lightbulb } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
   import CardButton from '../shared/CardButton.svelte'
@@ -101,7 +101,7 @@
             <CardButton
               label="Brainstorm first"
               title="Explore the direction with a Brainstorm first"
-              icon={Lightbulb}
+              icon={CioLightbulb}
               variant="secondary"
               disabled={busy}
               loading={busy}

@@ -1,10 +1,11 @@
 <script lang="ts">
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCalendarClock from '$lib/components/icons/cio/CioCalendarClock.svelte'
+  import CioCalendarPlus from '$lib/components/icons/cio/CioCalendarPlus.svelte'
   import CioClock from '$lib/components/icons/cio/CioClock.svelte'
   import CioLink from '$lib/components/icons/cio/CioLink.svelte'
   import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { CalendarClock, CalendarPlus } from '@lucide/svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import { describeSchedule, assistantIsScheduled, type Assistant } from '$shared/types'
   import { assistantGap } from './assistant-view'
@@ -125,14 +126,14 @@
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Created</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
-      <CalendarPlus size={12} class="shrink-0" />
+      <CioCalendarPlus size={12} class="shrink-0" />
       <span class="min-w-0 break-words">{createdLabel}</span>
     </dd>
   </div>
   <div class="flex gap-2">
     <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
     <dd class="flex min-w-0 items-center gap-1 text-muted">
-      <CalendarClock size={12} class="shrink-0" />
+      <CioCalendarClock size={12} class="shrink-0" />
       <span class="min-w-0 break-words">{updatedLabel}</span>
     </dd>
   </div>

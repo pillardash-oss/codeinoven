@@ -1,6 +1,5 @@
 <script lang="ts">
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-
   interface Props {
     src: string | null
     alt: string

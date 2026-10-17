@@ -1,5 +1,7 @@
 <script lang="ts">
+  import CioActivity from '$lib/components/icons/cio/CioActivity.svelte'
   import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
+  import CioCable from '$lib/components/icons/cio/CioCable.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
   import CioClock from '$lib/components/icons/cio/CioClock.svelte'
@@ -43,7 +45,6 @@
     type SaveOvenInput
   } from '$shared/ovens'
   import type { CustomIcon } from '$shared/types'
-  import { Activity, Cable } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
@@ -195,7 +196,7 @@
     })
     items.push({
       label: 'Check Oven',
-      icon: Activity,
+      icon: CioActivity,
       disabled: Boolean(busy) || checkingFor(oven) || Boolean(timezoneBusy),
       onClick: () => void checkOven(oven)
     })
@@ -887,6 +888,8 @@
   }
 </script>
 
+import CioCable from
+
 <div class="p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
@@ -1205,7 +1208,7 @@
                   <div>
                     <div class="space-y-1.5">
                       <dt class="flex items-center gap-1.5 text-xs text-dimmed">
-                        <Cable size={14} />Connection Info
+                        <CioCable size={14} />Connection Info
                       </dt>
                       <dd class="flex flex-col gap-1.5">
                         <p class="mt-0.5 truncate text-xs text-muted">

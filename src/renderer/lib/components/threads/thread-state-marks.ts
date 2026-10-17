@@ -1,15 +1,15 @@
-import CioInbox from '$lib/components/icons/cio/CioInbox.svelte'
-import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
 import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
 import CioClock from '$lib/components/icons/cio/CioClock.svelte'
 import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+import CioInbox from '$lib/components/icons/cio/CioInbox.svelte'
 import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
 import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
 import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
 import CioTools from '$lib/components/icons/cio/CioTools.svelte'
 import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-import type { Component } from 'svelte'
 import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
+import type { Component } from 'svelte'
 import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
 /**

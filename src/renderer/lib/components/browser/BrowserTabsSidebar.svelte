@@ -9,6 +9,7 @@
   import CioLock from '$lib/components/icons/cio/CioLock.svelte'
   import CioLockOpen from '$lib/components/icons/cio/CioLockOpen.svelte'
   import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPinOff from '$lib/components/icons/cio/CioPinOff.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
@@ -18,7 +19,6 @@
   import CioTabSettings from '$lib/components/icons/cio/CioTabSettings.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { PinOff } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserViewBounds } from '$shared/ipc-contract'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -936,7 +936,7 @@
                   {#if group.pinned}
                     <CioPin size={12} />
                   {:else}
-                    <PinOff size={12} />
+                    <CioPinOff size={12} />
                   {/if}
                 </button>
                 <button

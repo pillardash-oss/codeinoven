@@ -1,11 +1,11 @@
 <script lang="ts">
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioHammer from '$lib/components/icons/cio/CioHammer.svelte'
   import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioHammer from '$lib/components/icons/cio/CioHammer.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'

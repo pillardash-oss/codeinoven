@@ -1,10 +1,10 @@
 <script lang="ts">
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import { Popover } from 'bits-ui'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { assistantIsScheduled, type Assistant, type Thread } from '$shared/types'
   import { assistantGap } from './assistant-view'

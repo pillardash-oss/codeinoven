@@ -1,7 +1,6 @@
 <script lang="ts">
   import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-
   interface Props {
     x: number
     y: number

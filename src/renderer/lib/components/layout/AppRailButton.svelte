@@ -1,6 +1,6 @@
 <script lang="ts">
-  import RailAudioBadge from './RailAudioBadge.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import RailAudioBadge from './RailAudioBadge.svelte'
   import type { Component, Snippet } from 'svelte'
 
   interface Props {

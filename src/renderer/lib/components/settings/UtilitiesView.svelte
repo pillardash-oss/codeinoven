@@ -2,6 +2,7 @@
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioBook from '$lib/components/icons/cio/CioBook.svelte'
   import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
@@ -19,7 +20,6 @@
   import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
   import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
   import { onMount } from 'svelte'
-  import { Globe2 } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -402,7 +402,7 @@
     if (kind === 'skill') return CioBook
     if (kind === 'mcp') return CioServer
     if (kind === 'computer_use') return CioDisplay
-    return Globe2
+    return CioBrowser
   }
 
   /** An MCP server is a live connection, so its row offers a reachability test. */

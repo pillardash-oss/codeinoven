@@ -10,74 +10,134 @@
  */
 import type { Component } from 'svelte'
 import CioActions from './CioActions.svelte'
+import CioActivity from './CioActivity.svelte'
 import CioAlertCircle from './CioAlertCircle.svelte'
 import CioArchive from './CioArchive.svelte'
+import CioArrowDown from './CioArrowDown.svelte'
 import CioArrowLeft from './CioArrowLeft.svelte'
+import CioArrowLeftToLine from './CioArrowLeftToLine.svelte'
 import CioArrowRight from './CioArrowRight.svelte'
+import CioArrowRightToLine from './CioArrowRightToLine.svelte'
 import CioArrowUp from './CioArrowUp.svelte'
+import CioArrowUpCircle from './CioArrowUpCircle.svelte'
+import CioArrowUpDown from './CioArrowUpDown.svelte'
 import CioArrowUpRight from './CioArrowUpRight.svelte'
 import CioAttention from './CioAttention.svelte'
+import CioAudioLines from './CioAudioLines.svelte'
 import CioBack from './CioBack.svelte'
 import CioBan from './CioBan.svelte'
+import CioBatteryCharging from './CioBatteryCharging.svelte'
+import CioBatteryMedium from './CioBatteryMedium.svelte'
+import CioBellOff from './CioBellOff.svelte'
 import CioBoard from './CioBoard.svelte'
 import CioBook from './CioBook.svelte'
 import CioBookmark from './CioBookmark.svelte'
+import CioBookmarkCheck from './CioBookmarkCheck.svelte'
 import CioBraces from './CioBraces.svelte'
 import CioBrowser from './CioBrowser.svelte'
+import CioBugOff from './CioBugOff.svelte'
+import CioCable from './CioCable.svelte'
+import CioCalendar from './CioCalendar.svelte'
+import CioCalendarClock from './CioCalendarClock.svelte'
+import CioCalendarOff from './CioCalendarOff.svelte'
+import CioCalendarPlus from './CioCalendarPlus.svelte'
+import CioCaptions from './CioCaptions.svelte'
+import CioCaseSensitive from './CioCaseSensitive.svelte'
 import CioChart from './CioChart.svelte'
 import CioChat from './CioChat.svelte'
 import CioCheck from './CioCheck.svelte'
+import CioCheckCheck from './CioCheckCheck.svelte'
 import CioCheckCircle from './CioCheckCircle.svelte'
 import CioChevronDown from './CioChevronDown.svelte'
+import CioChevronsDown from './CioChevronsDown.svelte'
+import CioChevronsUp from './CioChevronsUp.svelte'
 import CioChevronUp from './CioChevronUp.svelte'
 import CioCircle from './CioCircle.svelte'
 import CioClapper from './CioClapper.svelte'
 import CioClipboardCheck from './CioClipboardCheck.svelte'
+import CioClipboardList from './CioClipboardList.svelte'
 import CioClipboardPaste from './CioClipboardPaste.svelte'
+import CioClipboardX from './CioClipboardX.svelte'
 import CioClock from './CioClock.svelte'
 import CioClose from './CioClose.svelte'
 import CioCloud from './CioCloud.svelte'
+import CioCloudOff from './CioCloudOff.svelte'
 import CioCode from './CioCode.svelte'
 import CioCommit from './CioCommit.svelte'
+import CioCookie from './CioCookie.svelte'
 import CioCopy from './CioCopy.svelte'
 import CioCpu from './CioCpu.svelte'
 import CioCrossCircle from './CioCrossCircle.svelte'
+import CioCursor from './CioCursor.svelte'
 import CioDebugger from './CioDebugger.svelte'
 import CioDesign from './CioDesign.svelte'
 import CioDiff from './CioDiff.svelte'
 import CioDisk from './CioDisk.svelte'
 import CioDisplay from './CioDisplay.svelte'
+import CioDocuments from './CioDocuments.svelte'
 import CioDot from './CioDot.svelte'
 import CioDownload from './CioDownload.svelte'
 import CioEllipsis from './CioEllipsis.svelte'
+import CioEllipsisVertical from './CioEllipsisVertical.svelte'
 import CioEnter from './CioEnter.svelte'
+import CioEraser from './CioEraser.svelte'
 import CioExternalLink from './CioExternalLink.svelte'
 import CioEye from './CioEye.svelte'
 import CioEyeOff from './CioEyeOff.svelte'
+import CioFile from './CioFile.svelte'
+import CioFileAudio from './CioFileAudio.svelte'
+import CioFileCheck from './CioFileCheck.svelte'
 import CioFileCode from './CioFileCode.svelte'
+import CioFileMinus from './CioFileMinus.svelte'
+import CioFilePen from './CioFilePen.svelte'
+import CioFilePlus from './CioFilePlus.svelte'
+import CioFileQuestion from './CioFileQuestion.svelte'
 import CioFiles from './CioFiles.svelte'
 import CioFileText from './CioFileText.svelte'
+import CioFileWarning from './CioFileWarning.svelte'
 import CioFilter from './CioFilter.svelte'
 import CioFind from './CioFind.svelte'
+import CioFlag from './CioFlag.svelte'
 import CioFlame from './CioFlame.svelte'
 import CioFolder from './CioFolder.svelte'
+import CioFolderGit from './CioFolderGit.svelte'
 import CioFolderInput from './CioFolderInput.svelte'
 import CioFolderOpen from './CioFolderOpen.svelte'
 import CioFolderPlus from './CioFolderPlus.svelte'
 import CioFork from './CioFork.svelte'
 import CioForward from './CioForward.svelte'
+import CioFrame from './CioFrame.svelte'
+import CioGitCompare from './CioGitCompare.svelte'
+import CioGitCompareArrows from './CioGitCompareArrows.svelte'
+import CioGitGraph from './CioGitGraph.svelte'
+import CioGitMergeConflict from './CioGitMergeConflict.svelte'
 import CioGrip from './CioGrip.svelte'
 import CioHammer from './CioHammer.svelte'
 import CioHarness from './CioHarness.svelte'
+import CioHeartPulse from './CioHeartPulse.svelte'
 import CioHistory from './CioHistory.svelte'
+import CioHome from './CioHome.svelte'
+import CioImage from './CioImage.svelte'
 import CioImageOff from './CioImageOff.svelte'
+import CioImagePlus from './CioImagePlus.svelte'
+import CioInbox from './CioInbox.svelte'
 import CioKey from './CioKey.svelte'
 import CioKeyboard from './CioKeyboard.svelte'
 import CioLayers from './CioLayers.svelte'
+import CioLayoutGrid from './CioLayoutGrid.svelte'
 import CioLearn from './CioLearn.svelte'
+import CioLightbulb from './CioLightbulb.svelte'
 import CioLink from './CioLink.svelte'
+import CioListChecks from './CioListChecks.svelte'
+import CioListClock from './CioListClock.svelte'
+import CioListOrdered from './CioListOrdered.svelte'
+import CioListTodo from './CioListTodo.svelte'
+import CioListTree from './CioListTree.svelte'
 import CioLock from './CioLock.svelte'
 import CioLockOpen from './CioLockOpen.svelte'
+import CioLogIn from './CioLogIn.svelte'
+import CioLogOut from './CioLogOut.svelte'
+import CioMarquee from './CioMarquee.svelte'
 import CioMaximize from './CioMaximize.svelte'
 import CioMemory from './CioMemory.svelte'
 import CioMerge from './CioMerge.svelte'
@@ -87,41 +147,67 @@ import CioMic from './CioMic.svelte'
 import CioMilestone from './CioMilestone.svelte'
 import CioMinimize from './CioMinimize.svelte'
 import CioMinus from './CioMinus.svelte'
+import CioMoon from './CioMoon.svelte'
 import CioNetwork from './CioNetwork.svelte'
 import CioNote from './CioNote.svelte'
 import CioNotes from './CioNotes.svelte'
 import CioNotifications from './CioNotifications.svelte'
 import CioPackage from './CioPackage.svelte'
+import CioPackageCheck from './CioPackageCheck.svelte'
+import CioPackagePlus from './CioPackagePlus.svelte'
 import CioPalette from './CioPalette.svelte'
 import CioPanelBottom from './CioPanelBottom.svelte'
+import CioPanelLeft from './CioPanelLeft.svelte'
 import CioPanelRight from './CioPanelRight.svelte'
+import CioPanelsLeftBottom from './CioPanelsLeftBottom.svelte'
 import CioPaperclip from './CioPaperclip.svelte'
 import CioPause from './CioPause.svelte'
 import CioPencil from './CioPencil.svelte'
 import CioPerson from './CioPerson.svelte'
 import CioPersonPlus from './CioPersonPlus.svelte'
 import CioPin from './CioPin.svelte'
+import CioPinOff from './CioPinOff.svelte'
 import CioPlay from './CioPlay.svelte'
 import CioPlug from './CioPlug.svelte'
+import CioPlugZap from './CioPlugZap.svelte'
 import CioPlus from './CioPlus.svelte'
 import CioProjects from './CioProjects.svelte'
 import CioPullRequest from './CioPullRequest.svelte'
+import CioPullRequestClosed from './CioPullRequestClosed.svelte'
+import CioPullRequestDraft from './CioPullRequestDraft.svelte'
 import CioRedo from './CioRedo.svelte'
 import CioRefresh from './CioRefresh.svelte'
+import CioReplace from './CioReplace.svelte'
+import CioReplaceAll from './CioReplaceAll.svelte'
 import CioRocket from './CioRocket.svelte'
+import CioRows3 from './CioRows3.svelte'
 import CioSave from './CioSave.svelte'
+import CioScissors from './CioScissors.svelte'
 import CioScoped from './CioScoped.svelte'
 import CioSearch from './CioSearch.svelte'
+import CioSearchX from './CioSearchX.svelte'
+import CioSelectAll from './CioSelectAll.svelte'
 import CioSend from './CioSend.svelte'
 import CioServer from './CioServer.svelte'
+import CioServerCrash from './CioServerCrash.svelte'
+import CioShapes from './CioShapes.svelte'
+import CioShield from './CioShield.svelte'
 import CioShieldAlert from './CioShieldAlert.svelte'
 import CioShieldCheck from './CioShieldCheck.svelte'
+import CioShieldOff from './CioShieldOff.svelte'
+import CioShredder from './CioShredder.svelte'
+import CioSkipBack from './CioSkipBack.svelte'
 import CioSkipForward from './CioSkipForward.svelte'
+import CioSmilePlus from './CioSmilePlus.svelte'
+import CioSnail from './CioSnail.svelte'
 import CioSparkles from './CioSparkles.svelte'
 import CioSpinner from './CioSpinner.svelte'
+import CioSquare from './CioSquare.svelte'
 import CioStar from './CioStar.svelte'
 import CioStop from './CioStop.svelte'
+import CioStore from './CioStore.svelte'
 import CioSubagent from './CioSubagent.svelte'
+import CioSun from './CioSun.svelte'
 import CioSwap from './CioSwap.svelte'
 import CioTabBoxes from './CioTabBoxes.svelte'
 import CioTabExtensions from './CioTabExtensions.svelte'
@@ -136,20 +222,30 @@ import CioTarget from './CioTarget.svelte'
 import CioTeam from './CioTeam.svelte'
 import CioTemporaryChat from './CioTemporaryChat.svelte'
 import CioTerminal from './CioTerminal.svelte'
+import CioThermometer from './CioThermometer.svelte'
 import CioThreadBrowser from './CioThreadBrowser.svelte'
 import CioThreads from './CioThreads.svelte'
+import CioThumbsUp from './CioThumbsUp.svelte'
 import CioTimerOff from './CioTimerOff.svelte'
+import CioTimerReset from './CioTimerReset.svelte'
 import CioTools from './CioTools.svelte'
 import CioTrash from './CioTrash.svelte'
+import CioTrendingUp from './CioTrendingUp.svelte'
 import CioUndo from './CioUndo.svelte'
 import CioUnplug from './CioUnplug.svelte'
 import CioUpload from './CioUpload.svelte'
+import CioUserCheck from './CioUserCheck.svelte'
+import CioUserMinus from './CioUserMinus.svelte'
 import CioVariable from './CioVariable.svelte'
 import CioVolume from './CioVolume.svelte'
 import CioVolumeX from './CioVolumeX.svelte'
+import CioWifiOff from './CioWifiOff.svelte'
 import CioWindow from './CioWindow.svelte'
+import CioWrapText from './CioWrapText.svelte'
 import CioWrench from './CioWrench.svelte'
 import CioZap from './CioZap.svelte'
+import CioZoomIn from './CioZoomIn.svelte'
+import CioZoomOut from './CioZoomOut.svelte'
 import AssistantIcon from './AssistantIcon.svelte'
 import AssistantDefaultIcon from './AssistantDefaultIcon.svelte'
 import AssistantKnowledgeIcon from './AssistantKnowledgeIcon.svelte'
@@ -159,74 +255,134 @@ import TriangleQuestionMark from './TriangleQuestionMark.svelte'
 /** Every glyph the set draws, by id. */
 export const CIO_ICONS = {
   actions: CioActions,
+  activity: CioActivity,
   'alert-circle': CioAlertCircle,
   archive: CioArchive,
+  'arrow-down': CioArrowDown,
   'arrow-left': CioArrowLeft,
+  'arrow-left-to-line': CioArrowLeftToLine,
   'arrow-right': CioArrowRight,
+  'arrow-right-to-line': CioArrowRightToLine,
   'arrow-up': CioArrowUp,
+  'arrow-up-circle': CioArrowUpCircle,
+  'arrow-up-down': CioArrowUpDown,
   'arrow-up-right': CioArrowUpRight,
   attention: CioAttention,
+  'audio-lines': CioAudioLines,
   back: CioBack,
   ban: CioBan,
+  'battery-charging': CioBatteryCharging,
+  'battery-medium': CioBatteryMedium,
+  'bell-off': CioBellOff,
   board: CioBoard,
   book: CioBook,
   bookmark: CioBookmark,
+  'bookmark-check': CioBookmarkCheck,
   braces: CioBraces,
   browser: CioBrowser,
+  'bug-off': CioBugOff,
+  cable: CioCable,
+  calendar: CioCalendar,
+  'calendar-clock': CioCalendarClock,
+  'calendar-off': CioCalendarOff,
+  'calendar-plus': CioCalendarPlus,
+  captions: CioCaptions,
+  'case-sensitive': CioCaseSensitive,
   chart: CioChart,
   chat: CioChat,
   check: CioCheck,
+  'check-check': CioCheckCheck,
   'check-circle': CioCheckCircle,
   'chevron-down': CioChevronDown,
+  'chevrons-down': CioChevronsDown,
+  'chevrons-up': CioChevronsUp,
   'chevron-up': CioChevronUp,
   circle: CioCircle,
   clapper: CioClapper,
   'clipboard-check': CioClipboardCheck,
+  'clipboard-list': CioClipboardList,
   'clipboard-paste': CioClipboardPaste,
+  'clipboard-x': CioClipboardX,
   clock: CioClock,
   close: CioClose,
   cloud: CioCloud,
+  'cloud-off': CioCloudOff,
   code: CioCode,
   commit: CioCommit,
+  cookie: CioCookie,
   copy: CioCopy,
   cpu: CioCpu,
   'cross-circle': CioCrossCircle,
+  cursor: CioCursor,
   debugger: CioDebugger,
   design: CioDesign,
   diff: CioDiff,
   disk: CioDisk,
   display: CioDisplay,
+  documents: CioDocuments,
   dot: CioDot,
   download: CioDownload,
   ellipsis: CioEllipsis,
+  'ellipsis-vertical': CioEllipsisVertical,
   enter: CioEnter,
+  eraser: CioEraser,
   'external-link': CioExternalLink,
   eye: CioEye,
   'eye-off': CioEyeOff,
+  file: CioFile,
+  'file-audio': CioFileAudio,
+  'file-check': CioFileCheck,
   'file-code': CioFileCode,
+  'file-minus': CioFileMinus,
+  'file-pen': CioFilePen,
+  'file-plus': CioFilePlus,
+  'file-question': CioFileQuestion,
   files: CioFiles,
   'file-text': CioFileText,
+  'file-warning': CioFileWarning,
   filter: CioFilter,
   find: CioFind,
+  flag: CioFlag,
   flame: CioFlame,
   folder: CioFolder,
+  'folder-git': CioFolderGit,
   'folder-input': CioFolderInput,
   'folder-open': CioFolderOpen,
   'folder-plus': CioFolderPlus,
   fork: CioFork,
   forward: CioForward,
+  frame: CioFrame,
+  'git-compare': CioGitCompare,
+  'git-compare-arrows': CioGitCompareArrows,
+  'git-graph': CioGitGraph,
+  'git-merge-conflict': CioGitMergeConflict,
   grip: CioGrip,
   hammer: CioHammer,
   harness: CioHarness,
+  'heart-pulse': CioHeartPulse,
   history: CioHistory,
+  home: CioHome,
+  image: CioImage,
   'image-off': CioImageOff,
+  'image-plus': CioImagePlus,
+  inbox: CioInbox,
   key: CioKey,
   keyboard: CioKeyboard,
   layers: CioLayers,
+  'layout-grid': CioLayoutGrid,
   learn: CioLearn,
+  lightbulb: CioLightbulb,
   link: CioLink,
+  'list-checks': CioListChecks,
+  'list-clock': CioListClock,
+  'list-ordered': CioListOrdered,
+  'list-todo': CioListTodo,
+  'list-tree': CioListTree,
   lock: CioLock,
   'lock-open': CioLockOpen,
+  'log-in': CioLogIn,
+  'log-out': CioLogOut,
+  marquee: CioMarquee,
   maximize: CioMaximize,
   memory: CioMemory,
   merge: CioMerge,
@@ -236,41 +392,67 @@ export const CIO_ICONS = {
   milestone: CioMilestone,
   minimize: CioMinimize,
   minus: CioMinus,
+  moon: CioMoon,
   network: CioNetwork,
   note: CioNote,
   notes: CioNotes,
   notifications: CioNotifications,
   package: CioPackage,
+  'package-check': CioPackageCheck,
+  'package-plus': CioPackagePlus,
   palette: CioPalette,
   'panel-bottom': CioPanelBottom,
+  'panel-left': CioPanelLeft,
   'panel-right': CioPanelRight,
+  'panels-left-bottom': CioPanelsLeftBottom,
   paperclip: CioPaperclip,
   pause: CioPause,
   pencil: CioPencil,
   person: CioPerson,
   'person-plus': CioPersonPlus,
   pin: CioPin,
+  'pin-off': CioPinOff,
   play: CioPlay,
   plug: CioPlug,
+  'plug-zap': CioPlugZap,
   plus: CioPlus,
   projects: CioProjects,
   'pull-request': CioPullRequest,
+  'pull-request-closed': CioPullRequestClosed,
+  'pull-request-draft': CioPullRequestDraft,
   redo: CioRedo,
   refresh: CioRefresh,
+  replace: CioReplace,
+  'replace-all': CioReplaceAll,
   rocket: CioRocket,
+  'rows-3': CioRows3,
   save: CioSave,
+  scissors: CioScissors,
   scoped: CioScoped,
   search: CioSearch,
+  'search-x': CioSearchX,
+  'select-all': CioSelectAll,
   send: CioSend,
   server: CioServer,
+  'server-crash': CioServerCrash,
+  shapes: CioShapes,
+  shield: CioShield,
   'shield-alert': CioShieldAlert,
   'shield-check': CioShieldCheck,
+  'shield-off': CioShieldOff,
+  shredder: CioShredder,
+  'skip-back': CioSkipBack,
   'skip-forward': CioSkipForward,
+  'smile-plus': CioSmilePlus,
+  snail: CioSnail,
   sparkles: CioSparkles,
   spinner: CioSpinner,
+  square: CioSquare,
   star: CioStar,
   stop: CioStop,
+  store: CioStore,
   subagent: CioSubagent,
+  sun: CioSun,
   swap: CioSwap,
   'tab-boxes': CioTabBoxes,
   'tab-extensions': CioTabExtensions,
@@ -285,20 +467,30 @@ export const CIO_ICONS = {
   team: CioTeam,
   'temporary-chat': CioTemporaryChat,
   terminal: CioTerminal,
+  thermometer: CioThermometer,
   'thread-browser': CioThreadBrowser,
   threads: CioThreads,
+  'thumbs-up': CioThumbsUp,
   'timer-off': CioTimerOff,
+  'timer-reset': CioTimerReset,
   tools: CioTools,
   trash: CioTrash,
+  'trending-up': CioTrendingUp,
   undo: CioUndo,
   unplug: CioUnplug,
   upload: CioUpload,
+  'user-check': CioUserCheck,
+  'user-minus': CioUserMinus,
   variable: CioVariable,
   volume: CioVolume,
   'volume-x': CioVolumeX,
+  'wifi-off': CioWifiOff,
   window: CioWindow,
+  'wrap-text': CioWrapText,
   wrench: CioWrench,
   zap: CioZap,
+  'zoom-in': CioZoomIn,
+  'zoom-out': CioZoomOut,
   assistant: AssistantIcon,
   'assistant-default': AssistantDefaultIcon,
   'assistant-knowledge': AssistantKnowledgeIcon,

@@ -1,8 +1,8 @@
 <script lang="ts">
+  import CioBan from '$lib/components/icons/cio/CioBan.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import CioClock from '$lib/components/icons/cio/CioClock.svelte'
   import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-  import { CircleSlash2 } from '@lucide/svelte'
   import type { AgentToolStatus } from '$shared/types'
   import { SUBAGENT_STATUS_TONE, subagentStatusLabel } from '$lib/subagent-presentation'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -61,7 +61,7 @@
     title={label}
   />
 {:else if status === 'aborted'}
-  <CircleSlash2
+  <CioBan
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.aborted}"
     role="img"

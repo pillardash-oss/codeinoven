@@ -1,6 +1,6 @@
 <script lang="ts">
+  import CioCookie from '$lib/components/icons/cio/CioCookie.svelte'
   import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import { Cookie } from '@lucide/svelte'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
@@ -49,7 +49,7 @@
     title="Clear browser cookies and site data"
     onclick={() => browser.requestDataClear()}
   >
-    <Cookie size={14} />
+    <CioCookie size={14} />
     <span>Clear cookies and site data</span>
   </button>
 </div>

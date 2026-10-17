@@ -1,9 +1,10 @@
 <script lang="ts">
+  import CioChevronsDown from '$lib/components/icons/cio/CioChevronsDown.svelte'
+  import CioChevronsUp from '$lib/components/icons/cio/CioChevronsUp.svelte'
   import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
   import CioTarget from '$lib/components/icons/cio/CioTarget.svelte'
-  import { ChevronsDown, ChevronsUp } from '@lucide/svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {
@@ -127,9 +128,9 @@
     onclick={onToggleExpandAll}
   >
     {#if anyDirExpanded}
-      <ChevronsUp size={12} />
+      <CioChevronsUp size={12} />
     {:else}
-      <ChevronsDown size={12} />
+      <CioChevronsDown size={12} />
     {/if}
   </button>
   <button

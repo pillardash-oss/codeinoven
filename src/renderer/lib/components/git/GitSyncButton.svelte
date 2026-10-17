@@ -1,8 +1,8 @@
 <script lang="ts">
   import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioGitCompareArrows from '$lib/components/icons/cio/CioGitCompareArrows.svelte'
   import CioPullRequest from '$lib/components/icons/cio/CioPullRequest.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { GitCompareArrows } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitSyncDirection } from '$shared/types'
 
@@ -43,7 +43,7 @@
     {#if busy}
       <CioSpinner size={11} class="animate-spin" aria-hidden="true" />
     {:else}
-      <GitCompareArrows size={11} aria-hidden="true" />
+      <CioGitCompareArrows size={11} aria-hidden="true" />
     {/if}
     <span class="sync-label">Sync</span>
     <CioChevronDown size={10} class="shrink-0 text-dimmed" aria-hidden="true" />
@@ -57,7 +57,7 @@
       class="z-50 w-60 overflow-hidden border border-border bg-surface py-1 shadow-xl"
     >
       <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('from')}>
-        <GitCompareArrows size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+        <CioGitCompareArrows size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
         Sync from main
       </DropdownMenu.Item>
       <DropdownMenu.Item class={itemClass} disabled={blocked} onSelect={() => onSync('to')}>

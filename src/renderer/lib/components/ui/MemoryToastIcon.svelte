@@ -1,6 +1,5 @@
 <script lang="ts">
   import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
-
   /**
    * The memory proposal's card icon, as svelte-sonner draws it.
    *

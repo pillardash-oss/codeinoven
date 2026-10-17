@@ -3,7 +3,8 @@
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
   import CioPause from '$lib/components/icons/cio/CioPause.svelte'
   import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import { Repeat, Square } from '@lucide/svelte'
+  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+  import CioSquare from '$lib/components/icons/cio/CioSquare.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     BrowserCompositionPlayback,
@@ -129,6 +130,8 @@
   })
 </script>
 
+import CioSquare from
+
 <div
   class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-2"
   role="group"
@@ -154,7 +157,7 @@
     title="Stop and return to the start"
     onclick={stop}
   >
-    <Square size={12} />
+    <CioSquare size={12} />
   </button>
   <button
     type="button"
@@ -203,7 +206,7 @@
     title={loop ? 'Looping: play again at the end' : 'Play once and hold the last frame'}
     onclick={toggleLoop}
   >
-    <Repeat size={13} />
+    <CioRefresh size={13} />
   </button>
 </div>
 {#if error}

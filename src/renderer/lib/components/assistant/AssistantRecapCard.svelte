@@ -1,9 +1,10 @@
 <script lang="ts">
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioListChecks from '$lib/components/icons/cio/CioListChecks.svelte'
+  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
   import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-  import { ListChecks, Signature } from '@lucide/svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -128,6 +129,8 @@
   )
 </script>
 
+import CioPencil from
+
 <CardFrame
   placement="replace"
   label="Review the assistant the agent drafted"
@@ -135,7 +138,7 @@
   {joinsBelow}
 >
   <CardHead
-    icon={ListChecks}
+    icon={CioListChecks}
     title={cardTitle}
     chip={{ text: 'Draft', tone: 'paused' }}
     bind:folded={foldState.folded}
@@ -160,7 +163,7 @@
         {#if plan?.name}
           <div class="flex items-start gap-2">
             <dt class="flex shrink-0 items-center gap-1.5 text-dimmed" title="The name you gave it">
-              <Signature size={12} strokeWidth={1.8} />
+              <CioPencil size={12} strokeWidth={1.8} />
               <span>Name</span>
             </dt>
             <dd class="min-w-0 flex-1 text-foreground">{plan.name}</dd>

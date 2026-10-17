@@ -3,9 +3,9 @@
   import CioFork from '$lib/components/icons/cio/CioFork.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPin from '$lib/components/icons/cio/CioPin.svelte'
+  import CioPinOff from '$lib/components/icons/cio/CioPinOff.svelte'
   import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
-  import { PinOff } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -106,7 +106,7 @@
           onclick={() => void togglePin()}
         >
           {#if pinned}
-            <PinOff size={14} />
+            <CioPinOff size={14} />
           {:else}
             <CioPin size={14} />
           {/if}

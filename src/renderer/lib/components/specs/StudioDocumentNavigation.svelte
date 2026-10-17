@@ -1,8 +1,7 @@
 <script lang="ts">
   import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
   import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import { PanelLeft } from '@lucide/svelte'
-
+  import CioPanelLeft from '$lib/components/icons/cio/CioPanelLeft.svelte'
   type StudioDocument = 'brainstorm' | 'prd' | 'spec' | 'assignment' | 'audit'
 
   interface Props {
@@ -70,7 +69,7 @@
       title={sectionsOpen ? `Hide ${sectionsLabel}` : `Show ${sectionsLabel}`}
       onclick={onToggleSections}
     >
-      <PanelLeft size={13} />
+      <CioPanelLeft size={13} />
     </button>
   {/if}
   <button

@@ -2,6 +2,7 @@
   import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
   import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
   import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
+  import CioListOrdered from '$lib/components/icons/cio/CioListOrdered.svelte'
   import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
@@ -9,9 +10,8 @@
   import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioWrapText from '$lib/components/icons/cio/CioWrapText.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { ListOrdered, WrapText } from '@lucide/svelte'
-
   interface Props {
     diffView: boolean
     lineNumbers: boolean
@@ -80,6 +80,8 @@
 
   let open = $state(false)
 </script>
+
+import CioWrapText from
 
 {#if showUndoRedo}
   <button
@@ -152,14 +154,14 @@
           Reload file
         </DropdownMenu.Item>
         <DropdownMenu.Item class={itemClass} onSelect={onToggleLineNumbers}>
-          <ListOrdered size={13} class="text-muted" />
+          <CioListOrdered size={13} class="text-muted" />
           <span class="flex-1">{lineNumbers ? 'Hide line numbers' : 'Show line numbers'}</span>
           {#if lineNumbers}
             <CioCheck size={12} class="text-primary" />
           {/if}
         </DropdownMenu.Item>
         <DropdownMenu.Item class={itemClass} onSelect={onToggleWrap}>
-          <WrapText size={13} class="text-muted" />
+          <CioWrapText size={13} class="text-muted" />
           <span class="flex-1">Wrap</span>
           {#if wrap}
             <CioCheck size={12} class="text-primary" />

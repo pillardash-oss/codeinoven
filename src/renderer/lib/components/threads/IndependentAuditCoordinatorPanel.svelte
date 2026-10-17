@@ -1,9 +1,9 @@
 <script lang="ts">
   import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
   import CioArrowUpRight from '$lib/components/icons/cio/CioArrowUpRight.svelte'
+  import CioFind from '$lib/components/icons/cio/CioFind.svelte'
   import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
   import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import { FileSearch } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
@@ -199,7 +199,7 @@
     <section class="border-b border-border p-4" aria-label="Independent auditor model">
       <div class="flex items-start gap-3">
         <div class="bg-primary/10 p-2 text-primary">
-          <FileSearch size={16} />
+          <CioFind size={16} />
         </div>
         <div class="min-w-0 flex-1">
           <h3 class="text-xs font-semibold text-foreground">Auditor model</h3>

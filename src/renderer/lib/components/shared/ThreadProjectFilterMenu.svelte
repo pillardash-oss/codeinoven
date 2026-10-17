@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Inbox } from '@lucide/svelte'
   import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
+  import CioInbox from '$lib/components/icons/cio/CioInbox.svelte'
   import { ContextMenu } from 'bits-ui'
   import {
     THREAD_GROUP_ICONS,
@@ -62,7 +62,7 @@
       onclick={() => threadGroupingState.toggleEnabled()}
     >
       <span class="relative flex items-center justify-center">
-        <Inbox size={15} strokeWidth={1.8} />
+        <CioInbox size={15} strokeWidth={1.8} />
         {#if inboxFilterActive}
           <span
             class="absolute -top-1.5 -right-2 flex min-w-3 items-center justify-center bg-primary px-0.5 text-[0.5rem] font-semibold leading-3 tabular-nums text-on-primary"
@@ -83,7 +83,7 @@
           threadGroupingState.setAllVisible(!threadGroupingState.isAll)
         }}
       >
-        <Inbox size={12} class="shrink-0 text-muted" aria-hidden="true" />
+        <CioInbox size={12} class="shrink-0 text-muted" aria-hidden="true" />
         <span class="min-w-0 flex-1 truncate text-xs font-medium">All</span>
         <span
           role="presentation"

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Columns3, Rows3 } from '@lucide/svelte'
+  import CioBoard from '$lib/components/icons/cio/CioBoard.svelte'
+  import CioRows3 from '$lib/components/icons/cio/CioRows3.svelte'
   import { diffLayoutState } from '$lib/stores/diff-layout.svelte'
 
   interface Props {
@@ -17,6 +18,8 @@
   }
 </script>
 
+import CioRows3 from
+
 <button
   type="button"
   {title}
@@ -25,8 +28,8 @@
   onclick={handleClick}
 >
   {#if diffLayoutState.layout === 'vertical'}
-    <Rows3 {size} />
+    <CioRows3 {size} />
   {:else}
-    <Columns3 {size} />
+    <CioBoard {size} />
   {/if}
 </button>

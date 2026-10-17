@@ -1,8 +1,9 @@
 <script lang="ts">
+  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
   import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioListTodo from '$lib/components/icons/cio/CioListTodo.svelte'
   import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
   import CioWrench from '$lib/components/icons/cio/CioWrench.svelte'
-  import { Film, ListTodo } from '@lucide/svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
@@ -44,6 +45,8 @@
     return task.workerName ?? (task.owner === 'senior' ? 'Sr. Engineer' : 'Unassigned')
   }
 </script>
+
+import CioListTodo from
 
 <div
   bind:this={listboxElement}
@@ -110,12 +113,12 @@
             {#if mention.entry.id === 'cio-design'}
               <CioPalette size={13} class="shrink-0 text-primary" />
             {:else if mention.entry.id === 'cio-video'}
-              <Film size={13} class="shrink-0 text-primary" />
+              <CioClapper size={13} class="shrink-0 text-primary" />
             {:else}
               <CioWrench size={13} class="shrink-0 text-primary" />
             {/if}
           {:else if mention.type === 'task'}
-            <ListTodo size={13} class="shrink-0 text-info" />
+            <CioListTodo size={13} class="shrink-0 text-info" />
           {:else if mention.entry.kind === 'directory'}
             <FolderTypeIcon name={mention.entry.name} size={13} />
           {:else}

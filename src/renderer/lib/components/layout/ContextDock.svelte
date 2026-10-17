@@ -1,6 +1,6 @@
 <script module lang="ts">
-  import type { Component, Snippet } from 'svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import type { Component, Snippet } from 'svelte'
   import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
   export interface ContextDockAppearance {

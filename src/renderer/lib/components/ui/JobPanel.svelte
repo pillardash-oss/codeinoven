@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
+  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
+  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   /**
    * One background job as a dockable panel: what it is doing, the steps it goes
    * through, and what it left behind.
@@ -11,10 +15,6 @@
    * spends minutes in the background is the same experience whoever started it.
    */
 
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCircle from '$lib/components/icons/cio/CioCircle.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import DockableModal from './DockableModal.svelte'
   import type { JobStatus, JobStepView } from './job-view'

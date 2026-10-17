@@ -1,7 +1,9 @@
 <script lang="ts">
+  import CioAudioLines from '$lib/components/icons/cio/CioAudioLines.svelte'
+  import CioClapper from '$lib/components/icons/cio/CioClapper.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import { AudioLines, Image as ImageIcon, Video } from '@lucide/svelte'
+  import CioImage from '$lib/components/icons/cio/CioImage.svelte'
   import { attachmentPreviewKind } from '$lib/mime'
   import type { PromptAttachment } from '$shared/types'
 
@@ -26,6 +28,8 @@
   const previewKind = $derived(attachmentPreviewKind(attachment.mime, name))
 </script>
 
+import CioImage from
+
 <!-- One attached file: what it is, what opening it does, and how it leaves. The
      leading segment is the icon or the picture, the trailing one is the remove
      control, and each reads the same wherever the file is listed. -->
@@ -37,12 +41,12 @@
       {#if previewUrl}
         <img src={previewUrl} alt={name} class="h-5 w-5 shrink-0 object-cover" />
       {:else}
-        <ImageIcon size={11} class="shrink-0" />
+        <CioImage size={11} class="shrink-0" />
       {/if}
     {:else if previewKind === 'video'}
-      <Video size={11} class="shrink-0" />
+      <CioClapper size={11} class="shrink-0" />
     {:else if previewKind === 'audio'}
-      <AudioLines size={11} class="shrink-0" />
+      <CioAudioLines size={11} class="shrink-0" />
     {:else}
       <CioFileText size={11} class="shrink-0" />
     {/if}

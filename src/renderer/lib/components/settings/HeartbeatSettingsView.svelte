@@ -2,6 +2,7 @@
   import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
+  import CioHeartPulse from '$lib/components/icons/cio/CioHeartPulse.svelte'
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
   import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
@@ -9,7 +10,6 @@
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import CioZap from '$lib/components/icons/cio/CioZap.svelte'
   import { onMount } from 'svelte'
-  import { HeartPulse } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { heartbeatStore } from '$lib/stores/heartbeat.svelte'
@@ -256,7 +256,7 @@
     </div>
   {:else if heartbeatStore.heartbeats.length === 0}
     <div class="border border-dashed p-6 text-center">
-      <HeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
+      <CioHeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
       <p class="text-xs text-muted">No heartbeats configured yet.</p>
       {#if providers.length === 0 && !providersLoading}
         <p class="mt-1 text-[0.6875rem] text-dimmed">Select a configured project first.</p>

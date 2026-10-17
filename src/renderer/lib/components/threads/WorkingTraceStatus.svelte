@@ -2,7 +2,6 @@
   import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-
   interface Props {
     /** True when this trace was rehydrated from persisted state instead of a live run. */
     rehydrated: boolean

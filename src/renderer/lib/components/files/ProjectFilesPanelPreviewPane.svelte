@@ -1,6 +1,6 @@
 <script lang="ts">
+  import CioFileQuestion from '$lib/components/icons/cio/CioFileQuestion.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { FileQuestion } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
@@ -74,7 +74,7 @@
       ></iframe>
     {:else if documentFailed}
       <div class="flex h-full flex-col items-center justify-center gap-2 text-dimmed" role="status">
-        <FileQuestion size={24} />
+        <CioFileQuestion size={24} />
         <span class="text-xs">This document could not be previewed</span>
         {#if showDocumentError && documentError}
           <span class="max-w-md text-center text-[0.625rem] break-words text-danger">

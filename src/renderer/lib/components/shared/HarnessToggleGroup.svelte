@@ -1,8 +1,7 @@
 <script lang="ts">
+  import CioArrowUpCircle from '$lib/components/icons/cio/CioArrowUpCircle.svelte'
   import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { ArrowUpCircle } from '@lucide/svelte'
-
   interface HarnessOption {
     id: string
     name: string
@@ -69,7 +68,7 @@
       <AgentIcon agentId={option.id} label={option.name} size={14} />
       {option.name}
       {#if option.updateAvailable}
-        <ArrowUpCircle size={12} class="shrink-0 text-info" />
+        <CioArrowUpCircle size={12} class="shrink-0 text-info" />
       {:else if option.installed}
         <CioCheckCircle size={12} class="shrink-0 text-success" />
       {/if}
