@@ -10,7 +10,12 @@ import {
   type ResponseReferenceAnchor
 } from '$lib/stores/response-references.svelte'
 import type { PromptAttachment, PromptReference } from '$shared/types'
-import { attachmentFileIdentity, uniqueAttachments } from './chat-composer-attachments'
+import {
+  attachmentFileIdentity,
+  partitionNewAttachments,
+  uniqueAttachments
+} from './chat-composer-attachments'
+import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 
 /**
  * Carrying composer content from one chat to another in the same project.
@@ -120,6 +125,25 @@ export function itemReferences(item: ComposerRelocationItem): readonly PromptRef
   return item.kind === 'reference' ? [item.reference] : item.references
 }
 
+/**
+ * Why a chat cannot take a file, or null when it can.
+ *
+ * A message carries a bounded number of files, and a carry never takes the place
+ * of what the destination holds, so a destination that already holds its twenty
+ * refuses the file rather than dropping one of its own. The destination's own
+ * files are the ones counted, and a file it already holds is the same file, so it
+ * does not count twice. Read by the picker (to say so on the row, before the user
+ * commits) and by the carry itself, so the two cannot disagree.
+ */
+export function attachmentCarryBlockedReason(input: {
+  attachment: PromptAttachment
+  existingAttachments: readonly PromptAttachment[]
+}): string | null {
+  const { overflow } = partitionNewAttachments(input.existingAttachments, [input.attachment])
+  if (overflow.length === 0) return null
+  return `That chat already holds the ${MAX_PROMPT_ATTACHMENTS} files a message carries, and a carry never takes the place of what it holds. Detach one there, then carry this over.`
+}
+
 /** The item's own name: the file it carries, or the label the reference was made with. */
 export function relocationItemName(item: ComposerRelocationItem): string {
   if (item.kind === 'attachment') {
@@ -218,6 +242,14 @@ function carryInto(
   }
 
   if (input.item.kind === 'attachment') {
+    // A file is refused when the destination already carries its twenty: making
+    // room by dropping one of the destination's own files is not this feature's
+    // business. Refused before anything is written, so nothing changes.
+    const blocked = attachmentCarryBlockedReason({
+      attachment: input.item.attachment,
+      existingAttachments: carried.attachments
+    })
+    if (blocked) throw new Error(blocked)
     carried.attachments = uniqueAttachments([...carried.attachments, input.item.attachment])
     return { entry: carried }
   }

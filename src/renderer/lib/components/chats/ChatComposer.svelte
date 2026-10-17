@@ -115,6 +115,7 @@
     EngineeringLifecycleState,
     HarnessAccount
   } from '$shared/types'
+  import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 
   const codeInOvenIconSvg = getVendorIconSvg(APP_NAME)
 
@@ -442,7 +443,11 @@
   // the same file twice, which the keyed attachment chips cannot render, so the
   // restored list is collapsed here before it ever reaches the markup.
   // svelte-ignore state_referenced_locally
-  let attachments = $state<PromptAttachment[]>(uniqueAttachments(initialAttachments))
+  let attachments = $state<PromptAttachment[]>(
+    // A restored draft or a hand-off can carry more than a message takes, so the
+    // composer is bounded on the way in too.
+    uniqueAttachments(initialAttachments).slice(0, MAX_PROMPT_ATTACHMENTS)
+  )
   // svelte-ignore state_referenced_locally
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
@@ -1678,6 +1683,31 @@
     )
   }
 
+  /** Say what did not fit, so a drop past the file ceiling is never a silence. */
+  function noticeOverflowAttachments(overflow: readonly PromptAttachment[]): void {
+    if (overflow.length === 0) return
+    showToastWarning(
+      overflow.length === 1
+        ? `${overflow[0]?.filename ?? 'That file'} was not attached: a message carries at most ${MAX_PROMPT_ATTACHMENTS} files.`
+        : `${overflow.length} of those files were not attached: a message carries at most ${MAX_PROMPT_ATTACHMENTS} files.`
+    )
+  }
+
+  /** Attach files that arrived through a path the composer has already built
+   *  them on, applying the same duplicate guard and file ceiling as a drop. */
+  function adoptAttachments(candidates: readonly PromptAttachment[]): PromptAttachment[] {
+    if (candidates.length === 0) return []
+    // Dropping the same file twice must leave one chip: a repeated `file://` URL
+    // is a duplicate key in the keyed attachment list and throws at render time.
+    const { added, duplicates, overflow } = partitionNewAttachments(attachments, candidates)
+    if (duplicates.length > 0) noticeDuplicateAttachments(duplicates)
+    noticeOverflowAttachments(overflow)
+    if (added.length === 0) return []
+    attachments = [...attachments, ...added]
+    onAttachmentsChange?.([...attachments])
+    return added
+  }
+
   async function addFileAttachments(
     selections: ReadonlyArray<{ path: string; file?: File }>
   ): Promise<void> {
@@ -1693,14 +1723,7 @@
     })
     if (candidates.length === 0) return
 
-    // Dropping the same file twice must leave one chip: a repeated `file://` URL
-    // is a duplicate key in the keyed attachment list and throws at render time.
-    const { added, duplicates } = partitionNewAttachments(attachments, candidates)
-    if (duplicates.length > 0) noticeDuplicateAttachments(duplicates)
-    if (added.length === 0) return
-
-    attachments = [...attachments, ...added]
-    onAttachmentsChange?.([...attachments])
+    const added = adoptAttachments(candidates)
     await Promise.all(added.map((attachment) => preview.load(attachment)))
   }
 
@@ -1716,9 +1739,9 @@
       url: pathToFileUrl(path),
       filename: 'Pasted text.txt'
     }
-    attachments = [...attachments, attachment]
-    preview.setText(attachment.url, text)
-    onAttachmentsChange?.([...attachments])
+    const [added] = adoptAttachments([attachment])
+    if (!added) return
+    preview.setText(added.url, text)
   }
 
   async function savePastedTextAttachment(

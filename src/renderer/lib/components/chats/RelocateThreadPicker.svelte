@@ -2,9 +2,14 @@
   import CioChat from '$lib/components/icons/cio/CioChat.svelte'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
   import { invoke } from '$lib/ipc.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadPaletteRow } from '$lib/threads/thread-palette-row'
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
-  import type { ComposerRelocationMode } from './composer-relocation'
+  import {
+    attachmentCarryBlockedReason,
+    type ComposerRelocationItem,
+    type ComposerRelocationMode
+  } from './composer-relocation'
 
   interface Props {
     projectId: string
@@ -12,6 +17,8 @@
     projectName: string
     /** The chat the content is coming from: never a destination itself. */
     sourceThreadId: string
+    /** What is being carried: a file has a ceiling a row has to be able to report. */
+    item: ComposerRelocationItem
     /** Which verb the search field asks for: a thread to relocate into, or one
      *  to copy into. */
     mode: ComposerRelocationMode
@@ -21,7 +28,8 @@
     onClose: () => void
   }
 
-  let { projectId, projectName, sourceThreadId, mode, title, onSelect, onClose }: Props = $props()
+  let { projectId, projectName, sourceThreadId, item, mode, title, onSelect, onClose }: Props =
+    $props()
 
   let threads = $state<Thread[]>([])
   let loading = $state(false)
@@ -36,10 +44,27 @@
   }
 
   /**
+   * Why this destination cannot take the carry, or null when it can.
+   *
+   * Only a file can be refused: a message carries a bounded number of files, and
+   * making room by dropping one of the destination's own is not this feature's
+   * business. A chat whose draft this window has not read answers null, and the
+   * carry itself refuses with the same sentence.
+   */
+  function blockedReason(thread: Thread): string | null {
+    if (item.kind !== 'attachment') return null
+    return attachmentCarryBlockedReason({
+      attachment: item.attachment,
+      existingAttachments: rendererRecovery.attachmentsFor(thread.projectId, thread.id)
+    })
+  }
+
+  /**
    * The project's chats, in the order the project view shows them.
    *
-   * Nothing narrows them beyond the exclusions above: every other chat of the
-   * project is a destination, and any of them takes the carry.
+   * Nothing narrows them beyond the exclusions above, and every other chat of the
+   * project is a destination: an annotation always fits, and a file only fails a
+   * row that says so.
    */
   $effect(() => {
     const request = ++requestId
@@ -60,14 +85,18 @@
   })
 
   const actions = $derived<ActionDefinition[]>(
-    threads.map((thread) =>
-      threadPaletteRow({
-        id: rowId(thread.id),
-        thread,
-        // One project is being picked from, so every row is named by it.
-        container: { label: projectName, icon: CioChat }
-      })
-    )
+    threads.map((thread) => {
+      const blocked = blockedReason(thread)
+      return {
+        ...threadPaletteRow({
+          id: rowId(thread.id),
+          thread,
+          // One project is being picked from, so every row is named by it.
+          container: { label: projectName, icon: CioChat }
+        }),
+        ...(blocked ? { disabledReason: blocked } : {})
+      }
+    })
   )
 
   function selectThread(selection: ActionSelection): void {

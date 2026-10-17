@@ -383,6 +383,7 @@ import {
   DEFAULT_SCOPE_BUCKET_ID,
   ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
+  MAX_PROMPT_ATTACHMENTS,
   isAssistantSetupThread,
   isAssistantThread,
   isOrchestrationChildThread,
@@ -10716,6 +10717,9 @@ export class ChatEngine {
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
     }
+    if (attachments.length > MAX_PROMPT_ATTACHMENTS) {
+      throw new TypeError(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files per message`)
+    }
     let validatedAttachments = attachments.map((attachment) => {
       const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)
       const mime = validateBoundedString(attachment.mime, 'Attachment MIME', 1, 512)
@@ -11169,6 +11173,9 @@ export class ChatEngine {
       : text
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
+    }
+    if (attachments.length > MAX_PROMPT_ATTACHMENTS) {
+      throw new TypeError(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files per message`)
     }
     const validatedAttachments = attachments.map((attachment) => {
       const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)

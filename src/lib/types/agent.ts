@@ -260,6 +260,18 @@ export interface ImageDescriptorErrorRequest {
   createdAt: number
 }
 
+/**
+ * How many files one message may carry.
+ *
+ * A file is a payload the prompt ships whole, so its count is bounded on every
+ * surface that can put one on a message: the composer that takes the drop or
+ * pick, a draft restored from disk, a carry from another chat, and main's own
+ * validation before a turn starts. Annotations are deliberately not bounded this
+ * way: they are a passage the user marked and they carry their own content
+ * budget instead.
+ */
+export const MAX_PROMPT_ATTACHMENTS = 20
+
 /** A file attached to an outgoing prompt. */
 export interface PromptAttachment {
   mime: string

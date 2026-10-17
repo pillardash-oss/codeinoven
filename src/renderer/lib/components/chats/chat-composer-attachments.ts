@@ -1,3 +1,4 @@
+import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 import { posixBasename, toPosixPath } from '$shared/paths'
 import { fileUrlToPath } from '$lib/mime'
 import type {
@@ -67,26 +68,41 @@ export function uniqueAttachments(files: readonly PromptAttachment[]): PromptAtt
 }
 
 /**
- * Split incoming files into the ones worth attaching and the repeats of files
- * the composer already holds (including repeats inside the same drop).
+ * Split incoming files into the ones worth attaching, the repeats of files the
+ * composer already holds (including repeats inside the same drop), and the ones
+ * a message may no longer carry.
+ *
+ * Repeated files are dropped because one file must be one chip: a repeated
+ * `file://` URL is a duplicate key in the keyed attachment list. Files past
+ * {@link MAX_PROMPT_ATTACHMENTS} are reported rather than dropped quietly, so a
+ * big drop says what did not fit instead of reading as a swallowed gesture.
  */
 export function partitionNewAttachments(
   existing: readonly PromptAttachment[],
   incoming: readonly PromptAttachment[]
-): { added: PromptAttachment[]; duplicates: PromptAttachment[] } {
+): {
+  added: PromptAttachment[]
+  duplicates: PromptAttachment[]
+  overflow: PromptAttachment[]
+} {
   const identities = existing.map((file) => attachmentFileIdentity(file))
   const added: PromptAttachment[] = []
   const duplicates: PromptAttachment[] = []
+  const overflow: PromptAttachment[] = []
   for (const file of incoming) {
     const identity = attachmentFileIdentity(file)
     if (identities.includes(identity)) {
       duplicates.push(file)
       continue
     }
+    if (identities.length >= MAX_PROMPT_ATTACHMENTS) {
+      overflow.push(file)
+      continue
+    }
     identities.push(identity)
     added.push(file)
   }
-  return { added, duplicates }
+  return { added, duplicates, overflow }
 }
 
 export function isImageAttachment(file: PromptAttachment): boolean {

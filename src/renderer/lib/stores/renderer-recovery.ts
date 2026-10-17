@@ -6,6 +6,7 @@ import type {
   PromptReference,
   UserMessagePresentation
 } from '$shared/types'
+import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 import { uuidv7 } from '$shared/id'
 import { MAX_MARK_POINTS, type MarkPoint } from '$lib/annotation-marks'
 
@@ -499,7 +500,7 @@ export function parseComposerDraftEntry(value: unknown): ComposerDraftEntry | nu
   const text = typeof value.text === 'string' ? value.text : ''
   if (text.length > MAX_DRAFT_LENGTH) return null
   const attachments = Array.isArray(value.attachments)
-    ? value.attachments.filter(isPromptAttachment)
+    ? value.attachments.filter(isPromptAttachment).slice(0, MAX_PROMPT_ATTACHMENTS)
     : []
   const projectReferences = Array.isArray(value.projectReferences)
     ? value.projectReferences.filter(isPromptProjectReference).slice(0, 20)
@@ -558,7 +559,7 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[
       if (text.length === 0 || text.length > MAX_DRAFT_LENGTH) continue
 
       const attachments = Array.isArray(item.attachments)
-        ? item.attachments.filter(isPromptAttachment)
+        ? item.attachments.filter(isPromptAttachment).slice(0, MAX_PROMPT_ATTACHMENTS)
         : []
       const promptReferences = Array.isArray(item.promptReferences)
         ? item.promptReferences.filter(isQueuedResponseReference)
