@@ -127,7 +127,8 @@
     type Project,
     type Assistant,
     type ThemePreference,
-    type Thread
+    type Thread,
+    type ThreadSearchResult
   } from '$shared/types'
   import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
@@ -146,6 +147,7 @@
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
+  import { warmIntentSearch } from './app-search-warm'
   import { workspaceTourViewFor, type GuideActionKind } from '$lib/guide/guide-stops'
   import { guideState } from '$lib/guide/guide-state.svelte'
 
@@ -1068,6 +1070,10 @@
     }
     capturePaletteFocus()
     commandPaletteOpen = true
+    // The spotlight is where the semantic ranking lives; its thread search is
+    // one hop away. Start the embedding model boot behind the keystroke (main
+    // no-ops it unless intent search is enabled).
+    warmIntentSearch()
   }
 
   /** Close the whole spotlight, whichever screen is on top. */
@@ -1112,6 +1118,22 @@
       assistant.id,
       assistant.name
     )
+  }
+
+  /**
+   * Hand the semantic half of a spotlight thread search to the screen that asked.
+   *
+   * Only one spotlight screen is on top at a time, so the open one owns the
+   * payload; its controller drops a request or query the user has moved past.
+   */
+  function applyThreadSearchIntent(payload: {
+    query: string
+    requestId: number
+    results: ThreadSearchResult[]
+  }): void {
+    if (threadSearch.paletteOpen) threadSearch.applyIntentResults(payload)
+    else if (chatSearch.paletteOpen) chatSearch.applyIntentResults(payload)
+    else if (assistantSearch.paletteOpen) assistantSearch.applyIntentResults(payload)
   }
 
   /** Focus a tab picked in browser search: land on the Browser view and switch
@@ -1872,7 +1894,8 @@
       handleNewTerminalShortcut,
       goBack: () => handleMouseHistoryNavigation('back'),
       goForward: () => handleMouseHistoryNavigation('forward'),
-      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
+      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps),
+      applyThreadSearchIntent
     })
     // Hydrate the instance role: the push fires before this renderer mounts, so
     // this read is what shows the "running in another instance" notice on load.

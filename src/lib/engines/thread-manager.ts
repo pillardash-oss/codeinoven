@@ -1715,6 +1715,20 @@ export class ThreadManager {
   }
 
   /**
+   * Spotlight search: the keyword answer resolves, and the merged hybrid
+   * ranking is handed to `onIntentReady` when the local embedding model has
+   * answered. Used only by the command palette's thread search - the panels'
+   * own search buttons stay on {@link searchThreads} and never touch the model.
+   */
+  async searchThreadsWithDeferredIntent(
+    query: string,
+    options: ThreadSearchOptions,
+    onIntentReady: (results: import('../types').ThreadSearchResult[]) => void
+  ): Promise<import('../types').ThreadSearchResult[]> {
+    return this.searchService.searchWithDeferredIntent(query, options, onIntentReady)
+  }
+
+  /**
    * Attach the semantic (intent) search provider. Set once during service
    * wiring; passing null restores keyword-only search.
    */

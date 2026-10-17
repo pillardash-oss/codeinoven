@@ -80,6 +80,8 @@ export class SearchService {
   private catalog: SearchModelArtifact[] = []
   private runtime: EmbeddingRuntime | null = null
   private runtimeModelId: string | null = null
+  /** A warm-up boot is in flight; a second one would only duplicate it. */
+  private warming = false
   private sweep: Promise<void> | null = null
   private sweepTotals: { total: number | null; pending: number } = { total: null, pending: 0 }
   private indexing = false
@@ -376,10 +378,10 @@ export class SearchService {
    * indexed yet, or the embedding fails, so the hybrid search falls back to
    * keyword results.
    *
-   * A cold runtime is never booted here. Booting it loads the embedding model
-   * and takes tens of seconds, which is far more than an interactive search can
-   * wait, so the query answers keyword-only and the boot runs in the background
-   * for the next one.
+   * A cold runtime is booted here, so this can take tens of seconds on the first
+   * call of a session. That is deliberate: the only caller that awaits it is the
+   * spotlight's deferred enrichment, whose keyword rows are already on screen.
+   * Warm-ups at boot and on Cmd+K are what keep the wait rare.
    */
   async searchIntent(query: string, limit: number): Promise<IntentThreadMatch[]> {
     const model = this.activeModel()
@@ -389,10 +391,6 @@ export class SearchService {
     const trimmed = query.trim()
     if (trimmed.length === 0) return []
     const document = `${model.queryPrefix}${trimmed}`
-    if (!this.runtimeResident()) {
-      this.warmRuntime(model, document)
-      return []
-    }
     const controller = new AbortController()
     try {
       const runtime = await this.ensureRuntime(model)
@@ -580,28 +578,38 @@ export class SearchService {
   }
 
   /**
-   * Load the embedding model in the background, so the next query can rank
-   * semantically.
+   * Boot the embedding model in the background, off every interactive path.
    *
-   * The runtime disposes itself after a minute idle to hand its memory back, so
-   * the first query of a session always finds it cold. Paying for the load here
-   * is what keeps it off the interactive path: the query that found it cold
-   * answers from keyword results, and the one after it is hybrid again. Going
-   * through `embed` rather than a bare boot is deliberate - it is what re-arms
-   * the runtime's idle timer, so a warm-up nobody follows up on is retired
-   * again a minute later instead of holding the model for the rest of the
-   * session.
+   * Called once the workspace is interactive (main's `workspace:ready`) and
+   * again whenever the spotlight opens, so a Cmd+K thread search finds a
+   * resident model instead of paying a cold load inside its semantic step. A
+   * no-op unless intent search is enabled with a model the local runtime can
+   * load, and idempotent while a boot is already in flight.
+   *
+   * The embed is not about the text: it is what re-arms the runtime's idle timer
+   * (five minutes), so a warm-up nobody follows up on is retired again instead of
+   * holding the model for the rest of the session.
    */
-  private warmRuntime(model: InstalledSearchModel, text: string): void {
-    void (async () => {
-      const runtime = await this.ensureRuntime(model)
-      await this.embedOne(runtime, text, new AbortController().signal)
-    })().catch((error) => {
-      Logger.dev('Embedding runtime warm-up failed.', error)
+  warm(): void {
+    const model = this.activeModel()
+    if (!this.settings.enabled || !model || !this.canEmbed()) return
+    if (this.runtimeResident() || this.warming) return
+    this.warming = true
+    void this.warmRuntime(model, `${model.queryPrefix}warm`).finally(() => {
+      this.warming = false
     })
   }
 
-  /** Whether a query could embed right now instead of waiting on a model load. */
+  private async warmRuntime(model: InstalledSearchModel, text: string): Promise<void> {
+    try {
+      const runtime = await this.ensureRuntime(model)
+      await this.embedOne(runtime, text, new AbortController().signal)
+    } catch (error) {
+      Logger.dev('Embedding runtime warm-up failed.', error)
+    }
+  }
+
+  /** Whether the model is loaded, so an embed would not pay a boot first. */
   private runtimeResident(): boolean {
     return this.runtime?.isResident() ?? false
   }

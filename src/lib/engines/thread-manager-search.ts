@@ -24,43 +24,6 @@ export type IntentSearchProvider = (
 ) => Promise<IntentThreadMatch[]>
 
 /**
- * How long a search waits for semantic matches before it answers with the
- * keyword results it already has.
- *
- * A resident embedding runtime answers a query in tens of milliseconds
- * (measured: 45 ms for a whole hybrid search, end to end), so the budget is not
- * a latency allowance for the normal case. It bounds the two cases that are not
- * normal: a query landing behind an indexing sweep's batch (a thread is up to
- * six windows of work) and a runtime that is still booting its model (measured:
- * 22 s). Neither may hold an interactive search open, so intent ranking joins
- * the answer only when it is ready in time and is otherwise dropped.
- */
-export const INTENT_SEARCH_BUDGET_MS = 1_500
-
-/**
- * Resolve with `work`'s value when it lands inside `budgetMs`, and with null
- * when it does not.
- *
- * The loser of the race stays observed either way: `Promise.race` holds both
- * inputs, so a late rejection can never surface as an unhandled rejection. The
- * work itself is not cancelled - a boot that missed its budget keeps warming the
- * runtime for the next query.
- */
-export async function withinBudget<T>(work: Promise<T>, budgetMs: number): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try {
-    return await Promise.race([
-      work,
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), budgetMs)
-      })
-    ])
-  } finally {
-    if (timer !== undefined) clearTimeout(timer)
-  }
-}
-
-/**
  * Search across thread titles and conversation content (user messages + agent
  * final output). The FTS queries run on the worker's connection (serialized)
  * with a primary-connection fallback.
@@ -69,8 +32,10 @@ export async function withinBudget<T>(work: Promise<T>, budgetMs: number): Promi
  * only touches `agent_messages` for the rows that return a snippet; until the
  * mirror has been backfilled the legacy join is used (correct, just slower).
  *
- * When an intent provider is attached (and intent search is enabled), the
- * keyword results are merged with semantic matches into one hybrid ranking.
+ * Semantic (intent) ranking is opt-in per search. The keyword answer is always
+ * the one that resolves; a search that asked for intent gets its merged hybrid
+ * ranking pushed through a callback once the local model has answered, so an
+ * interactive surface never waits on a model load to show rows.
  */
 export class ThreadSearchService {
   private intentProvider: IntentSearchProvider | null = null
@@ -85,16 +50,65 @@ export class ThreadSearchService {
     this.intentProvider = provider
   }
 
-  /** Family-scoped when `options.family` is set; project-scoped when
-   *  `options.projectId` is set. */
+  /**
+   * Keyword-only search: the answer every panel's own search button shows.
+   *
+   * Family-scoped when `options.family` is set; project-scoped when
+   * `options.projectId` is set. The embedding model is never consulted here -
+   * semantic ranking belongs to the spotlight's thread search, which asks for it
+   * explicitly through {@link searchWithDeferredIntent}.
+   */
   async search(query: string, options: ThreadSearchOptions = {}): Promise<ThreadSearchResult[]> {
     const raw = query.trim()
     if (!raw) return []
+    const { results } = await this.keywordSearch(raw, options)
+    return results
+  }
+
+  /**
+   * Spotlight search: answer with keyword rows now, hand the merged hybrid
+   * ranking to `onIntentReady` when the semantic step lands.
+   *
+   * The spotlight is the only surface that ranks by meaning, and the only one
+   * that can afford to wait for it: its rows are already on screen, so the
+   * semantic answer replaces them instead of delaying them. The model may need
+   * tens of seconds to boot when nothing has warmed it (measured: 22 s); that
+   * boot runs here, off the interactive path, and the callback fires only once
+   * the semantic matches are merged.
+   */
+  async searchWithDeferredIntent(
+    query: string,
+    options: ThreadSearchOptions,
+    onIntentReady: (results: ThreadSearchResult[]) => void
+  ): Promise<ThreadSearchResult[]> {
+    const raw = query.trim()
+    if (!raw) return []
     const { results: keyword, limit } = await this.keywordSearch(raw, options)
-    if (!this.intentProvider) return keyword
+    const provider = this.intentProvider
+    if (!provider) return keyword
+    void this.enrichWithIntent(raw, options, keyword, limit, provider, onIntentReady)
+    return keyword
+  }
+
+  /**
+   * Resolve the semantic half and hand the merged ranking to the caller.
+   *
+   * Semantic search is an enhancement: a failure is logged and dropped, never
+   * allowed to break the keyword answer or surface as an unhandled rejection.
+   * When the provider finds nothing, no callback fires - the keyword rows the
+   * caller is already showing are the whole answer.
+   */
+  private async enrichWithIntent(
+    raw: string,
+    options: ThreadSearchOptions,
+    keyword: readonly ThreadSearchResult[],
+    limit: number,
+    provider: IntentSearchProvider,
+    onIntentReady: (results: ThreadSearchResult[]) => void
+  ): Promise<void> {
     try {
-      const matches = await this.intentMatchesWithinBudget(raw, options)
-      if (matches.length === 0) return keyword
+      const matches = await provider(raw, options)
+      if (matches.length === 0) return
       const threads = await this.threadRepo.listByIdsViaWorker(
         matches.map((match) => match.threadId)
       )
@@ -106,43 +120,11 @@ export class ThreadSearchService {
         if (!threadMatchesSearchScope(thread, options)) continue
         intent.push({ thread, kind: 'intent', score: match.score })
       }
-      if (intent.length === 0) return keyword
-      return mergeHybridThreadSearchResults(keyword, intent, limit)
+      if (intent.length === 0) return
+      onIntentReady(mergeHybridThreadSearchResults(keyword, intent, limit))
     } catch (error) {
-      // Semantic search is an enhancement; a failure must never break keyword
-      // search, only silently fall back to it.
-      Logger.dev('Intent search enrichment failed; returning keyword results.', error)
-      return keyword
+      Logger.dev('Intent search enrichment failed; keeping keyword results.', error)
     }
-  }
-
-  /**
-   * Semantic matches that arrived in time to join the answer, or none.
-   *
-   * The provider is asked only after the keyword answer is in hand, and it is
-   * raced against {@link INTENT_SEARCH_BUDGET_MS}: the keyword results are the
-   * search, semantic ranking is an enhancement, and an enhancement never delays
-   * the answer or leaves the caller waiting on a local model. A provider that
-   * fails or misses the deadline is logged and dropped.
-   */
-  private async intentMatchesWithinBudget(
-    raw: string,
-    options: ThreadSearchOptions
-  ): Promise<IntentThreadMatch[]> {
-    const provider = this.intentProvider
-    if (!provider) return []
-    const pending = provider(raw, options).catch((error) => {
-      Logger.dev('Intent search failed; returning keyword results.', error)
-      return [] as IntentThreadMatch[]
-    })
-    const matches = await withinBudget(pending, INTENT_SEARCH_BUDGET_MS)
-    if (matches === null) {
-      Logger.dev('Intent search missed its budget; returning keyword results.', {
-        budgetMs: INTENT_SEARCH_BUDGET_MS
-      })
-      return []
-    }
-    return matches
   }
 
   private async keywordSearch(

@@ -125,8 +125,9 @@
     <div class="min-w-0">
       <h1 class="text-xl font-bold tracking-tight">Search by intent</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Blends keyword hits with meaning-based matches on every thread search. Title matches stay
-        first, semantic matches follow, keyword-only finds come last.
+        Ranks the Cmd+K thread search with meaning-based matches as well as keywords. Title matches
+        stay first, semantic matches follow, keyword-only finds come last. The search buttons on the
+        panels stay keyword-only.
       </p>
       {#if !canEnable}
         <p class="mt-1.5 text-xs text-dimmed">

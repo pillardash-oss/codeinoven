@@ -198,6 +198,10 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
 function markWorkspaceReadyIfInteractive(): void {
   if (!state.rendererReadyReported || !state.featuresReady) return
   startupTelemetry.mark('workspace:ready')
+  // The app is interactive: boot the embedding model behind the settled
+  // workspace so the first Cmd+K thread search ranks semantically instead of
+  // paying the model load inside its answer. No-op unless intent search is on.
+  state.searchService?.warm()
   void completeStartupIfReady()
 }
 

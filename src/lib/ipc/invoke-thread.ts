@@ -93,6 +93,15 @@ export const invokeThreadContract = {
         limit?: number
         family?: 'projects' | 'chats' | 'assistant'
         assistantId?: string
+        /**
+         * Rank with the local embedding model. The spotlight's own thread search
+         * is the only caller that sets this; the panels' search buttons leave it
+         * off and always get keyword results.
+         */
+        semantic?: boolean
+        /** The spotlight request this search belongs to, echoed on
+         *  `threads:searchIntent` so a deferred answer can be matched to it. */
+        requestId?: number
       }
     ],
     import('../types').ThreadSearchResult[]

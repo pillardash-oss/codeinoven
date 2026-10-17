@@ -15,6 +15,17 @@ export function embeddingWorkingContext(contextTokens: number): number {
 }
 
 /**
+ * How long a resident embedding model stays in memory after its last use.
+ *
+ * Five minutes: long enough that one working session keeps the model hot across
+ * searches, short enough that an app left open does not hold the model's memory
+ * for a feature the user has walked away from. The next use boots it again (or a
+ * warm-up does), and the spotlight's search never waits on that boot because its
+ * keyword rows are already on screen.
+ */
+export const EMBEDDING_RUNTIME_IDLE_MS = 5 * 60_000
+
+/**
  * A local embedding runtime: turns text into vectors without leaving the
  * machine. Implementations are selected per installed model's runtime id, so
  * the subsystem is not tied to one format or backend.
@@ -90,7 +101,7 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
           if (this.idleTimer) clearTimeout(this.idleTimer)
           this.idleTimer = setTimeout(() => {
             void this.dispose()
-          }, 60_000)
+          }, EMBEDDING_RUNTIME_IDLE_MS)
           this.idleTimer.unref()
         }
       }

@@ -406,6 +406,19 @@ export const IPC_EVENT_CONTRACT = {
    */
   'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
   /**
+   * The semantic half of a spotlight thread search, delivered after its keyword
+   * rows so the panel replaces them instead of waiting on the local model. The
+   * `requestId` and `query` are the ones the invoke carried, and a panel that has
+   * moved on drops the payload.
+   */
+  'threads:searchIntent': [] as unknown as [
+    payload: {
+      query: string
+      requestId: number
+      results: import('../types').ThreadSearchResult[]
+    }
+  ],
+  /**
    * The optional video pack's install state. The Design and video settings
    * block mirrors this so a long package install reports live progress.
    */
