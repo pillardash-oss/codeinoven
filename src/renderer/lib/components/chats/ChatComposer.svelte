@@ -2200,14 +2200,14 @@
       <!-- Send / Queue / Stop button.
            - Agent idle:       ArrowUp (send)   primary, disabled when empty
            - Agent working, user typing:  CioClock (queue)   primary, always clickable
-           - Agent working, no text:      Square (stop)   danger tint
+           - Agent working, no text:      Square (stop)   quiet at rest, danger tint on hover
            - Stop confirmation pending:   "Stop?" danger label -->
       <button
         type="button"
         class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors {pendingStop
           ? 'bg-danger text-on-danger hover:bg-danger-hover'
           : canStop
-            ? 'bg-danger/10 text-danger hover:bg-danger/20'
+            ? 'text-muted hover:bg-danger/10 hover:text-danger'
             : 'bg-accent text-on-accent hover:bg-accent-hover'}"
         aria-label={pendingStop
           ? 'Confirm stop'
