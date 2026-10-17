@@ -1,0 +1,2148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CIO icons · one language pass (round eleven)</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      /* Round-eleven page styles: comparison grid, ember demos, notes pin.
+         Palette and type come from tokens.css and styles.css. */
+
+      .masthead .side {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      button.ghost {
+        border: 1px solid var(--color-border-strong);
+        background: var(--color-surface);
+        color: var(--color-foreground);
+        font: 600 0.6875rem/1 var(--font-app);
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+      }
+      button.ghost:hover {
+        background: var(--color-elevated);
+      }
+      button.ghost:focus-visible {
+        outline: 1px solid var(--color-primary);
+        outline-offset: 1px;
+      }
+
+      /* ── Section 1: the language ─────────────────────────────────────── */
+      .langrow {
+        display: flex;
+        gap: 1.5rem;
+        align-items: flex-start;
+        margin-top: 1.25rem;
+        flex-wrap: wrap;
+      }
+      .rules {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        max-width: 44rem;
+        font-size: 0.8125rem;
+        line-height: 1.7;
+        color: var(--color-muted);
+      }
+      .rules li {
+        padding: 0.75rem 0;
+        border-top: 1px solid var(--color-border);
+      }
+      .rules li:first-child {
+        border-top: 0;
+        padding-top: 0;
+      }
+      .rules b {
+        color: var(--color-foreground);
+        font-weight: 600;
+      }
+      .yardstick {
+        flex: none;
+        width: 20rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        padding: 1rem;
+      }
+      .yardstick figcaption {
+        margin-top: 0.625rem;
+        font-size: 0.6875rem;
+        line-height: 1.6;
+        color: var(--color-dimmed);
+      }
+      .yardstick svg {
+        display: block;
+        margin: 0.25rem auto 0;
+        width: 4rem;
+        height: 4rem;
+        color: var(--color-foreground);
+      }
+
+      /* ── Section 2: in place ─────────────────────────────────────────── */
+      .inplace {
+        display: flex;
+        gap: 1.5rem;
+        align-items: stretch;
+        flex-wrap: wrap;
+        margin-top: 1.25rem;
+      }
+      .inplace .window {
+        min-height: 0;
+      }
+      .inplace .rail .group {
+        gap: 0.125rem;
+      }
+      .headbar {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.4375rem 0.625rem;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+        align-self: flex-start;
+      }
+      .headbar .slot {
+        width: 1.75rem;
+        height: 1.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-muted);
+      }
+      .headbar .slot[data-current] {
+        background: var(--color-elevated);
+        color: var(--color-foreground);
+      }
+      .headbar .slot svg {
+        display: block;
+        width: 1rem;
+        height: 1rem;
+      }
+      .headbar .sep {
+        width: 1px;
+        height: 1rem;
+        background: var(--color-border);
+        margin: 0 0.25rem;
+      }
+      .inplace .demo {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+      }
+      .demo .caption {
+        font-size: 0.6875rem;
+        line-height: 1.6;
+        color: var(--color-dimmed);
+        max-width: 24rem;
+      }
+
+      /* ── Section 3: the set at size ──────────────────────────────────── */
+      .grouph {
+        display: flex;
+        align-items: baseline;
+        gap: 0.625rem;
+        margin: 2.25rem 0 0.625rem;
+      }
+      .grouph:first-of-type {
+        margin-top: 1.25rem;
+      }
+      .grouph h3 {
+        margin: 0;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-foreground);
+      }
+      .grouph .note {
+        font-size: 0.6875rem;
+        color: var(--color-dimmed);
+      }
+      .grouplist {
+        border-top: 1px solid var(--color-border);
+      }
+      .glyph {
+        display: grid;
+        grid-template-columns: 13.5rem minmax(0, 1fr) auto;
+        gap: 1.25rem;
+        padding: 0.875rem 1rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-surface);
+        align-items: start;
+      }
+      .glyph .id {
+        min-width: 0;
+      }
+      .glyph .gname {
+        font-size: 0.8125rem;
+        font-weight: 600;
+        color: var(--color-foreground);
+      }
+      .chip {
+        display: inline-block;
+        margin-left: 0.375rem;
+        padding: 0 0.25rem;
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        color: var(--color-on-accent);
+        background: var(--color-accent);
+        border: 0;
+        cursor: pointer;
+        font-family: var(--font-app);
+      }
+      .chip:hover {
+        background: var(--color-accent-hover);
+      }
+      .chip:focus-visible {
+        outline: 1px solid var(--color-primary);
+        outline-offset: 1px;
+      }
+      .glyph .surf {
+        display: block;
+        margin-top: 0.25rem;
+        font-size: 0.625rem;
+        color: var(--color-dimmed);
+      }
+      .glyph .gnote {
+        margin-top: 0.5rem;
+        font-size: 0.6875rem;
+        line-height: 1.6;
+        color: var(--color-muted);
+      }
+      .sizes {
+        display: flex;
+        gap: 0.875rem;
+        flex-wrap: wrap;
+      }
+      .sizes .col {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+      .sizes .h {
+        font-size: 0.5625rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+        text-align: center;
+      }
+      .sizes .slot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 2rem;
+        height: 2rem;
+        background: var(--color-app);
+        border: 1px solid var(--color-border);
+        color: var(--color-muted);
+      }
+      .sizes .slot svg {
+        display: block;
+      }
+      .sizes .col .slot + .slot {
+        margin-top: 0.125rem;
+      }
+      .zooms {
+        display: flex;
+        gap: 0.75rem;
+        align-items: center;
+      }
+      .zooms figure {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.25rem;
+      }
+      .zooms .zbox {
+        width: 5.5rem;
+        height: 5.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--color-app);
+        border: 1px solid var(--color-border);
+        color: var(--color-foreground);
+      }
+      .zooms svg {
+        width: 4rem;
+        height: 4rem;
+        display: block;
+      }
+      .zooms figcaption {
+        font-size: 0.5625rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+      }
+
+      /* ── Section 4: verdict ledger ───────────────────────────────────── */
+
+      /* ── Notes pin ───────────────────────────────────────────────────── */
+      .pin {
+        position: fixed;
+        right: 1.25rem;
+        bottom: 1.25rem;
+        width: 16.5rem;
+        max-height: calc(100vh - 2.5rem);
+        overflow: auto;
+        padding: 0.875rem;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border-strong);
+        font-size: 0.6875rem;
+        line-height: 1.55;
+        color: var(--color-muted);
+        z-index: 10;
+      }
+      .pin h3 {
+        margin: 0;
+        font-size: 0.6875rem;
+        font-weight: 600;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-foreground);
+      }
+      .pin-help {
+        margin: 0.5rem 0 0.75rem;
+      }
+      .pin label {
+        display: block;
+        margin-bottom: 0.5rem;
+        color: var(--color-dimmed);
+      }
+      .pin select,
+      .pin textarea {
+        display: block;
+        width: 100%;
+        margin-top: 0.25rem;
+        border: 1px solid var(--color-border-strong);
+        background: var(--color-app);
+        color: var(--color-foreground);
+        font: 400 0.6875rem/1.5 var(--font-app);
+        padding: 0.375rem 0.5rem;
+      }
+      .pin textarea {
+        resize: vertical;
+        min-height: 3.5rem;
+      }
+      .pin:focus-visible {
+        outline: 1px solid var(--color-primary);
+      }
+      .pin-actions {
+        display: flex;
+        gap: 0.375rem;
+        margin: 0.5rem 0 0.75rem;
+      }
+      .pin-actions button {
+        border: 1px solid var(--color-border-strong);
+        background: var(--color-elevated);
+        color: var(--color-foreground);
+        font: 600 0.625rem/1 var(--font-app);
+        padding: 0.375rem 0.5rem;
+        cursor: pointer;
+      }
+      .pin-actions button:hover {
+        background: var(--color-overlay);
+      }
+      .pin-actions button:focus-visible {
+        outline: 1px solid var(--color-primary);
+        outline-offset: 1px;
+      }
+      .pin ol {
+        margin: 0;
+        padding-left: 1.125rem;
+      }
+      .pin ol li {
+        margin-bottom: 0.25rem;
+      }
+      .pin ol b {
+        color: var(--color-foreground);
+      }
+      .pin .status {
+        display: block;
+        margin-top: 0.5rem;
+        min-height: 1em;
+        color: var(--color-dimmed);
+      }
+      @media (max-width: 60rem) {
+        .pin {
+          position: static;
+          width: auto;
+          max-height: none;
+          margin-top: 2rem;
+        }
+        .glyph {
+          grid-template-columns: 1fr;
+          gap: 0.75rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Two sprites: cio-* is the set as it exists after round ten; r-cio-* is
+         the language pass this round proposes. A bare <symbol> in HTML parses
+         as an unknown element, so both live inside real <svg> shells. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none" aria-hidden="true">
+  <!--
+    The CIO set exactly as it stands after round ten, verbatim from
+    cio-icons.svg, for side-by-side judging on this page. Nothing edited.
+  -->
+<symbol id="cio-projects" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Project · AppHeaderNavigationController.svelte.ts:240 · 16px · f-projects, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Project: a folder, which is what a project is. -->
+    <path d="M3.5 16.7V7.6a2 2 0 0 1 2-2h3.7l2.2 2.8h7.1a2 2 0 0 1 2 2v6.3a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2Z" />
+    <rect x="6.6" y="10.6" width="7" height="4.4" rx="1" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-threads" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Thread · AppHeaderNavigationController.svelte.ts:250 · 16px · f-threads, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-5.617 -5.617) scale(1.4681)" stroke-width="1.2942"><!-- Thread: a spine of entries that shorten as they age, the live one solid. -->
+    <path d="M5.4 7.2v9.6" />
+    <rect x="8.6" y="5.9" width="11.5" height="2.6" rx="1.3" fill="currentColor" stroke="none" />
+    <path d="M8.6 12h9.4" />
+    <path d="M8.6 16.4h6" /></g>
+  </symbol>
+<symbol id="cio-scoped" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Scoped · AppHeaderNavigationController.svelte.ts:257 · 16px · f-scoped, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Scoped: a field with the selected region solid at its centre. -->
+    <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+    <rect x="9" y="9" width="6" height="6" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-board" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Board · AppHeaderNavigationController.svelte.ts:264 · 16px · f-board, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-3.9231 -3.9231) scale(1.3269)" stroke-width="1.4319"><!-- Board: a header rule and three even columns. -->
+    <path d="M4.4 5.8h15.2" />
+    <rect x="5.2" y="9.4" width="3.2" height="9.2" rx="1" fill="currentColor" stroke="none" />
+    <rect x="10.4" y="9.4" width="3.2" height="9.2" rx="1" fill="currentColor" stroke="none" />
+    <rect x="15.6" y="9.4" width="3.2" height="9.2" rx="1" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Chat · content-view-icons.ts:21 · 16px · f-chats, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Chats: a squared bubble with a tapered tail and the line that was said. -->
+    <path d="M3.5 8.6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v5.8a2 2 0 0 1-2 2h-7.3L7.4 20v-3.6H5.5a2 2 0 0 1-2-2Z" />
+    <rect x="7.2" y="10.3" width="9.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Back · AppHeader.svelte:268 · 16px · hand drawn here -->
+    <!-- Back: a direction, not a picture. Fitted to the indicator box because a chevron that fills the picture box reads as a much larger control than the glyphs beside it. -->
+    <g transform="translate(0.267 -0.802) scale(1.0668)" stroke-width="1.7810"><path d="M14.6 5.4 7.4 12l7.2 6.6" /></g>
+  </symbol>
+<symbol id="cio-forward" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Forward · AppHeader.svelte:277 · 16px · hand drawn here -->
+    <!-- Forward: the same chevron, mirrored. -->
+    <g transform="translate(-1.870 -0.802) scale(1.0668)" stroke-width="1.7810"><path d="M9.4 5.4 16.6 12l-7.2 6.6" /></g>
+  </symbol>
+<symbol id="cio-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Search · AppHeader.svelte:292 · 15px · hand drawn here -->
+    <!-- Search: a lens with a solid pupil and a handle thick enough to carry the mass at 16px. An empty lens read as a plain ring. -->
+    <g transform="translate(-3.710 -3.710) scale(1.2773)" stroke-width="1.4875"><circle cx="10.4" cy="10.4" r="6.2" /><path d="M15.2 15.2 20.4 20.4" /><circle cx="10.4" cy="10.4" r="2.4" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-tools" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Tools · AppHeader.svelte:365 · 15px · hand drawn here -->
+    <!-- Tools: a socket spanner. This is the spec studio toggle, so it has to read as engineering work rather than as an office. The case Lucide draws is a box with a handle on it, which is what luggage looks like. -->
+    <g transform="translate(-3.663 0.752) scale(1.2815)" stroke-width="1.4827"><path d="M20.2 5.6 17.9 9.6H13.3L11 5.6l2.3-4h4.6Z" /><circle cx="15.6" cy="5.6" r="1.9" fill="currentColor" stroke="none" /><path d="M10.7 7.1 13.1 9.5 5.7 16.9 3.3 14.5Z" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-notes" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Notes · AppHeader.svelte:406 · 16px · hand drawn here -->
+    <!-- Notes: a sticky note, which is what the feature is. The sheet is square, its lower right corner peels forward, and one line is solid. A plain rectangle with lines on it is a document, not a note you stick somewhere. -->
+    <g transform="translate(-2.783 -2.783) scale(1.2319)" stroke-width="1.5423"><path d="M5.4 4.6h13.2a1.8 1.8 0 0 1 1.8 1.8v8.4l-4.4 4.6H5.4a1.8 1.8 0 0 1-1.8-1.8V6.4a1.8 1.8 0 0 1 1.8-1.8Z" /><path d="M20.4 14.8h-2.8a1.6 1.6 0 0 0-1.6 1.6v3" /><rect x="7.2" y="9.2" width="8.8" height="2.6" rx="1.3" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-notifications" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Notifications · AppHeader.svelte:418 · 16px · hand drawn here -->
+    <!-- Notifications: a bell with a solid mouth bar and a clapper. The bar is the anchor; a thin rim there disappeared into the body at 16px. -->
+    <g transform="translate(-3.576 -6.124) scale(1.2980)" stroke-width="1.4638"><path d="M7 16.4V11a5 5 0 0 1 10 0v5.4" /><rect x="4.4" y="16.4" width="15.2" height="2.6" rx="1.3" fill="currentColor" stroke="none" /><path d="M10.2 21a2.2 2.2 0 0 0 3.6 0" /></g>
+  </symbol>
+<symbol id="cio-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Oven and terminal · Workspace.svelte:1216 · 16px · hand drawn here -->
+    <!-- Oven and terminal: a frame with a prompt and a solid cursor. The cursor is the anchor, and it is 2.4 units tall so it survives 12px as well as 16px. -->
+    <g transform="translate(-2.441 -2.441) scale(1.2034)" stroke-width="1.5789"><rect x="3.4" y="4.6" width="17.2" height="14.8" rx="2.4" /><path d="M7.6 9.4 10.4 12.2 7.6 15" /><rect x="12" y="12.6" width="5.2" height="2.6" rx="1.3" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-files" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Workspace files · Workspace.svelte:1277 · 16px · hand drawn here -->
+    <!-- Workspace files: a folder with a child panel hanging off it, which is the tree. Two equal panels were tried first and read as two files, not as a tree. -->
+    <g transform="translate(-2.441 -2.441) scale(1.2034)" stroke-width="1.5789"><rect x="3.4" y="4.2" width="10" height="6.8" rx="2" /><path d="M8.4 11v3.2a2 2 0 0 0 2 2h1.4" /><rect x="11.8" y="13" width="8.8" height="6.8" rx="2" /><rect x="5.6" y="6.4" width="5.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Changes · Workspace.svelte:1285 · 16px · hand drawn here -->
+    <!-- Changes: a page carrying a solid plus. The plus is two crossed solid bars rather than a stroked cross, because a stroked cross at 16px reads as a tick. -->
+    <g transform="translate(-1.047 -5.317) scale(1.2923)" stroke-width="1.4702"><path d="M4.6 5.4h8.6l4.6 4.6v9.2a2.2 2.2 0 0 1-2.2 2.2H4.6a2.2 2.2 0 0 1-2.2-2.2V7.6a2.2 2.2 0 0 1 2.2-2.2Z" /><rect x="6.4" y="12.8" width="8" height="2.4" rx="1.2" fill="currentColor" stroke="none" /><rect x="9.2" y="10" width="2.4" height="8" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-actions" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Actions · Workspace.svelte:1197 · 16px · hand drawn here -->
+    <!-- Actions: a gauge, which is what monitoring looks like. A monitor frame with a cog was Lucide answer and it turns to mush at 16px; the gauge keeps one arc, one needle and one solid hub. -->
+    <g transform="translate(-4.332 -7.227) scale(1.3610)" stroke-width="1.3960"><path d="M4.4 17.4a7.6 7.6 0 1 1 15.2 0" /><path d="M12 17.4 16.2 11" /><circle cx="12" cy="17.4" r="2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-memory" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Memory · Workspace.svelte:1322 · 16px · hand drawn here -->
+    <!-- Memory: three plates with the middle one solid, so the stack reads as a store rather than as a list. A brain outline was tried and read as a cloud at 16px. -->
+    <g transform="translate(-3.915 -4.047) scale(1.3263)" stroke-width="1.4326"><rect x="4.2" y="4.6" width="15.6" height="3.8" rx="1.8" /><rect x="4.2" y="10.2" width="15.6" height="3.8" rx="1.8" fill="currentColor" stroke="none" /><rect x="4.2" y="15.8" width="15.6" height="3.8" rx="1.8" /></g>
+  </symbol>
+<symbol id="cio-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cloud deployments · Workspace.svelte:1331 · 16px · hand drawn here -->
+    <!-- Cloud deployments: a cloud carrying a solid bar, which is the deployment payload. A bare cloud read as weather, and an arrow inside it disappeared at 16px. -->
+    <g transform="translate(-0.249 0.359) scale(1.0584)" stroke-width="1.7951"><path d="M6.4 17.6h11.2a4 4 0 0 0 .6-7.9 6.2 6.2 0 0 0-12-1.1 3.6 3.6 0 0 0 .2 9Z" /><rect x="9.2" y="11.4" width="5.6" height="2.6" rx="1.3" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-debugger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Debugger · Workspace.svelte:1350 · 16px · hand drawn here -->
+    <!-- Debugger: a beetle with two legs a side and one solid band. Lucide bug has nine strokes and turns to a cluster at 16px; this keeps four legs, so the legs read as legs. -->
+    <g transform="translate(-2.783 -4.508) scale(1.2319)" stroke-width="1.5423"><rect x="6" y="7.4" width="12" height="12" rx="6" /><path d="M6 10.6H3.6" /><path d="M6 16.4H3.6" /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" /><rect x="8.6" y="12.2" width="6.8" height="2.6" rx="1.3" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-temporary-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Temporary chat · Workspace.svelte:1373 · 16px · hand drawn here -->
+    <!-- Temporary chat: the chat bubble with a bite out of its lower right, so it is the same object as Chats with one thing missing rather than a different object. A dashed outline was tried and the dashes fell under the 1.5-unit floor. -->
+    <g transform="translate(-3.201 -4.481) scale(1.2773)" stroke-width="1.4875"><path d="M8.6 6.6H6.2a2.4 2.4 0 0 0-2.4 2.4v4.8a2.4 2.4 0 0 0 2.4 2.4h1.4l3.4 3v-3" /><path d="M14.8 6.6h2.8a2.4 2.4 0 0 1 2.4 2.4v2.2" /><rect x="6.6" y="10.6" width="8.4" height="2.6" rx="1.3" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-subagent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Subagent · Workspace.svelte:1453 · 16px · hand drawn here -->
+    <!-- Subagent: a head with an aerial and two solid eyes. The eyes carry the mass; one wider solid visor was tried and read as a robot mask rather than a worker. -->
+    <g transform="translate(-2.676 -1.974) scale(1.2230)" stroke-width="1.5535"><rect x="4.2" y="8.6" width="15.6" height="11.2" rx="3" /><path d="M12 8.6V5.4" /><circle cx="12" cy="3.8" r="1.7" fill="currentColor" stroke="none" /><rect x="7.6" y="12.6" width="3.2" height="3.2" rx="1.2" fill="currentColor" stroke="none" /><rect x="13.2" y="12.6" width="3.2" height="3.2" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-attention" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Decisions made for you · Workspace.svelte:1458 · 16px · hand drawn here -->
+    <!-- Decisions made for you: a triangle with a solid stem and a solid dot, which is a warning without a second outline inside it. -->
+    <g transform="translate(-2.132 -1.912) scale(1.1777)" stroke-width="1.6133"><path d="M10.8 4.6a1.4 1.4 0 0 1 2.4 0l7.4 13a1.4 1.4 0 0 1-1.2 2.1H4.6a1.4 1.4 0 0 1-1.2-2.1Z" /><rect x="11" y="9.4" width="2" height="5.2" rx="1" fill="currentColor" stroke="none" /><circle cx="12" cy="16.8" r="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-note" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Thread note · feature-registry.ts:23 · 16px · hand drawn here -->
+    <!-- Thread note: the thread itself, with the note hanging off it. A feather is Lucide mark and a pen is a drawing of a pen; neither says the note belongs to this thread. The card carries one solid line. -->
+    <g transform="translate(-4.532 -3.142) scale(1.2618)" stroke-width="1.5057"><path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" rx="2.2" /><rect x="11.2" y="10.4" width="6.4" height="2.4" rx="1.2" fill="currentColor" stroke="none" /><path d="M11.2 15.4h4.2" /></g>
+  </symbol>
+<symbol id="cio-tab-files" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Files tab · ContextSidebar.svelte:440 · 12px · hand drawn here -->
+    <!-- Files: two sheets with one solid line on the front sheet. The dock Workspace files is a folder tree; this one is the pages themselves, so the two never collide. -->
+    <g transform="translate(-2.891 -3.393) scale(1.2618)" stroke-width="1.5057"><rect x="4.2" y="6.4" width="11" height="14" rx="2" /><path d="M8.2 6.4V6a2 2 0 0 1 2-2h7.2a2 2 0 0 1 2 2v10.6a2 2 0 0 1-2 2h-.4" /><rect x="7" y="11.6" width="5.6" height="2.4" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-tab-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Info tab · ContextSidebar.svelte:462 · 12px · f-info, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Update: a readout plate carrying its own mark. The dot and the stem are
+    1.8 units wide, above the one-device-pixel floor, which pass D's
+    version of this glyph was not. -->
+    <rect x="3.5" y="4.8" width="17" height="14.4" rx="2" />
+    <circle cx="12" cy="9.3" r="1.8" fill="currentColor" stroke="none" />
+    <rect x="11.1" y="12.4" width="1.8" height="4.8" rx="0.9" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-tab-git" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Git tab · ContextSidebar.svelte:485 · 12px · hand drawn here -->
+    <!-- Git: two commits on a stem and the branch that leaves from one of them, the head commit solid. The solid head is what makes it a branch rather than three dots. -->
+    <g transform="translate(-2.905 -3.519) scale(1.2932)" stroke-width="1.4692"><circle cx="7" cy="6.4" r="2.4" /><circle cx="7" cy="17.6" r="2.4" /><circle cx="17" cy="9.6" r="2.4" fill="currentColor" stroke="none" /><path d="M7 8.8v6.4" /><path d="M14.8 9.6h-3.6a4.2 4.2 0 0 0-4.2 4.2v1.4" /></g>
+  </symbol>
+<symbol id="cio-tab-boxes" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Containers tab · ContextSidebar.svelte:503 · 12px · hand drawn here -->
+    <!-- Containers: a box with its contents in it, one object inside another and a five-unit gap between them. Four equal panels read as a grid rather than as a thing that holds things. -->
+    <g transform="translate(-3.915 -3.915) scale(1.3263)" stroke-width="1.4326"><rect x="4.2" y="4.2" width="15.6" height="15.6" rx="2.6" /><rect x="9.2" y="9.2" width="5.6" height="5.6" rx="1.6" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-tab-extensions" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Extensions tab · ContextSidebar.svelte:505 · 12px · hand drawn here -->
+    <!-- Extensions: a puzzle piece, one knob cut into the top edge and one knob solid on the right. The previous drawing was a square with a single knob and it read as a clipboard, which is reserved for the copy toast. -->
+    <g transform="translate(-4.169 0.749) scale(1.2130)" stroke-width="1.5664"><path d="M6.4 5.2h3.2a3 3 0 1 1 5 0h3.2v12.4H6.4Z" /><circle cx="18.4" cy="11.4" r="2.8" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-tab-utilities" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Utilities · feature-registry.ts:22 · 12px · f-utilities, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Utilities: the four panels the utilities page actually is, a grid of
+    skills, MCP servers and plugins. -->
+    <rect x="3.5" y="3.5" width="7.4" height="7.4" rx="1.6" />
+    <rect x="13.1" y="3.5" width="7.4" height="7.4" rx="1.6" />
+    <rect x="3.5" y="13.1" width="7.4" height="7.4" rx="1.6" />
+    <rect x="13.1" y="13.1" width="7.4" height="7.4" rx="1.6" /></g>
+  </symbol>
+<symbol id="cio-tab-tasks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Task manager · feature-registry.ts:26 · 12px · f-tasks, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-3.4286 -3.4286) scale(1.2857)" stroke-width="1.4778"><!-- Task manager: two running panels, one behind the other, the front one
+    lit. Isometric planes and lanes were both tried first and both failed at
+    16px: the planes closed into a single downward point, and the lanes read
+    as a list, which is what Thread already is. The panels overlap by 2
+    units so the offset is a visible step rather than two tiles touching. -->
+    <rect x="7.8" y="3.8" width="12.7" height="7.8" rx="1.8" />
+    <rect x="3.5" y="9.6" width="12.7" height="8.8" rx="1.8" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-tab-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Settings · feature-registry.ts:27 · 12px · f-settings, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Settings: two sliders, each handle solid, its track entering from both
+    sides. The gap in the track is what stops the handle merging into it at
+    16px, which is exactly what happened in pass C. The gap is 1.6 units,
+    which is just over one device pixel at rail size; a 1.2-unit gap
+    vanished and the glyph became two plain bars. -->
+    <path d="M3.5 8.6h2.9" />
+    <path d="M15 8.6h5.5" />
+    <rect x="8" y="6.9" width="5.4" height="3.4" rx="1.2" fill="currentColor" stroke="none" />
+    <path d="M3.5 15.4h5.5" />
+    <path d="M17.6 15.4h2.9" />
+    <rect x="10.6" y="13.7" width="5.4" height="3.4" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+<symbol id="cio-browser" viewBox="0 0 24 24" fill="none">
+    <!-- Planet and ring: disc, tilted ring gap, planet inside -->
+    <path fill="currentColor" fill-rule="evenodd" d="M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.422,9.071A7.200,5.419 24 0 0 18.578,14.929A7.200,5.419 24 0 0 5.422,9.071Z" />
+  </symbol>
+</svg>
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none" aria-hidden="true">
+  <!--
+    The round-eleven language pass over the CIO set. Drawings carry from
+    cio-icons.svg, construction changes: stroke-linecap square, miter joins,
+    squared solid anchors reading var(--icon-anchor, currentColor), rect
+    containers rounded at exactly 2 (the beetle keeps 6, the browser is fill).
+    Set --icon-anchor: var(--color-accent) on a current ancestor to light the
+    anchor gold, the mark's knob terms. Generated by .cio/tmp/icon-refine/build.ts.
+    Do not edit by hand.
+  -->
+  <symbol id="r-cio-projects" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Project · AppHeaderNavigationController.svelte.ts:240 · 16px · f-projects, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Project: a folder, which is what a project is. -->
+    <path d="M3.5 16.7V7.6a2 2 0 0 1 2-2h3.7l2.2 2.8h7.1a2 2 0 0 1 2 2v6.3a2 2 0 0 1-2 2H5.5a2 2 0 0 1-2-2Z" />
+    <rect x="6.6" y="10.6" width="7" height="4.4" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-threads" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Thread · AppHeaderNavigationController.svelte.ts:250 · 16px · f-threads, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-5.617 -5.617) scale(1.4681)" stroke-width="1.2942"><!-- Thread: a spine of entries that shorten as they age, the live one solid. -->
+    <path d="M5.4 7.2v9.6" />
+    <rect x="8.6" y="5.9" width="11.5" height="2.6" style="fill: var(--icon-anchor, currentColor)" stroke="none" />
+    <path d="M8.6 12h9.4" />
+    <path d="M8.6 16.4h6" /></g>
+  </symbol>
+  <symbol id="r-cio-scoped" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Scoped · AppHeaderNavigationController.svelte.ts:257 · 16px · f-scoped, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Scoped: a field with the selected region solid at its centre. -->
+    <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+    <rect x="9" y="9" width="6" height="6" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-board" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Board · AppHeaderNavigationController.svelte.ts:264 · 16px · f-board, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-3.9231 -3.9231) scale(1.3269)" stroke-width="1.4319"><!-- Board: a header rule and three even columns. -->
+    <path d="M4.4 5.8h15.2" />
+    <rect x="5.2" y="9.4" width="3.2" height="9.2" style="fill: var(--icon-anchor, currentColor)" stroke="none" />
+    <rect x="10.4" y="9.4" width="3.2" height="9.2" style="fill: var(--icon-anchor, currentColor)" stroke="none" />
+    <rect x="15.6" y="9.4" width="3.2" height="9.2" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Chat · content-view-icons.ts:21 · 16px · f-chats, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Chats: a squared bubble with a tapered tail and the line that was said. -->
+    <path d="M3.5 8.6a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v5.8a2 2 0 0 1-2 2h-7.3L7.4 20v-3.6H5.5a2 2 0 0 1-2-2Z" />
+    <rect x="7.2" y="10.3" width="9.6" height="2.4" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Back · AppHeader.svelte:268 · 16px · hand drawn here -->
+    <!-- Back: a direction, not a picture. Fitted to the indicator box because a chevron that fills the picture box reads as a much larger control than the glyphs beside it. -->
+    <g transform="translate(0.267 -0.802) scale(1.0668)" stroke-width="1.7810"><path d="M14.6 5.4 7.4 12l7.2 6.6" /></g>
+  </symbol>
+  <symbol id="r-cio-forward" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Forward · AppHeader.svelte:277 · 16px · hand drawn here -->
+    <!-- Forward: the same chevron, mirrored. -->
+    <g transform="translate(-1.870 -0.802) scale(1.0668)" stroke-width="1.7810"><path d="M9.4 5.4 16.6 12l-7.2 6.6" /></g>
+  </symbol>
+  <symbol id="r-cio-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Search · AppHeader.svelte:292 · 15px · hand drawn here -->
+    <!-- Search: a lens with a solid pupil and a handle thick enough to carry the mass at 16px. An empty lens read as a plain ring. -->
+    <g transform="translate(-3.710 -3.710) scale(1.2773)" stroke-width="1.4875"><circle cx="10.4" cy="10.4" r="6.2" /><path d="M15.2 15.2 20.4 20.4" /><circle cx="10.4" cy="10.4" r="2.4" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-tools" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Tools · AppHeader.svelte:365 · 15px · hand drawn here -->
+    <!-- Tools: a socket spanner. This is the spec studio toggle, so it has to read as engineering work rather than as an office. The case Lucide draws is a box with a handle on it, which is what luggage looks like. -->
+    <g transform="translate(-3.663 0.752) scale(1.2815)" stroke-width="1.4827"><path d="M20.2 5.6 17.9 9.6H13.3L11 5.6l2.3-4h4.6Z" /><circle cx="15.6" cy="5.6" r="1.9" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><path d="M10.7 7.1 13.1 9.5 5.7 16.9 3.3 14.5Z" fill="currentColor" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-notes" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Notes · AppHeader.svelte:406 · 16px · hand drawn here -->
+    <!-- Notes: a sticky note, which is what the feature is. The sheet is square, its lower right corner peels forward, and one line is solid. A plain rectangle with lines on it is a document, not a note you stick somewhere. -->
+    <g transform="translate(-2.783 -2.783) scale(1.2319)" stroke-width="1.5423"><path d="M5.4 4.6h13.2a1.8 1.8 0 0 1 1.8 1.8v8.4l-4.4 4.6H5.4a1.8 1.8 0 0 1-1.8-1.8V6.4a1.8 1.8 0 0 1 1.8-1.8Z" /><path d="M20.4 14.8h-2.8a1.6 1.6 0 0 0-1.6 1.6v3" /><rect x="7.2" y="9.2" width="8.8" height="2.6" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-notifications" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Notifications · AppHeader.svelte:418 · 16px · hand drawn here -->
+    <!-- Notifications: a bell with a solid mouth bar and a clapper. The bar is the anchor; a thin rim there disappeared into the body at 16px. -->
+    <g transform="translate(-3.576 -6.124) scale(1.2980)" stroke-width="1.4638"><path d="M7 16.4V11a5 5 0 0 1 10 0v5.4" /><rect x="4.4" y="16.4" width="15.2" height="2.6" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><path d="M10.2 21a2.2 2.2 0 0 0 3.6 0" /></g>
+  </symbol>
+  <symbol id="r-cio-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Oven and terminal · Workspace.svelte:1216 · 16px · hand drawn here -->
+    <!-- Oven and terminal: a frame with a prompt and a solid cursor. The cursor is the anchor, and it is 2.4 units tall so it survives 12px as well as 16px. -->
+    <g transform="translate(-2.441 -2.441) scale(1.2034)" stroke-width="1.5789"><rect x="3.4" y="4.6" width="17.2" height="14.8" /><path d="M7.6 9.4 10.4 12.2 7.6 15" /><rect x="12" y="12.6" width="5.2" height="2.6" rx="1.3" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-files" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Workspace files · Workspace.svelte:1277 · 16px · hand drawn here -->
+    <!-- Workspace files: a folder with a child panel hanging off it, which is the tree. Two equal panels were tried first and read as two files, not as a tree. -->
+    <g transform="translate(-2.441 -2.441) scale(1.2034)" stroke-width="1.5789"><rect x="3.4" y="4.2" width="10" height="6.8" /><path d="M8.4 11v3.2a2 2 0 0 0 2 2h1.4" /><rect x="11.8" y="13" width="8.8" height="6.8" rx="2" /><rect x="5.6" y="6.4" width="5.6" height="2.4" rx="1.2" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-diff" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Changes · Workspace.svelte:1285 · 16px · hand drawn here -->
+    <!-- Changes: a page carrying a solid plus. The plus is two crossed solid bars rather than a stroked cross, because a stroked cross at 16px reads as a tick. -->
+    <g transform="translate(-1.047 -5.317) scale(1.2923)" stroke-width="1.4702"><path d="M4.6 5.4h8.6l4.6 4.6v9.2a2.2 2.2 0 0 1-2.2 2.2H4.6a2.2 2.2 0 0 1-2.2-2.2V7.6a2.2 2.2 0 0 1 2.2-2.2Z" /><rect x="6.4" y="12.8" width="8" height="2.4" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><rect x="9.2" y="10" width="2.4" height="8" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-actions" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Actions · Workspace.svelte:1197 · 16px · hand drawn here -->
+    <!-- Actions: a gauge, which is what monitoring looks like. A monitor frame with a cog was Lucide answer and it turns to mush at 16px; the gauge keeps one arc, one needle and one solid hub. -->
+    <g transform="translate(-4.332 -7.227) scale(1.3610)" stroke-width="1.3960"><path d="M4.4 17.4a7.6 7.6 0 1 1 15.2 0" /><path d="M12 17.4 16.2 11" /><circle cx="12" cy="17.4" r="2" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-memory" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Memory · Workspace.svelte:1322 · 16px · hand drawn here -->
+    <!-- Memory: three plates with the middle one solid, so the stack reads as a store rather than as a list. A brain outline was tried and read as a cloud at 16px. -->
+    <g transform="translate(-3.915 -4.047) scale(1.3263)" stroke-width="1.4326"><rect x="4.2" y="4.6" width="15.6" height="3.8" /><rect x="4.2" y="10.2" width="15.6" height="3.8" rx="1.8" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><rect x="4.2" y="15.8" width="15.6" height="3.8" rx="1.8" /></g>
+  </symbol>
+  <symbol id="r-cio-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Cloud deployments · Workspace.svelte:1331 · 16px · hand drawn here -->
+    <!-- Cloud deployments: a cloud carrying a solid bar, which is the deployment payload. A bare cloud read as weather, and an arrow inside it disappeared at 16px. -->
+    <g transform="translate(-0.249 0.359) scale(1.0584)" stroke-width="1.7951"><path d="M6.4 17.6h11.2a4 4 0 0 0 .6-7.9 6.2 6.2 0 0 0-12-1.1 3.6 3.6 0 0 0 .2 9Z" /><rect x="9.2" y="11.4" width="5.6" height="2.6" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-debugger" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Debugger · Workspace.svelte:1350 · 16px · hand drawn here -->
+    <!-- Debugger: a beetle with two legs a side and one solid band. Lucide bug has nine strokes and turns to a cluster at 16px; this keeps four legs, so the legs read as legs. -->
+    <g transform="translate(-2.783 -4.508) scale(1.2319)" stroke-width="1.5423"><rect x="6" y="7.4" width="12" height="12" /><path d="M6 10.6H3.6" /><path d="M6 16.4H3.6" /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" /><rect x="8.6" y="12.2" width="6.8" height="2.6" rx="1.3" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-temporary-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Temporary chat · Workspace.svelte:1373 · 16px · hand drawn here -->
+    <!-- Temporary chat: the chat bubble with a bite out of its lower right, so it is the same object as Chats with one thing missing rather than a different object. A dashed outline was tried and the dashes fell under the 1.5-unit floor. -->
+    <g transform="translate(-3.201 -4.481) scale(1.2773)" stroke-width="1.4875"><path d="M8.6 6.6H6.2a2.4 2.4 0 0 0-2.4 2.4v4.8a2.4 2.4 0 0 0 2.4 2.4h1.4l3.4 3v-3" /><path d="M14.8 6.6h2.8a2.4 2.4 0 0 1 2.4 2.4v2.2" /><rect x="6.6" y="10.6" width="8.4" height="2.6" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-subagent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Subagent · Workspace.svelte:1453 · 16px · hand drawn here -->
+    <!-- Subagent: a head with an aerial and two solid eyes. The eyes carry the mass; one wider solid visor was tried and read as a robot mask rather than a worker. -->
+    <g transform="translate(-2.676 -1.974) scale(1.2230)" stroke-width="1.5535"><rect x="4.2" y="8.6" width="15.6" height="11.2" /><path d="M12 8.6V5.4" /><circle cx="12" cy="3.8" r="1.7" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><rect x="7.6" y="12.6" width="3.2" height="3.2" rx="1.2" fill="currentColor" stroke="none" /><rect x="13.2" y="12.6" width="3.2" height="3.2" rx="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-attention" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Decisions made for you · Workspace.svelte:1458 · 16px · hand drawn here -->
+    <!-- Decisions made for you: a triangle with a solid stem and a solid dot, which is a warning without a second outline inside it. -->
+    <g transform="translate(-2.132 -1.912) scale(1.1777)" stroke-width="1.6133"><path d="M10.8 4.6a1.4 1.4 0 0 1 2.4 0l7.4 13a1.4 1.4 0 0 1-1.2 2.1H4.6a1.4 1.4 0 0 1-1.2-2.1Z" /><rect x="11" y="9.4" width="2" height="5.2" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><circle cx="12" cy="16.8" r="1.2" fill="currentColor" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-note" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Thread note · feature-registry.ts:23 · 16px · hand drawn here -->
+    <!-- Thread note: the thread itself, with the note hanging off it. A feather is Lucide mark and a pen is a drawing of a pen; neither says the note belongs to this thread. The card carries one solid line. -->
+    <g transform="translate(-4.532 -3.142) scale(1.2618)" stroke-width="1.5057"><path d="M6.2 3.8v16.4" /><rect x="8.8" y="7.4" width="11.2" height="9.2" /><rect x="11.2" y="10.4" width="6.4" height="2.4" rx="1.2" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><path d="M11.2 15.4h4.2" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-files" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Files tab · ContextSidebar.svelte:440 · 12px · hand drawn here -->
+    <!-- Files: two sheets with one solid line on the front sheet. The dock Workspace files is a folder tree; this one is the pages themselves, so the two never collide. -->
+    <g transform="translate(-2.891 -3.393) scale(1.2618)" stroke-width="1.5057"><rect x="4.2" y="6.4" width="11" height="14" /><path d="M8.2 6.4V6a2 2 0 0 1 2-2h7.2a2 2 0 0 1 2 2v10.6a2 2 0 0 1-2 2h-.4" /><rect x="7" y="11.6" width="5.6" height="2.4" rx="1.2" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Info tab · ContextSidebar.svelte:462 · 12px · f-info, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Update: a readout plate carrying its own mark. The dot and the stem are
+    <rect x="3.5" y="4.8" width="17" height="14.4" rx="2" />
+    <circle cx="12" cy="9.3" r="1.8" style="fill: var(--icon-anchor, currentColor)" stroke="none" />
+    <rect x="11.1" y="12.4" width="1.8" height="4.8" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-git" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Git tab · ContextSidebar.svelte:485 · 12px · hand drawn here -->
+    <!-- Git: two commits on a stem and the branch that leaves from one of them, the head commit solid. The solid head is what makes it a branch rather than three dots. -->
+    <g transform="translate(-2.905 -3.519) scale(1.2932)" stroke-width="1.4692"><circle cx="7" cy="6.4" r="2.4" /><circle cx="7" cy="17.6" r="2.4" /><circle cx="17" cy="9.6" r="2.4" style="fill: var(--icon-anchor, currentColor)" stroke="none" /><path d="M7 8.8v6.4" /><path d="M14.8 9.6h-3.6a4.2 4.2 0 0 0-4.2 4.2v1.4" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-boxes" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Containers tab · ContextSidebar.svelte:503 · 12px · hand drawn here -->
+    <!-- Containers: a box with its contents in it, one object inside another and a five-unit gap between them. Four equal panels read as a grid rather than as a thing that holds things. -->
+    <g transform="translate(-3.915 -3.915) scale(1.3263)" stroke-width="1.4326"><rect x="4.2" y="4.2" width="15.6" height="15.6" /><rect x="9.2" y="9.2" width="5.6" height="5.6" rx="1.6" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-extensions" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Extensions tab · ContextSidebar.svelte:505 · 12px · hand drawn here -->
+    <!-- Extensions: a puzzle piece, one knob cut into the top edge and one knob solid on the right. The previous drawing was a square with a single knob and it read as a clipboard, which is reserved for the copy toast. -->
+    <g transform="translate(-4.169 0.749) scale(1.2130)" stroke-width="1.5664"><path d="M6.4 5.2h3.2a3 3 0 1 1 5 0h3.2v12.4H6.4Z" /><circle cx="18.4" cy="11.4" r="2.8" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-utilities" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Utilities · feature-registry.ts:22 · 12px · f-utilities, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Utilities: the four panels the utilities page actually is, a grid of
+    <rect x="3.5" y="3.5" width="7.4" height="7.4" rx="2" />
+    <rect x="13.1" y="3.5" width="7.4" height="7.4" rx="2" />
+    <rect x="3.5" y="13.1" width="7.4" height="7.4" rx="2" />
+    <rect x="13.1" y="13.1" width="7.4" height="7.4" rx="2" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-tasks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Task manager · feature-registry.ts:26 · 12px · f-tasks, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-3.4286 -3.4286) scale(1.2857)" stroke-width="1.4778"><!-- Task manager: two running panels, one behind the other, the front one
+    <rect x="7.8" y="3.8" width="12.7" height="7.8" rx="2" />
+    <rect x="3.5" y="9.6" width="12.7" height="8.8" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-tab-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Settings · feature-registry.ts:27 · 12px · f-settings, pass F -->
+    <!-- Pass F drawing, unchanged. -->
+    <g transform="translate(-2.5263 -2.5263) scale(1.2105)" stroke-width="1.5696"><!-- Settings: two sliders, each handle solid, its track entering from both
+    <path d="M3.5 8.6h2.9" />
+    <path d="M15 8.6h5.5" />
+    <rect x="8" y="6.9" width="5.4" height="3.4" style="fill: var(--icon-anchor, currentColor)" stroke="none" />
+    <path d="M3.5 15.4h5.5" />
+    <path d="M17.6 15.4h2.9" />
+    <rect x="10.6" y="13.7" width="5.4" height="3.4" style="fill: var(--icon-anchor, currentColor)" stroke="none" /></g>
+  </symbol>
+  <symbol id="r-cio-browser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="square" stroke-linejoin="round">
+    <!-- Planet and ring: disc, tilted ring gap, planet inside -->
+    <path style="fill: var(--icon-anchor, currentColor)" fill-rule="evenodd" d="M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.422,9.071A7.200,5.419 24 0 0 18.578,14.929A7.200,5.419 24 0 0 5.422,9.071Z" />
+  </symbol>
+</svg>
+    <svg xmlns="http://www.w3.org/2000/svg" style="display: none" aria-hidden="true">
+      <symbol id="cio-mark" viewBox="0 0 96 96" fill="none">
+        <path d="M49 17a31 31 0 1 0 0 62" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+        <path d="M61 23h23v50H61z" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+        <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+        <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+      </symbol>
+    </svg>
+
+    <div class="wrap">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">CodeInOven · brand work · round eleven</div>
+          <h1>The CIO set, <em>one language pass</em></h1>
+          <p class="lede">
+            No new iconography here. The set you approved over ten rounds keeps
+            its drawings and its unified 1.9 weight. What changes is the
+            construction the drawings speak in: square caps and miter joins
+            like the mark, squared solid anchors, one corner rule, and the
+            anchor exposed as a colour variable so state can light it gold the
+            way the mark's knob does. Annotate by naming a chip in the thread,
+            for example R-07, or pin notes on the right and copy them back.
+          </p>
+        </div>
+        <div class="side">
+          <button id="themeToggle" class="ghost" type="button" title="Switch the study between light and dark" aria-label="Switch the study between light and dark">Dark</button>
+          <div class="lockup">
+            <svg viewBox="0 0 96 96" aria-label="CodeInOven mark"><use href="#cio-mark" /></svg>
+            <div>
+              <b>CodeInOven</b>
+              <span>the mark this pass answers to</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>1 · The language</h2>
+          <span class="note">five rules, one yardstick</span>
+        </div>
+        <div class="langrow">
+          <ul class="rules">
+            <li><b>Square caps, miter joins.</b> The mark builds every stroke that way. Round ends were the one unrounded thing the set still drew, and beside the squared C and O they read soft.</li>
+            <li><b>Anchors squared.</b> Each glyph carries exactly one solid element. Bars become bars, radius 0, like the mark's bar. Dots stay circles, like the mark's knob.</li>
+            <li><b>One corner rule.</b> Every rectangular container rounds at 2, not the current scatter of 1.6 to 2.6. The beetle keeps its radius 6 as the single organic exception.</li>
+            <li><b>The weight system carries.</b> Every fitted stroke still resolves to 1.9 effective units. Nothing is redrawn or re-weighted in this pass.</li>
+            <li><b>State lighting.</b> The solid anchor fills itself from var(--icon-anchor), so the current surface can light its anchor in gold. Gold appears only where the mark's own terms put it: on the live thing, never statically.</li>
+          </ul>
+          <figure class="yardstick">
+            <svg viewBox="0 0 96 96" role="img" aria-label="The CodeInOven mark"><use href="#cio-mark" /></svg>
+            <figcaption>
+              Square caps on the open C, a miter join on the squared O, one
+              solid bar, one gold knob. The set above now says the same five
+              sentences at 12 to 24 pixels.
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>2 · In place</h2>
+          <span class="note">the refined set where it lives, with state lighting</span>
+        </div>
+        <div class="inplace">
+          <div class="window">
+            <nav class="rail" aria-label="Refined rail mock">
+              <div class="group">
+                <span class="item" data-current title="Projects, current" style="--icon-anchor: var(--color-accent)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-projects" /></svg></span>
+                <span class="item" title="Threads"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-chat" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Notifications"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notifications" /></svg></span>
+                <span class="item" title="Memory"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-memory" /></svg></span>
+                <span class="item" title="Subagent"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-subagent" /></svg></span>
+                <span class="item" title="Attention"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-attention" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span>4 agents</span></div>
+                <div><b>pillardash</b><span>1 working</span></div>
+                <div><b>oven-recipes</b><span>idle</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="demo">
+            <div class="headbar" role="img" aria-label="App header mock with the refined set">
+              <span class="slot" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-back" /></svg></span>
+              <span class="slot" title="Forward"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-forward" /></svg></span>
+              <span class="sep"></span>
+              <span class="slot" data-current title="Search, current" style="--icon-anchor: var(--color-accent)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-search" /></svg></span>
+              <span class="slot" title="Tools"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tools" /></svg></span>
+              <span class="slot" title="Notes"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notes" /></svg></span>
+              <span class="sep"></span>
+              <span class="slot" title="Notifications"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notifications" /></svg></span>
+            </div>
+            <p class="caption">
+              Projects is current, so its folder tab bar lights gold. Search is
+              current in the header, so its pupil does. Everything else stays
+              ink on surface.
+            </p>
+            <p class="caption">
+              Same two surfaces at rest carry no gold at all, which is the
+              brand condition: gold is the mark's knob and the current item's
+              anchor, nothing else.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>3 · The set at size</h2>
+          <span class="note">click a chip to pin a note about that glyph</span>
+        </div>
+        <div class="grouph"><h3>The rail</h3><span class="note">16px</span></div>
+        <div class="grouplist">
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Projects
+                <button class="chip" type="button" data-glyph="R-01" data-name="Projects" title="Pin a note about Projects" aria-label="Pin a note about Projects">R-01</button>
+              </span>
+              <span class="surf">rail, 16px</span>
+              <p class="gnote">Folder carries. The document tab bar squares into the mark's bar.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-projects" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-projects" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-projects" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-projects" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-projects" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-projects" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-projects" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-projects" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Threads
+                <button class="chip" type="button" data-glyph="R-02" data-name="Threads" title="Pin a note about Threads" aria-label="Pin a note about Threads">R-02</button>
+              </span>
+              <span class="surf">rail, 16px</span>
+              <p class="gnote">Spine gets square ends. The live entry loses its capsule rounding.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-threads" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-threads" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-threads" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-threads" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-threads" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-threads" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-threads" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-threads" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Scoped
+                <button class="chip" type="button" data-glyph="R-03" data-name="Scoped" title="Pin a note about Scoped" aria-label="Pin a note about Scoped">R-03</button>
+              </span>
+              <span class="surf">rail, 16px</span>
+              <p class="gnote">Field keeps radius 2. The solid centre plate squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-scoped" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-scoped" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-scoped" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-scoped" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-scoped" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-scoped" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-scoped" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-scoped" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Board
+                <button class="chip" type="button" data-glyph="R-04" data-name="Board" title="Pin a note about Board" aria-label="Pin a note about Board">R-04</button>
+              </span>
+              <span class="surf">rail, 16px</span>
+              <p class="gnote">Header rule square ended. The three lit columns become square bars.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-board" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-board" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-board" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-board" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-board" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-board" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-board" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-board" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Chat
+                <button class="chip" type="button" data-glyph="R-05" data-name="Chat" title="Pin a note about Chat" aria-label="Pin a note about Chat">R-05</button>
+              </span>
+              <span class="surf">rail, 16px</span>
+              <p class="gnote">Bubble silhouette untouched. The spoken line becomes a square bar.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-chat" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-chat" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-chat" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-chat" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-chat" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-chat" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-chat" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-chat" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+        <div class="grouph"><h3>The workspace dock</h3><span class="note">16px</span></div>
+        <div class="grouplist">
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Temporary chat
+                <button class="chip" type="button" data-glyph="R-06" data-name="Temporary chat" title="Pin a note about Temporary chat" aria-label="Pin a note about Temporary chat">R-06</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">The bite stays. Its line squares into the same bar Chat uses.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-temporary-chat" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-temporary-chat" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-temporary-chat" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-temporary-chat" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-temporary-chat" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-temporary-chat" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-temporary-chat" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-temporary-chat" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Subagent
+                <button class="chip" type="button" data-glyph="R-07" data-name="Subagent" title="Pin a note about Subagent" aria-label="Pin a note about Subagent">R-07</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Head plate rounds at 2 instead of 3. The two solid eyes square. The aerial dot stays a circle, the mark's knob.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-subagent" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-subagent" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-subagent" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-subagent" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-subagent" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-subagent" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-subagent" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-subagent" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Attention
+                <button class="chip" type="button" data-glyph="R-08" data-name="Attention" title="Pin a note about Attention" aria-label="Pin a note about Attention">R-08</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Triangle untouched. The stem bar squares. The dot stays a circle.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-attention" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-attention" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-attention" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-attention" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-attention" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-attention" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-attention" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-attention" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Notifications
+                <button class="chip" type="button" data-glyph="R-09" data-name="Notifications" title="Pin a note about Notifications" aria-label="Pin a note about Notifications">R-09</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Mouth bar squares. Bell arc keeps its shape, joins go miter.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notifications" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notifications" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notifications" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notifications" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notifications" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notifications" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notifications" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notifications" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Memory
+                <button class="chip" type="button" data-glyph="R-10" data-name="Memory" title="Pin a note about Memory" aria-label="Pin a note about Memory">R-10</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Plates round at 2. The lit middle plate squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-memory" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-memory" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-memory" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-memory" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-memory" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-memory" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-memory" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-memory" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Actions
+                <button class="chip" type="button" data-glyph="R-11" data-name="Actions" title="Pin a note about Actions" aria-label="Pin a note about Actions">R-11</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Gauge arc and needle square ended. The hub dot stays the knob.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-actions" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-actions" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-actions" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-actions" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-actions" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-actions" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-actions" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-actions" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Cloud deployments
+                <button class="chip" type="button" data-glyph="R-12" data-name="Cloud deployments" title="Pin a note about Cloud deployments" aria-label="Pin a note about Cloud deployments">R-12</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Cloud silhouette untouched. The payload bar squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-cloud" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-cloud" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-cloud" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-cloud" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-cloud" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-cloud" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-cloud" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-cloud" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Debugger
+                <button class="chip" type="button" data-glyph="R-13" data-name="Debugger" title="Pin a note about Debugger" aria-label="Pin a note about Debugger">R-13</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">The one organic exception, the beetle body keeps radius 6. Its band squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-debugger" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-debugger" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-debugger" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-debugger" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-debugger" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-debugger" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-debugger" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-debugger" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Terminal
+                <button class="chip" type="button" data-glyph="R-14" data-name="Terminal" title="Pin a note about Terminal" aria-label="Pin a note about Terminal">R-14</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Frame rounds at 2, was 2.4. Prompt square capped. Cursor squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-terminal" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-terminal" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-terminal" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-terminal" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-terminal" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-terminal" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-terminal" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-terminal" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Workspace files
+                <button class="chip" type="button" data-glyph="R-15" data-name="Workspace files" title="Pin a note about Workspace files" aria-label="Pin a note about Workspace files">R-15</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Folder keeps radius 2. The hanging tab bar squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-files" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-files" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-files" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-files" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-files" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-files" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-files" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-files" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Changes
+                <button class="chip" type="button" data-glyph="R-16" data-name="Changes" title="Pin a note about Changes" aria-label="Pin a note about Changes">R-16</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Page rounds at 2, was 2.2. The crossed plus bars square.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-diff" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-diff" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-diff" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-diff" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-diff" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-diff" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-diff" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-diff" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Thread note
+                <button class="chip" type="button" data-glyph="R-17" data-name="Thread note" title="Pin a note about Thread note" aria-label="Pin a note about Thread note">R-17</button>
+              </span>
+              <span class="surf">dock, 16px</span>
+              <p class="gnote">Card rounds at 2, was 2.2. Its line bar squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-note" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-note" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-note" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-note" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-note" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-note" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-note" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-note" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+        <div class="grouph"><h3>The app header</h3><span class="note">16px</span></div>
+        <div class="grouplist">
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Back
+                <button class="chip" type="button" data-glyph="R-18" data-name="Back" title="Pin a note about Back" aria-label="Pin a note about Back">R-18</button>
+              </span>
+              <span class="surf">header, 16px</span>
+              <p class="gnote">Square caps, miter join. No other change.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-back" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-back" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-back" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-back" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-back" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-back" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-back" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-back" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Forward
+                <button class="chip" type="button" data-glyph="R-19" data-name="Forward" title="Pin a note about Forward" aria-label="Pin a note about Forward">R-19</button>
+              </span>
+              <span class="surf">header, 16px</span>
+              <p class="gnote">The same chevron mirrored. Square caps, miter join.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-forward" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-forward" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-forward" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-forward" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-forward" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-forward" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-forward" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-forward" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Search
+                <button class="chip" type="button" data-glyph="R-20" data-name="Search" title="Pin a note about Search" aria-label="Pin a note about Search">R-20</button>
+              </span>
+              <span class="surf">header, 15px</span>
+              <p class="gnote">Lens carries. The pupil stays the ember-capable dot. Handle end squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-search" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-search" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-search" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-search" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-search" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-search" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-search" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-search" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Tools
+                <button class="chip" type="button" data-glyph="R-21" data-name="Tools" title="Pin a note about Tools" aria-label="Pin a note about Tools">R-21</button>
+              </span>
+              <span class="surf">header, 15px</span>
+              <p class="gnote">Spanner paths keep their silhouette. Jaw dot stays the knob. Joins go miter.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tools" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tools" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tools" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tools" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tools" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tools" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tools" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tools" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Notes
+                <button class="chip" type="button" data-glyph="R-22" data-name="Notes" title="Pin a note about Notes" aria-label="Pin a note about Notes">R-22</button>
+              </span>
+              <span class="surf">header, 16px</span>
+              <p class="gnote">Peel paths untouched. Its line bar squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notes" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notes" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notes" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notes" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notes" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notes" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-notes" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-notes" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+        <div class="grouph"><h3>Context tabs</h3><span class="note">12px</span></div>
+        <div class="grouplist">
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Files tab
+                <button class="chip" type="button" data-glyph="R-23" data-name="Files tab" title="Pin a note about Files tab" aria-label="Pin a note about Files tab">R-23</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Sheets keep radius 2. Line bar squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-files" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-files" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-files" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-files" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-files" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-files" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-files" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-files" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Info tab
+                <button class="chip" type="button" data-glyph="R-24" data-name="Info tab" title="Pin a note about Info tab" aria-label="Pin a note about Info tab">R-24</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Readout plate keeps radius 2. Stem squares. Dot stays the knob.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-info" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-info" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-info" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-info" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-info" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-info" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-info" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-info" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Git tab
+                <button class="chip" type="button" data-glyph="R-25" data-name="Git tab" title="Pin a note about Git tab" aria-label="Pin a note about Git tab">R-25</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Commit dots stay dots. Stems square ended. The head commit stays the ember-capable dot.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-git" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-git" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-git" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-git" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-git" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-git" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-git" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-git" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Containers tab
+                <button class="chip" type="button" data-glyph="R-26" data-name="Containers tab" title="Pin a note about Containers tab" aria-label="Pin a note about Containers tab">R-26</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Outer plate rounds at 2, was 2.6. Inner contents square.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-boxes" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-boxes" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-boxes" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-boxes" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-boxes" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-boxes" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-boxes" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-boxes" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Extensions tab
+                <button class="chip" type="button" data-glyph="R-27" data-name="Extensions tab" title="Pin a note about Extensions tab" aria-label="Pin a note about Extensions tab">R-27</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Puzzle knob paths keep shape. Knob circle stays. Joins go miter.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-extensions" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-extensions" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-extensions" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-extensions" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-extensions" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-extensions" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-extensions" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-extensions" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Utilities
+                <button class="chip" type="button" data-glyph="R-28" data-name="Utilities" title="Pin a note about Utilities" aria-label="Pin a note about Utilities">R-28</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Four panels round up to 2, was 1.6. The one rule applied upward.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-utilities" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-utilities" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-utilities" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-utilities" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-utilities" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-utilities" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-utilities" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-utilities" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Task manager
+                <button class="chip" type="button" data-glyph="R-29" data-name="Task manager" title="Pin a note about Task manager" aria-label="Pin a note about Task manager">R-29</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Back plate rounds at 2, was 1.8. The lit front plate squares.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-tasks" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-tasks" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-tasks" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-tasks" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-tasks" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-tasks" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-tasks" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-tasks" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Settings
+                <button class="chip" type="button" data-glyph="R-30" data-name="Settings" title="Pin a note about Settings" aria-label="Pin a note about Settings">R-30</button>
+              </span>
+              <span class="surf">tabs, 12px</span>
+              <p class="gnote">Track gaps carry. Handles square into the mark's bar.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-settings" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-settings" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-settings" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-settings" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-settings" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-settings" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-tab-settings" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-tab-settings" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+        <div class="grouph"><h3>Beside the brand</h3><span class="note">16 to 24px</span></div>
+        <div class="grouplist">
+          <div class="glyph">
+            <div class="id">
+              <span class="gname">
+                Browser
+                <button class="chip" type="button" data-glyph="R-31" data-name="Browser" title="Pin a note about Browser" aria-label="Pin a note about Browser">R-31</button>
+              </span>
+              <span class="surf">browser, 16 to 24px</span>
+              <p class="gnote">Fill glyph, untouched. It is identity work, not part of the stroke system.</p>
+            </div>
+            <div class="sizes">
+              <div class="col"><span class="h">12px</span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-browser" /></svg></span>
+               <span class="slot"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-browser" /></svg></span>
+             </div>
+              <div class="col"><span class="h">16px</span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-browser" /></svg></span>
+               <span class="slot"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-browser" /></svg></span>
+             </div>
+              <div class="col"><span class="h">24px</span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-browser" /></svg></span>
+               <span class="slot"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-browser" /></svg></span>
+             </div>
+            </div>
+            <div class="zooms">
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#cio-browser" /></svg></div>
+                <figcaption>Now</figcaption>
+              </figure>
+              <figure>
+                <div class="zbox"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#r-cio-browser" /></svg></div>
+                <figcaption>Refined</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <h2>4 · What would ship, one line each</h2>
+          <span class="note">the verdict ledger</span>
+        </div>
+        <table class="ledger">
+          <thead>
+            <tr>
+              <th style="width: 4rem">Chip</th>
+              <th style="width: 8rem">Glyph</th>
+              <th style="width: 9rem">Surface</th>
+              <th>Verdict in this pass</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="keys">R-01</td><td class="name">Projects</td><td class="keys">rail, 16px</td><td>Folder carries. The document tab bar squares into the mark's bar.</td></tr>
+            <tr><td class="keys">R-02</td><td class="name">Threads</td><td class="keys">rail, 16px</td><td>Spine gets square ends. The live entry loses its capsule rounding.</td></tr>
+            <tr><td class="keys">R-03</td><td class="name">Scoped</td><td class="keys">rail, 16px</td><td>Field keeps radius 2. The solid centre plate squares.</td></tr>
+            <tr><td class="keys">R-04</td><td class="name">Board</td><td class="keys">rail, 16px</td><td>Header rule square ended. The three lit columns become square bars.</td></tr>
+            <tr><td class="keys">R-05</td><td class="name">Chat</td><td class="keys">rail, 16px</td><td>Bubble silhouette untouched. The spoken line becomes a square bar.</td></tr>
+            <tr><td class="keys">R-06</td><td class="name">Temporary chat</td><td class="keys">dock, 16px</td><td>The bite stays. Its line squares into the same bar Chat uses.</td></tr>
+            <tr><td class="keys">R-07</td><td class="name">Subagent</td><td class="keys">dock, 16px</td><td>Head plate rounds at 2 instead of 3. The two solid eyes square. The aerial dot stays a circle, the mark's knob.</td></tr>
+            <tr><td class="keys">R-08</td><td class="name">Attention</td><td class="keys">dock, 16px</td><td>Triangle untouched. The stem bar squares. The dot stays a circle.</td></tr>
+            <tr><td class="keys">R-09</td><td class="name">Notifications</td><td class="keys">dock, 16px</td><td>Mouth bar squares. Bell arc keeps its shape, joins go miter.</td></tr>
+            <tr><td class="keys">R-10</td><td class="name">Memory</td><td class="keys">dock, 16px</td><td>Plates round at 2. The lit middle plate squares.</td></tr>
+            <tr><td class="keys">R-11</td><td class="name">Actions</td><td class="keys">dock, 16px</td><td>Gauge arc and needle square ended. The hub dot stays the knob.</td></tr>
+            <tr><td class="keys">R-12</td><td class="name">Cloud deployments</td><td class="keys">dock, 16px</td><td>Cloud silhouette untouched. The payload bar squares.</td></tr>
+            <tr><td class="keys">R-13</td><td class="name">Debugger</td><td class="keys">dock, 16px</td><td>The one organic exception, the beetle body keeps radius 6. Its band squares.</td></tr>
+            <tr><td class="keys">R-14</td><td class="name">Terminal</td><td class="keys">dock, 16px</td><td>Frame rounds at 2, was 2.4. Prompt square capped. Cursor squares.</td></tr>
+            <tr><td class="keys">R-15</td><td class="name">Workspace files</td><td class="keys">dock, 16px</td><td>Folder keeps radius 2. The hanging tab bar squares.</td></tr>
+            <tr><td class="keys">R-16</td><td class="name">Changes</td><td class="keys">dock, 16px</td><td>Page rounds at 2, was 2.2. The crossed plus bars square.</td></tr>
+            <tr><td class="keys">R-17</td><td class="name">Thread note</td><td class="keys">dock, 16px</td><td>Card rounds at 2, was 2.2. Its line bar squares.</td></tr>
+            <tr><td class="keys">R-18</td><td class="name">Back</td><td class="keys">header, 16px</td><td>Square caps, miter join. No other change.</td></tr>
+            <tr><td class="keys">R-19</td><td class="name">Forward</td><td class="keys">header, 16px</td><td>The same chevron mirrored. Square caps, miter join.</td></tr>
+            <tr><td class="keys">R-20</td><td class="name">Search</td><td class="keys">header, 15px</td><td>Lens carries. The pupil stays the ember-capable dot. Handle end squares.</td></tr>
+            <tr><td class="keys">R-21</td><td class="name">Tools</td><td class="keys">header, 15px</td><td>Spanner paths keep their silhouette. Jaw dot stays the knob. Joins go miter.</td></tr>
+            <tr><td class="keys">R-22</td><td class="name">Notes</td><td class="keys">header, 16px</td><td>Peel paths untouched. Its line bar squares.</td></tr>
+            <tr><td class="keys">R-23</td><td class="name">Files tab</td><td class="keys">tabs, 12px</td><td>Sheets keep radius 2. Line bar squares.</td></tr>
+            <tr><td class="keys">R-24</td><td class="name">Info tab</td><td class="keys">tabs, 12px</td><td>Readout plate keeps radius 2. Stem squares. Dot stays the knob.</td></tr>
+            <tr><td class="keys">R-25</td><td class="name">Git tab</td><td class="keys">tabs, 12px</td><td>Commit dots stay dots. Stems square ended. The head commit stays the ember-capable dot.</td></tr>
+            <tr><td class="keys">R-26</td><td class="name">Containers tab</td><td class="keys">tabs, 12px</td><td>Outer plate rounds at 2, was 2.6. Inner contents square.</td></tr>
+            <tr><td class="keys">R-27</td><td class="name">Extensions tab</td><td class="keys">tabs, 12px</td><td>Puzzle knob paths keep shape. Knob circle stays. Joins go miter.</td></tr>
+            <tr><td class="keys">R-28</td><td class="name">Utilities</td><td class="keys">tabs, 12px</td><td>Four panels round up to 2, was 1.6. The one rule applied upward.</td></tr>
+            <tr><td class="keys">R-29</td><td class="name">Task manager</td><td class="keys">tabs, 12px</td><td>Back plate rounds at 2, was 1.8. The lit front plate squares.</td></tr>
+            <tr><td class="keys">R-30</td><td class="name">Settings</td><td class="keys">tabs, 12px</td><td>Track gaps carry. Handles square into the mark's bar.</td></tr>
+            <tr><td class="keys">R-31</td><td class="name">Browser</td><td class="keys">browser, 16 to 24px</td><td>Fill glyph, untouched. It is identity work, not part of the stroke system.</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <aside class="pin" id="pin" aria-label="Notes about the icon pass">
+        <h3>Notes pin</h3>
+        <p class="pin-help">Click any gold chip in section 3 to name it here, or pick from the list. Notes are saved in this browser until you clear them. Copy assembles a markdown list to paste back into the thread.</p>
+        <label>Glyph
+          <select id="pinGlyph" aria-label="Glyph to annotate"></select>
+        </label>
+        <label for="pinText" style="display: none">Note text</label>
+        <textarea id="pinText" rows="3" placeholder="One line about this glyph"></textarea>
+        <div class="pin-actions">
+          <button id="pinSave" type="button">Save note</button>
+          <button id="pinCopy" type="button">Copy notes</button>
+          <button id="pinClear" type="button">Clear</button>
+        </div>
+        <ol id="pinList"></ol>
+        <span class="status" id="pinStatus" role="status"></span>
+      </aside>
+    </div>
+
+    <script>
+      (function () {
+        var html = document.documentElement;
+        var toggle = document.getElementById('themeToggle');
+        toggle.addEventListener('click', function () {
+          var dark = html.classList.toggle('dark');
+          toggle.textContent = dark ? 'Light' : 'Dark';
+        });
+
+        var chips = Array.prototype.slice.call(document.querySelectorAll('.chip[data-glyph]'));
+        var select = document.getElementById('pinGlyph');
+        chips.forEach(function (chip) {
+          var opt = document.createElement('option');
+          opt.value = chip.dataset.glyph;
+          opt.textContent = chip.dataset.glyph + ' ' + chip.dataset.name;
+          select.appendChild(opt);
+        });
+        chips.forEach(function (chip) {
+          chip.addEventListener('click', function () {
+            select.value = chip.dataset.glyph;
+            document.getElementById('pinText').focus();
+          });
+        });
+
+        var KEY = 'cio-round-eleven-notes';
+        var list = document.getElementById('pinList');
+        var status = document.getElementById('pinStatus');
+        var notes = [];
+        try {
+          notes = JSON.parse(localStorage.getItem(KEY) || '[]') || [];
+        } catch (e) {
+          notes = [];
+        }
+
+        function render() {
+          list.textContent = '';
+          notes.forEach(function (note) {
+            var li = document.createElement('li');
+            var b = document.createElement('b');
+            b.textContent = note.id + ' ' + note.name;
+            li.appendChild(b);
+            li.appendChild(document.createTextNode(': ' + note.text));
+            list.appendChild(li);
+          });
+        }
+
+        function flash(message) {
+          status.textContent = message;
+          window.setTimeout(function () {
+            status.textContent = '';
+          }, 2500);
+        }
+
+        document.getElementById('pinSave').addEventListener('click', function () {
+          var text = document.getElementById('pinText').value.trim();
+          if (!select.value || !text) {
+            flash('Pick a glyph and write a line first.');
+            return;
+          }
+          var found = notes.filter(function (n) { return n.id === select.value; })[0];
+          if (found) {
+            found.text = text;
+          } else {
+            var name = select.options[select.selectedIndex].textContent.replace(/^[^ ]+ /, '');
+            notes.push({ id: select.value, name: name, text: text });
+          }
+          localStorage.setItem(KEY, JSON.stringify(notes));
+          document.getElementById('pinText').value = '';
+          render();
+          flash('Saved for ' + select.value + '.');
+        });
+
+        document.getElementById('pinCopy').addEventListener('click', function () {
+          if (!notes.length) {
+            flash('No notes yet.');
+            return;
+          }
+          var md = notes.map(function (n) { return n.id + ' ' + n.name + ': ' + n.text; }).join('\n');
+          navigator.clipboard.writeText(md).then(function () {
+            flash(notes.length + ' note(s) copied as markdown.');
+          }, function () {
+            flash('Copy failed. Select the notes list and copy manually.');
+          });
+        });
+
+        document.getElementById('pinClear').addEventListener('click', function () {
+          if (!notes.length) {
+            flash('Nothing to clear.');
+            return;
+          }
+          var sure = window.confirm('Clear all ' + notes.length + ' saved note(s)?');
+          if (!sure) return;
+          notes = [];
+          localStorage.setItem(KEY, '[]');
+          render();
+          flash('Notes cleared.');
+        });
+
+        render();
+      })();
+    </script>
+  </body>
+</html>
