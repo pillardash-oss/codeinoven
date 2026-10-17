@@ -33,7 +33,7 @@ import {
   broadcastThreadUpdate,
   publishThreadMessagesChanged,
   subscribeThreadCorpus,
-  setBackgroundAttention,
+  setBackgroundTray,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
@@ -420,7 +420,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       at: report.at
     })
     broadcastAutoAnswersChanged(store.list())
-    state.backgroundLifecycle?.refreshAttention()
+    state.backgroundLifecycle?.refreshTrayState()
   })
   state.assistantScheduler = new AssistantSchedulerService(storage, {
     assistants: assistantManager,
@@ -431,7 +431,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     onRunFailed: (runThreadId) => {
       try {
         new ThreadRepo(database).markUnread(runThreadId)
-        state.backgroundLifecycle?.refreshAttention()
+        state.backgroundLifecycle?.refreshTrayState()
       } catch (error) {
         Logger.error('Could not flag a failed run as unread:', error)
       }
@@ -499,7 +499,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     broadcastMissedRunsChanged(state.assistantScheduler?.listMissedRuns() ?? [])
     broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])
     broadcastSkippedRunsChanged(state.assistantScheduler?.listSkippedRuns() ?? [])
-    state.backgroundLifecycle?.refreshAttention()
+    state.backgroundLifecycle?.refreshTrayState()
   })
   // Background wake: the machine is held awake inside the lead window before a
   // due scheduled run, capped so a mis-scheduled task cannot pin it. The next
@@ -782,7 +782,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.powerWakeService?.onRetryScheduleChanged()
     // A tracked provider issue (and the retry that clears it) is the durable
     // half of the thread's error card, which the icon mirrors.
-    state.backgroundLifecycle?.requestAttentionRefresh()
+    state.backgroundLifecycle?.requestTrayRefresh()
   })
   // The engine counts the working sessions but cannot name them; the shared
   // report is what the close gate lists too, so an install prompt and a quit
@@ -1042,8 +1042,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
 
     // Every persisted thread update now re-evaluates the menu bar icon, so a
     // thread that breaks while the window is closed flips it and a thread that
-    // recovers flips it back.
-    if (state.backgroundLifecycle) setBackgroundAttention(state.backgroundLifecycle)
+    // recovers flips it back   including the figure, which rises and falls with
+    // the threads that are actually running.
+    if (state.backgroundLifecycle) setBackgroundTray(state.backgroundLifecycle)
 
     try {
       await state.retryScheduler?.start()

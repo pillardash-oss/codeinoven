@@ -4,7 +4,7 @@
  *
  * Both are derived from durable state (SQLite and the schedulers) rather than
  * from a renderer, because while the window is closed there is no renderer to
- * ask. The menu bar icon's two states and its tooltip are the only consumers.
+ * ask. The menu bar icon's states and its tooltip are the only consumers.
  */
 
 import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'
@@ -151,5 +151,25 @@ export function computeAttention(database: Database): boolean {
   } catch (error) {
     Logger.error('Background attention check failed', error)
     return false
+  }
+}
+
+/**
+ * How many threads are producing work right now: the figure the menu bar icon
+ * carries while anything is running.
+ *
+ * Deliberately the same set as the residency `thread-running` reason and
+ * {@link ThreadRepo.countActiveViaWorker}: a harness is mid-turn (`planning` or
+ * `executing`). A thread parked on the user, waiting on a provider retry, or
+ * settled is not working, however much of the user's attention it wants, which
+ * is why the figure never counts them.
+ */
+export async function countWorkingThreads(database: Database): Promise<number> {
+  if (!database.isOpen()) return 0
+  try {
+    return await new ThreadRepo(database).countActiveViaWorker()
+  } catch (error) {
+    Logger.error('Working-thread count failed', error)
+    return 0
   }
 }

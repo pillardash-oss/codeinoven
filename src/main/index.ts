@@ -50,7 +50,12 @@ import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
-import { computeAttention, hasUpcomingWork, residencyReason } from './system/background-work-state'
+import {
+  computeAttention,
+  countWorkingThreads,
+  hasUpcomingWork,
+  residencyReason
+} from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import { startStartupUpdater } from './bootstrap/startup-updater'
 import { getMainBundleDirectory } from './bootstrap/bundle-directory'
@@ -318,6 +323,24 @@ function getTrayIconPath(attention: boolean, darkTaskbar = false): string {
 }
 
 /**
+ * The menu bar working-figure strip: the plain resolution and its Retina pair.
+ *
+ * One file per resolution holds every figure as a cell (see
+ * `src/lib/tray-count-art.ts`), which is what keeps the repository from
+ * carrying a template per count. Only macOS reads it.
+ */
+function getTrayCountStripPaths(): { base: string; retina: string } {
+  const directory =
+    !isProduction && is.dev
+      ? join(app.getAppPath(), 'src/renderer/static/macos')
+      : join(mainBundleDirectory, '../renderer/macos')
+  return {
+    base: join(directory, 'trayCountTemplate.png'),
+    retina: join(directory, 'trayCountTemplate@2x.png')
+  }
+}
+
+/**
  * Whether this launch came from the OS login item. A login launch starts
  * windowless in background mode: the whole point is a backend that keeps the
  * schedule without a renderer.
@@ -373,6 +396,7 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   // returns a reason (see `BackgroundLifecycleService.evaluateResidency`).
   residencyReason: () => residencyReason(state, database),
   computeAttention: () => computeAttention(database),
+  countWorkingThreads: () => countWorkingThreads(database),
   onBecameOwner: () => {
     // A survivor that inherited the schedule picks up the slots missed while
     // nobody owned the scheduler.
@@ -380,7 +404,8 @@ const backgroundLifecycle = new BackgroundLifecycleService({
       ?.runPendingMisses()
       .catch((error) => Logger.error('Take-over catch-up failed:', error))
   },
-  resolveTrayIcon: (attention, darkTaskbar) => getTrayIconPath(attention, darkTaskbar)
+  resolveTrayIcon: (attention, darkTaskbar) => getTrayIconPath(attention, darkTaskbar),
+  resolveTrayCountStrip: () => getTrayCountStripPaths()
 })
 state.backgroundLifecycle = backgroundLifecycle
 

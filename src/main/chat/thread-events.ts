@@ -13,11 +13,12 @@ type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }
  * The service that owns the menu bar icon. Injected as a narrow port rather
  * than imported, because this module is loaded by the chat engine and must not
  * pull in the whole background lifecycle: every persisted thread update is
- * exactly the moment the icon's error state can have changed.
+ * exactly the moment the icon's error state and its working-thread figure can
+ * have changed.
  */
-interface BackgroundAttentionPort {
+interface BackgroundTrayPort {
   /** Coalesced, so calling it on every thread update is cheap. */
-  requestAttentionRefresh: () => void
+  requestTrayRefresh: () => void
 }
 
 interface ThreadCorpusListener {
@@ -36,7 +37,7 @@ export function subscribeThreadCorpus(listener: ThreadCorpusListener): () => voi
 
 let _notificationService: NotificationService | null = null
 let _powerWakeService: PowerWakeService | null = null
-let _backgroundAttention: BackgroundAttentionPort | null = null
+let _backgroundTray: BackgroundTrayPort | null = null
 
 export function setNotificationService(service: NotificationService | null): void {
   _notificationService = service
@@ -46,8 +47,8 @@ export function setPowerWakeService(service: PowerWakeService | null): void {
   _powerWakeService = service
 }
 
-export function setBackgroundAttention(port: BackgroundAttentionPort | null): void {
-  _backgroundAttention = port
+export function setBackgroundTray(port: BackgroundTrayPort | null): void {
+  _backgroundTray = port
 }
 
 export function markNotificationAborting(projectId: string, threadId: string): void {
@@ -82,9 +83,10 @@ export function broadcastThreadUpdate(thread: Thread): void {
     dismissThreadNotifications(thread.projectId, thread.id)
   }
   _powerWakeService?.onThreadUpdate(thread)
-  // The menu bar mirrors the thread's error card, so every persisted status or
-  // read change is a moment its state can have changed.
-  _backgroundAttention?.requestAttentionRefresh()
+  // The menu bar mirrors the thread's error card and carries the number of
+  // working threads, so every persisted status or read change is a moment the
+  // icon's state can have changed.
+  _backgroundTray?.requestTrayRefresh()
   void _notificationService?.notify(thread)
   // The row is shared with every other instance, and none of them receives this
   // fan-out, so the change is also announced for a sibling to re-read.
@@ -122,7 +124,7 @@ export function broadcastCrossInstanceThreadUpdate(thread: Thread): void {
   }
   // The menu bar mirrors the thread states of the shared database, so a row
   // corrected from a sibling's write is a moment its own state can have changed.
-  _backgroundAttention?.requestAttentionRefresh()
+  _backgroundTray?.requestTrayRefresh()
 }
 
 /**

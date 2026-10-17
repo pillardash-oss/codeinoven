@@ -1233,6 +1233,29 @@ export class ThreadRepo {
     )
   }
 
+  /**
+   * How many non-archived threads hold active agent work right now, read on the
+   * database worker.
+   *
+   * The count the menu bar figure shows. It is the same set {@link hasActive}
+   * probes for, counted rather than probed, so the icon and the stay-alive
+   * decision can never disagree about what "working" means. It is read on the
+   * worker because it is refreshed from thread-update paths, which are
+   * interaction paths: a count holds the whole main process for as long as the
+   * OS takes to serve it (see `docs/APP-BIBLE.md`).
+   */
+  async countActiveViaWorker(): Promise<number> {
+    const result = await this.db.queryViaWorker(
+      `SELECT COUNT(*) AS active
+       FROM threads
+       WHERE archived = 0 AND status IN ('planning', 'executing')`,
+      [],
+      1
+    )
+    if (!result.ok) return 0
+    return Number(result.rows[0]?.['active'] ?? 0)
+  }
+
   delete(id: string): void {
     this.db.run('DELETE FROM threads WHERE id = ?', id)
   }

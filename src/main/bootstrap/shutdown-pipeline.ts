@@ -15,7 +15,7 @@ import { app } from 'electron'
 import type { Database } from '../database/database'
 import { flushDraftWrites } from '../chat/draft-commit-gate'
 import {
-  setBackgroundAttention,
+  setBackgroundTray,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
@@ -72,7 +72,7 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
   setNotificationService(null)
   setPowerWakeService(null)
-  setBackgroundAttention(null)
+  setBackgroundTray(null)
   try {
     state.powerWakeService?.stop()
   } catch (error) {
