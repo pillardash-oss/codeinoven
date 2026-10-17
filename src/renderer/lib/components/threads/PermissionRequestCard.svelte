@@ -100,8 +100,6 @@
   }
 </script>
 
-import CioEnter from
-
 <section
   out:slide={dismissSlide()}
   class={cardFrameClass('replace', 'overflow-hidden')}

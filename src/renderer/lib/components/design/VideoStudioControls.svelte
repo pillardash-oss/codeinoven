@@ -166,8 +166,6 @@
   }
 </script>
 
-import CioTabSettings from
-
 <svelte:window onkeydown={primaryAction} />
 <section
   {@attach (node) => {

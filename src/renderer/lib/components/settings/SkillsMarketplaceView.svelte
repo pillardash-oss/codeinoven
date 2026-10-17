@@ -129,8 +129,6 @@
   })
 </script>
 
-import CioTrendingUp from
-
 <div class="h-full min-h-0 overflow-hidden">
   <div class="flex h-full min-h-0 flex-col px-6 pt-6">
     <div class="shrink-0 bg-app pb-3">

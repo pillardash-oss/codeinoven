@@ -405,8 +405,6 @@
   onDestroy(resetAll)
 </script>
 
-import CioSquare from
-
 <div
   class="mb-4 flex items-center gap-1 border bg-surface p-1"
   role="tablist"

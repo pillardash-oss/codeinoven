@@ -189,8 +189,6 @@
   }
 </script>
 
-import CioSquare from
-
 <!--
   Docked into the context sidebar: the sidebar owns the width, the visibility,
   and the tab chrome, so this panel is just a column that fills whatever space

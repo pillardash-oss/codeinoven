@@ -125,8 +125,6 @@
     'flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 </script>
 
-import CioShieldOff from
-
 <ContextMenu.Root>
   <ContextMenu.Trigger class="contents">
     {@render children()}

@@ -474,8 +474,6 @@
   }
 </script>
 
-import CioWrapText from
-
 <div class="flex h-full min-h-0 flex-col bg-app" data-region="conflict-editor">
   {#if loading && !workFile}
     <div class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed">

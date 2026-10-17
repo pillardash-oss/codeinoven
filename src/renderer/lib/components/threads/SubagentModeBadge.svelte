@@ -19,8 +19,6 @@
   const title = $derived(subagentModeTitle(background))
 </script>
 
-import CioLayers from
-
 {#if variant === 'chip'}
   <span
     class="flex shrink-0 items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"

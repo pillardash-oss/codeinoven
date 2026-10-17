@@ -428,8 +428,6 @@
   })
 </script>
 
-import CioSelectAll from
-
 {#if target}
   <div
     {@attach captureMenu}

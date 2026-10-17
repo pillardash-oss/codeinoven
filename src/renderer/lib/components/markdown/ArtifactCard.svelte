@@ -170,8 +170,6 @@
   }
 </script>
 
-import CioWrapText from
-
 {#snippet artifactBody(fullscreen = false)}
   {#if showSource && !fullscreen}
     <div class="[&>div]:border-0 [&>div]:border-t">

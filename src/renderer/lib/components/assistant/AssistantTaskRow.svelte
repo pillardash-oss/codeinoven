@@ -314,8 +314,6 @@
   }
 </script>
 
-import CioSwap from
-
 <div
   class="relative"
   role="listitem"

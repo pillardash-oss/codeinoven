@@ -206,8 +206,6 @@
   )
 </script>
 
-import CioPanelLeft from
-
 <div class="flex h-full flex-col items-center justify-center px-6">
   <img src={logoUrl} alt="CodeInOven" class="mb-8 h-20 w-20" draggable="false" />
   <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">CodeInOven</h1>

@@ -164,8 +164,6 @@
   }
 </script>
 
-import CioPackageCheck from
-
 <div class="flex h-full min-h-0 flex-col">
   {#if !githubConnected}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

@@ -102,8 +102,6 @@
   }
 </script>
 
-import CioTools from
-
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label={specless ? 'Assignment' : 'Specification ready'}>
     <CardHead

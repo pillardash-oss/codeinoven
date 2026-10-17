@@ -18,8 +18,6 @@
   }
 </script>
 
-import CioRows3 from
-
 <button
   type="button"
   {title}

@@ -66,8 +66,6 @@
   )
 </script>
 
-import CioSnail from
-
 <DropdownMenu.Root bind:open={menuOpen}>
   <DropdownMenu.Trigger
     class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"

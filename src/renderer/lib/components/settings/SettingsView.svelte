@@ -597,8 +597,6 @@
   }
 </script>
 
-import CioSun from
-
 <svelte:window onkeydown={escHandler} />
 
 <div class="flex h-full">

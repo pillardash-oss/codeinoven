@@ -152,8 +152,6 @@
   }
 </script>
 
-import CioArrowUp from
-
 <div class="overflow-x-auto border bg-surface">
   <table class="w-full text-left text-xs" aria-label={label}>
     <thead>

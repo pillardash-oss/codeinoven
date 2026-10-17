@@ -1368,8 +1368,6 @@
   }
 </script>
 
-import CioStore from
-
 <div class="flex h-full min-h-0 flex-col" {@attach watchViewingThread}>
   {#snippet videoStage()}
     {#if video && selected.directory !== '' && !liveEditing}

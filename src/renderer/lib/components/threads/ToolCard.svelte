@@ -194,8 +194,6 @@
   const giantInput = $derived(inputJson.length > GIANT_TOOL_STRING_CHARS ? inputJson : null)
 </script>
 
-import CioFilePlus from
-
 <div class="min-w-0">
   <button
     type="button"

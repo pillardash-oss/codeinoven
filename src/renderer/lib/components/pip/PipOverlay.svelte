@@ -427,8 +427,6 @@
   }
 </script>
 
-import CioWindow from
-
 <svelte:window onresize={onViewportResize} />
 
 {#if visible}

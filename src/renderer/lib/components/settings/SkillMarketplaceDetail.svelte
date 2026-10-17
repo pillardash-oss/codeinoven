@@ -335,8 +335,6 @@
   })
 </script>
 
-import CioCalendar from
-
 <!--
   One scope destination per row: they are independent choices, so a shared row
   made them read as one segmented selector.

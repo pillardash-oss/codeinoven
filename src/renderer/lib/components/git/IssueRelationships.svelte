@@ -88,8 +88,6 @@
   )
 </script>
 
-import CioListTree from
-
 {#snippet addButton(mode: IssueRelationshipMode, label: string)}
   {#if canLink}
     <button

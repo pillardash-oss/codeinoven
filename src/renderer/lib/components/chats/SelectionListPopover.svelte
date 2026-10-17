@@ -76,8 +76,6 @@
   }
 </script>
 
-import CioShapes from
-
 <div
   class="w-80 border border-border bg-surface p-1.5 shadow-lg"
   role="dialog"

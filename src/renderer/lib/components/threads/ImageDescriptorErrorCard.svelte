@@ -199,8 +199,6 @@
   }
 </script>
 
-import CioImagePlus from
-
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Image descriptor error" {stackedAbove} {joinsBelow}>
     <CardHead

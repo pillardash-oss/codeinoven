@@ -28,8 +28,6 @@
   const previewKind = $derived(attachmentPreviewKind(attachment.mime, name))
 </script>
 
-import CioImage from
-
 <!-- One attached file: what it is, what opening it does, and how it leaves. The
      leading segment is the icon or the picture, the trailing one is the remove
      control, and each reads the same wherever the file is listed. -->

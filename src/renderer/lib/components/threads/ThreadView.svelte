@@ -12631,8 +12631,6 @@
   })
 </script>
 
-import CioClapper from
-
 {#snippet ovenPicker()}
   {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
     <OvenControlsComponent

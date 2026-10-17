@@ -15,8 +15,6 @@
   const tone = $derived(stage === 'steer' ? 'text-thread-working' : 'text-thread-spec')
 </script>
 
-import CioTimerOff from
-
 <!-- Armed dictation: the same processing pulse the transcribing bars carry, on
      the icon that says how the transcript will be delivered: a wave for
      "queued behind the run", a clock for "steering into it". -->

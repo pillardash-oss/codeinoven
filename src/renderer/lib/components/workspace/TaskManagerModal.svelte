@@ -772,8 +772,6 @@
   }
 </script>
 
-import CioTools from
-
 <Modal
   {open}
   title="Task Manager"

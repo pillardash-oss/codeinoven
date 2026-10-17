@@ -44,8 +44,6 @@
   })
 </script>
 
-import CioTag from
-
 {#if dataUri}
   <img src={dataUri} alt="" width={size} height={size} class="shrink-0 {className}" />
 {:else if kind === 'json'}

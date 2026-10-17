@@ -81,8 +81,6 @@
   let open = $state(false)
 </script>
 
-import CioWrapText from
-
 {#if showUndoRedo}
   <button
     type="button"

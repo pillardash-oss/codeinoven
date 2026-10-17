@@ -17,8 +17,6 @@
   }
 </script>
 
-import CioEraser from
-
 {#if import.meta.env.DEV}
   <aside class="flex h-full w-full flex-col bg-surface" aria-label="Agent debug inspector">
     <!-- Header -->

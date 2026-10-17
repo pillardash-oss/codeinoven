@@ -129,8 +129,6 @@
   )
 </script>
 
-import CioPencil from
-
 <CardFrame
   placement="replace"
   label="Review the assistant the agent drafted"

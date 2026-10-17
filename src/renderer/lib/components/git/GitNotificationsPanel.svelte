@@ -156,8 +156,6 @@
     'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
 </script>
 
-import CioInbox from
-
 <div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-notifications-panel">
   <!--
     The listing: one row of the three views, the filter and ordering, then the

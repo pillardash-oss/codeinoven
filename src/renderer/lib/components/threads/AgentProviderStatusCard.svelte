@@ -293,8 +293,6 @@
   }
 </script>
 
-import CioTimerReset from
-
 <!-- The live region wraps the frame so a status change still announces the whole
 card, the way it did before the head moved onto the shared primitives. -->
 <div role={waiting ? 'status' : 'alert'} aria-live="polite">

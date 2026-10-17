@@ -46,8 +46,6 @@
   }
 </script>
 
-import CioListTodo from
-
 <div
   bind:this={listboxElement}
   class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col border border-border-strong bg-surface p-1 shadow-lg"

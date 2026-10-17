@@ -35,8 +35,6 @@
   }: Props = $props()
 </script>
 
-import CioTag from
-
 <div class="group border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
   <div class="flex items-start gap-3">
     {#if source.kind === 'web'}

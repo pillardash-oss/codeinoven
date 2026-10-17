@@ -214,8 +214,6 @@
   )
 </script>
 
-import CioPinOff from
-
 <!--
   A portaled `bits-ui` menu, not a positioned child: the sidebar, the scope board
   and the scoped-threads sidebar all clip their own overflow and are narrow, so

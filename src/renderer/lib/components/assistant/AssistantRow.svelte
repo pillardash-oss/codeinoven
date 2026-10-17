@@ -229,8 +229,6 @@
   }
 </script>
 
-import CioPinOff from
-
 <div
   class="group relative flex items-center gap-1 border-l-2 px-1.5 py-2 transition-colors {expanded
     ? 'bg-elevated/70'
