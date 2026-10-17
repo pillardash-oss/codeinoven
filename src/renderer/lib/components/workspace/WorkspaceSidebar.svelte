@@ -318,6 +318,19 @@
       }))
   })
 
+  /**
+   * Rows the threads timeline mounts per section before its "Show more".
+   *
+   * The view can hold the whole loaded history - a couple of hundred rows - and
+   * every one of them is a fully mounted row component. Changing the arrangement
+   * (the inbox grouping, the project filter, a search) re-mounts each row it
+   * moves, so the cost of one click grew with the size of the history. One page
+   * per group keeps that bounded to about a screenful while each group still
+   * shows its head, and the rest stays one click (or one scroll away, through
+   * the same affordance the project folders use).
+   */
+  const TIMELINE_PAGE_SIZE = 15
+
   // Rows travel between containers, not inside one keyed list: a regrouping or a
   // project filter tears them out of one status group and builds them inside
   // another, so Svelte's per-list FLIP has nothing to measure. This pair takes
@@ -901,6 +914,31 @@
                       heading sits 8px below the app header: the heading is held to
                       its containing block's padding box, and the scroller's own
                       top padding is inside it. -->
+            <!-- The timeline mounts one page per section; the rest of a
+                 group's rows are one click away. Mounting every loaded row is
+                 what makes changing the arrangement expensive: a regroup, a
+                 project filter or a search re-mounts each row it moves, so the
+                 cost of the click rose with the size of the history.
+
+                 Search results are never budgeted: they are the rows the user
+                 just asked for, already capped by the search itself. -->
+            {@const sectionThreads =
+              searchingThreads || section.threads.length <= TIMELINE_PAGE_SIZE
+                ? section.threads
+                : sidebar.visibleThreads(
+                    section.key,
+                    section.threads,
+                    activeThreadId,
+                    TIMELINE_PAGE_SIZE
+                  )}
+            {@const hiddenSectionCount = searchingThreads
+              ? 0
+              : sidebar.hiddenThreadCount(
+                  section.key,
+                  section.threads,
+                  sectionThreads,
+                  TIMELINE_PAGE_SIZE
+                )}
             <section>
               {#if section.group}
                 {@const group = section.group}
@@ -927,7 +965,7 @@
                 </div>
               {/if}
               <div class="space-y-px {section.group ? 'pb-5' : ''}" role="list">
-                {#each section.threads as thread (thread.id)}
+                {#each sectionThreads as thread (thread.id)}
                   {@const result = searchingThreads ? searchResultsById.get(thread.id) : undefined}
                   <div data-row-key={thread.id} in:fade={threadsRowArrive(thread.createdAt)}>
                     {#if result}
@@ -962,6 +1000,26 @@
                   </div>
                 {/each}
               </div>
+              {#if hiddenSectionCount > 0}
+                <button
+                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+                  onclick={() =>
+                    sidebar.showMoreThreads(
+                      section.key,
+                      section.threads.length,
+                      TIMELINE_PAGE_SIZE
+                    )}
+                >
+                  Show {hiddenSectionCount} more
+                </button>
+              {:else if sidebar.getVisibleCount(section.key, TIMELINE_PAGE_SIZE) > TIMELINE_PAGE_SIZE}
+                <button
+                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+                  onclick={() => sidebar.showLessThreads(section.key, TIMELINE_PAGE_SIZE)}
+                >
+                  Show less
+                </button>
+              {/if}
             </section>
           {:else}
             {#if searchingThreads || pinnedTimelineThreads.length === 0}
