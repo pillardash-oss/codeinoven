@@ -45,6 +45,14 @@
   import { normalizeComposerMessage } from '../chats/composer-mentions'
   import { COMPOSER_DRAFT_SELECTOR } from '../chats/chat-composer-draft-surface'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
+  import RelocateThreadPicker from '../chats/RelocateThreadPicker.svelte'
+  import {
+    applyComposerRelocation,
+    relocationActionLabel,
+    relocationNoun,
+    type ComposerRelocationItem,
+    type ComposerRelocationMode
+  } from '../chats/composer-relocation'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
@@ -242,6 +250,7 @@
     describeSchedule,
     isAssistantSetupThread,
     isOrchestrationChildThread,
+    usesThreadWorkspaceMount,
     assistantIsScheduled,
     WORKING_TRACE_PAGE_SIZE,
     COMPLETED_TURN_PAGE_SIZE
@@ -9788,6 +9797,76 @@
     if (linkedThread) workspaceState.openThread(linkedThread, project)
   }
 
+  /**
+   * Carrying composer content to another chat.
+   *
+   * An attached file, a doc comment and an inspector comment all name something
+   * the project holds, not something this conversation holds, so any of them can
+   * be moved or copied to another chat of the same project. A chat, an assistant
+   * task or a browser tab conversation lives in a hidden container with no
+   * sibling chat to carry anything to, and a controller-driven conversation (a
+   * temporary chat) keeps its own composer state, so neither offers the action.
+   */
+  const relocationAvailable = $derived(
+    !hasController && !usesThreadWorkspaceMount(thread.projectId)
+  )
+
+  /** The composer chip a destination is being picked for, and which verb applies. */
+  let relocationRequest = $state<{
+    item: ComposerRelocationItem
+    mode: ComposerRelocationMode
+  } | null>(null)
+
+  const relocationPickerTitle = $derived(
+    relocationRequest
+      ? relocationActionLabel(relocationRequest.mode, relocationRequest.item)
+      : 'Move to chat'
+  )
+
+  function requestComposerRelocation(
+    item: ComposerRelocationItem,
+    mode: ComposerRelocationMode
+  ): void {
+    if (!relocationAvailable) return
+    relocationRequest = { item, mode }
+  }
+
+  function closeRelocationPicker(): void {
+    relocationRequest = null
+  }
+
+  /**
+   * Carry the requested item to the chosen chat and land there with it.
+   *
+   * The item is written into the destination's composer draft, so the picked
+   * chat opens with the file attached or the comment pinned and ready to send;
+   * a move also takes it out of this composer. The composer is remounted on the
+   * way out because it was drawn from the draft the move just changed.
+   */
+  async function commitComposerRelocation(target: Thread): Promise<void> {
+    const request = relocationRequest
+    relocationRequest = null
+    if (!request) return
+    const noun = relocationNoun(request.item)
+    try {
+      await applyComposerRelocation({
+        projectId: thread.projectId,
+        sourceThreadId: thread.id,
+        targetThreadId: target.id,
+        item: request.item,
+        mode: request.mode
+      })
+    } catch (error) {
+      reportError(error, `The ${noun} could not be carried to that chat.`)
+      return
+    }
+    toast.success(`${request.mode === 'copy' ? 'Copied' : 'Moved'} ${noun} to ${target.title}`)
+    composerRestoreKey += 1
+    const targetProject =
+      project ?? (await invoke('project:get', target.projectId).catch(() => null))
+    workspaceState.openThreadInOwningView(target, targetProject)
+  }
+
   function persistQueuedStartAfterThreads(): void {
     rendererRecovery.updateQueuedHead(thread.projectId, thread.id, {
       text: queuedMessage,
@@ -14651,6 +14730,7 @@
                         )
                       }}
                       onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
+                      onRelocateItem={relocationAvailable ? requestComposerRelocation : undefined}
                       references={composerReferences}
                       onRemoveReference={removeComposerReference}
                       onRemoveAllReferences={clearComposerReferences}
@@ -14725,6 +14805,19 @@
   }}
   onContinue={(project) => continueChatInProject(project)}
   onProjectCreated={(project) => void onProjectCreated?.(project)}
+/>
+
+<!-- The destination picker for a relocation or a copy: the same spotlight the
+     rest of the app picks from, listing this project's chats in the order the
+     project view shows them. -->
+<RelocateThreadPicker
+  open={relocationRequest !== null}
+  projectId={thread.projectId}
+  projectName={project?.name ?? 'this project'}
+  sourceThreadId={thread.id}
+  title={relocationPickerTitle}
+  onSelect={(target) => void commitComposerRelocation(target)}
+  onClose={closeRelocationPicker}
 />
 
 <TranscriptExportModal

@@ -37,6 +37,7 @@
   import ExpertCard from './ExpertCard.svelte'
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
+  import type { ComposerRelocationRequest } from './composer-relocation'
   import { installComposerDropListeners, type ComposerDropRegion } from './chat-composer-drop'
   import { readComposerDrop } from './chat-composer-drop-source'
   import { handleComposerKeydown, type ComposerKeydownContext } from './chat-composer-keydown'
@@ -195,6 +196,12 @@
     onRemoveAllReferences?: () => void
     /** Jump to a reference's highlight and open its comment editor. */
     onEditReference?: (id: string) => void
+    /**
+     * Carry a composer attachment, doc comment or inspector comment to another
+     * chat of the same project. Absent on a surface that has no project to move
+     * into: chats, assistant tasks, browser conversations and read-only views.
+     */
+    onRelocateItem?: ComposerRelocationRequest
     /** False on the Chats tab   plain chats never surface the engineer toggle. */
     showEngineeringMode?: boolean
     engineeringLifecycle?: EngineeringLifecycleState | null
@@ -324,6 +331,7 @@
     onRemoveReference,
     onRemoveAllReferences,
     onEditReference,
+    onRelocateItem,
     showEngineeringMode = true,
     engineeringLifecycle = null,
     engineeringActive,
@@ -702,6 +710,14 @@
   // pointer travels from the chip across any gap to the popover itself.
   let selectionPopoverOpen = $state(false)
   let selectionPopoverTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Whether a reference row's relocation menu is up.
+   *
+   * The menu is portaled outside the popover, so the pointer crosses out of the
+   * popover to reach it. Plain book-keeping: it is only read while deciding
+   * whether a hover-out may close the list, never rendered.
+   */
+  let referenceMenuOpen = false
   let startAfterPopoverOpen = $state(false)
   let startAfterPopoverTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -712,9 +728,17 @@
 
   function scheduleSelectionPopoverClose(): void {
     clearTimeout(selectionPopoverTimer)
+    // A menu opened from a row outranks the pointer leaving: the list it was
+    // opened from must still be there when the user comes back to it.
+    if (referenceMenuOpen) return
     selectionPopoverTimer = setTimeout(() => {
       selectionPopoverOpen = false
     }, 220)
+  }
+
+  function handleReferenceMenuOpenChange(open: boolean): void {
+    referenceMenuOpen = open
+    if (!open) scheduleSelectionPopoverClose()
   }
 
   function toggleSelectionPopover(): void {
@@ -1966,6 +1990,8 @@
     {onEditReference}
     {onRemoveReference}
     {onRemoveAllReferences}
+    {onRelocateItem}
+    onReferenceMenuOpenChange={handleReferenceMenuOpenChange}
   />
 
   <div class="relative" style="--editor-gutter: 2.25rem">

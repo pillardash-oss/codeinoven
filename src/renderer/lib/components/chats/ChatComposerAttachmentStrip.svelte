@@ -8,8 +8,14 @@
   import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
   import { SquareDashedMousePointer } from '@lucide/svelte'
   import AttachmentPill from './AttachmentPill.svelte'
+  import ComposerRelocationMenu from './ComposerRelocationMenu.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
+  import {
+    relocationItemName,
+    relocationNoun,
+    type ComposerRelocationRequest
+  } from './composer-relocation'
   import type { StartAfterSelection } from './chat-composer-attachments'
   import type { PromptAttachment, PromptReference } from '$shared/types'
 
@@ -41,6 +47,13 @@
     onEditReference?: (id: string) => void
     onRemoveReference?: (id: string) => void
     onRemoveAllReferences?: () => void
+    /** Carry an attachment, a doc comment or an inspector comment to another
+     *  chat of the same project. Absent on a surface with no project to move
+     *  into (chats, assistant tasks, browser conversations, read-only views). */
+    onRelocateItem?: ComposerRelocationRequest
+    /** Reports a reference row's relocation menu opening and closing, so the
+     *  reference popover stays open while the menu is up. */
+    onReferenceMenuOpenChange?: (open: boolean) => void
   }
 
   let {
@@ -67,7 +80,9 @@
     onCloseSelectionPopover,
     onEditReference,
     onRemoveReference,
-    onRemoveAllReferences
+    onRemoveAllReferences,
+    onRelocateItem,
+    onReferenceMenuOpenChange
   }: Props = $props()
 
   /** Wording for the reference count, which carries both response selections and
@@ -243,6 +258,8 @@
               }}
               onRemove={(id) => onRemoveReference?.(id)}
               onRemoveAll={onRemoveAllReferences}
+              {onRelocateItem}
+              onMenuOpenChange={onReferenceMenuOpenChange}
             />
           </div>
         {/if}
@@ -253,12 +270,20 @@
         <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
              unique across drops, picks, pastes, and restored drafts. -->
         {#each attachments as file, i (file.url)}
-          <AttachmentPill
-            attachment={file}
-            previewUrl={previewUrls[file.url]}
-            onPreview={onPreviewAttachment}
-            onRemove={() => onRemoveAttachment(i)}
-          />
+          <ComposerRelocationMenu
+            noun={onRelocateItem ? relocationNoun({ kind: 'attachment', attachment: file }) : null}
+            name={relocationItemName({ kind: 'attachment', attachment: file })}
+            onRelocate={() =>
+              onRelocateItem?.({ kind: 'attachment', attachment: file }, 'relocate')}
+            onCopy={() => onRelocateItem?.({ kind: 'attachment', attachment: file }, 'copy')}
+          >
+            <AttachmentPill
+              attachment={file}
+              previewUrl={previewUrls[file.url]}
+              onPreview={onPreviewAttachment}
+              onRemove={() => onRemoveAttachment(i)}
+            />
+          </ComposerRelocationMenu>
         {/each}
       </div>
     {/if}
