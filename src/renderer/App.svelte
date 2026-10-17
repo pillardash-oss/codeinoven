@@ -1,8 +1,9 @@
 <script lang="ts">
   import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
   import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+  import CioThreads from '$lib/components/icons/cio/CioThreads.svelte'
   import { onMount } from 'svelte'
-  import { FileSearch, Timeline } from '@lucide/svelte'
+  import { FileSearch } from '@lucide/svelte'
   import type {
     CommandPaletteProps,
     PaletteFooterFilter
@@ -355,7 +356,9 @@
           emptyLabel: threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
-          headerIcon: Timeline,
+          // The Threads view's own mark, so the screen wears the glyph the rail,
+          // the overview and the palette home row already use for this family.
+          headerIcon: CioThreads,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
           serverFiltered: true,
