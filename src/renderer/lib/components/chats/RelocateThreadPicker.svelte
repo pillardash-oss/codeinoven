@@ -113,7 +113,12 @@
 
 <!-- The picker is a dialog palette, so its module is only needed once the user
      asks for it: this component is mounted for one carry and unmounted with it,
-     which keeps CommandPalette out of the conversation's own chunk. -->
+     which keeps CommandPalette out of the conversation's own chunk.
+
+     `closeOnSelect` stays off, as every other host of this palette has it: a
+     palette that owns the close closes *before* it reports the pick, and that
+     close clears the state the host opened it with. This picker is closed by the
+     carry itself, which is the same moment the request is consumed. -->
 {#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
   <CommandPalette
     open
@@ -125,6 +130,7 @@
     onSelect={selectThread}
     {onClose}
     shortcutLabel="ESC"
+    closeOnSelect={false}
   />
 {:catch importError}
   <!-- A picker that cannot load must say so rather than look like a click that
