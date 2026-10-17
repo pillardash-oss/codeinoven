@@ -171,7 +171,7 @@ describe('chats list parity', () => {
           projectIcons,
           loading: false,
           activeThreadId: null,
-          threadsByProject: new SvelteMap(),
+          threadsByProject: new SvelteMap<string, Thread[]>(),
           pinnedThreads: [],
           pinnedProjects: [],
           regularProjects: projects,

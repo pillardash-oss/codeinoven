@@ -180,6 +180,7 @@ function sidebarProps(sidebar: WorkspaceSidebarController): SidebarProps {
     pinnedTimelineThreads: [],
     unpinnedTimelineThreads: timelineThreads,
     draftThreadKeys: new Set<string>(),
+    typingThreadKeys: new Set<string>(),
     hasMoreHistory: false,
     historyLoading: false,
     projectPageLoading: null,

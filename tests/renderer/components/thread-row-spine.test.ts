@@ -478,7 +478,12 @@ describe('ThreadRow, the detailed spine row', () => {
     // pin, glyph, rail
     expect(column.children.length).toBe(3)
     const rail = column.children[2] as HTMLElement
-    expect(rail.getAttribute('style')).toContain('var(--color-thread-working)')
+    expect(rail).not.toBeNull()
+    // A live working rail paints its colour on the inner spans (track + light),
+    // not on the rail box itself, so read the painted child.
+    const painted = rail.querySelector('[style]') as HTMLElement | null
+    expect(painted).not.toBeNull()
+    expect(painted?.getAttribute('style')).toContain('var(--color-thread-working)')
 
     unmount(app)
     waiting.queue.length = 0
