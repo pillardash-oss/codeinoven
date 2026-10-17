@@ -325,18 +325,24 @@
   // updated, and where it is after. See `ListRowReflow`.
   const threadsRowReflow = new ListRowReflow()
   let threadsListElement = $state<HTMLElement | null>(null)
-  /** The rows this pass draws, in order. Both measurements below read it, so they
-   *  run on the same pass, and it is what tells the reflow which rows to follow. */
-  const threadRowKeys = $derived(
-    threadSections.flatMap((section) => section.threads.map((thread) => thread.id))
+  /**
+   * What the list is arranged as, per section: the rows this pass draws and the
+   * section boundaries they sit between. Both measurements below read it, so they
+   * run on the same pass, and the reflow compares it by value - a recompute that
+   * did not move a row therefore measures nothing.
+   */
+  const threadRowArrangement = $derived(
+    threadSections
+      .map((section) => `${section.key}#${section.threads.map((thread) => thread.id).join(',')}`)
+      .join('|')
   )
 
   $effect.pre(() => {
-    threadsRowReflow.capture(threadsListElement, scroller ?? null, threadRowKeys)
+    threadsRowReflow.capture(threadsListElement, scroller ?? null, threadRowArrangement)
   })
 
   $effect(() => {
-    threadsRowReflow.play(threadsListElement, scroller ?? null, threadRowKeys)
+    threadsRowReflow.play(threadsListElement, scroller ?? null, threadRowArrangement)
   })
 
   /** When this list first painted. A row that lands because the app just created

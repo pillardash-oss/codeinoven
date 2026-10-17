@@ -137,48 +137,57 @@ export function listRowArrive(): FadeParams {
  *
  * One instance per list. `capture` belongs in `$effect.pre` and `play` in
  * `$effect`, both reading the same list derivation so they run on exactly the
- * same passes, and `play` only moves a row whose capture it actually holds.
+ * same passes, and `play` only moves a row a capture for this arrangement
+ * actually holds. That derivation is the arrangement string: a tick that
+ * recomputes the list without changing it costs one string compare, and the
+ * measurements - and the layout they force - happen only when rows really do
+ * change place.
  */
 export class ListRowReflow {
   #before = new Map<string, { top: number; left: number }>()
   /** Whether a capture is waiting for its play. */
   #captured = false
+  /** The arrangement the held capture was taken for. Compared by value, so a list
+   *  that recomputed without changing costs one string compare and no measurement
+   *  - the case that matters, because a live sidebar recomputes on every tick. */
+  #arrangement = ''
 
   /**
    * Snapshot where this pass's rows are, before the DOM updates.
    *
-   * `keys` is the rows the caller is about to render: passing it is what
-   * subscribes the caller's effect to the list, and it keeps the measurement to
-   * the rows this pass draws. A row that exists now but is leaving is
-   * deliberately not recorded - it has nowhere to travel to.
+   * `arrangement` is the caller's description of what it is about to render
+   * (its sections and their rows, in order). Reading it is what subscribes the
+   * caller's effect to the list, and comparing it is what keeps a recompute that
+   * changed nothing off the layout: nothing past this line runs unless the rows
+   * really are being arranged differently than the last pass.
    */
-  capture(root: HTMLElement | null, scroller: HTMLElement | null, keys: readonly string[]): void {
-    this.#captured = true
+  capture(root: HTMLElement | null, scroller: HTMLElement | null, arrangement: string): void {
+    const unchanged = arrangement === this.#arrangement
+    this.#arrangement = arrangement
     this.#before.clear()
-    if (!root || keys.length === 0) return
-    const wanted = new Set(keys)
+    this.#captured = false
+    if (unchanged || !root) return
+    this.#captured = true
     for (const node of root.querySelectorAll<HTMLElement>('[data-row-key]')) {
       const key = node.dataset.rowKey
-      if (key === undefined || !wanted.has(key) || !isRowVisible(node)) continue
+      if (key === undefined || !isRowVisible(node)) continue
       this.#before.set(key, rowOffset(node, scroller))
     }
   }
 
   /** Move every row the capture holds from where it was to where it now is. */
-  play(root: HTMLElement | null, scroller: HTMLElement | null, keys: readonly string[]): void {
-    if (!this.#captured) return
+  play(root: HTMLElement | null, scroller: HTMLElement | null, arrangement: string): void {
+    if (!this.#captured || arrangement !== this.#arrangement) return
     this.#captured = false
     const before = this.#before
     this.#before = new Map()
-    if (!root || keys.length === 0 || prefersReducedMotion()) return
-    const wanted = new Set(keys)
+    if (!root || prefersReducedMotion()) return
     // Every box is read before the first animation starts, so one pass of moves
     // costs one layout instead of one per row.
     const moves: { node: HTMLElement; dx: number; dy: number }[] = []
     for (const node of root.querySelectorAll<HTMLElement>('[data-row-key]')) {
       const key = node.dataset.rowKey
-      if (key === undefined || !wanted.has(key)) continue
-      const from = before.get(key)
+      const from = key === undefined ? undefined : before.get(key)
       if (from === undefined || !isRowVisible(node)) continue
       const to = rowOffset(node, scroller)
       const dx = from.left - to.left
