@@ -1765,15 +1765,16 @@ export class ChatEngine {
       this.executeImageDescriptor(request)
     )
     // An agent can enter a design or a video session without the user typing the
-    // tag for it, by picking up the capability itself. The thread's row is the
-    // durable record of that session: it is what docks the coordinator board
-    // while the work is being made, and what keeps the thread's later turns
-    // carrying the session's contract instead of leaving each turn to rediscover
-    // the tool mid-flight.
-    this.utilityOrchestration.setAuthoredWorkSessionRecorder(
-      ({ projectId, threadId, kind }) =>
-        void this.rememberAuthoredWorkKind(projectId, threadId, kind)
-    )
+    // tag for it, by picking up the capability itself, and the session that opens
+    // is the same session: the memo the tag sets is set here, and the thread's row
+    // is written, which is what docks the coordinator board while the work is
+    // being made and what keeps the thread's later turns carrying the session's
+    // contract instead of leaving each turn to rediscover the tool mid-flight.
+    this.utilityOrchestration.setAuthoredWorkSessionRecorder(({ projectId, threadId, kind }) => {
+      if (kind === 'design') this.cioDesignThreads.set(threadId, true)
+      else this.cioVideoThreads.set(threadId, true)
+      void this.rememberAuthoredWorkKind(projectId, threadId, kind)
+    })
     // Design work the user routed to a model of their own choosing. The config
     // is read per call, so re-assigning a model applies to the next delegation
     // rather than the next app run, and the app never substitutes a model.
@@ -10111,10 +10112,12 @@ export class ChatEngine {
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
-    // A design session is user-started too, and it lasts for the thread: the
-    // turn that types @cio-design gets the session briefing and promotes the
-    // design capability to an active one, and every later turn keeps the
-    // capability and gets the continuation instead.
+    // A design session lasts for the thread, and it opens two ways: the turn that
+    // types @cio-design gets the session briefing here and promotes the design
+    // capability to an active one, and a turn where the agent activates the
+    // capability itself opens the same session, whose briefing rides the
+    // activation payload. Every later turn keeps the capability and gets the
+    // continuation instead.
     const designRequested = origin === 'user' && isCioDesignRequest(text)
     if (designRequested) this.cioDesignThreads.set(threadId, true)
     const designSession = await this.designSessionFor(
@@ -10123,10 +10126,11 @@ export class ChatEngine {
       designRequested,
       targetThread?.authoredWorkKind
     )
-    // A video session is user-started the same way, and it lasts for the thread:
-    // the turn that types @cio-video gets the session briefing and promotes the
-    // video capability to an active one, and every later turn keeps the
-    // capability and gets the continuation instead.
+    // A video session opens the same two ways and lasts for the thread just as
+    // long: the turn that types @cio-video gets the session briefing here and
+    // promotes the video capability to an active one, and an agent activating the
+    // capability opens the session from the activation payload. Every later turn
+    // keeps the capability and gets the continuation instead.
     const videoRequested = origin === 'user' && isCioVideoRequest(text)
     if (videoRequested) this.cioVideoThreads.set(threadId, true)
     const videoSession = await this.videoSessionFor(

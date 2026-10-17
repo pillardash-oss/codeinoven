@@ -29,8 +29,8 @@ import {
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
-import type { DesignSessionMode } from './cio-design-prompt'
-import type { VideoSessionMode } from './cio-video-prompt'
+import { CIO_DESIGN_ACTIVATION_PROMPT, type DesignSessionMode } from './cio-design-prompt'
+import { CIO_VIDEO_ACTIVATION_PROMPT, type VideoSessionMode } from './cio-video-prompt'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
@@ -204,17 +204,20 @@ export interface UtilityTurnRequest {
   /** Explicit user intent grants the setup-only utility management operation. */
   allowManagement?: boolean
   /**
-   * Whether this turn belongs to a design session the user opened with
-   * `@cio-design`. A session promotes the app-owned design capability to an
-   * active capability for the turn, so the playbook is already in context and
-   * its preview operation is callable without a search and an activation.
+   * Whether this turn belongs to a design session: either the user opened it with
+   * `@cio-design`, or an earlier turn opened it by activating the capability and
+   * the app recorded it on the thread. A session promotes the app-owned design
+   * capability to an active capability for the turn, so the playbook is already
+   * in context and its preview operation is callable without a search and an
+   * activation.
    */
   designSession?: DesignSessionMode
   /**
-   * Whether this turn belongs to a video session the user opened with
-   * `@cio-video`. It does for the video capability what `designSession` does for
-   * the design capability: promotes it to an active capability for the turn, so
-   * the edit pass is in context and `preview` and `capture` are callable at once.
+   * Whether this turn belongs to a video session: either the user opened it with
+   * `@cio-video`, or an earlier turn opened it by activating the capability. It
+   * does for the video capability what `designSession` does for the design
+   * capability: promotes it to an active capability for the turn, so the edit
+   * pass is in context and `preview` and `capture` are callable at once.
    */
   videoSession?: VideoSessionMode
   /**
@@ -2138,7 +2141,11 @@ export class UtilityOrchestrationService {
     // First activation in this thread registers the utility in the durable
     // thread utilities bank so every later turn can invoke it by id directly.
     await this.registerThreadBankEntry(state, resolved.utility)
-    const capability = await this.capabilityFor(state, resolved)
+    const capability = await this.capabilityFor(
+      state,
+      resolved,
+      this.sessionOpeningFor(state, utilityId)
+    )
     await this.audit(state, 'utility.activated', {
       utilityId,
       kind: resolved.utility.kind
@@ -2247,7 +2254,39 @@ export class UtilityOrchestrationService {
   /** Build the capability payload (tools, operations, or instructions) that
    *  activation and cio_util_docs_lookup hand back to the model. Shared so a
    *  post-compaction docs re-dump is byte-identical to the original listing. */
-  private async capabilityFor(state: TurnState, resolved: ResolvedUtility): Promise<unknown> {
+  /**
+   * The session briefing to hand back with an activation, when that activation is
+   * what opens the session.
+   *
+   * A turn the user tagged carries its contract in the prompt, which was composed
+   * before the agent read anything. A turn where the agent reaches for the
+   * capability itself has no such prompt, so the briefing travels with the
+   * activation and the session opens the same way. Empty when the turn already
+   * carries the session, because the prompt is then the copy in hand and a second
+   * one would say the same thing twice.
+   */
+  private sessionOpeningFor(state: TurnState, utilityId: string): string {
+    if (utilityId === APP_DESIGN_UTILITY_ID) {
+      const session = state.request.designSession
+      return session === undefined || session === 'off' ? CIO_DESIGN_ACTIVATION_PROMPT : ''
+    }
+    if (utilityId === APP_VIDEO_UTILITY_ID) {
+      const session = state.request.videoSession
+      return session === undefined || session === 'off' ? CIO_VIDEO_ACTIVATION_PROMPT : ''
+    }
+    return ''
+  }
+
+  private async capabilityFor(
+    state: TurnState,
+    resolved: ResolvedUtility,
+    /**
+     * The session briefing that opens a design or video session, handed to the
+     * agent with the capability it just activated. Empty for a docs re-dump and
+     * for any activation in a turn that already carries its session.
+     */
+    sessionOpening = ''
+  ): Promise<unknown> {
     if (resolved.utility.id === BRAINSTORM_ALIGNMENT_UTILITY_ID) {
       return { tools: BRAINSTORM_ALIGNMENT_OPERATIONS }
     }
@@ -2283,9 +2322,13 @@ export class UtilityOrchestrationService {
     }
     if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // The operation catalog travels with the playbook, because unlike the scope
-      // capability this one is invoked with typed fields.
+      // capability this one is invoked with typed fields. The briefing an
+      // activation that opens the session carries sits in front of it, so the
+      // turn reads how to run the session before it reads what it can call.
       return {
-        instructions: await this.designPlaybook(state.request.threadId),
+        instructions: [sessionOpening, await this.designPlaybook(state.request.threadId)]
+          .filter(Boolean)
+          .join('\n\n'),
         tools: designUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
@@ -2294,7 +2337,9 @@ export class UtilityOrchestrationService {
       // catalog, handed back together so an activation or a post-compaction
       // docs re-dump is one payload.
       return {
-        instructions: await this.videoPlaybook(state.request.threadId),
+        instructions: [sessionOpening, await this.videoPlaybook(state.request.threadId)]
+          .filter(Boolean)
+          .join('\n\n'),
         tools: videoUtilityTools(currentWorkRoots(state.request.projectId))
       }
     }
