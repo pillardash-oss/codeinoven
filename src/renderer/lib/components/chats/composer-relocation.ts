@@ -2,6 +2,7 @@ import { SvelteSet } from 'svelte/reactivity'
 
 import { attachmentPreviewKind } from '$lib/mime'
 import { invoke } from '$lib/ipc.svelte'
+import { logRendererDev } from '$lib/system/renderer-logger'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { parseComposerDraftEntry, type ComposerDraftEntry } from '$lib/stores/renderer-recovery'
 import {
@@ -196,8 +197,10 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
     writeDraft(projectId, targetThreadId, targetAfter)
     syncReferences(projectId, targetThreadId, targetAfter)
     await commitDraft(projectId, targetThreadId)
+    logRendererDev(`[relocation] destination ${targetThreadId} committed`)
   } catch (error) {
     restoreDraft(projectId, targetThreadId, targetBefore)
+    logRendererDev('[relocation] destination write failed, rolled back')
     throw error
   }
 
@@ -210,12 +213,14 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
     writeDraft(projectId, sourceThreadId, sourceAfter)
     syncReferences(projectId, sourceThreadId, sourceAfter)
     await commitDraft(projectId, sourceThreadId)
+    logRendererDev(`[relocation] source ${sourceThreadId} committed`)
   } catch (error) {
     // The move failed as a whole: the source keeps its item and the destination
     // is put back exactly as it was.
     restoreDraft(projectId, sourceThreadId, sourceBefore)
     restoreDraft(projectId, targetThreadId, targetBefore)
     await commitDraft(projectId, targetThreadId).catch(() => undefined)
+    logRendererDev('[relocation] source write failed, whole carry rolled back')
     throw error
   }
 }

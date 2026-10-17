@@ -2,6 +2,7 @@
   import CioChat from '$lib/components/icons/cio/CioChat.svelte'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
   import { invoke } from '$lib/ipc.svelte'
+  import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadPaletteRow } from '$lib/threads/thread-palette-row'
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
@@ -68,6 +69,7 @@
    */
   $effect(() => {
     const request = ++requestId
+    logRendererDev(`[relocation] picker mounted for ${projectId} from ${sourceThreadId}`)
     loading = true
     void invoke('thread:list', projectId)
       .then((result) => {
@@ -75,6 +77,7 @@
         // The list arrives in the project view's own order   pinned first, then
         // the order the sidebar shows   so the picker never re-sorts it.
         threads = result.filter(isDestination)
+        logRendererDev(`[relocation] picker listed ${threads.length} destinations`)
         loading = false
       })
       .catch(() => {
@@ -101,6 +104,9 @@
 
   function selectThread(selection: ActionSelection): void {
     const thread = threads.find((candidate) => rowId(candidate.id) === selection.action.id)
+    logRendererDev(
+      `[relocation] picker selected ${thread?.id ?? 'nothing'} (${selection.action.id})`
+    )
     if (thread) onSelect(thread)
   }
 </script>
@@ -120,4 +126,8 @@
     {onClose}
     shortcutLabel="ESC"
   />
+{:catch importError}
+  <!-- A picker that cannot load must say so rather than look like a click that
+       did nothing. -->
+  {logRendererError('The chat picker could not be opened', importError)}
 {/await}

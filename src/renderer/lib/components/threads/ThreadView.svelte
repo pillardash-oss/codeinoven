@@ -176,6 +176,7 @@
   } from '$lib/stores/provider-connect-flow.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
+  import { logRendererDev } from '$lib/system/renderer-logger'
   import { assistants } from '$lib/stores/assistants.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import {
@@ -9910,6 +9911,7 @@
     item: ComposerRelocationItem,
     mode: ComposerRelocationMode
   ): void {
+    logRendererDev(`[relocation] requested ${item.kind} ${mode} from ${thread.id}`)
     if (!relocationAvailable) return
     relocationRequest = { item, mode }
   }
@@ -9921,17 +9923,26 @@
   /**
    * Carry the requested item to the chosen chat and land there with it.
    *
+   * The request arrives as a value rather than being read from the state that
+   * opened the picker: the palette closes the picker before it reports the pick,
+   * and that close clears the request, so reading it here would always find
+   * nothing and the carry would do nothing at all.
+   *
    * The carry is a transaction: the destination is written and persisted first,
    * and only then does this composer give the item up, so a failure leaves every
    * draft exactly as it was and nothing is reported as moved. The composer is
    * remounted on the way out because it was drawn from the draft the move just
    * changed.
    */
-  async function commitComposerRelocation(target: Thread): Promise<void> {
-    const request = relocationRequest
-    relocationRequest = null
-    if (!request) return
+  async function commitComposerRelocation(
+    request: { item: ComposerRelocationItem; mode: ComposerRelocationMode },
+    target: Thread
+  ): Promise<void> {
+    if (relocationRequest !== null) relocationRequest = null
     const noun = relocationNoun(request.item)
+    logRendererDev(
+      `[relocation] commit ${request.mode} ${request.item.kind} ${thread.id} -> ${target.id}`
+    )
     try {
       await applyComposerRelocation({
         projectId: thread.projectId,
@@ -9941,9 +9952,13 @@
         mode: request.mode
       })
     } catch (error) {
+      logRendererDev(
+        `[relocation] failed: ${error instanceof Error ? error.message : String(error)}`
+      )
       reportError(error, `Could not carry the ${noun} to that chat; nothing was changed.`)
       return
     }
+    logRendererDev(`[relocation] carried ${noun} to ${target.id}`)
     toast.success(`${request.mode === 'copy' ? 'Copied' : 'Moved'} ${noun} to ${target.title}`)
     composerRestoreKey += 1
     const targetProject =
@@ -14913,14 +14928,17 @@
      rest of the app picks from, listing this project's chats in the order the
      project view shows them. Mounted only while a carry is being picked. -->
 {#if relocationRequest}
+  <!-- The request travels into the picker's own callback: the palette closes the
+       picker before it reports the pick, and that close clears this state. -->
+  {@const request = relocationRequest}
   <RelocateThreadPicker
     projectId={thread.projectId}
     projectName={project?.name ?? 'this project'}
     sourceThreadId={thread.id}
-    item={relocationRequest.item}
-    mode={relocationRequest.mode}
+    item={request.item}
+    mode={request.mode}
     title={relocationPickerTitle}
-    onSelect={(target) => void commitComposerRelocation(target)}
+    onSelect={(picked) => void commitComposerRelocation(request, picked)}
     onClose={closeRelocationPicker}
   />
 {/if}
