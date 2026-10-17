@@ -4,7 +4,8 @@
   import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
   import CioSave from '$lib/components/icons/cio/CioSave.svelte'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import { FileQuestion, WrapText } from '@lucide/svelte'
+  import CioFileQuestion from '$lib/components/icons/cio/CioFileQuestion.svelte'
+  import CioWrapText from '$lib/components/icons/cio/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -250,7 +251,7 @@
         title={wrapTitle}
         onclick={() => wrapTextState.toggle()}
       >
-        <WrapText size={14} />
+        <CioWrapText size={14} />
       </button>
       <button
         type="button"
@@ -418,13 +419,27 @@
           <div
             class="flex h-full w-full flex-col items-center justify-center gap-2 bg-surface text-muted shadow-2xl"
           >
-            <FileQuestion size={32} class="text-dimmed" />
+            <CioFileQuestion size={32} class="text-dimmed" />
             <span class="text-xs">No preview available for this file type</span>
           </div>
         {/if}
       </div>
       {#if pagerState || (kind === 'image' && src)}
-        <div class="absolute right-3 bottom-3 flex items-center gap-2">
+        <!-- The floating controls belong to the content, not to the backdrop
+             behind it: the lightbox dismisses on a press of its backdrop, so the
+             cluster's own box and the gap between its controls must not read as
+             one, and an activation key pressed on a focused control (Enter on
+             the zoom toolbar) must not reach the lightbox's activate handler
+             either. The controls guard their own buttons; this guards the
+             region. -->
+        <div
+          class="absolute right-3 bottom-3 flex items-center gap-2"
+          role="presentation"
+          onclick={(event: MouseEvent) => event.stopPropagation()}
+          onkeydown={(event: KeyboardEvent) => {
+            if (keymapState.matches('ui-activate', event)) event.stopPropagation()
+          }}
+        >
           {#if pagerState}
             <PreviewPager pager={pagerState} />
           {/if}

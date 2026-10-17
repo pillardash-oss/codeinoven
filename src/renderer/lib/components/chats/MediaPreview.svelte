@@ -211,7 +211,19 @@
       {/if}
     </div>
     {#if pager || (kind === 'image' && !annotate)}
-      <div class="absolute right-4 bottom-4 flex items-center gap-2">
+      <!-- The floating controls belong to the content, not to the backdrop behind
+           it: the lightbox dismisses on a press of its backdrop, so the cluster's
+           own box and the gap between its controls must not read as one, and an
+           activation key pressed on a focused control must not reach the
+           lightbox's activate handler either. -->
+      <div
+        class="absolute right-4 bottom-4 flex items-center gap-2"
+        role="presentation"
+        onclick={(event: MouseEvent) => event.stopPropagation()}
+        onkeydown={(event: KeyboardEvent) => {
+          if (keymapState.matches('ui-activate', event)) event.stopPropagation()
+        }}
+      >
         {#if pager}
           <PreviewPager {pager} />
         {/if}
