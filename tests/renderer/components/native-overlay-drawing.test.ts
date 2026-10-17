@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
+import { SvelteMap } from 'svelte/reactivity'
 import BrowserOverlayDock from '$lib/components/ui/BrowserOverlayDock.svelte'
 import type { NativeDockRequest } from '$shared/native-dock'
 
@@ -58,6 +59,60 @@ function render(request: NativeDockRequest = dock) {
   )
   flushSync()
   return target
+}
+/**
+ * A dock whose scroll host the app mirrors: one scrolling list, the shape every
+ * long panel in the app projects.
+ */
+function scrollDock(top: string, revision = 7): NativeDockRequest {
+  return {
+    id: 'dialog-scroll',
+    revision,
+    modal: true,
+    theme: 'dark',
+    bounds: { x: 20, y: 30, width: 500, height: 400 },
+    nodes: [
+      {
+        tag: 'div',
+        attributes: {
+          'data-native-dock-scroll': 'list',
+          'data-native-dock-scroll-top': top,
+          style: 'height: 300px; max-height: 300px;'
+        },
+        children: [{ tag: 'div', attributes: {}, children: ['row'] }]
+      }
+    ]
+  }
+}
+/**
+ * Mount a scrollable dock and hand back its scroll host together with the way a
+ * new revision arrives. The request is read through a reactive cell because the
+ * drive is reactive: publishing the next frame re-runs the dock's draw
+ * attachment, exactly as the host's own `{#each docks}` does.
+ */
+function renderScrollDock(request: NativeDockRequest) {
+  const cell = new SvelteMap<string, NativeDockRequest>([['dock', request]])
+  const target = document.createElement('div')
+  document.body.append(target)
+  instances.push(
+    mount(BrowserOverlayDock, {
+      target,
+      props: {
+        get dock() {
+          return cell.get('dock') ?? request
+        },
+        onDragging: () => {}
+      }
+    })
+  )
+  flushSync()
+  return {
+    host: target.querySelector<HTMLElement>('[data-native-dock-scroll="list"]')!,
+    publish: (next: NativeDockRequest) => {
+      cell.set('dock', next)
+      flushSync()
+    }
+  }
 }
 beforeEach(() => {
   bridge.invoke.mockClear()
@@ -137,6 +192,60 @@ describe('native overlay drawing and interactions', () => {
       kind: 'commit',
       key: 'thread-2'
     })
+  })
+})
+
+describe('mirrored scrolling', () => {
+  /**
+   * The regression this guards: the app mirrors every position reported from
+   * here, so its next frame carries that position back as
+   * `data-native-dock-scroll-top`. Writing it back one round trip late dragged a
+   * live gesture backwards on every frame, and the list shook and crawled
+   * instead of scrolling.
+   */
+  it('keeps the position the user scrolled to instead of the echo the app mirrors back', () => {
+    const { host, publish } = renderScrollDock(scrollDock('0'))
+    expect(host.scrollTop).toBe(0)
+    host.scrollTop = 246
+    host.dispatchEvent(new Event('scroll'))
+    expect(bridge.invoke).toHaveBeenCalledWith('browser:overlayDockInteract', {
+      id: 'dialog-scroll',
+      kind: 'scroll',
+      target: 'list',
+      top: 246
+    })
+    bridge.invoke.mockClear()
+    // The gesture has moved on by the time the mirrored frame lands.
+    host.scrollTop = 258
+    publish(scrollDock('246', 8))
+    expect(host.scrollTop).toBe(258)
+    expect(bridge.invoke).not.toHaveBeenCalledWith(
+      'browser:overlayDockInteract',
+      expect.objectContaining({ kind: 'scroll' })
+    )
+  })
+
+  it('applies a position the app scrolled itself', () => {
+    const { host, publish } = renderScrollDock(scrollDock('0'))
+    host.scrollTop = 246
+    host.dispatchEvent(new Event('scroll'))
+    host.scrollTop = 258
+    // A position this document never reported is the app moving the container
+    // (a search result reached, a list reset), which must win over the gesture.
+    publish(scrollDock('12', 8))
+    expect(host.scrollTop).toBe(12)
+  })
+
+  it('reports a host that scrolls back to a position it already reported', () => {
+    const { host } = renderScrollDock(scrollDock('0'))
+    host.scrollTop = 120
+    host.dispatchEvent(new Event('scroll'))
+    host.scrollTop = 0
+    host.dispatchEvent(new Event('scroll'))
+    const positions = bridge.invoke.mock.calls
+      .filter(([channel]) => channel === 'browser:overlayDockInteract')
+      .map(([, report]) => (report as { top?: number }).top)
+    expect(positions).toEqual([120, 0])
   })
 })
 

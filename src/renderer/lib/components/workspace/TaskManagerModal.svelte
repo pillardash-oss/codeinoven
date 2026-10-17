@@ -823,19 +823,19 @@
           </div>
         </div>
       {:else}
-        {#snippet projectIconTile(
+        <!-- A project mark, drawn bare: the icon is what the row shows, with no
+        tile, tint or border around it and nothing but its own size inside. The
+        slot stays so the icon column keeps its geometry, and the mark is drawn
+        at 20px rather than the 16px it used to sit at inside a padded box. -->
+        {#snippet projectIcon(
           projectId: string,
           label: string,
-          boxClass: string,
+          slotClass: string,
           iconClass: string
         )}
           {@const color = projectColors.get(projectId) ?? pickColorForSeed(projectId)}
           {@const iconUrl = projectIconUrls.get(projectId) ?? generateInitialsIconSvg(label, color)}
-          <span
-            class="flex shrink-0 items-center justify-center overflow-hidden border {boxClass}"
-            style:border-color={`color-mix(in srgb, ${color} 45%, transparent)`}
-            style:background-color={`color-mix(in srgb, ${color} 14%, var(--color-raised))`}
-          >
+          <span class="flex shrink-0 items-center justify-center {slotClass}">
             <img
               src={iconUrl}
               alt=""
@@ -961,11 +961,11 @@
                   <AgentIcon agentId={harnessId} size={16} />
                 </span>
               {:else if process.projectId}
-                {@render projectIconTile(
+                {@render projectIcon(
                   process.projectId,
                   process.projectName ?? processName(process.command),
                   'mt-0.5 h-8 w-8',
-                  'h-4 w-4'
+                  'h-5 w-5'
                 )}
               {:else}
                 <span
@@ -1122,11 +1122,11 @@
               carries the icon and colour of the project it belongs to. The
               harness mark stays on the process rows, where it identifies the
               run itself rather than the project. -->
-              {@render projectIconTile(
+              {@render projectIcon(
                 group.projectId ?? group.id,
                 group.projectName ?? group.label,
                 'h-6 w-6',
-                'h-4 w-4'
+                'h-5 w-5'
               )}
             {/snippet}
             <ul class="divide-y divide-border">
