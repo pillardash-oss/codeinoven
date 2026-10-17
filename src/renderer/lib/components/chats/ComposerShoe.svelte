@@ -88,6 +88,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
   import { formatTokenRate } from '$lib/token-rate.svelte'
+  import CioActions from '$lib/components/icons/cio/CioActions.svelte'
   import type { ScopeBucket, ScopeChoice, ScopeEnvironmentMode } from '$shared/types'
   import type { AgentContextUsage, AgentHarnessUsage, UsageEfficiencyKpis } from '$shared/types'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
@@ -510,11 +511,14 @@
     refreshing={usage.refreshing ?? false}
   />
 
-  {#if isWorking}
+  {#if isWorking || usage.generationRate != null}
     <span
-      class="flex h-6 shrink-0 items-center px-2 text-[0.625rem] text-muted tabular-nums"
-      title="Approximate generation speed for the current message. Excludes tool waits; token counts may be estimated from streamed text."
+      class="flex h-6 shrink-0 items-center gap-1 px-2 text-[0.625rem] text-muted tabular-nums"
+      title={isWorking
+        ? 'Approximate generation speed for the current message. Excludes tool waits; token counts may be estimated from streamed text.'
+        : 'Last measured generation speed. Excludes tool waits; token counts may be estimated from streamed text.'}
     >
+      <CioActions size={12} />
       {usage.generationRate != null ? `~${formatTokenRate(usage.generationRate)}` : '… tok/s'}
     </span>
   {/if}

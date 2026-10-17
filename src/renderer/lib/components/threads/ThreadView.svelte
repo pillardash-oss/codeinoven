@@ -956,6 +956,16 @@
   const liveTokenRate = new LiveGenerationRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
+  const lastCompletedTokenRate = $derived.by(() => {
+    if (busy) return null
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message.role !== 'assistant') continue
+      const rate = messageTokenRate(message, { finalizedTokenRates, liveTokenRate })
+      if (rate !== null) return rate
+    }
+    return null
+  })
   $effect(() => {
     liveTokenRate.begin(sessionId)
   })
@@ -14623,7 +14633,7 @@
                       onSlashCommand={executeHarnessCommand}
                       usageCreditsCommandId={usageCreditsCommand?.id}
                       contextUsage={contextUsageDisplay}
-                      generationRate={busy ? liveTokenRate.rate() : null}
+                      generationRate={busy ? liveTokenRate.rate() : lastCompletedTokenRate}
                       efficiencyKpis={storedEfficiencyKpis}
                       onRevealUsage={revealContextUsage}
                       onHideUsage={hideContextUsage}
