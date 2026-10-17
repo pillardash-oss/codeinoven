@@ -550,7 +550,7 @@
       providerName !== undefined &&
       (attribution?.harnessId === undefined || !vendorMatches(attribution.harnessId, providerName))}
     <div
-      class="group relative flex h-6 shrink-0 items-center"
+      class="group relative flex h-6 min-w-0 shrink items-center"
       role="group"
       aria-label="Generation speed"
     >
@@ -561,10 +561,11 @@
         aria-label="Generation speed details"
       >
         <CioActions size={12} class="shrink-0" />
-        <!-- The rate keeps a column of its own: it stops growing the shoe once the
-             figure passes what that column holds, and it hands room back when the
-             row tightens. The exact figure is the panel's own header. -->
-        <span class="max-w-[4.5rem] min-w-0 truncate">
+        <!-- The rate keeps a column of its own: a fixed width, so a reading that
+             grows never widens the shoe or shifts what sits after it, and it can
+             still give room back when the row itself runs out. The exact figure
+             is the panel's own header. -->
+        <span class="w-[4.5rem] min-w-0 shrink truncate">
           {usage.generationRate != null ? `~${formatTokenRate(usage.generationRate)}` : '… tok/s'}
         </span>
       </button>
