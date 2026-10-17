@@ -228,7 +228,8 @@
   // 1. The reader's own wheel or touch gesture hands the scroll over: while they
   //    hold it, background list changes may not move the viewport.
   // 2. Selecting another thread reveals its row, and so does a row the active
-  //    thread moves by itself (typing an unsent draft sends it to the top).
+  //    thread moves by itself (typing an unsent draft sends it to the top, and a
+  //    pin re-hosts it between the Pinned section and its own list).
   // 3. Switching sidebar mode settles the incoming list on the active thread's
   //    row, keeping that mode's remembered place when it already shows the row.
   let sidebarScroller: HTMLElement | null = $state(null)
@@ -297,24 +298,16 @@
   /**
    * Bring a thread's row into view.
    *
-   * `force` is for a reveal the user asked for by acting on that very row (a
-   * pin, for example). The default honours the reader's hold on the scroll: a
-   * row that is already in view stays put, and this run gives the scroll back
-   * to the thread. A forced reveal wants the row on screen whatever the reader
-   * was looking at and whatever the row's own slot is worth in the sort, so it
-   * skips the in-view check and scrolls either way.
-   */
-  /**
-   * Bring a thread's row into view.
-   *
-   * `force` is for a reveal the user asked for by acting on that very row (a
-   * pin, for example), and it is a different contract from the focus-follow one:
-   * the row the user acted on is what they are looking for now, so it is brought
-   * on screen even when the active thread's row is somewhere else. The reveal
+   * `force` is for the pin of the thread in focus (see `togglePin`): that row is
+   * the one the reader is reading, so a pin re-hosting it between the Pinned
+   * section and its own list is followed wherever it goes. The forced reveal
    * therefore takes the scroll over (the same hold the reader's own gesture
-   * takes) instead of handing it back, and keeps correcting until the row is
-   * actually visible rather than merely rendered, because a pin re-hosts the row
-   * between the Pinned section and its own list and the move is animated.
+   * takes, which is also what keeps the focus-follow effect from pulling the
+   * list back a frame later) and keeps correcting until the row is actually
+   * visible rather than merely rendered, because the move is animated.
+   *
+   * The default honours the reader's hold on the scroll: a row already in view
+   * stays put, and this run gives the scroll back to the thread.
    */
   async function revealThreadInSidebar(thread: Thread, force = false): Promise<void> {
     // A reveal the user asked for is the reader handing the scroll over: they
@@ -4940,9 +4933,28 @@
   async function togglePin(thread: Thread): Promise<void> {
     // A pin re-hosts the row into the Pinned section and an unpin sends it back
     // into its own list, so both directions move it in the DOM. Open the section
-    // that will hold it   a folded one would not draw the row at all   and then
-    // put the row on screen, because the user acted on that row and expects to
-    // see where it went (see `openPinnedSection`, `revealThreadInSidebar`).
+    // that will hold it   a folded one would not draw the row at all, so the pin
+    // would look like it did nothing (see `openPinnedSection`). The unfold is
+    // unconditional: it is content, not the viewport, that has to change for the
+    // row to land anywhere, and the browser's own scroll anchoring keeps the
+    // reader's place through a section opening above them.
+    //
+    // The scroll belongs to the thread in focus, so only that thread's pin moves
+    // the viewport. Pinning the row the reader is reading re-hosts it out from
+    // under them, and the reveal puts it back on screen; pinning anybody else's
+    // row moves a row they are not looking at, and the list stays exactly where
+    // they left it.
+    const isFocusedThread =
+      selectedThread !== null && activeThreadRowId(selectedThread) === thread.id
+    if (!isFocusedThread) {
+      // Nobody else's pin moves this viewport, not even through this update: the
+      // follow effect would pull the list back to the active row the moment that
+      // row is out of view, which is a scroll the user never asked for. Taking
+      // the reader's hold says what their own gesture says   they are driving
+      // this list right now   and the hold is handed back the moment they pick
+      // another thread or the active row comes into view.
+      sidebarReaderOwnsScroll = true
+    }
     openPinnedSection(thread)
     const updated = thread.bookmarked
       ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
@@ -4950,6 +4962,7 @@
     upsertThreadInList(updated)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
+    if (!isFocusedThread) return
     // The reopen above is synchronous, so the incoming list may be measured in
     // the same task. A section that had to unfold mounts its rows a tick later,
     // which the reveal's own retry covers.
