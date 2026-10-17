@@ -31,7 +31,13 @@
     type ThreadIndicator
   } from '$lib/components/threads/thread-indicator'
   import {
+    liveRailDashCount,
+    liveRailPaint,
+    markDrawsGlyph,
     markDrawsRail,
+    markRailFills,
+    RAIL_TRACK_INK,
+    railPaint,
     THREAD_FOREIGN_MARK,
     threadSecondaryMark,
     threadStateMark,
@@ -649,17 +655,46 @@
    *  attract no attention, and its glyph stands alone, vertically centred. */
   let spineRailVisible = $derived(markDrawsRail(primaryMark))
 
-  /** The rail's paint: the primary status's own colour, and its dash pattern,
-   *  which is the second carrier beside the hue. The rail is the same width as
-   *  the glyph above it, so the mark reads as one column. A secondary status
-   *  never repaints it: the rail is what the thread is doing, and the glyph above
-   *  is what is waiting on it. */
-  let spineRailPaint = $derived.by((): string => {
-    if (primaryMark.dash === 'solid') return primaryMark.colour
-    const stripe =
-      primaryMark.dash === 'dashed' ? ['0.25rem', '0.4375rem'] : ['0.125rem', '0.25rem']
-    return `repeating-linear-gradient(to bottom, ${primaryMark.colour} 0 ${stripe[0]}, transparent ${stripe[0]} ${stripe[1]})`
-  })
+  /** Whether the state's glyph is drawn above the rail at all.
+   *
+   *  Live work drops it: a rail whose dashes come alight says "running" every
+   *  cycle, so the working mark spends no height on a pickaxe that would only
+   *  repeat it, and the rail takes the height the glyph held. A secondary status
+   *  keeps the slot, because what is waiting on the thread is not what the rail is
+   *  showing. */
+  let spineGlyphVisible = $derived(markDrawsGlyph(primaryMark, secondaryMark !== null))
+
+  /** Whether the rail is live work, lighting from the bottom of its box to the
+   *  top and starting over. The box never changes height: only the light moves
+   *  inside it, so the row, and every row under it, stays exactly where it is. */
+  let spineRailFills = $derived(markRailFills(primaryMark))
+
+  /** The live rail's height as laid out, which is the only thing that decides how
+   *  many dashes it has room for. A rail that has not been measured yet reports
+   *  nothing here and the count answers with the fullest column, so the first frame
+   *  is drawn where the row is about to land. */
+  let spineRailHeight = $state(0)
+
+  /** How many dashes this rail's height has room for: the grid the row paints and
+   *  the steps the light climbs it in, from one decision. */
+  let spineDashCount = $derived(liveRailDashCount(spineRailHeight))
+
+  /** The rail's paint: the primary status's own colour, in the shape its dash
+   *  names, which is the second carrier beside the hue. The rail is the same
+   *  width as the glyph above it, so the mark reads as one column. A secondary
+   *  status never repaints it: the rail is what the thread is doing, and the
+   *  glyph above is what is waiting on it. */
+  let spineRailPaint = $derived(railPaint(primaryMark))
+
+  /** The light on a live rail: whole dashes at full strength, on the grid the
+   *  reveal animation steps through, so a step lights a dash and never leaves a
+   *  stretched half dash behind it. */
+  let spineLivePaint = $derived(liveRailPaint(primaryMark, spineDashCount))
+
+  /** The track a live rail lights along: the same dashes on the same grid, in a
+   *  fraction of the state's colour, so the spine keeps its full height and its
+   *  shape between one lit dash and the next. */
+  let spineTrackPaint = $derived(liveRailPaint(primaryMark, spineDashCount, RAIL_TRACK_INK))
 
   /** The row's own ground, when the state wants the user. A tint is the second
    *  carrier beside the rail, so approval and error are findable from across the
@@ -1241,6 +1276,11 @@
            and even.
            A settled thread draws no rail at all: with nothing left to do it
            should attract no attention, so its row shows the glyph alone.
+           While work is running the rail is live: its dashes light from the
+           bottom of the column to the top, one whole dash at a time, and the
+           working mark drops its own glyph for it, so the column is the pin and
+           then one tall column of dashes coming alight. The state reads as work
+           in progress rather than as a pictogram describing it.
            The pin is a real control at the top of the column, lit while the
            pointer is on the row or while the thread is pinned, so pinning is
            never hidden behind the context menu alone. -->
@@ -1282,21 +1322,52 @@
               aria-hidden="true"
             />{/if}
         </span>
-        <span
-          class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
-          style="color: {glyphMark.colour};"
-          role="img"
-          title={markLabel}
-          aria-label={markLabel}
-        >
-          <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
-        </span>
-        {#if spineRailVisible}
+        {#if spineGlyphVisible}
           <span
-            class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
-            style="background: {spineRailPaint};"
-            aria-hidden="true"
-          ></span>
+            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
+            style="color: {glyphMark.colour};"
+            role="img"
+            title={markLabel}
+            aria-label={markLabel}
+          >
+            <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+          </span>
+        {/if}
+        {#if spineRailVisible}
+          {#if spineRailFills}
+            <!-- Live work: short dashes, never more than four, with the
+                 full-strength ones lighting from the bottom of the box to the
+                 top, one whole dash at a time. The light is a clip stepped to the
+                 same grid the dashes are drawn on, which is what keeps a step from
+                 stopping half way through a dash and stretching it. The box, the
+                 row and every row under it stay put: only the light inside the box
+                 moves. `bind:clientHeight` is what hands the grid its count, and
+                 it is the rail's own layout height, not a guess at it. -->
+            <span
+              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              bind:clientHeight={spineRailHeight}
+              role="img"
+              title={markLabel}
+              aria-label={markLabel}
+            >
+              <span
+                class="absolute inset-0"
+                style="background: {spineTrackPaint};"
+                aria-hidden="true"
+              ></span>
+              <span
+                class="spine-lit absolute inset-0"
+                style="background: {spineLivePaint}; --spine-steps: {spineDashCount};"
+                aria-hidden="true"
+              ></span>
+            </span>
+          {:else}
+            <span
+              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              style="background: {spineRailPaint};"
+              aria-hidden="true"
+            ></span>
+          {/if}
         {/if}
       </span>
     {/if}
@@ -1735,3 +1806,50 @@
     currentBucketId={thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
   />
 {/if}
+
+<style>
+  /*
+   * Live work. The rail's dashes are drawn by the row; this is only the light that
+   * climbs them. It steps one whole dash at a time from the bottom to the top,
+   * holds a beat at the top, then steps back down and starts again, for as long as
+   * the thread keeps working.
+   *
+   * The step count and the grid the dashes are painted on are the same decision, so
+   * the count is measured off the rail's own height (`liveRailDashCount`) and handed
+   * to this rule as `--spine-steps` by the markup. Steps, not a smooth sweep: a light
+   * that moved continuously would leave the dash it is passing half lit and half
+   * stretched.
+   *
+   * A clip animates no box, so nothing in the row or the list below it moves while
+   * the light climbs, and the browser only has to repaint this one small column
+   * when a step lands.
+   */
+  @keyframes cio-spine-light {
+    0% {
+      clip-path: inset(100% 0 0 0);
+    }
+    75% {
+      clip-path: inset(0 0 0 0);
+    }
+    85% {
+      clip-path: inset(0 0 0 0);
+    }
+    100% {
+      clip-path: inset(100% 0 0 0);
+    }
+  }
+
+  .spine-lit {
+    clip-path: inset(100% 0 0 0);
+    animation: cio-spine-light 2s steps(var(--spine-steps, 8), start) infinite;
+  }
+
+  /* Reduced motion keeps the state and drops the loop: every dash stands lit, so
+     the rail is the whole dashed spine in the working colour, still. */
+  @media (prefers-reduced-motion: reduce) {
+    .spine-lit {
+      clip-path: none;
+      animation: none;
+    }
+  }
+</style>
