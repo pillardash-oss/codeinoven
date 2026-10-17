@@ -289,6 +289,27 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **The design and video board never renders blank again.** The panel showed a
+  design or a video composition, and at times its body came up empty and stayed
+  empty until a reload. Its props came from `{...coordinator.panel.props}`, where
+  the registration belongs to the thread on screen: that is null for the length of
+  a thread switch, while another top-level view is up, or the moment a session
+  stops coordinating. Svelte reads a child's props through getters that re-read
+  their source for as long as the child is mounted, including the frame it
+  unmounts on, so the board threw `Cannot read properties of null (reading
+'panel')` on the way out; the throw unwound through the rail's keyed swap, the
+  fallback empty state never painted, and the board's job poll kept running (the
+  app's own log shows it erroring every 1.5 seconds for over a minute). The
+  composition pane's stage read `tab.tabId` the same way, which is the second
+  throw in that log. The panel now belongs to the active tab's own coordinator
+  row and reads its props through the last answer that was not null, while the
+  live value still decides whether a board is shown at all; the stage keeps the
+  tab it was built for as the floor of every read. Measured on an isolated probe
+  against both revisions: the old code raised the throws and left the body empty
+  (re-publishing the row could not bring the board back), the fixed code raises
+  neither, restores the board when the row comes back, keeps it while the thread
+  selection is gone, and unmounts the stage cleanly.
+
 - **An assistant stops tagging its message with its own urgency.** The run
   contract told the assistant to "label the report with the bracket it actually
   falls in", with the bracket ids listed right there, so a run prefixed its
