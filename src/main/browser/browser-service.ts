@@ -2038,10 +2038,12 @@ export class BrowserService {
       this.applyTabMark(tabId, tab, url, NO_TAB_MARK)
       return
     }
-    // Project board views and user-opened screen tabs browse work without
-    // changing the thread's durable authored-work association.
-    const recordThread = !tabId.startsWith('browser:screen:') && !tabId.startsWith('browser:board:')
-    void recogniser(tab.projectId, tab.threadId, url, recordThread)
+    // Recognition is a mark, never a write: the app is told which folder the page
+    // shows, and the thread's own authored-work record is left to the session that
+    // started the work. A user opening a design folder in a tab of their own, a
+    // reload, or a tab restored after a restart therefore marks the tab (the
+    // inspector and the transport still follow it) without claiming the thread.
+    void recogniser(tab.projectId, tab.threadId, url)
       .then((recognised) => {
         if (contents.isDestroyed() || contents.getURL() !== url) return
         this.applyTabMark(tabId, tab, url, recognised)

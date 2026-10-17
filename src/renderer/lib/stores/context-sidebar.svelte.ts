@@ -410,13 +410,13 @@ class ContextSidebarState {
       this.attentionScope.threadId === threadId
     const projectChanged = this.activeProjectId !== projectId
     const previousTab = this.sidebarActiveTab
+    // Only the entering thread's own board is restored. A board never follows the
+    // user onto a thread that is not in the session, so coming from a design
+    // thread opens the new thread's own panel (or nothing) instead of the board
+    // the user just left.
     const inheritedWork =
       !projectChanged && previousTab?.kind === 'coordinator'
-        ? coordinatorDockState.inheritWork(
-            projectId,
-            this.activeRowThreadId ?? '',
-            rowThreadId ?? threadId
-          )
+        ? coordinatorDockState.inheritWork(projectId, rowThreadId ?? threadId)
         : null
     // Capture before `activeProjectId` moves: the native view (if any) belongs
     // to the outgoing project and must be detached from the store layer so the

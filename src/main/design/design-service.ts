@@ -106,20 +106,6 @@ const SCREEN_LOAD_TIMEOUT_MS = 5_000
  */
 const POSTER_SECONDS = 0
 
-/** The part of a served URL under its origin, decoded, or null when it names no file. */
-function entryWithinOrigin(url: string, origin: string): string | null {
-  const withoutQuery = url.slice(origin.length).split(/[?#]/u)[0] ?? ''
-  const path = withoutQuery.replace(/^\/+/u, '')
-  if (path.length === 0) return null
-  try {
-    return decodeURIComponent(path)
-  } catch {
-    // A URL the browser accepted can still hold a malformed escape; its raw form
-    // is still the file that was asked for.
-    return path
-  }
-}
-
 /** Identifier validation for the two ids every call carries. */
 function requireId(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length === 0 || value.length > 240) {
@@ -1043,8 +1029,6 @@ export class DesignService {
           projectId,
           threadId,
           projectPath: project.path,
-          folder: folder.display,
-          screens,
           before,
           url: urlBefore
         })
@@ -1257,37 +1241,50 @@ export class DesignService {
   /**
    * Put the tab back where the sweep found it.
    *
-   * The thread's own record is the target, whatever kind of work it holds, because
-   * that record is what the tab was showing. A thread that has no record yet is
-   * left without a restoration request. Restoration stays inside the sweep's
-   * recording suppression, so browsing another folder cannot rewrite the link.
+   * A thread with a work record has the folder and the kind the tab was showing, so
+   * the record is the target and the tab is served that work again. A thread with no
+   * record has no work to return to, so the tab goes back to the page it was on when
+   * the sweep started: the sweep is the board picturing a project's design, and a
+   * thread that never designed anything must not be left sitting on one of its
+   * screens. A thread whose tab did not exist before the sweep is left alone, because
+   * there is nothing to put back.
    */
   private async restoreTab(input: {
     projectId: string
     threadId: string
     projectPath: string
-    folder: string
-    screens: DesignScreen[]
     before: ThreadDesignCurrent | null
+    /** The page the thread's tab was on before the sweep, or null with no tab. */
+    url: string | null
   }): Promise<void> {
-    const target =
-      input.before?.kind === 'design'
-        ? { directory: input.before.directory, entry: input.before.entry }
-        : { directory: input.folder, entry: input.screens[0]?.entry ?? null }
+    const browser = this.options.browser()
+    if (browser === null) return
     try {
+      if (!input.before) {
+        if (input.url === null) return
+        const shown = await browser.showThreadWorkTab({
+          projectId: input.projectId,
+          threadId: input.threadId,
+          url: input.url,
+          attention: 'background',
+          reveal: false
+        })
+        await browser.waitForTabLoad(shown.tabId, SCREEN_LOAD_TIMEOUT_MS)
+        return
+      }
       const restored = await this.serveWork({
-        kind: 'design',
+        kind: input.before.kind,
         projectPath: input.projectPath,
         projectId: input.projectId,
         threadId: input.threadId,
-        directory: target.directory,
-        entry: target.entry,
+        directory: input.before.directory,
+        entry: input.before.entry,
         attention: 'background',
         reveal: false,
         tab: 'thread'
       })
       if (restored.tabId) {
-        await this.options.browser()?.waitForTabLoad(restored.tabId, SCREEN_LOAD_TIMEOUT_MS)
+        await browser.waitForTabLoad(restored.tabId, SCREEN_LOAD_TIMEOUT_MS)
       }
     } catch (error) {
       Logger.dev('The tab could not be put back after picturing a design:', error)
