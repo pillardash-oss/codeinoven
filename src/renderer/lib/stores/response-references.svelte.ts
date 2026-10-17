@@ -2,7 +2,13 @@ import type { PromptReference } from '$shared/types'
 import type { MarkPoint } from '$lib/annotation-marks'
 import { rendererRecovery } from './renderer-recovery.svelte'
 
-const MAX_REFERENCES_PER_THREAD = 20
+/**
+ * How many references one composer carries. The cap keeps the newest, so the
+ * gesture the user just made always survives; a caller that wants to add to a
+ * thread must respect it rather than let the store evict the oldest chips that
+ * thread already held.
+ */
+export const MAX_REFERENCES_PER_THREAD = 20
 const MAX_THREADS_WITH_REFERENCES = 200
 
 export interface ResponseReferenceAnchor extends PromptReference {

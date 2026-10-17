@@ -1,8 +1,15 @@
+import { SvelteSet } from 'svelte/reactivity'
+
 import { attachmentPreviewKind } from '$lib/mime'
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { parseComposerDraftEntry, type ComposerDraftEntry } from '$lib/stores/renderer-recovery'
-import { mergeReferenceById, responseReferencesState } from '$lib/stores/response-references.svelte'
+import {
+  MAX_REFERENCES_PER_THREAD,
+  mergeReferenceById,
+  responseReferencesState,
+  type ResponseReferenceAnchor
+} from '$lib/stores/response-references.svelte'
 import type { PromptAttachment, PromptReference } from '$shared/types'
 import { attachmentFileIdentity, uniqueAttachments } from './chat-composer-attachments'
 
@@ -39,10 +46,18 @@ import { attachmentFileIdentity, uniqueAttachments } from './chat-composer-attac
  * where it sits instead of adding a second chip under a repeated key.
  */
 
-/** What a relocation carries: one composer attachment or one composer reference. */
+/**
+ * What a relocation carries: one composer attachment, one composer reference, or
+ * the whole relocatable set a reference chip holds.
+ *
+ * The set is what the reference chip carries. The chip is its group's own handle
+ * (hovering lists it, its close button clears it), so right-clicking the chip
+ * carries everything inside it that belongs to the project.
+ */
 export type ComposerRelocationItem =
   | { kind: 'attachment'; attachment: PromptAttachment }
   | { kind: 'reference'; reference: PromptReference }
+  | { kind: 'references'; references: readonly PromptReference[] }
 
 /** `relocate` takes the item out of the source chat; `copy` leaves it there. */
 export type ComposerRelocationMode = 'relocate' | 'copy'
@@ -78,18 +93,41 @@ export function isRelocatableReference(reference: Pick<PromptReference, 'kind'>)
 
 /** What the menu and the confirmation call the item, e.g. `media attachment`. */
 export function relocationNoun(item: ComposerRelocationItem): string {
-  if (item.kind === 'reference') {
-    return item.reference.kind === 'design' ? 'inspector comment' : 'doc comment'
+  if (item.kind === 'attachment') {
+    const kind = attachmentPreviewKind(item.attachment.mime, item.attachment.filename ?? '')
+    const isMedia = kind === 'image' || kind === 'video' || kind === 'audio'
+    return isMedia ? 'media attachment' : 'attachment'
   }
-  const kind = attachmentPreviewKind(item.attachment.mime, item.attachment.filename ?? '')
-  const isMedia = kind === 'image' || kind === 'video' || kind === 'audio'
-  return isMedia ? 'media attachment' : 'attachment'
+  if (item.kind === 'reference') return referenceNoun(item.reference)
+  // One noun per kind: a lone reference is named, several of one kind are
+  // counted, and a mixed set is named by the group, because neither noun would
+  // describe all of it.
+  const nouns = new SvelteSet(item.references.map(referenceNoun))
+  const [only] = nouns
+  if (item.references.length === 1) return only ?? 'comment'
+  if (nouns.size === 1 && only === 'doc comment') return `${item.references.length} doc comments`
+  if (nouns.size === 1) return `${item.references.length} inspector comments`
+  return `${item.references.length} comments`
+}
+
+/** One reference's noun, which is what its kind means to the user. */
+function referenceNoun(reference: PromptReference): string {
+  return reference.kind === 'design' ? 'inspector comment' : 'doc comment'
+}
+
+/** The references an item carries, in their own order. */
+export function itemReferences(item: ComposerRelocationItem): readonly PromptReference[] {
+  if (item.kind === 'attachment') return []
+  return item.kind === 'reference' ? [item.reference] : item.references
 }
 
 /** The item's own name: the file it carries, or the label the reference was made with. */
 export function relocationItemName(item: ComposerRelocationItem): string {
+  if (item.kind === 'attachment') {
+    return item.attachment.filename ?? item.attachment.url.split('/').pop() ?? 'file'
+  }
   if (item.kind === 'reference') return item.reference.label
-  return item.attachment.filename ?? item.attachment.url.split('/').pop() ?? 'file'
+  return `${item.references.length} attached references`
 }
 
 /** The menu entry that starts a relocation, e.g. `Relocate doc comment`. */
@@ -132,26 +170,42 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
     return
   }
 
-  // A copy is a new reference, never the same one twice: a reference is
-  // identified by its id, and both chats must be able to edit their own.
-  const reference =
-    input.mode === 'copy'
-      ? { ...input.item.reference, id: copiedReferenceId() }
-      : input.item.reference
-  // The destination's own annotations are kept and the carried one is added to
-  // them, never in place of them. A reference id that is somehow already there
-  // is the same reference, so the carried content updates that entry where it
-  // sits rather than arriving as a second chip the composer would reject as a
-  // repeated key. The composer's own ceiling of twenty references per thread
-  // still applies to the result, exactly as it does to any other composer write.
-  carried.promptReferences = mergeReferenceById(carried.promptReferences, reference)
+  const carriedReferences = itemReferences(input.item).map((reference) =>
+    // A copy is a new reference, never the same one twice: a reference is
+    // identified by its id, and both chats must be able to edit their own.
+    input.mode === 'copy' ? { ...reference, id: copiedReferenceId() } : reference
+  )
+  // A destination must never lose its own annotations to make room. The
+  // composer's ceiling is the store's own rule for every write, so a carry that
+  // would cross it is refused outright rather than evicting the oldest chips the
+  // destination already held.
+  const known = new SvelteSet(carried.promptReferences.map((reference) => reference.id))
+  const added = carriedReferences.filter((reference) => !known.has(reference.id)).length
+  if (carried.promptReferences.length + added > MAX_REFERENCES_PER_THREAD) {
+    throw new Error(
+      `That chat already holds the ${MAX_REFERENCES_PER_THREAD} annotations a composer can carry. Nothing was carried over.`
+    )
+  }
+  // The destination's own annotations are kept and the carried ones join them,
+  // never in place of them. A reference id that is already there is the same
+  // reference, so the carried content updates that entry where it sits rather
+  // than arriving as a second chip the composer would reject as a repeated key.
+  carried.promptReferences = carriedReferences.reduce<ResponseReferenceAnchor[]>(
+    (references, reference) => mergeReferenceById(references, reference),
+    carried.promptReferences
+  )
   writeTargetDraft(input.projectId, input.targetThreadId, carried)
   responseReferencesState.setForThread(
     input.projectId,
     input.targetThreadId,
     carried.promptReferences
   )
-  if (input.mode === 'relocate') dropSourceReference(input, input.item.reference.id)
+  if (input.mode === 'relocate') {
+    dropSourceReferences(
+      input,
+      carriedReferences.map((reference) => reference.id)
+    )
+  }
 }
 
 /**
@@ -230,17 +284,18 @@ function dropSourceAttachment(
   )
 }
 
-/** Take a moved reference out of the source composer, keeping everything else. */
-function dropSourceReference(
+/** Take moved references out of the source composer, keeping everything else. */
+function dropSourceReferences(
   input: Pick<ComposerRelocationInput, 'projectId' | 'sourceThreadId'>,
-  referenceId: string
+  referenceIds: readonly string[]
 ): void {
   const { projectId, sourceThreadId } = input
+  const moved = new SvelteSet(referenceIds)
   responseReferencesState.setForThread(
     projectId,
     sourceThreadId,
     responseReferencesState
       .forThread(projectId, sourceThreadId)
-      .filter((candidate) => candidate.id !== referenceId)
+      .filter((candidate) => !moved.has(candidate.id))
   )
 }

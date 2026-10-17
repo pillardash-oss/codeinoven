@@ -14847,6 +14847,7 @@
   projectName={project?.name ?? 'this project'}
   sourceThreadId={thread.id}
   title={relocationPickerTitle}
+  mode={relocationRequest?.mode ?? 'relocate'}
   onSelect={(target) => void commitComposerRelocation(target)}
   onClose={closeRelocationPicker}
 />

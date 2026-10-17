@@ -4,21 +4,26 @@
   import { invoke } from '$lib/ipc.svelte'
   import { threadPaletteRow } from '$lib/threads/thread-palette-row'
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
+  import type { ComposerRelocationMode } from './composer-relocation'
 
   interface Props {
     open: boolean
     projectId: string
-    /** Names the project in the search field, so the destination is never in doubt. */
+    /** Names the project on every row, so the destination is never in doubt. */
     projectName: string
     /** The chat the content is coming from: never a destination itself. */
     sourceThreadId: string
     /** What the picker completes, e.g. `Relocate doc comment`. */
     title: string
+    /** Which verb the search field asks for: a thread to relocate into, or one
+     *  to copy into. */
+    mode: ComposerRelocationMode
     onSelect: (thread: Thread) => void
     onClose: () => void
   }
 
-  let { open, projectId, projectName, sourceThreadId, title, onSelect, onClose }: Props = $props()
+  let { open, projectId, projectName, sourceThreadId, title, mode, onSelect, onClose }: Props =
+    $props()
 
   let threads = $state<Thread[]>([])
   let loading = $state(false)
@@ -77,7 +82,7 @@
       {open}
       {title}
       {actions}
-      placeholder={`Search threads in ${projectName}…`}
+      placeholder={`Search threads to ${mode} into…`}
       emptyLabel={loading ? 'Loading threads…' : 'No other threads in this project'}
       headerIcon={CioChat}
       onSelect={selectThread}

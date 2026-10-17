@@ -12,8 +12,10 @@
   import SelectionListPopover from './SelectionListPopover.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
   import {
+    isRelocatableReference,
     relocationItemName,
     relocationNoun,
+    type ComposerRelocationItem,
     type ComposerRelocationRequest
   } from './composer-relocation'
   import type { StartAfterSelection } from './chat-composer-attachments'
@@ -88,6 +90,30 @@
   /** Wording for the reference count, which carries both response selections and
    *  picked design elements. */
   const referenceSummary = $derived(summarizeComposerReferences(references))
+
+  /**
+   * The attached references that belong to the project rather than to this
+   * conversation: the doc comments and the inspector comments. The chip is the
+   * handle for the whole group, so right-clicking it carries every one of them,
+   * exactly as its close button clears every attached reference.
+   */
+  const relocatableReferences = $derived(references.filter(isRelocatableReference))
+
+  /** The noun the chip's own menu names that group by, or null when the chip
+   *  holds nothing this project can hand to another chat. */
+  const referenceRelocationNoun = $derived(
+    relocatableReferences.length > 0
+      ? relocationNoun({ kind: 'references', references: relocatableReferences })
+      : null
+  )
+
+  function requestReferenceRelocation(mode: 'relocate' | 'copy'): void {
+    const item: ComposerRelocationItem | null =
+      relocatableReferences.length === 1
+        ? { kind: 'reference', reference: relocatableReferences[0]! }
+        : { kind: 'references', references: relocatableReferences }
+    if (item) onRelocateItem?.(item, mode)
+  }
 </script>
 
 <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
@@ -206,48 +232,56 @@
         onmouseenter={onOpenSelectionPopover}
         onmouseleave={onScheduleSelectionPopoverClose}
       >
-        <div
-          class="flex items-center border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
+        <ComposerRelocationMenu
+          noun={onRelocateItem ? referenceRelocationNoun : null}
+          name={referenceSummary.label}
+          onOpenChange={onReferenceMenuOpenChange}
+          onRelocate={() => requestReferenceRelocation('relocate')}
+          onCopy={() => requestReferenceRelocation('copy')}
         >
-          <button
-            type="button"
-            class="flex items-center gap-1.5 px-2 py-1"
-            title={`${referenceSummary.aria}   hover to manage`}
-            aria-label={referenceSummary.aria}
-            aria-expanded={selectionPopoverOpen}
-            onclick={onToggleSelectionPopover}
+          <div
+            class="flex items-center border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
           >
-            {#if referenceSummary.noun === 'element'}
-              <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
-            {:else if referenceSummary.noun === 'annotation'}
-              <CioFileText size={11} class="shrink-0 text-accent" />
-            {:else if referenceSummary.noun === 'note'}
-              <CioClapper size={11} class="shrink-0 text-accent" />
-            {:else if referenceSummary.noun === 'mark'}
-              <CioPencil size={11} class="shrink-0 text-accent" />
-            {:else}
-              <CioMessage size={11} class="shrink-0 text-accent" />
-            {/if}
-            <span>
-              {referenceSummary.label}
-            </span>
-          </button>
-          {#if onRemoveAllReferences}
             <button
               type="button"
-              class="flex h-full items-center pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
-              title={referenceSummary.noun === 'selection'
-                ? 'Delete all selections'
-                : 'Delete all attached references'}
-              aria-label={referenceSummary.noun === 'selection'
-                ? 'Delete all selections'
-                : 'Delete all attached references'}
-              onclick={onRemoveAllReferences}
+              class="flex items-center gap-1.5 px-2 py-1"
+              title={`${referenceSummary.aria}   hover to manage`}
+              aria-label={referenceSummary.aria}
+              aria-expanded={selectionPopoverOpen}
+              onclick={onToggleSelectionPopover}
             >
-              <CioClose size={11} />
+              {#if referenceSummary.noun === 'element'}
+                <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
+              {:else if referenceSummary.noun === 'annotation'}
+                <CioFileText size={11} class="shrink-0 text-accent" />
+              {:else if referenceSummary.noun === 'note'}
+                <CioClapper size={11} class="shrink-0 text-accent" />
+              {:else if referenceSummary.noun === 'mark'}
+                <CioPencil size={11} class="shrink-0 text-accent" />
+              {:else}
+                <CioMessage size={11} class="shrink-0 text-accent" />
+              {/if}
+              <span>
+                {referenceSummary.label}
+              </span>
             </button>
-          {/if}
-        </div>
+            {#if onRemoveAllReferences}
+              <button
+                type="button"
+                class="flex h-full items-center pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
+                title={referenceSummary.noun === 'selection'
+                  ? 'Delete all selections'
+                  : 'Delete all attached references'}
+                aria-label={referenceSummary.noun === 'selection'
+                  ? 'Delete all selections'
+                  : 'Delete all attached references'}
+                onclick={onRemoveAllReferences}
+              >
+                <CioClose size={11} />
+              </button>
+            {/if}
+          </div>
+        </ComposerRelocationMenu>
         {#if selectionPopoverOpen}
           <div class="absolute bottom-full left-0 z-50 mb-1.5">
             <SelectionListPopover
