@@ -284,6 +284,7 @@ function parseTool(
 ): CliLineParseResult {
   const providerStatus = stringValue(item['status'])
   const failed = completed && (providerStatus === 'failed' || providerStatus === 'error')
+  const output = toolOutput(item)
   const toolPart = {
     type: 'tool' as const,
     id: `${itemId}:tool`,
@@ -301,7 +302,18 @@ function parseTool(
           : ('completed' as const),
       input: toolInput(item),
       title: command,
-      output: toolOutput(item)
+      output,
+      ...(output === undefined
+        ? {}
+        : {
+            metadata: {
+              outputBudget: {
+                transcriptCharacters: output.length,
+                modelFacingCharacters: null,
+                historyTokenBudget: 3000
+              }
+            }
+          })
     }
   }
   const events: SessionAgentEvent[] = [{ type: 'message.part.updated', sessionId, part: toolPart }]

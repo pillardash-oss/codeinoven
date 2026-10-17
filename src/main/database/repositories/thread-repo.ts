@@ -1,3 +1,4 @@
+import { ledgerContextUsageSql } from '../thread-context-usage-sql'
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
@@ -467,7 +468,7 @@ ON CONFLICT(id) DO UPDATE SET
   authored_work_kinds=excluded.authored_work_kinds,
   scope_bucket_id=excluded.scope_bucket_id,
   settings=excluded.settings,
-  context_usage=excluded.context_usage,
+  context_usage=COALESCE(threads.context_usage, excluded.context_usage),
   session_id=excluded.session_id,
   session_harness_id=excluded.session_harness_id,
   session_account_id=excluded.session_account_id,
@@ -1259,11 +1260,12 @@ export class ThreadRepo {
     contextUsage: ThreadContextUsage
   ): Promise<boolean> {
     return this.db
-      .executeViaWorker('UPDATE threads SET context_usage = ? WHERE id = ? AND project_id = ?', [
-        JSON.stringify(contextUsage),
-        threadId,
-        projectId
-      ])
+      .executeViaWorker(
+        `WITH incoming(snapshot) AS (VALUES (?))
+        UPDATE threads SET context_usage = (SELECT ${ledgerContextUsageSql('incoming.snapshot')} FROM incoming)
+        WHERE id = ? AND project_id = ?`,
+        [JSON.stringify(contextUsage), threadId, projectId]
+      )
       .then((result) => result.ok)
   }
 

@@ -1,3 +1,4 @@
+import { invokeGatewayCapability } from './utility-orchestration/utility-gateway-discovery'
 import { normalizePlanDelivery, normalizePlanPriority } from '../../lib/assistant-reporting'
 import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { randomBytes, randomUUID } from 'crypto'
@@ -33,6 +34,10 @@ import type { VideoSessionMode } from './cio-video-prompt'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
+  GATEWAY_CAPABILITY_ID,
+  GATEWAY_DISCOVERY_INSTRUCTION,
+  initialGatewayTools,
+  type GatewayToolDefinition,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
@@ -57,7 +62,6 @@ import {
   CREATE_BRAINSTORM_TOOL_NAME,
   CREATE_PRD_TOOL_NAME,
   CREATE_SPEC_TOOL_NAME,
-  ENGINEERING_TOOL_NAMES,
   isEngineeringTool,
   type EngineeringToolOperation
 } from '../../lib/engineering-tools'
@@ -69,7 +73,10 @@ import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { currentWorkRoots } from '../design/work-roots-state'
 import { gatewayStructuredResult } from '../../lib/image-payload'
-import { budgetGatewayOutput } from './utility-orchestration/utility-gateway-output'
+import {
+  budgetGatewayOutput,
+  type GatewayOutputMeasurement
+} from './utility-orchestration/utility-gateway-output'
 import { acquireCuaSnapshotLease } from './cua-snapshot-lease'
 import {
   cuaActionReference,
@@ -480,6 +487,7 @@ export interface AppControlExecutor {
 }
 
 interface TurnState {
+  grantedTools: GatewayToolDefinition[]
   id: string
   request: UtilityTurnRequest
   eligible: Map<string, ResolvedUtility>
@@ -1131,7 +1139,13 @@ export class UtilityOrchestrationService {
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
-      return hasOnDemand
+      return (
+        hasOnDemand ||
+        request.permissionLevel === 'full_access' ||
+        request.artifactTools === true ||
+        request.allowManagement === true ||
+        (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
+      )
     })
     if (gatewayTools.length === 0) {
       return {
@@ -1145,6 +1159,7 @@ export class UtilityOrchestrationService {
       }
     }
     const state: TurnState = {
+      grantedTools: gatewayTools,
       id,
       request,
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
@@ -1171,7 +1186,10 @@ export class UtilityOrchestrationService {
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
-    await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
+    await this.storage.writeRaw(
+      scriptPath,
+      buildUtilityGatewayScript(initialGatewayTools(gatewayTools))
+    )
     this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
@@ -1186,14 +1204,15 @@ export class UtilityOrchestrationService {
       request.permissionLevel !== 'full_access' &&
       (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     const toolInstructions = [
+      GATEWAY_DISCOVERY_INSTRUCTION,
       'Use available code mode to batch independent tool calls in one model request. Run independent reads with bounded parallelism and inspect every result; keep dependent operations, mutations, approvals and retries sequential. Filter large results before returning them to the model. Reuse loaded documentation and activated utilities. Read workstation targets only when dispatching work, and the app catalog only when driving the app.',
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
-      `When a search finds a capability the task needs but the user does not have, offer it with ${UTILITY_SUGGEST_TOOL_NAME} instead of telling the user it is connected: it surfaces an actionable card, and the app installs it through Utilities only if they accept. Never say a capability is installed, available, or connected before ${UTILITY_SUGGEST_TOOL_NAME} returns "accepted".`,
+      `When a needed capability is missing, load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer its installation card. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
       `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
-            `The engineering artifact tools (${ENGINEERING_TOOL_NAMES.join(', ')}) create this thread's durable Brainstorm, PRD, specification and Assignment. Call the matching tool when the user asks for one of those artifacts instead of answering in prose: ${CREATE_BRAINSTORM_TOOL_NAME} for a brainstorm, ${CREATE_PRD_TOOL_NAME} for a PRD, ${CREATE_SPEC_TOOL_NAME} for a spec, ${CREATE_ASSIGNMENT_TOOL_NAME} for splitting work across workers. For the last one, choose between it and cio_spawn_agent by prompting: both an Assignment and spawned sub-agents can be monitored, but only Assignment workers can be prompted independently, so pick ${CREATE_ASSIGNMENT_TOOL_NAME} when the user wants to prompt the workers themselves. When the user has not said which they want, ask with cio_ask_user first, and never ask again when they already stated a preference.`
+            `For a requested Brainstorm, PRD, spec or Assignment, discover the matching cio_create_* schema through cio:gateway and invoke it. Ask once whether the user wants independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
           ]
         : []),
       ...(sessionToolsAskRequired
@@ -1266,7 +1285,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(request.allowManagement
         ? [
-            `Install a validated utility bundle with ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle). Never include credential or secret values in the bundle: install the secret-free definition, then collect each value with ${ASK_SECRET_TOOL_NAME} (pass the installed id as utility_id and the variable the server reads as environment_variable), and otherwise tell the user to add them through Utilities.`
+            `Explicit utility setup is enabled. Discover ${UTILITY_MANAGE_TOOL_NAME} through cio:gateway; install secret-free definitions, then collect credentials with ${ASK_SECRET_TOOL_NAME}.`
           ]
         : [])
     ].join('\n')
@@ -1288,7 +1307,7 @@ export class UtilityOrchestrationService {
       directEndpoint: {
         url: bridgeUrl,
         token,
-        toolNames: gatewayTools.map(({ name }) => name),
+        toolNames: initialGatewayTools(gatewayTools).map(({ name }) => name),
         timeoutMs: gatewayHarnessTimeoutMs((await this.storage.getConfig()).questionTimeoutMs)
       },
       managementEnabled: request.allowManagement === true,
@@ -1788,18 +1807,32 @@ export class UtilityOrchestrationService {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
+      const direct = GATEWAY_TOOLS.find((tool) => tool.route === request.url)
+      if (!direct || !state.grantedTools.some((tool) => tool.name === direct.name))
+        throw new Error('Tool is not granted to this turn')
       const result = await handler(state, input)
       // A tool that declares an output schema is answered with the payload both
       // ways: content parts for a model, the same data for a script. Every other
       // route keeps the exact body it has always returned.
-      this.respond(
-        response,
-        200,
-        await budgetGatewayOutput(
-          this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result,
-          state.request.projectPath
-        )
+      let measurement: GatewayOutputMeasurement | undefined
+      const prepared = await budgetGatewayOutput(
+        this.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result,
+        state.request.projectPath,
+        (value) => {
+          measurement = value
+        }
       )
+      if (measurement) {
+        await this.audit(state, 'gateway.output_budgeted', {
+          ...measurement,
+          route: request.url,
+          stage: 'gateway_text_preview',
+          nativeModelInputCharacters: null
+        }).catch((error: unknown) => {
+          Logger.error('Could not record gateway output measurement:', error)
+        })
+      }
+      this.respond(response, 200, prepared)
     } catch (error) {
       this.respond(response, 400, {
         error: error instanceof Error ? error.message : 'Utility gateway request failed'
@@ -1965,6 +1998,20 @@ export class UtilityOrchestrationService {
     // A capability installed moments ago must be findable in this same turn.
     await this.refreshEligible(state)
     const query = optionalString(input['query'], 500)
+    if (query && /^(?:cio:gateway|cio_(?:app_|orchestrate_|create_)\w+)$/.test(query)) {
+      return {
+        notFound: false,
+        utilities: [
+          {
+            id: GATEWAY_CAPABILITY_ID,
+            name: 'App tools',
+            kind: 'skill',
+            active: true,
+            description: GATEWAY_DISCOVERY_INSTRUCTION
+          }
+        ]
+      }
+    }
     const kinds = optionalKinds(input['kinds'])
     const requestedLimit = optionalNumber(input['limit'])
     const limit = Math.min(Math.max(requestedLimit ?? 8, 1), 20)
@@ -2022,6 +2069,12 @@ export class UtilityOrchestrationService {
 
   private async activate(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
+    if (utilityId === GATEWAY_CAPABILITY_ID)
+      return {
+        id: utilityId,
+        instructions: GATEWAY_DISCOVERY_INSTRUCTION,
+        operations: ['catalog', 'call', 'batch']
+      }
     // Re-check the registry first: the agent may be activating a utility that was
     // installed or enabled after this turn started.
     await this.refreshEligible(state)
@@ -2303,6 +2356,12 @@ export class UtilityOrchestrationService {
    */
   private async docsLookup(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
+    if (utilityId === GATEWAY_CAPABILITY_ID)
+      return {
+        id: utilityId,
+        instructions: GATEWAY_DISCOVERY_INSTRUCTION,
+        operations: ['catalog', 'call', 'batch']
+      }
     const resolved = state.activated.get(utilityId) ?? state.eligible.get(utilityId)
     if (!resolved) {
       throw new Error(
@@ -2332,6 +2391,18 @@ export class UtilityOrchestrationService {
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
     const operation = requiredString(input['operation'], 'operation', 256)
     const operationInput = recordValue(input['input'] ?? {})
+    if (utilityId === GATEWAY_CAPABILITY_ID) {
+      return invokeGatewayCapability(
+        operation,
+        operationInput,
+        state.grantedTools,
+        async (tool, args) => {
+          const handler = this.bridgeHandlers.get(tool.route)
+          if (!handler) throw new Error('Gateway handler is unavailable')
+          return handler(state, args)
+        }
+      )
+    }
     let resolved = state.activated.get(utilityId)
     if (!resolved) {
       // Straight-to-usage banked reuse: a utility registered in this thread's

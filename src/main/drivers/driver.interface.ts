@@ -288,6 +288,8 @@ export interface HarnessLoginHandoff {
 
 /** Options for sending a prompt to the harness. */
 export interface SendPromptOptions {
+  /** Tool-free auxiliary inference, isolated from engineering instructions. */
+  minimalContext?: boolean
   sessionId: string
   settings: ThreadSettings
   text: string

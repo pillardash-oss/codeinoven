@@ -12,13 +12,10 @@
  * catalog in `src/lib/gateway-tools.ts`, so updating that catalog updates
  * this extension everywhere   no surface can drift.
  *
- * Visibility contract: pi's system prompt lists a custom tool only when it
- * carries a `promptSnippet`. The app capabilities an ordinary turn can use
- * (find/init/use, `cio_ask_secret`, `cio_util_suggest` and the read-only
- * `cio_util_diagnose`) carry one so the model discovers them on every turn.
- * `cio_util_manage` is registered WITHOUT a snippet: it stays callable on a
- * turn whose gateway carries the setup route (an explicit @cio-utility setup
- * turn), but it never advertises itself during ordinary work.
+ * Visibility contract: only the core discovery, invocation, documentation,
+ * diagnostics and secret tools are registered. Optional app, workstation,
+ * engineering and setup schemas are loaded through cio:gateway on demand.
+ * The turn's original grant list still governs every invocation.
  *
  * The gateway URL and bearer token are turn-scoped, while a Pi session process
  * persists across turns   extensions load at spawn, so their source cannot
@@ -38,6 +35,7 @@
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
+  CORE_GATEWAY_TOOL_NAMES,
   gatewayToolForModel,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
@@ -65,25 +63,7 @@ import {
 } from '../../lib/engineering-tools'
 
 /** The gateway tools the extension registers as first-class Pi tools. */
-export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
-  UTILITY_SEARCH_TOOL_NAME,
-  UTILITY_ACTIVATE_TOOL_NAME,
-  UTILITY_INVOKE_TOOL_NAME,
-  UTILITY_DOCS_TOOL_NAME,
-  ASK_SECRET_TOOL_NAME,
-  UTILITY_MANAGE_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME,
-  ORCHESTRATION_TARGETS_TOOL_NAME,
-  ORCHESTRATION_DISPATCH_TOOL_NAME,
-  ORCHESTRATION_STATUS_TOOL_NAME,
-  APP_CONTROL_CATALOG_TOOL_NAME,
-  APP_CONTROL_CALL_TOOL_NAME,
-  CREATE_BRAINSTORM_TOOL_NAME,
-  CREATE_PRD_TOOL_NAME,
-  CREATE_SPEC_TOOL_NAME,
-  CREATE_ASSIGNMENT_TOOL_NAME
-] as const
+export const PI_UTILITY_GATEWAY_TOOL_NAMES = [...CORE_GATEWAY_TOOL_NAMES]
 
 function gatewayTool(name: string): GatewayToolDefinition {
   const definition = GATEWAY_TOOLS.find((tool) => tool.name === name)
@@ -311,6 +291,7 @@ const CIO_GATEWAY_OUTPUT_SCHEMAS = ${JSON.stringify(
 
 /** Register one gateway tool, with its output schema when the catalog declares one. */
 function registerCioGatewayTool(pi, definition) {
+  if (!${JSON.stringify([...CORE_GATEWAY_TOOL_NAMES])}.includes(definition.name)) return
   const outputSchema = CIO_GATEWAY_OUTPUT_SCHEMAS[definition.name]
   pi.registerTool(outputSchema === undefined ? definition : { ...definition, outputSchema })
 }

@@ -32,6 +32,25 @@ export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
  */
 export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
 
+/** Optional app APIs remain callable through the core invocation tool. */
+export const GATEWAY_CAPABILITY_ID = 'cio:gateway'
+export const CORE_GATEWAY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_DOCS_TOOL_NAME,
+  ASK_SECRET_TOOL_NAME,
+  UTILITY_DIAGNOSTICS_TOOL_NAME
+])
+export const GATEWAY_DISCOVERY_INSTRUCTION =
+  'Optional app, workstation, engineering and utility-setup tools are available through the built-in cio:gateway capability, already active. Use cio_util_use with utility_id "cio:gateway", operation "catalog", and input {names:["tool_name"]} to load only the needed schemas, or input {} for a compact index. Then operation "call" with input {tool:"tool_name",arguments:{...}} executes it with the original permissions. Operation "batch" accepts input {calls:[{tool,arguments}]} for up to eight independent read-only calls. Inspect every result; dependent calls, mutations and approvals remain sequential. Do not call optional tool names directly or use shell gateway requests.'
+
+export function initialGatewayTools(
+  tools: readonly GatewayToolDefinition[]
+): GatewayToolDefinition[] {
+  return tools.filter(({ name }) => CORE_GATEWAY_TOOL_NAMES.has(name))
+}
+
 /** Model-facing summaries; complete schemas and route policy remain unchanged. */
 const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_orchestrate_targets:

@@ -60,6 +60,7 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
 
 6. Tooling and quality
    - Use available code mode to batch independent calls in one model request. Use bounded parallelism for independent reads and inspect every result. Keep dependent operations, mutations, approvals, retries and adaptive follow-ups sequential.
+   - Start with one bounded discovery batch for the owning module, its callers and relevant existing tests. Implement once the evidence is sufficient, then batch scoped validation. Avoid serial one-file reads, repeated configuration reads, and full-tree status/diff output; pass explicit paths. Combine independent verification calls while preserving causality.
    - Prefer targeted rg searches and line ranges over full dumps. Reuse loaded guidance, set output caps, and filter large code-mode results before returning them. Read required instructions completely, using ranges when capped. Preserve necessary evidence and validation.
    - Consult matching technology skills/MCP documentation and complete their validation. For Svelte, use current documentation and the Svelte validation workflow. Keep code type-safe and follow project conventions.
    - Reuse existing functions, classes and components. Extend or compose them before introducing another implementation of the same behavior.

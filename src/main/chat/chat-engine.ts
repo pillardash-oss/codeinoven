@@ -12626,6 +12626,13 @@ export class ChatEngine {
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
+    // The first-message title is already visible. Spend on refinement only
+    // when the user has assigned an auxiliary model for this harness.
+    const titleSelection = auxiliarySelectionFor(
+      (await this.storage.getConfig()).auxiliaryAgents,
+      driverId
+    )
+    if (!titleSelection) return
     Logger.dev('Thread auto-title generation started', { projectId, threadId, driverId })
 
     let generated: string | null

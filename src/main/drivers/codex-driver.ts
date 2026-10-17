@@ -112,6 +112,7 @@ import {
 } from './codex/codex-values'
 import {
   codexDeveloperInstructions,
+  codexAuxiliaryConfig,
   composePrompt,
   localAttachmentPath
 } from './codex/codex-prompts'
@@ -417,26 +418,31 @@ export class CodexDriver extends PersistentCliDriver {
     active.messageOffset = session.messages.length
 
     try {
-      const dynamicTools = [
-        codexQuestionTool((await this.storage.getConfig()).agentQuestionCap),
-        ...(this.utilityEndpoints.has(session.id)
-          ? GATEWAY_TOOLS.filter(({ name }) => {
-              const granted = this.utilityEndpoints.get(session.id)?.toolNames
-              return granted === undefined || granted.includes(name)
-            })
-              .map(gatewayToolForModel)
-              .map(({ name, description, inputSchema }) => ({
-                name,
-                description,
-                inputSchema
-              }))
-          : [])
-      ]
-      const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
+      const dynamicTools = options.minimalContext
+        ? []
+        : [
+            codexQuestionTool((await this.storage.getConfig()).agentQuestionCap),
+            ...(this.utilityEndpoints.has(session.id)
+              ? GATEWAY_TOOLS.filter(({ name }) => {
+                  const granted = this.utilityEndpoints.get(session.id)?.toolNames
+                  return granted === undefined || granted.includes(name)
+                })
+                  .map(gatewayToolForModel)
+                  .map(({ name, description, inputSchema }) => ({
+                    name,
+                    description,
+                    inputSchema
+                  }))
+              : [])
+          ]
+      const developerInstructions = options.minimalContext
+        ? 'Return only the requested auxiliary answer.'
+        : codexDeveloperInstructions(options.systemPrompt)
       const contextWindow = this.codexContextWindowOverride(options.settings)
       const contextConfig = {
         config: {
           tool_output_token_limit: 3_000,
+          ...(options.minimalContext ? await codexAuxiliaryConfig(projectPath) : {}),
           ...(contextWindow === undefined
             ? {}
             : {
@@ -2155,6 +2161,36 @@ export class CodexDriver extends PersistentCliDriver {
         ]
       })
     }
+    const finalUsageMessage = active.session.messages
+      .slice(active.messageOffset ?? 0)
+      .findLast((message) => message.role === 'assistant')
+    if (finalUsageMessage) {
+      let sessionCost = 0
+      let priced = false
+      let complete = true
+      for (const message of active.session.messages) {
+        if (
+          message.role !== 'assistant' ||
+          message.providerId !== finalUsageMessage.providerId ||
+          message.harnessId !== this.id
+        )
+          continue
+        if (typeof message.cost === 'number') {
+          sessionCost += message.cost
+          priced = true
+        } else if (message.tokens || message.normalizedUsage) complete = false
+      }
+      if (priced && complete) {
+        const costEvent: AgentEvent = {
+          type: 'usage.updated',
+          sessionId: active.session.id,
+          messageId: finalUsageMessage.id,
+          cost: sessionCost
+        }
+        this.applyEventToSession(active.session, costEvent)
+        this.emit(costEvent)
+      }
+    }
     active.finished = true
     if (this.activeTurns.get(active.session.id) === active) {
       this.activeTurns.delete(active.session.id)
@@ -2511,6 +2547,11 @@ export class CodexDriver extends PersistentCliDriver {
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)
     args.push('-c', 'tool_output_token_limit=3000')
+    if (options.minimalContext) {
+      const config = await codexAuxiliaryConfig(_projectPath)
+      for (const [key, value] of Object.entries(config))
+        args.push('-c', `${key}=${JSON.stringify(value)}`)
+    }
     const inlineSvg = await inlineSvgAttachments(options.attachments)
     const attachmentPrompts: string[] = []
     for (const attachment of options.attachments) {

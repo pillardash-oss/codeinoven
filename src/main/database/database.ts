@@ -1,3 +1,4 @@
+import { RECONCILE_THREAD_CONTEXT_USAGE_SQL } from './thread-context-usage-sql'
 import { mkdirSync } from 'fs'
 import { dirname, join } from 'path'
 import { performance } from 'node:perf_hooks'
@@ -79,6 +80,8 @@ export class Database {
    * `backfillAgentMessageSearchMeta`).
    */
   private searchMetaReady = false
+  private closing = false
+  private contextCostRepair: Promise<void> | null = null
 
   constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
     this.path = path ?? getConfigRoot() + '/codeinoven.db'
@@ -88,6 +91,7 @@ export class Database {
   /** Initialise the database: open connection, apply schema, set WAL mode. */
   async init(): Promise<void> {
     if (this.db) return
+    this.closing = false
     const startedAt = performance.now()
 
     // On a fresh install the config root does not exist yet and
@@ -108,11 +112,49 @@ export class Database {
     // serialized batches, so init never waits on it and the main thread stays
     // free. Until it reports ready, search uses the legacy (correct) query.
     void this.backfillAgentMessageSearchMeta()
+    this.contextCostRepair = this.reconcileLegacyContextUsageCosts()
 
     Logger.info('SQLite database initialised', {
       path: this.path,
       durationMs: this.roundDuration(performance.now() - startedAt)
     })
+  }
+
+  /** One bounded worker-only repair pass for snapshots written before ledger reconciliation. */
+  private async reconcileLegacyContextUsageCosts(): Promise<void> {
+    try {
+      const marker = await this.queryViaWorker(
+        "SELECT value FROM db_meta WHERE key = 'context_usage_cost_v1'",
+        [],
+        1
+      )
+      if (!marker.ok || marker.rows.length > 0) return
+      let cursor = ''
+      for (;;) {
+        if (this.closing) return
+        const batch = await this.queryViaWorker(
+          'SELECT id FROM threads WHERE id > ? AND context_usage IS NOT NULL ORDER BY id LIMIT 32',
+          [cursor],
+          32
+        )
+        if (!batch.ok) throw new Error(batch.error ?? 'Context cost repair read failed')
+        if (batch.rows.length === 0) break
+        for (const row of batch.rows) {
+          if (this.closing) return
+          const id = String(row['id'])
+          const result = await this.executeViaWorker(RECONCILE_THREAD_CONTEXT_USAGE_SQL, [id])
+          if (!result.ok) throw new Error(result.error ?? 'Context cost repair failed')
+          cursor = id
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      await this.executeViaWorker(
+        "INSERT OR REPLACE INTO db_meta(key,value) VALUES('context_usage_cost_v1','complete')",
+        []
+      )
+    } catch (error) {
+      Logger.error('Legacy context cost reconciliation failed:', error)
+    }
   }
 
   /** Whether thread search may rank against the narrow search mirror. */
@@ -249,6 +291,9 @@ export class Database {
    * worker has stopped and its connection is closed before teardown completes.
    */
   async close(): Promise<void> {
+    this.closing = true
+    await this.contextCostRepair
+    this.contextCostRepair = null
     const worker = this.maintenanceWorker
     this.maintenanceWorker = null
     if (worker?.isRunning()) {
@@ -440,6 +485,11 @@ export class Database {
     if (!worker || !worker.isRunning()) {
       return { ok: false, reason: 'io', error: 'no maintenance worker' }
     }
+    // Drain the bounded repair before the worker swaps database files. Its
+    // next queued statement must never race a restore onto a different inode.
+    this.closing = true
+    await this.contextCostRepair
+    this.contextCostRepair = null
     // Close the primary connection so it cannot hold the pre-restore inode.
     this.closeConnection()
     let result: WorkerRestoreResult
