@@ -180,6 +180,18 @@
     if (!activeTab) return
     editRequest = { nonce: ++editNonce, action }
   }
+  /** What one editor surface (sidebar or fullscreen) last reported about its own
+   *  undo/redo depth. The tab id rides along so a report from the file that was
+   *  open a moment ago can never light up the current file's buttons. */
+  interface EditorHistoryReport {
+    tabId: string
+    canUndo: boolean
+    canRedo: boolean
+  }
+  let sidebarHistory = $state<EditorHistoryReport | null>(null)
+  let fullscreenHistory = $state<EditorHistoryReport | null>(null)
+  const reportsHistory = (report: EditorHistoryReport, tabId: string | undefined): boolean =>
+    tabId !== undefined && report.tabId === tabId
   /** Paths still carrying merge/rebase conflicts, straight from the git store. */
   let conflictedPaths = $derived([...gitState.conflicted])
   /**
@@ -213,6 +225,33 @@
       !deletedAtCheckpoint &&
       !activeFileInMergeEditor &&
       activeTab?.view === 'source'
+  )
+  /** Undo/redo are only live when the editor behind that toolbar still holds
+   *  history in that direction. The two surfaces own separate CodeMirror
+   *  instances, so each toolbar reads its own report rather than sharing one. */
+  let sidebarCanUndo = $derived(
+    canUndoRedo &&
+      sidebarHistory !== null &&
+      reportsHistory(sidebarHistory, activeTab?.id) &&
+      sidebarHistory.canUndo
+  )
+  let sidebarCanRedo = $derived(
+    canUndoRedo &&
+      sidebarHistory !== null &&
+      reportsHistory(sidebarHistory, activeTab?.id) &&
+      sidebarHistory.canRedo
+  )
+  let fullscreenCanUndo = $derived(
+    canUndoRedo &&
+      fullscreenHistory !== null &&
+      reportsHistory(fullscreenHistory, activeTab?.id) &&
+      fullscreenHistory.canUndo
+  )
+  let fullscreenCanRedo = $derived(
+    canUndoRedo &&
+      fullscreenHistory !== null &&
+      reportsHistory(fullscreenHistory, activeTab?.id) &&
+      fullscreenHistory.canRedo
   )
   /** Beautify is offered for the same editable source view as undo/redo, and
    *  only for a format the editor can reformat. The label doubles as the flag,
@@ -954,6 +993,8 @@
           readAloud={documentReadAloud}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
+          canUndo={sidebarCanUndo}
+          canRedo={sidebarCanRedo}
           {reloadDisabled}
           mutationDisabled={deletedAtCheckpoint || mutationPending}
           {showLineNumbers}
@@ -1164,6 +1205,10 @@
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : (matches) => editorFind.setMatches(matches)}
             onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
+            onHistoryChange={(history) => {
+              if (!activeTab) return
+              sidebarHistory = { tabId: activeTab.id, ...history }
+            }}
             onInput={handleEditorInput}
           />
         {/key}
@@ -1333,6 +1378,8 @@
           readAloud={documentReadAloud}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
+          canUndo={fullscreenCanUndo}
+          canRedo={fullscreenCanRedo}
           {reloadDisabled}
           mutationDisabled={deletedAtCheckpoint || mutationPending}
           {showLineNumbers}
@@ -1465,6 +1512,10 @@
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={(matches) => editorFind.setMatches(matches)}
                 onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
+                onHistoryChange={(history) => {
+                  if (!activeTab) return
+                  fullscreenHistory = { tabId: activeTab.id, ...history }
+                }}
                 onInput={handleEditorInput}
               />
             {/key}

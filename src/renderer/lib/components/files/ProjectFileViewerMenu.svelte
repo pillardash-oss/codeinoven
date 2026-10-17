@@ -18,9 +18,13 @@
     wrap: boolean
     reloadDisabled: boolean
     mutationDisabled: boolean
-    /** Show undo/redo buttons ahead of the wrap button; only the file editor
+    /** Show undo/redo buttons ahead of the menu; only the file editor
      *  (editable source view) sets this. */
     showUndoRedo?: boolean
+    /** Whether the editor behind this menu still holds history in that
+     *  direction; a button whose action would do nothing is disabled. */
+    canUndo?: boolean
+    canRedo?: boolean
     /** Open the same File info dialog the file tree's context menu shows for
      *  the active file. Disabled (greyed out) while infoDisabled is set. */
     onInfo: () => void
@@ -29,7 +33,7 @@
     infoDisabled?: boolean
     /** Format label the active file can be beautified as ("JSON"), or null when
      *  the editor cannot reformat it. Drives the menu item and, in fullscreen,
-     *  the toolbar button beside the wrap button. */
+     *  the toolbar button beside the fullscreen controls. */
     beautifyLabel?: string | null
     /** The viewer already fills the window, so it no longer offers fullscreen. */
     fullscreen?: boolean
@@ -51,6 +55,8 @@
     reloadDisabled,
     mutationDisabled,
     showUndoRedo = false,
+    canUndo = false,
+    canRedo = false,
     beautifyLabel = null,
     fullscreen = false,
     onInfo,
@@ -70,11 +76,9 @@
     'flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
   const btnClass =
-    'flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
+    'flex h-6 w-6 items-center justify-center text-dimmed transition-colors enabled:hover:bg-elevated enabled:hover:text-foreground disabled:opacity-30'
 
   let open = $state(false)
-
-  const wrapTitle = $derived(wrap ? 'Unwrap text' : 'Wrap text')
 </script>
 
 {#if showUndoRedo}
@@ -83,6 +87,7 @@
     class={btnClass}
     aria-label="Undo (Cmd+Z)"
     title="Undo (Cmd+Z)"
+    disabled={!canUndo}
     onclick={onUndo}
   >
     <CioUndo size={13} />
@@ -92,21 +97,10 @@
     class={btnClass}
     aria-label="Redo (Shift+Cmd+Z)"
     title="Redo (Shift+Cmd+Z)"
+    disabled={!canRedo}
     onclick={onRedo}
   >
     <CioRedo size={13} />
-  </button>
-{/if}
-{#if !diffView}
-  <button
-    type="button"
-    class={btnClass}
-    aria-label={wrapTitle}
-    title={wrapTitle}
-    aria-pressed={wrap}
-    onclick={onToggleWrap}
-  >
-    <WrapText size={13} class={wrap ? 'text-primary' : ''} />
   </button>
 {/if}
 {#if fullscreen && beautifyLabel}
@@ -151,7 +145,7 @@
         sideOffset={5}
         avoidCollisions
         collisionPadding={10}
-        class="z-50 min-w-52 border border-border bg-surface p-1 shadow-lg"
+        class="z-90 min-w-52 border border-border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
           <CioRefresh size={13} class="text-muted" />

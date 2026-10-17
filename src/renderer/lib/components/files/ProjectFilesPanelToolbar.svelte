@@ -35,6 +35,10 @@
     readAloud: DocumentReadAloud | null
     deletedAtCheckpoint: boolean
     showUndoRedo: boolean
+    /** Whether the source editor behind this toolbar can still undo / redo, so
+     *  an action that would do nothing reads as unavailable. */
+    canUndo: boolean
+    canRedo: boolean
     reloadDisabled: boolean
     mutationDisabled: boolean
     showLineNumbers: boolean
@@ -76,6 +80,8 @@
     readAloud,
     deletedAtCheckpoint,
     showUndoRedo,
+    canUndo,
+    canRedo,
     reloadDisabled,
     mutationDisabled,
     showLineNumbers,
@@ -208,6 +214,8 @@
     {reloadDisabled}
     {mutationDisabled}
     {showUndoRedo}
+    {canUndo}
+    {canRedo}
     {beautifyLabel}
     {fullscreen}
     {onInfo}

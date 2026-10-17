@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
 
-  import { createFileEditor, type FileEditorController } from '$lib/editor/codemirror-file-editor'
+  import {
+    createFileEditor,
+    type FileEditorController,
+    type FileEditorHistoryState
+  } from '$lib/editor/codemirror-file-editor'
 
   interface Props {
     value: string
@@ -28,6 +32,9 @@
     onInput: (input: { currentTarget: { value: string } }) => void
     onFindMatches?: (matches: number) => void
     onReplaceDone?: (replaced: number) => void
+    /** Mirror of the editor's undo/redo depth, so a toolbar can disable the
+     *  actions that would do nothing. */
+    onHistoryChange?: (state: FileEditorHistoryState) => void
   }
 
   let {
@@ -47,7 +54,8 @@
     editRequest = null,
     onInput,
     onFindMatches = undefined,
-    onReplaceDone = undefined
+    onReplaceDone = undefined,
+    onHistoryChange = undefined
   }: Props = $props()
 
   let host = $state<HTMLDivElement | null>(null)
@@ -75,7 +83,8 @@
       spellcheck,
       ariaLabel,
       onDocChange: (text) => onInput({ currentTarget: { value: text } }),
-      onFindMatches
+      onFindMatches,
+      onHistoryChange: (history) => onHistoryChange?.(history)
     }).then((instance) => {
       if (cancelled) {
         instance.destroy()

@@ -1,4 +1,4 @@
-import type { Extension, Range } from '@codemirror/state'
+import type { EditorState, Extension, Range } from '@codemirror/state'
 import type { Decoration as ViewDecoration, EditorView } from '@codemirror/view'
 
 export interface FileEditorConflictRange {
@@ -16,6 +16,13 @@ export interface FileEditorDocumentChange {
   from: number
   to: number
   insertedLength: number
+}
+
+/** Whether the editor's own history can still step back or forward, so toolbar
+ *  buttons can read as unavailable instead of looking live on a fresh buffer. */
+export interface FileEditorHistoryState {
+  canUndo: boolean
+  canRedo: boolean
 }
 
 export interface FileEditorRangeViewportRect {
@@ -92,6 +99,9 @@ export interface CreateFileEditorOptions {
   onConflictRangesChange?: (ranges: FileEditorConflictRange[]) => void
   onFindMatches?: (count: number) => void
   onScroll?: () => void
+  /** Fires on creation and whenever the undo/redo depth changes, never for an
+   *  unchanged depth, so a toolbar can mirror the editor without polling. */
+  onHistoryChange?: (state: FileEditorHistoryState) => void
 }
 
 export const TAB_INSERT = '  '
@@ -115,6 +125,8 @@ interface CodeMirrorApi {
   indentLess: (typeof import('@codemirror/commands'))['indentLess']
   undo: (typeof import('@codemirror/commands'))['undo']
   redo: (typeof import('@codemirror/commands'))['redo']
+  undoDepth: (typeof import('@codemirror/commands'))['undoDepth']
+  redoDepth: (typeof import('@codemirror/commands'))['redoDepth']
   invertedEffects: (typeof import('@codemirror/commands'))['invertedEffects']
   isolateHistory: (typeof import('@codemirror/commands'))['isolateHistory']
   indentUnit: (typeof import('@codemirror/language'))['indentUnit']
@@ -140,7 +152,8 @@ export async function createFileEditor(
     onDocChange,
     onConflictRangesChange,
     onFindMatches,
-    onScroll
+    onScroll,
+    onHistoryChange
   } = options
 
   const wrapCompartment = new api.Compartment()
@@ -176,6 +189,24 @@ export async function createFileEditor(
 
   let flashTimer: ReturnType<typeof setTimeout> | null = null
   let destroyed = false
+  /** Last depth pair handed to `onHistoryChange`, so the toolbar is only told
+   *  when something actually changed. `null` forces the creation report. */
+  let reportedHistory: FileEditorHistoryState | null = null
+  const reportHistory = (state: EditorState): void => {
+    const next: FileEditorHistoryState = {
+      canUndo: api.undoDepth(state) > 0,
+      canRedo: api.redoDepth(state) > 0
+    }
+    if (
+      reportedHistory !== null &&
+      reportedHistory.canUndo === next.canUndo &&
+      reportedHistory.canRedo === next.canRedo
+    ) {
+      return
+    }
+    reportedHistory = next
+    onHistoryChange?.(next)
+  }
   const clearFlashTimer = (): void => {
     if (flashTimer === null) return
     clearTimeout(flashTimer)
@@ -338,6 +369,7 @@ export async function createFileEditor(
     api.history(),
     api.keymap.of([tabBinding, ...api.defaultKeymap, ...api.historyKeymap]),
     api.EditorView.updateListener.of((update) => {
+      reportHistory(update.state)
       const conflictRangesChanged = update.transactions.some(
         (transaction) =>
           transaction.docChanged ||
@@ -367,6 +399,10 @@ export async function createFileEditor(
 
   const state = api.EditorState.create({ doc: value, extensions })
   const view = new api.EditorView({ state, parent: host })
+  // A fresh buffer has nothing to step back through. The report is forced here
+  // because the listener only fires on transactions, and a remount over an
+  // earlier file would otherwise leave a toolbar showing a stale history.
+  reportHistory(view.state)
   void setLanguage(path, languageCompartment, view)
 
   function setFind(query: string, activeIndex: number): void {
@@ -617,6 +653,8 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     indentLess: commandModule.indentLess,
     undo: commandModule.undo,
     redo: commandModule.redo,
+    undoDepth: commandModule.undoDepth,
+    redoDepth: commandModule.redoDepth,
     invertedEffects: commandModule.invertedEffects,
     isolateHistory: commandModule.isolateHistory,
     indentUnit: languageModule.indentUnit,
