@@ -21,6 +21,7 @@
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
+    CONTRAST_LEVEL_OPTIONS,
     FONT_FAMILY_OPTIONS,
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
@@ -680,6 +681,30 @@
                     onclick={() => setPreference(option.id)}
                   >
                     <Icon size={13} />
+                    {option.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Contrast</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  Strengthen text and rules for a dim or washed-out display
+                </p>
+              </div>
+              <div class="flex items-center gap-0.5 border bg-elevated p-0.5">
+                {#each CONTRAST_LEVEL_OPTIONS as option (option.id)}
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium transition-colors {config.contrastLevel ===
+                    option.id
+                      ? 'bg-surface text-foreground'
+                      : 'text-muted hover:text-foreground'}"
+                    aria-pressed={config.contrastLevel === option.id}
+                    disabled={!settingsReady}
+                    title={option.hint}
+                    onclick={() => void updateConfig({ contrastLevel: option.id })}
+                  >
                     {option.label}
                   </button>
                 {/each}

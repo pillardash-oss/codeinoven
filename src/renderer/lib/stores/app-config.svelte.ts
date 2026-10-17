@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CONTRAST_LEVEL,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
   DEFAULT_BROWSER_HISTORY_LIMIT,
   DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
@@ -7,6 +8,7 @@ import {
 import type {
   AppConfig,
   CioCleanupCategoryId,
+  ContrastLevel,
   GitPullPreference,
   InAppNotificationSoundSettings,
   MediaGenerationConfig,
@@ -21,7 +23,8 @@ import {
   DEFAULT_APP_FONT_FAMILY,
   DEFAULT_APP_FONT_SIZE,
   DEFAULT_APP_FONT_WEIGHT,
-  applyAppTypography
+  applyAppTypography,
+  applyContrastLevel
 } from '$lib/app-typography'
 import { isBrowserLoaded } from '$lib/stores/browser-access.svelte'
 
@@ -52,6 +55,7 @@ let defaultPullStrategy = $state<GitPullPreference>('ask')
 let fontFamily = $state(DEFAULT_APP_FONT_FAMILY)
 let appFontSize = $state(DEFAULT_APP_FONT_SIZE)
 let fontWeight = $state(DEFAULT_APP_FONT_WEIGHT)
+let contrastLevel = $state<ContrastLevel>(DEFAULT_CONTRAST_LEVEL)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 /** The generation backend choice, mirrored so deep components can read it. */
 let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
@@ -89,6 +93,7 @@ let modelProfiles = $state<ModelProfile[]>([])
  *  window-level Electron zoomFactor owned by the main process. */
 function applyAppearance(): void {
   applyAppTypography(document.documentElement, { fontFamily, appFontSize, fontWeight })
+  applyContrastLevel(document.documentElement, contrastLevel)
   void zoomLevel // zoom is applied by the main process via setZoomFactor
 }
 
@@ -152,6 +157,10 @@ export const appConfigState = {
   get fontWeight(): number {
     return fontWeight
   },
+  /** How hard the palette pushes text and rules away from its surfaces. */
+  get contrastLevel(): ContrastLevel {
+    return contrastLevel
+  },
   get zoomLevel(): number {
     return zoomLevel
   },
@@ -207,6 +216,7 @@ export const appConfigState = {
     fontFamily = config.fontFamily
     appFontSize = config.appFontSize
     fontWeight = config.fontWeight
+    contrastLevel = config.contrastLevel
     zoomLevel = config.zoomLevel
     mediaGeneration = { providerId: config.mediaGeneration.providerId }
     workRoots = config.workRoots ?? { ...DEFAULT_WORK_ROOTS }
@@ -239,6 +249,24 @@ export const FONT_WEIGHT_OPTIONS: Array<{ id: number; label: string }> = [
   { id: 300, label: 'Light' },
   { id: 400, label: 'Regular' },
   { id: 500, label: 'Medium' }
+]
+
+/**
+ * Contrast levels offered in Appearance settings, with the one line that says
+ * what each one does.
+ *
+ * The copy states the effect in terms of the reader's own screen ("on a dim or
+ * washed-out display") rather than in ratios, because the ratio is a number the
+ * user has no way to check and the situation is the thing they recognise.
+ */
+export const CONTRAST_LEVEL_OPTIONS: Array<{
+  id: ContrastLevel
+  label: string
+  hint: string
+}> = [
+  { id: 'normal', label: 'Normal', hint: 'The shipped palette' },
+  { id: 'more', label: 'More', hint: 'About twice the contrast' },
+  { id: 'intense', label: 'Intense', hint: 'About three times the contrast' }
 ]
 
 /** Zoom levels offered in Appearance settings, as percentages. */

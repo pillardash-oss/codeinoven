@@ -5,7 +5,7 @@
   import type { Attachment } from 'svelte/attachments'
 
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { applyAppTypography } from '$lib/app-typography'
+  import { applyAppTypography, applyContrastLevel } from '$lib/app-typography'
   import { TOAST_CARD_WIDTH } from '$shared/browser-overlay'
   import { sitePermissionRequestSummary } from '$shared/browser/site-permissions'
   import {
@@ -118,6 +118,7 @@
         (config.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
       document.documentElement.classList.toggle('dark', dark)
       applyAppTypography(document.documentElement, config)
+      applyContrastLevel(document.documentElement, config.contrastLevel)
     } catch {
       // The first-paint theme stays.
     }

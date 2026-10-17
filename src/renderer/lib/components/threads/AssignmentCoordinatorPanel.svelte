@@ -494,7 +494,7 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      class="flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
       disabled={stopBusy}
       onclick={() => void confirmStop()}
     >

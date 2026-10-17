@@ -12,6 +12,7 @@ import {
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
+  DEFAULT_CONTRAST_LEVEL,
   type AppConfig
 } from '$shared/types'
 
@@ -21,6 +22,7 @@ export const defaultConfig: AppConfig = {
   fontFamily: 'jetbrains-mono',
   appFontSize: 15,
   fontWeight: 200,
+  contrastLevel: DEFAULT_CONTRAST_LEVEL,
   zoomLevel: 1,
   onboardingCompleted: false,
   shareAnonymousUsage: true,

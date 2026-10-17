@@ -10,6 +10,8 @@
  * typography as the app it belongs to.
  */
 
+import { DEFAULT_CONTRAST_LEVEL, type ContrastLevel } from '$shared/types'
+
 /** Font stacks for the family ids offered in Appearance settings. Keep in
  *  sync with FONT_FAMILIES in src/main/ipc/ipc-handlers.ts. */
 export const FONT_STACKS: Record<string, string> = {
@@ -48,4 +50,22 @@ export function applyAppTypography(root: HTMLElement, typography: AppTypography)
     '--font-weight-base',
     String(typography.fontWeight ?? DEFAULT_APP_FONT_WEIGHT)
   )
+}
+
+/**
+ * Apply the reader's chosen contrast level to a document root.
+ *
+ * The level is carried as a `data-contrast` attribute rather than a class: it is
+ * one of three named states, not a toggle, and every level including `normal`
+ * gets a value so a stylesheet can select on it. `normal` is the shipped palette,
+ * which the attribute spells out explicitly instead of leaving it to the absence
+ * of an attribute, so a document that was never told a level still answers
+ * `data-contrast="normal"` when asked.
+ *
+ * The stylesheet keys the stronger palettes off this attribute next to the
+ * `.dark` class, so a theme switch and a contrast switch compose without either
+ * one knowing about the other.
+ */
+export function applyContrastLevel(root: HTMLElement, level: ContrastLevel | undefined): void {
+  root.dataset.contrast = level ?? DEFAULT_CONTRAST_LEVEL
 }

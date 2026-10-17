@@ -304,7 +304,7 @@
     <button
       type="button"
       data-modal-primary
-      class="bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Delete the auditor thread and start a fresh audit"
       onclick={confirmNewAudit}
     >

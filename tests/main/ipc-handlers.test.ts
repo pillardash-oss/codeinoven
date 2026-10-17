@@ -95,6 +95,7 @@ const defaultConfig: AppConfig = {
   fontFamily: 'jetbrains-mono',
   appFontSize: 15,
   fontWeight: 200,
+  contrastLevel: 'normal',
   zoomLevel: 1,
   onboardingCompleted: false,
   threadLimit: 70,

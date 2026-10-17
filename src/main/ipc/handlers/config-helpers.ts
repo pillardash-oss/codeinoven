@@ -65,6 +65,7 @@ import {
   normalizeCioCleanupExcludedCategories
 } from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
+import { isContrastLevel } from '../../../lib/types'
 import { isRecord, requireString } from './shared'
 import type {
   AgentDefaultsConfig,
@@ -182,6 +183,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'fontFamily',
   'appFontSize',
   'fontWeight',
+  'contrastLevel',
   'zoomLevel',
   'onboardingCompleted',
   'shareAnonymousUsage',
@@ -744,6 +746,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Font weight must be a multiple of 100 between 100 and 800')
     }
     patch.fontWeight = value.fontWeight
+  }
+
+  if ('contrastLevel' in value) {
+    if (!isContrastLevel(value.contrastLevel)) {
+      throw new TypeError('Contrast level must be normal, more, or intense')
+    }
+    patch.contrastLevel = value.contrastLevel
   }
 
   if ('zoomLevel' in value) {

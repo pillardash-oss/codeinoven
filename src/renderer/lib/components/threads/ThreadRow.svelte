@@ -1778,7 +1778,7 @@
 </div>
 
 {#if actionsMenu.renameError}
-  <div class="fixed bottom-4 right-4 z-60 bg-danger px-4 py-2 text-sm text-white shadow-lg">
+  <div class="fixed bottom-4 right-4 z-60 bg-danger px-4 py-2 text-sm text-on-danger shadow-lg">
     {actionsMenu.renameError}
   </div>
 {/if}

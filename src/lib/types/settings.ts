@@ -67,6 +67,28 @@ export interface EditorInfo {
 
 export type ThemePreference = 'light' | 'dark' | 'system'
 
+/**
+ * How far the text and rule tokens are pushed away from their surfaces.
+ *
+ * `normal` is the shipped palette. The two stronger levels redraw the same
+ * tokens at roughly twice and three times their original contrast, so the
+ * interface stays readable on a washed-out or badly calibrated display without
+ * changing a single layout measure. Every level is a palette, never a filter:
+ * the hue of each token is kept, so `danger` still reads red and `accent` still
+ * reads gold.
+ */
+export type ContrastLevel = 'normal' | 'more' | 'intense'
+
+/** Every contrast level, in increasing order. */
+export const CONTRAST_LEVELS: readonly ContrastLevel[] = ['normal', 'more', 'intense']
+
+export const DEFAULT_CONTRAST_LEVEL: ContrastLevel = 'normal'
+
+/** Whether an untrusted value is a contrast level this build understands. */
+export function isContrastLevel(value: unknown): value is ContrastLevel {
+  return typeof value === 'string' && (CONTRAST_LEVELS as readonly string[]).includes(value)
+}
+
 export type SlashCommandMode = 'app' | 'passthrough'
 
 export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference' | 'models'
@@ -354,6 +376,8 @@ export interface AppConfig {
   appFontSize: number
   /** Base font weight for app text (Light 300 / Regular 400 / Medium 500). */
   fontWeight: number
+  /** How hard the palette pushes text and rules away from its surfaces. */
+  contrastLevel: ContrastLevel
   /** UI zoom level (Electron zoomFactor). 1 = 100%. */
   zoomLevel: number
   /** True after the user finishes or dismisses the first-run setup guide. */
@@ -543,6 +567,7 @@ export type AppConfigPatch = Partial<
     | 'fontFamily'
     | 'appFontSize'
     | 'fontWeight'
+    | 'contrastLevel'
     | 'zoomLevel'
     | 'onboardingCompleted'
     | 'shareAnonymousUsage'

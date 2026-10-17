@@ -295,8 +295,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-appearance',
     title: 'Appearance',
-    description: 'Theme — follow the system or pick light or dark.',
-    keywords: ['theme', 'light', 'dark', 'system'],
+    description: 'Theme, contrast, font, size, weight, and zoom.',
+    keywords: ['theme', 'light', 'dark', 'system', 'contrast', 'accessibility', 'readability'],
     icon: CioTabSettings
   },
   {

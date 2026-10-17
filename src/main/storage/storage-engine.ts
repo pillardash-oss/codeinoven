@@ -29,6 +29,8 @@ import {
   MIN_CIO_CLEANUP_RETENTION_DAYS,
   MAX_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
+  DEFAULT_CONTRAST_LEVEL,
+  isContrastLevel,
   normalizeCioCleanupExcludedCategories
 } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
@@ -81,6 +83,7 @@ const DEFAULT_CONFIG: AppConfig = {
   fontFamily: 'jetbrains-mono',
   appFontSize: 15,
   fontWeight: 200,
+  contrastLevel: DEFAULT_CONTRAST_LEVEL,
   zoomLevel: 1,
   onboardingCompleted: false,
   shareAnonymousUsage: true,
@@ -228,6 +231,12 @@ export class StorageEngine {
       // Analytics is on by default: only an explicit opt-out in the stored
       // config turns it off, and a missing field keeps the default.
       shareAnonymousUsage: config?.shareAnonymousUsage !== false,
+      // A level a future version wrote is dropped back to the shipped one rather
+      // than reaching the window as a `data-contrast` value no rule matches,
+      // which would paint the default palette while the picker claims otherwise.
+      contrastLevel: isContrastLevel(config?.contrastLevel)
+        ? config.contrastLevel
+        : DEFAULT_CONFIG.contrastLevel,
       agentDefaults: {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})

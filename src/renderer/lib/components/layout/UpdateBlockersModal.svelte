@@ -117,7 +117,7 @@
     <button
       type="button"
       data-modal-primary
-      class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
       title="Stop everything listed above and install the update now"
       disabled={forcing}
       onclick={() => void updateBlockers.forceInstall()}

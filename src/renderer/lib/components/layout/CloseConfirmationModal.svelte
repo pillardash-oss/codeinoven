@@ -220,7 +220,7 @@
     {/if}
     <button
       type="button"
-      class="shrink-0 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
+      class="shrink-0 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90"
       title="Close the application and interrupt working threads"
       onclick={() => void onConfirm()}
     >
