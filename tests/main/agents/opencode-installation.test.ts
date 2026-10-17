@@ -11,6 +11,16 @@ vi.mock('../../../src/main/drivers/harness-runtime', () => ({
   probeHarnessRuntime: mocks.probeHarnessRuntime
 }))
 
+// Detection probes every real PATH match for a candidate name before it falls
+// back to name-based discovery, so a test host that actually carries OpenCode
+// installs would answer through those paths instead of the mocks below.
+// Returning no PATH matches keeps every case on the name-based fallback this
+// file drives, independent of what the host has installed.
+vi.mock('../../../src/main/drivers/cli-environment', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/main/drivers/cli-environment')>()
+  return { ...actual, resolveExecutablePaths: () => [] }
+})
+
 import {
   cachedOpenCodeInstallation,
   detectOpenCodeInstallation,
