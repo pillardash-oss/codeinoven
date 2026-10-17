@@ -12626,13 +12626,11 @@ export class ChatEngine {
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
-    // The first-message title is already visible. Spend on refinement only
-    // when the user has assigned an auxiliary model for this harness.
-    const titleSelection = auxiliarySelectionFor(
-      (await this.storage.getConfig()).auxiliaryAgents,
-      driverId
-    )
-    if (!titleSelection) return
+    // The first-message fallback is already visible, and it must never be the
+    // only title a thread gets. An auxiliary assignment is a preference, not a
+    // precondition: `generateTitleWithModel` tries the assigned model first and
+    // falls back to the harness's own cheap model, so an unassigned app still
+    // refines the fallback instead of keeping a truncated first line forever.
     Logger.dev('Thread auto-title generation started', { projectId, threadId, driverId })
 
     let generated: string | null
