@@ -36,7 +36,8 @@
     liveRailPaint,
     markDrawsGlyph,
     markDrawsRail,
-    markRailFills,
+    markRailClimbs,
+    markRailStandsLit,
     RAIL_TRACK_INK,
     railPaint,
     THREAD_FOREIGN_MARK,
@@ -665,11 +666,19 @@
    *  showing. */
   let spineGlyphVisible = $derived(markDrawsGlyph(primaryMark, secondaryMark !== null))
 
-  /** Whether the rail is live work, lighting from the bottom of its box to the top,
-   *  going out in the same instant it reaches the top, and starting over. The box
-   *  never changes height: only the light moves inside it, so the row, and every row
-   *  under it, stays exactly where it is. */
-  let spineRailFills = $derived(markRailFills(primaryMark))
+  /** Whether the rail's light climbs it: work this window is driving, lighting one
+   *  whole dash at a time from the bottom to the top. */
+  let spineRailClimbs = $derived(markRailClimbs(primaryMark))
+
+  /** Whether the rail stands full instead: work another instance is driving. Every
+   *  dash lit, nothing moving, because this window can watch that run but not drive
+   *  it. */
+  let spineRailStandsLit = $derived(markRailStandsLit(primaryMark))
+
+  /** Whether this rail is drawn on the counted live grid rather than the mark's own
+   *  still shape: the climbing light and the standing full rail are the same spine
+   *  seen two ways, so they share its dashes. */
+  let spineRailOnLiveGrid = $derived(spineRailClimbs || spineRailStandsLit)
 
   /** The live rail's height as laid out, which is the only thing that decides how
    *  many dashes it has room for. A rail that has not been measured yet reports
@@ -690,7 +699,8 @@
 
   /** The light on a live rail: whole dashes at full strength, on the grid the
    *  reveal animation steps through, so a step lights a dash and never leaves a
-   *  stretched half dash behind it. */
+   *  stretched half dash behind it. A rail that stands full wears the same paint
+   *  without the light, which is what makes the two read as one spine. */
   let spineLivePaint = $derived(liveRailPaint(primaryMark, spineDashCount))
 
   /** The track a live rail lights along: the same dashes on the same grid, in a
@@ -1336,15 +1346,18 @@
           </span>
         {/if}
         {#if spineRailVisible}
-          {#if spineRailFills}
-            <!-- Live work: short dashes, never more than four, with the
-                 full-strength ones lighting from the bottom of the box to the
-                 top, one whole dash at a time. The light is a clip stepped to the
-                 same grid the dashes are drawn on, which is what keeps a step from
-                 stopping half way through a dash and stretching it. The box, the
-                 row and every row under it stay put: only the light inside the box
-                 moves. `bind:clientHeight` is what hands the grid its count, and
-                 it is the rail's own layout height, not a guess at it. -->
+          {#if spineRailOnLiveGrid}
+            <!-- The spine at a working thread: short dashes, never more than four,
+                 on a grid that divides the rail's own box. `bind:clientHeight` is
+                 what hands the grid its count, and it is the measured height of the
+                 box, not a guess at it.
+                 Work this window drives climbs the dashes: the light is a clip
+                 stepped to the same grid, which is what keeps a step from stopping
+                 half way through a dash and stretching it. The box, the row and
+                 every row under it stay put, because only the light inside the box
+                 moves.
+                 Work another instance drives stands full: the same dashes, all lit,
+                 with no track and no motion. -->
             <span
               class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
               bind:clientHeight={spineRailHeight}
@@ -1352,17 +1365,25 @@
               title={markLabel}
               aria-label={markLabel}
             >
-              <span
-                class="absolute inset-0"
-                style="background: {spineTrackPaint};"
-                aria-hidden="true"
-              ></span>
-              <span
-                class="spine-lit absolute inset-0"
-                style="background: {spineLivePaint}; --spine-steps: {spineDashCount}; --spine-beat: {LIVE_RAIL_DASH_MS /
-                  1000}s;"
-                aria-hidden="true"
-              ></span>
+              {#if spineRailClimbs}
+                <span
+                  class="absolute inset-0"
+                  style="background: {spineTrackPaint};"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  class="spine-lit absolute inset-0"
+                  style="background: {spineLivePaint}; --spine-steps: {spineDashCount}; --spine-beat: {LIVE_RAIL_DASH_MS /
+                    1000}s;"
+                  aria-hidden="true"
+                ></span>
+              {:else}
+                <span
+                  class="absolute inset-0"
+                  style="background: {spineLivePaint};"
+                  aria-hidden="true"
+                ></span>
+              {/if}
             </span>
           {:else}
             <span

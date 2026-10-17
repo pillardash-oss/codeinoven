@@ -55,20 +55,28 @@ export interface ThreadStateMark {
    */
   rail?: boolean
   /**
-   * How the rail moves, for the states a reader can stand to watch.
+   * How a mark's rail is lit, for the states that are work in progress.
    *
-   * `fill` is live work: the rail lights from the bottom of its own box to the
-   * top, gives the light back, and starts again, for as long as the state holds.
-   * Only work that is running right now carries it. Every other state is
-   * something to notice once and act on, so a still rail is the honest drawing of
-   * it, and the row keeps the calm of a list that is not perpetually moving.
+   * `climbing` is work this window is driving: the light climbs the rail's dashes,
+   * one whole dash at a time, from the bottom to the top, and starts again, for as
+   * long as the state holds. Only work that is running right now carries it.
    *
-   * The rail never changes height while it animates: the box is fixed and only
-   * the light moves inside it, so the row and every row under it stay exactly
-   * where they are, and the dashes keep their shape instead of stretching as the
-   * light climbs them.
+   * `standing` is work another instance is driving: every dash stands lit and
+   * nothing moves. The work is live, but not here, and this window holds neither
+   * its stream nor its stop control. A climbing light would promise the reader a
+   * turn running in front of them with live output to watch and a control to press,
+   * and the standing rail is the honest drawing of the one thing this window can
+   * say: that thread is busy, elsewhere.
+   *
+   * Every other state is something to notice once and act on, so it carries no
+   * light at all: its rail is the colour and the shape its own mark names, and the
+   * row keeps the calm of a list that is not perpetually moving.
+   *
+   * Neither value changes the rail's height. `climbing` moves only the light inside
+   * a fixed box, so the row and every row under it stay exactly where they are, and
+   * the dashes keep their shape instead of stretching as the light climbs them.
    */
-  railMotion?: 'fill'
+  railLight?: 'climbing' | 'standing'
 
   /**
    * Whether the row draws this state's glyph above its rail.
@@ -150,7 +158,7 @@ export const THREAD_STATE_MARKS = {
     // the light climbs it one whole dash at a time. `liveRailPaint` draws the grid
     // and the row steps the light up it.
     dash: 'dashed',
-    railMotion: 'fill',
+    railLight: 'climbing',
     glyph: false
   },
   'working-paused': {
@@ -254,9 +262,10 @@ export const THREAD_FOREIGN_MARK: ThreadStateMark = {
   tone: 'working',
   colour: 'var(--color-thread-working)',
   dash: 'dashed',
-  // The work is live, so the rail fills here too; the window glyph stays,
-  // because where the run lives is the whole reason this mark exists.
-  railMotion: 'fill'
+  // The work is live but this window cannot drive it, so the rail stands full: every
+  // dash lit, nothing moving. The window glyph stays, because where the run lives is
+  // the whole reason this mark exists.
+  railLight: 'standing'
 }
 
 export type ThreadRowState = keyof typeof THREAD_STATE_MARKS
@@ -278,15 +287,26 @@ export function markDrawsRail(mark: ThreadStateMark): boolean {
 }
 
 /**
- * Whether a mark's rail lights from the bottom of its box to the top, one whole
- * dash at a time, over and over, for as long as the state holds.
+ * Whether a mark's rail climbs: one whole dash lighting after another, from the
+ * bottom of its box to the top, over and over, for as long as the state holds.
  *
  * The row asks the mark rather than the thread's status string, so the motion a
  * reader sees and the vocabulary the rest of the app reads from cannot drift
- * apart: any surface drawing this mark draws a live rail with it.
+ * apart: any surface drawing this mark draws a climbing rail with it.
  */
-export function markRailFills(mark: ThreadStateMark): boolean {
-  return mark.railMotion === 'fill'
+export function markRailClimbs(mark: ThreadStateMark): boolean {
+  return mark.railLight === 'climbing'
+}
+
+/**
+ * Whether a mark's rail stands full: every dash lit, and nothing moving.
+ *
+ * Work another instance owns wears this. The row draws it on the same grid the
+ * climbing light climbs, so the two read as the same spine seen two ways rather
+ * than as two different marks.
+ */
+export function markRailStandsLit(mark: ThreadStateMark): boolean {
+  return mark.railLight === 'standing'
 }
 
 /**
