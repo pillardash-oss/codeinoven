@@ -207,7 +207,7 @@
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
-  import { promptArrive } from '$lib/motion'
+  import { playHistoryArrive, promptArrive } from '$lib/motion'
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
@@ -4673,11 +4673,57 @@
   }
 
   let loadingOlderMessages = $state(false)
+  /** The row that carries the history button: it is the top of the mounted
+   *  window, so the blocks a load mounts are exactly the ones between it and the
+   *  seam the window already had (see `historyArrivedBlocks`). Plain local state,
+   *  not `$state`: nothing renders from it, the load reads it when it runs. */
+  let historyHeadEl: HTMLElement | null = null
+
+  /** Track the history row for as long as it is mounted. */
+  function trackHistoryHead(node: HTMLElement): () => void {
+    historyHeadEl = node
+    return () => {
+      if (historyHeadEl === node) historyHeadEl = null
+    }
+  }
+
+  /** The earliest block of the mounted window, the seam a history load inserts
+   *  above. Must be read BEFORE the window moves: afterwards the seam sits under
+   *  the pages that arrived on top of it. Null with an empty window, and while
+   *  the history row is not mounted there is nothing for a load to insert above. */
+  function historySeamElement(): Element | null {
+    return historyHeadEl?.nextElementSibling ?? null
+  }
+
+  /** The blocks a history load mounted, in document order. Element identity is
+   *  the boundary and the window only ever grows upward, so every sibling above
+   *  the seam and below the history row is new, whether it is a prompt, an
+   *  answer, a working trace or a card. Walking it here rather than listing the
+   *  mounted message ids is what lets one arrival cover the whole page instead of
+   *  the message blocks alone. */
+  function historyArrivedBlocks(seam: Element | null): HTMLElement[] {
+    const blocks: HTMLElement[] = []
+    if (!historyHeadEl || !seam || !seam.isConnected) return blocks
+    for (
+      let node = seam.previousElementSibling;
+      node && node !== historyHeadEl;
+      node = node.previousElementSibling
+    ) {
+      if (node instanceof HTMLElement) blocks.push(node)
+    }
+    return blocks.reverse()
+  }
 
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
     if (controller) {
+      // A controller's transcript mounts every message it holds, so the page that
+      // lands above the seam is the page the reader watches arrive.
+      const seam = historySeamElement()
       await controller.loadOlder()
+      if (!alive) return
+      await tick()
+      playHistoryArrive(historyArrivedBlocks(seam), scrollEl ?? null)
       return
     }
     loadingOlderMessages = true
@@ -4804,6 +4850,7 @@
       // of refusing to move the window and leaving the click a no-op.
       if (target >= mountedStartIndex) target = 0
       if (target < mountedStartIndex) {
+        const seam = historySeamElement()
         windowStartId = messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
         // the bottom never shrinks the window below what is mounted.
@@ -4833,6 +4880,12 @@
             awayFromBottom: userScrolledAway
           })
         }
+        // The loaded page is in the document and the viewport is back where the
+        // reader left it, so the blocks that landed inside it can settle into
+        // place instead of blinking on. Blocks above the viewport are left alone,
+        // which is both what the reader can watch and what keeps a three-page
+        // load from animating a hundred blocks at once (`playHistoryArrive`).
+        playHistoryArrive(historyArrivedBlocks(seam), after ?? null)
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
@@ -13013,7 +13066,7 @@
           </div>
         {:else}
           {#if hasOlderMessages}
-            <div class="flex justify-center pb-2">
+            <div class="flex justify-center pb-2" {@attach trackHistoryHead}>
               <button
                 type="button"
                 class="px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-60"

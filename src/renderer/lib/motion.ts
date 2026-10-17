@@ -116,6 +116,73 @@ export function listRowArrive(): FadeParams {
   return { duration: motionDuration(LIST_ROW_ARRIVE_MS) }
 }
 
+/** How long a page of history takes to settle into place after a load, and how
+ *  far it travels. The rate is the app's single arrival rate (160 ms of
+ *  easeOutCubic); the travel is longer than the 4 px a row takes because a page of
+ *  history is a bigger arrival, and because all the reader can watch of one is
+ *  the band above the anchor. */
+const HISTORY_ARRIVE_MS = 160
+const HISTORY_ARRIVE_TRAVEL = 8
+/** The most blocks one load ever animates. The reader's viewport already bounds
+ *  the selection, so this only caps a pathological pane of one-line blocks; past
+ *  it the blocks nearest the reader (the end of the list) are the ones kept. */
+const HISTORY_ARRIVE_MAX = 12
+
+/**
+ * Arrival for the blocks a history load mounted, for use once they are in the
+ * document and the reader's viewport has been restored.
+ *
+ * A transition cannot express this one. An `in:` intro's parameters are computed
+ * before its element exists, so an intro on the transcript plays for every block
+ * a load mounts   a three-page load mounts well over a hundred   and an opacity
+ * animation promotes each of them to its own compositor layer. That layer churn
+ * is what `src/renderer/app.css` removed from `.message-block` for good reason.
+ * Here the blocks are in the document first, so only the ones inside the reader's
+ * viewport travel: everything above it mounts without motion, which is where
+ * nobody can watch it. The reader's own content never moves, and the arrived
+ * blocks settle from a few pixels ABOVE their final place, the direction they
+ * came from.
+ *
+ * `blocks` are in document order (top to bottom) and `scroller` is the element
+ * that clips them. Nothing plays under reduced motion, and a block outside the
+ * scroller's viewport is left alone.
+ *
+ * Returns how many blocks played.
+ */
+export function playHistoryArrive(
+  blocks: readonly HTMLElement[],
+  scroller: HTMLElement | null
+): number {
+  if (blocks.length === 0 || prefersReducedMotion()) return 0
+  const frame = scroller?.getBoundingClientRect()
+  const viewTop = frame ? frame.top : 0
+  const viewBottom = frame ? frame.bottom : window.innerHeight
+  // The reader reads at the seam, which is the BOTTOM of what just arrived, so
+  // the list is walked from its end: when the cap bites, the blocks that keep
+  // the motion are the ones nearest the reader.
+  const playing: HTMLElement[] = []
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    if (playing.length >= HISTORY_ARRIVE_MAX) break
+    const node = blocks[index]
+    if (!node) continue
+    const rect = node.getBoundingClientRect()
+    if (rect.bottom <= viewTop || rect.top >= viewBottom) continue
+    playing.push(node)
+  }
+  // Every box is read before the first animation starts: one layout for the whole
+  // arrival instead of one per block.
+  for (const node of playing) {
+    node.animate(
+      [
+        { opacity: 0, transform: `translateY(-${HISTORY_ARRIVE_TRAVEL}px)` },
+        { opacity: 1, transform: 'none' }
+      ],
+      { duration: HISTORY_ARRIVE_MS, easing: CUBIC_OUT_CSS }
+    )
+  }
+  return playing.length
+}
+
 /**
  * The travel a row makes when the list around it is rebuilt, for lists whose rows
  * can move *between* containers.
