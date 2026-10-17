@@ -245,18 +245,11 @@
             Close
           </button>
           <span class="flex-1"></span>
-          {#if action}
-            <!-- The step has its own row above, so this is only the way past it
-                 for a user who has already done it. -->
-            <button
-              type="button"
-              class="flex h-8 items-center gap-1.5 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Skip this step"
-              onclick={() => guideState.next()}
-            >
-              Next
-            </button>
-          {/if}
+          <!-- Back always sits left of the step button, and the step button
+               is always the same slot: rightmost. A stop with its own action
+               row above keeps this one quieter, because the labelled step is
+               the loud one, and calls it Skip, because it does not do the
+               step. The order never changes between stops. -->
           <button
             type="button"
             class="flex h-8 items-center gap-1.5 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
@@ -268,17 +261,21 @@
             <CioArrowLeft size={12} />
             Back
           </button>
-          {#if !action}
-            <button
-              type="button"
-              class="flex h-8 items-center gap-1.5 border border-primary bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
-              title={guideState.onLastStop ? 'Finish the guide' : 'Next stop'}
-              onclick={() => guideState.next()}
-            >
-              {guideState.onLastStop ? 'Done' : 'Next'}
-              {#if !guideState.onLastStop}<CioArrowRight size={12} />{/if}
-            </button>
-          {/if}
+          <button
+            type="button"
+            class="flex h-8 items-center gap-1.5 px-2.5 text-[0.6875rem] transition-colors {action
+              ? 'border border-border text-muted hover:bg-elevated hover:text-foreground'
+              : 'border border-primary bg-primary font-medium text-on-primary hover:bg-primary-hover'}"
+            title={guideState.onLastStop
+              ? 'Finish the guide'
+              : action
+                ? 'Skip this step'
+                : 'Next stop'}
+            onclick={() => guideState.next()}
+          >
+            {guideState.onLastStop ? 'Done' : action ? 'Skip' : 'Next'}
+            {#if !guideState.onLastStop}<CioArrowRight size={12} />{/if}
+          </button>
         </div>
       </div>
     </aside>
