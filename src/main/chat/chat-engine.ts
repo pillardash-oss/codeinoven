@@ -1764,11 +1764,17 @@ export class ChatEngine {
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
-    // Activating the design or video capability is not entering its session: it
-    // only reads the playbook. The session, its marker and the coordinator board
-    // come from actual work, so the durable record is written where the work
-    // happens (the design and video previews) or by the tag the user typed. A
-    // thread the agent only read the playbook on stays an ordinary thread.
+    // An agent can enter a design or a video session without the user typing the
+    // tag for it, by picking up the capability itself, and the session that opens
+    // is the same session: the memo the tag sets is set here, and the thread's row
+    // is written, which is what docks the coordinator board while the work is
+    // being made and what keeps the thread's later turns carrying the session's
+    // contract instead of leaving each turn to rediscover the tool mid-flight.
+    this.utilityOrchestration.setAuthoredWorkSessionRecorder(({ projectId, threadId, kind }) => {
+      if (kind === 'design') this.cioDesignThreads.set(threadId, true)
+      else this.cioVideoThreads.set(threadId, true)
+      void this.rememberAuthoredWorkKind(projectId, threadId, kind)
+    })
     // Design work the user routed to a model of their own choosing. The config
     // is read per call, so re-assigning a model applies to the next delegation
     // rather than the next app run, and the app never substitutes a model.

@@ -12,13 +12,11 @@ import { CIO_VIDEO_TAG, isCioVideoRequest, type VideoSessionMode } from '../../l
  * activation round trip.
  *
  * The other way is the agent reaching for the tool: activating `cio:video` from
- * the utility gateway opens the same session for the turn and hands back the same
- * briefing, so a user who asked for a video in their own words never watches the
- * session go missing. Activation only reads the playbook: the app records the
- * session on the thread row when the work actually happens, which is the first
- * preview into a composition folder. That row is what the coordinator board reads
- * to dock and what keeps the thread's later turns inside the session, so a thread
- * the agent only read the playbook on stays an ordinary thread.
+ * the utility gateway opens the same session and hands back the same briefing,
+ * so a user who asked for a video in their own words never watches the session
+ * go missing. Either way the app records the session on the thread row, which is
+ * what the coordinator board reads to dock and what keeps the thread's later
+ * turns inside it.
  *
  * The session continues for the rest of the thread: later turns get the shorter
  * continuation contract and the capability stays active, because an edit is
@@ -99,18 +97,16 @@ ${VIDEO_SESSION_STEPS}`
  * opens, so the activation hands back the same instructions the tag's turn
  * carries. This is the only way the turn that opened a session can receive its
  * contract after the fact: the prompt was composed before the agent reached for
- * the tool, and the activation result is the turn's next place to read. The
- * session becomes durable on the thread when the work does, at the first preview,
- * so reading the playbook alone never marks the thread as a composition thread.
+ * the tool, and the activation result is the turn's next place to read.
  */
 export const CIO_VIDEO_ACTIVATION_PROMPT = `CodeInOven video session
 
 You activated the app-owned video capability, and activating it opens a video
-session for this turn: the playbook you just received is the session's contract
-and its preview and capture operations are callable now. Writing the first frame
-is what opens the session on the thread, which is what makes the coordinator
-board appear and what keeps this thread's later turns inside the session, so do
-not treat this as a preliminary: making this video is the work of this turn.
+session on this thread: the playbook you just received is the session's contract,
+its preview and capture operations are callable now, the app records the session
+so this thread's later turns stay inside it, and the coordinator board shows the
+user the composition as you write into it. Making this video is the work of this
+turn, not a preliminary to it.
 
 ${VIDEO_SESSION_STEPS}`
 
