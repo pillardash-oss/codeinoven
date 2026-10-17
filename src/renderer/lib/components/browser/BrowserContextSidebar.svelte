@@ -62,7 +62,7 @@
 
   // The note is docked by the store the moment a tab becomes active and while
   // this rail is shown, so nothing here creates it; this only reads the one the
-  // store owns.
+  // Store owns.
   const noteTab = $derived(
     activeTab ? contextSidebarState.noteTabFor(GLOBAL_BROWSER_PROJECT_ID, activeTab.id) : null
   )

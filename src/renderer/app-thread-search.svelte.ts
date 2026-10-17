@@ -97,7 +97,7 @@ export class ThreadSearchPaletteController {
     // unless intent search is enabled.
     warmIntentSearch()
     // The assistant screen's assistant picker and assistant rows read the assistants
-    // store, which may not have hydrated yet on a session that restored onto a
+    // Store, which may not have hydrated yet on a session that restored onto a
     // non-content view. Idempotent, so an already-initialised store is free.
     if (this.family === 'assistant') assistants.initialize()
     // Rows carry the thread's Oven next to its scope, so the registry has to be

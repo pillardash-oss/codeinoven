@@ -48,7 +48,7 @@
    * here is chosen for them.
    *
    * An assignment also says which craft it covers, by naming the practitioner
-   * (Copywriter, Illustrator, Video editor, Voice-over artist), because a model
+   * (Copywriter, Illustrator, Film editor, Voice-over artist), because a model
    * that writes copy cannot make a picture and one trained for pictures is
    * picked for that. Two assignments for one craft are alternatives for the same
    * job, so the order they are listed in is the order they are preferred.

@@ -36,7 +36,6 @@
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
   } from '$shared/types'
-  import { Plug2 } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -884,7 +883,7 @@
                   disabled={!canAddProvider(provider)}
                   onclick={() => providerConnectFlow.open(provider.id)}
                 >
-                  <Plug2 size={13} /> Manage providers
+                  <CioPlug size={13} /> Manage providers
                 </button>
               {/if}
 

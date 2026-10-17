@@ -311,7 +311,7 @@
   const dockProjectName = $derived(projectMeta?.name ?? '')
 
   // The sheet lives inside `PrDockHost`'s `{#each store.drafts}`, so writing the
-  // store from a bare effect would re-render the host, re-run this effect and
+  // Store from a bare effect would re-render the host, re-run this effect and
   // write again   a read/write cycle. Reading back the current descriptor and
   // writing only when a field actually changed makes the sync idempotent.
   $effect(() => {
