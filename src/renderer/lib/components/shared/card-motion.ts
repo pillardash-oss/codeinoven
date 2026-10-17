@@ -1,6 +1,6 @@
 import { cubicOut } from 'svelte/easing'
 import type { FlyParams, SlideParams } from 'svelte/transition'
-import { motionDuration, prefersReducedMotion } from '$lib/motion'
+import { CUBIC_OUT_CSS as CUBIC_OUT, motionDuration, prefersReducedMotion } from '$lib/motion'
 
 /** Body fold/unfold time for a card above the composer. */
 const FOLD_MS = 160
@@ -19,10 +19,6 @@ const TICK_TRAVEL = 3
 /** A row arriving inside a card body: a notice, a task, a changed file. */
 const ARRIVE_MS = 160
 const ARRIVE_TRAVEL = 4
-
-/** easeOutCubic as a CSS easing, so an animation scripted by hand moves at the
- *  same rate as the transitions beside it. */
-const CUBIC_OUT = 'cubic-bezier(0.215, 0.61, 0.355, 1)'
 
 /** Which way a card moved between two of its entries: forward, or back. */
 export type StepDirection = 1 | -1

@@ -13,9 +13,9 @@
   import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { prefersReducedMotion } from 'svelte/motion'
-  import { fade, slide } from 'svelte/transition'
+  import { fade, slide, type FadeParams } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
-  import { listRowMove } from '$lib/motion'
+  import { ListRowReflow, listRowArrive } from '$lib/motion'
   import { PinOff } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
@@ -318,12 +318,35 @@
       }))
   })
 
-  // Animate only rows that were or will be on screen. Offscreen rows move
-  // immediately instead of creating hundreds of invisible animations; that
-  // guard, its reduced-motion read and its 160ms rate live in `listRowMove`,
-  // shared with every other reordering list.
-  function moveThreadEntry(node: HTMLElement, positions: { from: DOMRect; to: DOMRect }) {
-    return listRowMove(node, positions)
+  // Rows travel between containers, not inside one keyed list: a regrouping or a
+  // project filter tears them out of one status group and builds them inside
+  // another, so Svelte's per-list FLIP has nothing to measure. This pair takes
+  // the two measurements Svelte cannot: where every row was before the DOM
+  // updated, and where it is after. See `ListRowReflow`.
+  const threadsRowReflow = new ListRowReflow()
+  let threadsListElement = $state<HTMLElement | null>(null)
+  /** The rows this pass draws, in order. Both measurements below read it, so they
+   *  run on the same pass, and it is what tells the reflow which rows to follow. */
+  const threadRowKeys = $derived(
+    threadSections.flatMap((section) => section.threads.map((thread) => thread.id))
+  )
+
+  $effect.pre(() => {
+    threadsRowReflow.capture(threadsListElement, scroller ?? null, threadRowKeys)
+  })
+
+  $effect(() => {
+    threadsRowReflow.play(threadsListElement, scroller ?? null, threadRowKeys)
+  })
+
+  /** When this list first painted. A row that lands because the app just created
+   *  it is an arrival; every other row that appears is one the list already knew
+   *  about (a regroup, a widened filter, older history paging in) and must not
+   *  replay an entrance. Same rule the transcript uses for a landing message. */
+  const threadsListAttachedAt = Date.now()
+
+  function threadsRowArrive(createdAt: number): FadeParams {
+    return createdAt > threadsListAttachedAt ? listRowArrive() : { duration: 0 }
   }
 
   function getThreadIcon(thread: Thread): string | null {
@@ -842,9 +865,11 @@
              the next group as that group takes the top. The section must stay a
              real block: `display: contents` would drop its box, leaving the
              heading's containing block as the whole list, so it would out-stick
-             its own group. The inner keyed list keeps the row FLIP for reorders
-             inside a group. -->
-        <div>
+             its own group. The rows themselves are keyed by thread id inside one
+             keyed list per group, so a row changing group is a different element
+             in a different list and travels with the reflow pair above instead
+             of Svelte's FLIP. -->
+        <div bind:this={threadsListElement}>
           {#each threadSections as section (section.key)}
             <!-- The section spans the heading and its rows, so `position: sticky`
                  keeps the heading put while its own rows pass underneath and the
@@ -898,7 +923,7 @@
               <div class="space-y-px {section.group ? 'pb-5' : ''}" role="list">
                 {#each section.threads as thread (thread.id)}
                   {@const result = searchingThreads ? searchResultsById.get(thread.id) : undefined}
-                  <div animate:moveThreadEntry>
+                  <div data-row-key={thread.id} in:fade={threadsRowArrive(thread.createdAt)}>
                     {#if result}
                       <ThreadSearchResultRow
                         {result}

@@ -1,6 +1,15 @@
 import { cubicOut } from 'svelte/easing'
 import { flip, type AnimationConfig } from 'svelte/animate'
-import type { FlyParams, TransitionConfig } from 'svelte/transition'
+import type { FadeParams, FlyParams, TransitionConfig } from 'svelte/transition'
+
+/** `cubicOut` as a CSS easing, so an animation scripted by hand over the Web
+ *  Animations API moves at the same rate as the transitions beside it. */
+export const CUBIC_OUT_CSS = 'cubic-bezier(0.215, 0.61, 0.355, 1)'
+/** How long a row travels when a restructure moves it, and how long a row takes
+ *  to arrive in a list that owns its own travel. One rate for both, so a list
+ *  does not read as two motions running at different speeds. */
+const ROW_REFLOW_MS = 160
+export const LIST_ROW_ARRIVE_MS = 120
 
 /** True when the user has asked the OS for reduced motion. Shared by the
  *  transitions (`motionDuration`) and by the few animations scripted by hand,
@@ -91,4 +100,115 @@ export function listRowMove(
     (rect) => rect.bottom > 0 && rect.top < window.innerHeight
   )
   return flip(node, positions, { duration: visible ? motionDuration(duration) : 0 })
+}
+
+/**
+ * Arrival for a row that appears in a list whose travel is scripted by
+ * {@link ListRowReflow}, for use as `in:` on the row whose owner just created it.
+ *
+ * Opacity only, deliberately: the list's own reflow reads every row's box before
+ * and after an update, and a transform animating through a `fly` would be read
+ * back as the row's position, so an arriving row would hand the next move a
+ * starting point it never had. A row that is only fading is exactly where its box
+ * says it is.
+ */
+export function listRowArrive(): FadeParams {
+  return { duration: motionDuration(LIST_ROW_ARRIVE_MS) }
+}
+
+/**
+ * The travel a row makes when the list around it is rebuilt, for lists whose rows
+ * can move *between* containers.
+ *
+ * `animate:listRowMove` covers a row reordered inside one keyed list: Svelte's
+ * own flip measures that list before and after the update. A sidebar that draws
+ * its rows inside one keyed list per status group has no such single list - a
+ * regrouping, or a project filter, tears rows out of one group's list and builds
+ * them inside another's, so Svelte sees the row leave and a different row arrive
+ * and there is nothing to travel from: the rows pop into their new place.
+ *
+ * This pairs the two measurements Svelte cannot take across containers. `capture`
+ * records where every row is before the DOM updates, `play` walks the rows after
+ * it and moves each one from its recorded place to where it now is, keyed by the
+ * row's own id rather than by element identity - which is what makes a
+ * brand-new element for an existing row travel instead of appearing. Both
+ * measurements are taken relative to the list's scroller, so a list that scrolls
+ * in the same frame carries no scroll delta into the travel.
+ *
+ * One instance per list. `capture` belongs in `$effect.pre` and `play` in
+ * `$effect`, both reading the same list derivation so they run on exactly the
+ * same passes, and `play` only moves a row whose capture it actually holds.
+ */
+export class ListRowReflow {
+  #before = new Map<string, { top: number; left: number }>()
+  /** Whether a capture is waiting for its play. */
+  #captured = false
+
+  /**
+   * Snapshot where this pass's rows are, before the DOM updates.
+   *
+   * `keys` is the rows the caller is about to render: passing it is what
+   * subscribes the caller's effect to the list, and it keeps the measurement to
+   * the rows this pass draws. A row that exists now but is leaving is
+   * deliberately not recorded - it has nowhere to travel to.
+   */
+  capture(root: HTMLElement | null, scroller: HTMLElement | null, keys: readonly string[]): void {
+    this.#captured = true
+    this.#before.clear()
+    if (!root || keys.length === 0) return
+    const wanted = new Set(keys)
+    for (const node of root.querySelectorAll<HTMLElement>('[data-row-key]')) {
+      const key = node.dataset.rowKey
+      if (key === undefined || !wanted.has(key) || !isRowVisible(node)) continue
+      this.#before.set(key, rowOffset(node, scroller))
+    }
+  }
+
+  /** Move every row the capture holds from where it was to where it now is. */
+  play(root: HTMLElement | null, scroller: HTMLElement | null, keys: readonly string[]): void {
+    if (!this.#captured) return
+    this.#captured = false
+    const before = this.#before
+    this.#before = new Map()
+    if (!root || keys.length === 0 || prefersReducedMotion()) return
+    const wanted = new Set(keys)
+    // Every box is read before the first animation starts, so one pass of moves
+    // costs one layout instead of one per row.
+    const moves: { node: HTMLElement; dx: number; dy: number }[] = []
+    for (const node of root.querySelectorAll<HTMLElement>('[data-row-key]')) {
+      const key = node.dataset.rowKey
+      if (key === undefined || !wanted.has(key)) continue
+      const from = before.get(key)
+      if (from === undefined || !isRowVisible(node)) continue
+      const to = rowOffset(node, scroller)
+      const dx = from.left - to.left
+      const dy = from.top - to.top
+      if (dx === 0 && dy === 0) continue
+      moves.push({ node, dx, dy })
+    }
+    for (const { node, dx, dy } of moves) {
+      node.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
+        duration: ROW_REFLOW_MS,
+        easing: CUBIC_OUT_CSS
+      })
+    }
+  }
+}
+
+/** Whether a row is on screen, so a move nobody can see is not animated. */
+function isRowVisible(node: HTMLElement): boolean {
+  const rect = node.getBoundingClientRect()
+  return rect.bottom > 0 && rect.top < window.innerHeight
+}
+
+/** A row's place inside its scroller's content box, so the measurement is the
+ *  same before and after an update even if the list scrolled in between. */
+function rowOffset(node: HTMLElement, scroller: HTMLElement | null): { top: number; left: number } {
+  const rect = node.getBoundingClientRect()
+  if (!scroller) return { top: rect.top, left: rect.left }
+  const frame = scroller.getBoundingClientRect()
+  return {
+    top: rect.top - frame.top + scroller.scrollTop,
+    left: rect.left - frame.left + scroller.scrollLeft
+  }
 }
