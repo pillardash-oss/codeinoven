@@ -1309,12 +1309,20 @@ export class ThreadRepo {
     )
   }
 
-  countBookmarkedByProject(projectId: string): number {
-    const row = this.db.get<{ count: number }>(
+  /**
+   * A project's bookmarked-thread count, read on the database worker.
+   *
+   * The bookmark toggle is an interaction path, so the cap check that reads this
+   * must not touch SQLite on the Electron main thread (see `docs/APP-BIBLE.md`).
+   */
+  async countBookmarkedByProjectViaWorker(projectId: string): Promise<number> {
+    const result = await this.db.queryViaWorker(
       'SELECT COUNT(*) AS count FROM threads WHERE project_id = ? AND bookmarked = 1',
-      projectId
+      [projectId],
+      1
     )
-    return row?.count ?? 0
+    if (!result.ok) return 0
+    return Number(result.rows[0]?.['count'] ?? 0)
   }
 
   setSortOrder(id: string, sortOrder: number, now = Date.now()): void {

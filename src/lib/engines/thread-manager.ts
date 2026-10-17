@@ -1235,7 +1235,7 @@ export class ThreadManager {
     if (
       bookmarked &&
       !existing.bookmarked &&
-      this.threadRepo.countBookmarkedByProject(projectId) >= 3
+      (await this.threadRepo.countBookmarkedByProjectViaWorker(projectId)) >= 3
     ) {
       throw new Error('A project can have at most 3 bookmarked threads.')
     }

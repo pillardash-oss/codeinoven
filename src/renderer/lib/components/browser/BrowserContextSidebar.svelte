@@ -25,6 +25,7 @@
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+  import { SvelteMap } from 'svelte/reactivity'
 
   interface Props {
     onClose: () => void
@@ -177,7 +178,7 @@
    */
   const popupTabs = $derived.by(() => {
     const tabs = browserPopupWindows.tabs()
-    const extensionTabCounts = new Map<string, number>()
+    const extensionTabCounts = new SvelteMap<string, number>()
     for (const tab of tabs) {
       if (tab.extensionId) {
         extensionTabCounts.set(tab.extensionId, (extensionTabCounts.get(tab.extensionId) ?? 0) + 1)

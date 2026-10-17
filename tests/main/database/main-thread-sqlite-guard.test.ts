@@ -67,6 +67,12 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     reason: REPOSITORY_READ
   },
   {
+    file: 'src/main/database/repositories/design-repo.ts',
+    maxSites: 1,
+    reason:
+      'the indexed single-row relocation redirect lookup that resolves a folder on the preview path immediately before the synchronous upsert writes'
+  },
+  {
     file: 'src/main/database/repositories/expert-settings-repo.ts',
     maxSites: 1,
     reason: REPOSITORY_READ
