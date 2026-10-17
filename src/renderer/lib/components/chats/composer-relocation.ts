@@ -5,7 +5,6 @@ import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { parseComposerDraftEntry, type ComposerDraftEntry } from '$lib/stores/renderer-recovery'
 import {
-  MAX_REFERENCES_PER_THREAD,
   mergeReferenceById,
   responseReferencesState,
   type ResponseReferenceAnchor
@@ -121,28 +120,6 @@ export function itemReferences(item: ComposerRelocationItem): readonly PromptRef
   return item.kind === 'reference' ? [item.reference] : item.references
 }
 
-/**
- * Why a chat cannot take a carry, or null when it can.
- *
- * A composer carries a bounded number of references, and arriving content never
- * evicts what the destination already holds, so a carry that cannot fit is
- * refused rather than made room for. The destination's own references are the
- * ones counted, and a reference it already holds is the same reference, so it
- * does not count twice. Read by the picker (to say so on the row, before the
- * user commits) and by the carry itself.
- */
-export function carryBlockedReason(input: {
-  item: ComposerRelocationItem
-  existingReferences: readonly PromptReference[]
-}): string | null {
-  const carried = itemReferences(input.item)
-  if (carried.length === 0) return null
-  const known = new SvelteSet(input.existingReferences.map((reference) => reference.id))
-  const added = carried.filter((reference) => !known.has(reference.id)).length
-  if (input.existingReferences.length + added <= MAX_REFERENCES_PER_THREAD) return null
-  return `That chat already holds the ${MAX_REFERENCES_PER_THREAD} attached references a composer carries, and a carry never takes the place of what it holds. Clear its chip there, then carry these over.`
-}
-
 /** The item's own name: the file it carries, or the label the reference was made with. */
 export function relocationItemName(item: ComposerRelocationItem): string {
   if (item.kind === 'attachment') {
@@ -197,14 +174,6 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
     // identified by its id, and both chats must be able to edit their own.
     input.mode === 'copy' ? { ...reference, id: copiedReferenceId() } : reference
   )
-  // A destination must never lose its own annotations to make room, so a carry
-  // that cannot fit is refused with the reason rather than trimming the oldest
-  // chips the destination already held.
-  const blocked = carryBlockedReason({
-    item: input.item,
-    existingReferences: carried.promptReferences
-  })
-  if (blocked) throw new Error(blocked)
   // The destination's own annotations are kept and the carried ones join them,
   // never in place of them. A reference id that is already there is the same
   // reference, so the carried content updates that entry where it sits rather

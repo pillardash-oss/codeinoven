@@ -508,7 +508,7 @@ export function parseComposerDraftEntry(value: unknown): ComposerDraftEntry | nu
     ? value.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
     : []
   const promptReferences = Array.isArray(value.promptReferences)
-    ? value.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+    ? value.promptReferences.filter(isQueuedResponseReference)
     : []
   const startAfterThreads = parseStartAfterThreads(value.startAfterThreads)
   return {
@@ -561,7 +561,7 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[
         ? item.attachments.filter(isPromptAttachment)
         : []
       const promptReferences = Array.isArray(item.promptReferences)
-        ? item.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+        ? item.promptReferences.filter(isQueuedResponseReference)
         : []
       const projectReferences = Array.isArray(item.projectReferences)
         ? item.projectReferences.filter(isPromptProjectReference).slice(0, 20)
