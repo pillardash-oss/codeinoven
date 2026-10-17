@@ -415,32 +415,50 @@
       ? rendererRecovery.hasDraftContent(selectedThread.projectId, selectedThread.id)
       : false
   )
-  /** Threads holding any unsent composer content stay pinned at the top of their list,
-      even after the user navigates away, so they are easy to find mid-task.
-      An active voice capture counts as draft activity too   draft status must
-      drive sort order regardless of whether the user is typing or dictating. */
-  let draftThreadKeys = $derived.by(() => {
+  /**
+   * The threads the user is writing into: unsent typed content, attachments and
+   * references, plus a live voice capture.
+   *
+   * The narrower of the two composer sets, and the one that earns the Threads
+   * view's Drafts section: a message already sent and waiting behind a turn is a
+   * finished action, so it stays out of this set and out of that section. A live
+   * dictation counts as writing, because from the first mic press through
+   * transcription the user is composing with their voice.
+   */
+  let typingThreadKeys = $derived.by(() => {
     const keys = new SvelteSet<string>()
     // Only threads that actually hold unsent content belong here, and the draft
     // store is the authority on which those are. Scanning every thread instead
-    // asked `hasDraftContent` about each one, which materialized an empty draft
+    // asked `hasTypedContent` about each one, which materialized an empty draft
     // entry (six arrays) per thread and subscribed to a draft slot per thread,
-    // on every keystroke.
+    // on every keystroke. A stored entry is dropped the moment it holds nothing,
+    // and the check keeps the set honest if one is ever kept empty.
     for (const ref of rendererRecovery.listDraftThreadRefs()) {
+      if (!rendererRecovery.hasTypedContent(ref.projectId, ref.threadId)) continue
       keys.add(`${ref.projectId}:${ref.threadId}`)
     }
-    for (const ref of rendererRecovery.queuedMessageThreads()) {
-      keys.add(`${ref.projectId}:${ref.threadId}`)
-    }
-    // An active voice capture counts as draft activity too, so the row leaves
-    // the "visited" order while the mic is open. Only one scope captures at a
-    // time, so the thread scan below costs nothing with the mic closed.
+    // Only one scope captures at a time, so the thread scan below costs nothing
+    // with the mic closed.
     if (speechController.capturingScope) {
       for (const t of allThreads) {
         if (!t.archived && speechController.isCapturingThread(t.id)) {
           keys.add(threadVisitKey(t))
         }
       }
+    }
+    return keys
+  })
+
+  /** Threads holding any unsent composer content stay pinned at the top of their list,
+      even after the user navigates away, so they are easy to find mid-task. Wider
+      than `typingThreadKeys`: a queued message counts here too, because it is
+      still waiting on the thread. An active voice capture counts as draft
+      activity, so draft status drives sort order regardless of whether the user
+      is typing or dictating. */
+  let draftThreadKeys = $derived.by(() => {
+    const keys = new SvelteSet(typingThreadKeys)
+    for (const ref of rendererRecovery.queuedMessageThreads()) {
+      keys.add(`${ref.projectId}:${ref.threadId}`)
     }
     return keys
   })
@@ -5110,6 +5128,7 @@
       {pinnedTimelineThreads}
       {unpinnedTimelineThreads}
       {draftThreadKeys}
+      {typingThreadKeys}
       {hasMoreHistory}
       {historyLoading}
       {projectPageLoading}

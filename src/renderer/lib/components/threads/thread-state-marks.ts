@@ -1,3 +1,6 @@
+import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+import CioInbox from '$lib/components/icons/cio/CioInbox.svelte'
+import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
 import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
 import CioClock from '$lib/components/icons/cio/CioClock.svelte'
 import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
@@ -6,7 +9,6 @@ import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
 import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
 import CioTools from '$lib/components/icons/cio/CioTools.svelte'
 import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-import { AlarmClock, Inbox, Pickaxe } from '@lucide/svelte'
 import type { Component } from 'svelte'
 import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
 import type { ThreadStatusTone } from '$shared/thread-status-policy'
@@ -114,7 +116,7 @@ export interface ThreadStateMark {
  */
 export const THREAD_STATE_MARKS = {
   unread: {
-    icon: Inbox,
+    icon: CioInbox,
     label: 'Unread',
     tone: 'done',
     colour: 'var(--color-thread-unread)',
@@ -157,7 +159,7 @@ export const THREAD_STATE_MARKS = {
     rail: false
   },
   working: {
-    icon: Pickaxe,
+    icon: CioSpinner,
     label: 'Working',
     tone: 'working',
     colour: 'var(--color-thread-working)',
@@ -239,7 +241,7 @@ export const THREAD_SECONDARY_MARKS = {
     dash: 'dotted'
   },
   scheduled: {
-    icon: AlarmClock,
+    icon: CioClock,
     label: 'Starts after another thread',
     tone: 'todo',
     colour: 'var(--color-info)',
@@ -478,6 +480,12 @@ export function threadRailMark(
  */
 export const THREAD_GROUP_MARK: Record<string, ThreadStateMark> = {
   Attention: THREAD_STATE_MARKS.approval,
+  // The pen, because that is what the rows under this header wear: a thread
+  // nothing has been sent into carries it as its own state, and a settled thread
+  // the user is typing into carries it in the secondary slot above its spine.
+  // The grey is the draft mark's own and happens to be Done's as well; the glyph
+  // is what separates the two groups, exactly as it does on the rows.
+  Drafts: THREAD_STATE_MARKS.todo,
   Unread: THREAD_STATE_MARKS.unread,
   Errors: THREAD_STATE_MARKS.error,
   Spec: THREAD_STATE_MARKS.spec,

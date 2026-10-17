@@ -88,6 +88,10 @@
      *  visit key. The workspace owns the set; grouping reads it so drafting shows
      *  up as work in progress. */
     draftThreadKeys: ReadonlySet<string>
+    /** The same set narrowed to unfinished writing: typed or dictated content only,
+     *  never a message already queued behind a turn. This is what puts a settled
+     *  thread in the Drafts group. */
+    typingThreadKeys: ReadonlySet<string>
     hasMoreHistory: boolean
     historyLoading: boolean
     projectPageLoading: string | null
@@ -142,6 +146,7 @@
     pinnedTimelineThreads,
     unpinnedTimelineThreads,
     draftThreadKeys,
+    typingThreadKeys,
     hasMoreHistory,
     historyLoading,
     projectPageLoading,
@@ -270,7 +275,8 @@
   ): Thread[] | null {
     return resolveTimelineDrop(settledTimelineThreads, draggedId, targetId, position, {
       grouped: threadGroupingState.enabled,
-      draftThreadKeys
+      draftThreadKeys,
+      typingThreadKeys
     })
   }
   // Grouping runs over unpinned threads only: pinned threads keep their own
@@ -282,7 +288,8 @@
           searchPanelActive
             ? visibleSearchResults.map((result) => result.thread)
             : settledTimelineThreads,
-          draftThreadKeys
+          draftThreadKeys,
+          typingThreadKeys
         )
       : []
   )

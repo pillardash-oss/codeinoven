@@ -1,6 +1,6 @@
 import { isThreadLiveWorking } from '$lib/thread-status-badge'
 import { scopeState } from '$lib/stores/scope.svelte'
-import { settledThreadReadsUnread } from '$shared/thread-status-policy'
+import { settledThreadReadsUnread, threadStatusPolicy } from '$shared/thread-status-policy'
 import {
   GLOBAL_BROWSER_PROJECT_ID,
   isConversationContainer,
@@ -20,22 +20,38 @@ import { threadVisitKey } from '$lib/stores/recent-visits.svelte'
 /**
  * Partition the already-filtered rows once, preserving their order within each group.
  *
- * A thread holding an unsent composer draft belongs to Work: the user is mid
- * composition on it, so it leaves Unread and Done and sits under Working until
- * the draft is sent or cleared. Errors, Attention, and Spec keep their
- * precedence above it, matching the row badge, which shows a parked or failed
- * state over the draft dot.
+ * `Drafts` holds the two threads the user still has to finish writing: one that
+ * nothing has been sent into yet, and one whose run is over while its composer
+ * holds unsent typing. A thread whose run is live is not a draft   that typing
+ * rides the row's secondary slot while the run keeps the row   so it stays under
+ * Working. Errors, Attention, and Spec keep their precedence above the draft
+ * section, matching the row badge, which shows a parked or failed state over the
+ * pen.
  *
- * `draftThreadKeys` is the workspace's draft set   the same one that pins drafts
- * to the top of the list. Asking the recovery store about every thread instead
- * would materialize an empty draft entry per row on each keystroke.
+ * Two key sets, because there are two questions. `draftThreadKeys` is everything
+ * waiting in the composer, unsent typing plus messages already sent and queued
+ * behind a turn: that is what pins a row to the top of its list, and it keeps a
+ * running thread under Working even for a caller that hands over no more than it.
+ * `typingThreadKeys` is only the unfinished writing, and only that earns the
+ * Drafts section   a queued message is a finished action waiting its turn, not a
+ * thread the user has to come back to. Both sets come from the workspace; asking
+ * the recovery store about every thread instead would materialize an empty draft
+ * entry per row on each keystroke.
  */
 export function groupThreadsByStatus(
   threads: Thread[],
-  draftThreadKeys?: ReadonlySet<string> | null
+  draftThreadKeys?: ReadonlySet<string> | null,
+  typingThreadKeys?: ReadonlySet<string> | null
 ): { label: ThreadGroup; threads: Thread[] }[] {
+  // The literal's order is the display order: the rows below return
+  // `Object.keys` of this record, so a group added here is a group drawn where
+  // it is written. Drafts sits above Unread   unfinished writing of the user's
+  // own asks for them the way an unopened result does, and it is theirs to
+  // finish rather than theirs to read. Attention still leads both, because a gate
+  // on the user stops every other thing.
   const groups: Record<ThreadGroup, Thread[]> = {
     Attention: [],
+    Drafts: [],
     Unread: [],
     Errors: [],
     Spec: [],
@@ -50,6 +66,7 @@ export function groupThreadsByStatus(
     if (thread.status === 'failed') group = 'Errors'
     else if (thread.status === 'awaiting_approval') group = 'Attention'
     else if (thread.status === 'spec') group = 'Spec'
+    else if (isDraftSectionThread(thread, typingThreadKeys)) group = 'Drafts'
     else if (
       threadHasVisibleWork(thread) ||
       thread.status === 'working-paused' ||
@@ -74,6 +91,29 @@ export function groupThreadsByStatus(
     .map((label) => ({ label, threads: groups[label] }))
 }
 
+/**
+ * Whether the thread belongs in the sidebar's Drafts section: a thread nothing
+ * has been sent into yet, or a run that is over while the user writes its next
+ * message.
+ *
+ * `created` is the new thread   the one the user just made and has not written
+ * a first message into. Nothing else counts as new: the moment a turn starts the
+ * thread is doing something, and the section is for what is waiting on the user
+ * alone. The second case reads the settled statuses (`completed`, `interrupted`)
+ * rather than a run flag, so a finished thread the user is typing into is a draft
+ * however long ago it settled, and a thread that is merely between turns of a live
+ * run is not.
+ */
+function isDraftSectionThread(
+  thread: Thread,
+  typingThreadKeys?: ReadonlySet<string> | null
+): boolean {
+  if (thread.status === 'created') return true
+  if (threadStatusPolicy(thread.status).scopeSlice !== 'done') return false
+  return typingThreadKeys?.has(threadVisitKey(thread)) ?? false
+}
+
+/** Threads matching the view's search query. */
 export function filterThreadsByQuery(threads: Thread[], query: string): Thread[] {
   const q = query.trim().toLowerCase()
   if (!q) return threads

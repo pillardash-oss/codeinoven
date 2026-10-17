@@ -33,6 +33,10 @@ export interface TimelineDropOptions {
   /** Whether the list renders status groups, or one flat list. */
   grouped: boolean
   draftThreadKeys?: ReadonlySet<string> | null
+  /** Unfinished composer writing per thread, which is what puts a thread in the
+   *  Drafts group. Passed alongside `draftThreadKeys`, not instead of it, because
+   *  the two answer different questions: see `groupThreadsByStatus`. */
+  typingThreadKeys?: ReadonlySet<string> | null
 }
 
 /**
@@ -79,9 +83,11 @@ export function resolveTimelineDrop(
     sequence.push(thread)
   }
   if (options.grouped) {
-    groupThreadsByStatus([...threads], options.draftThreadKeys).forEach((group, index) => {
-      for (const thread of group.threads) place(thread, index)
-    })
+    groupThreadsByStatus([...threads], options.draftThreadKeys, options.typingThreadKeys).forEach(
+      (group, index) => {
+        for (const thread of group.threads) place(thread, index)
+      }
+    )
   } else {
     for (const thread of threads)
       place(thread, threadStatusSortKey(thread, options.draftThreadKeys))
