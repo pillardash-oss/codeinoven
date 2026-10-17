@@ -20,7 +20,11 @@
     contextSidebarState,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
-  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import {
+    coordinatorDockState,
+    type CoordinatorDockRegistration
+  } from '$lib/stores/coordinator-dock.svelte'
+  import { LastKnown } from '$lib/last-known'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -45,7 +49,6 @@
     selectedThread?: Thread | null
     projectIcons: SvelteMap<string, string>
     browser: WorkspaceBrowserController
-    coordinator: ReturnType<typeof coordinatorDockState.forThread>
     /** Close the active coordinator tab, used when no coordinator is published
      *  for it so the panel can never trap the user on a blank body. */
     onDismissCoordinator: () => void
@@ -72,7 +75,6 @@
     selectedThread = null,
     projectIcons,
     browser,
-    coordinator,
     onDismissCoordinator,
     onContinueInThread,
     onOpenSubagent,
@@ -83,6 +85,35 @@
   }: Props = $props()
 
   let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
+
+  /**
+   * The coordinator the active tab belongs to.
+   *
+   * Read from the tab's own row rather than from the on-screen thread's, because
+   * the panel body *is* that row's board: the thread selection is null while a
+   * switch or another top-level view keeps it that way, and reading through it
+   * dropped a board the user still had open. A row that stops coordinating still
+   * answers null here, which is what drops the board to its own empty state.
+   */
+  let tabCoordinator = $derived.by(() => {
+    const tab = activeContextTab
+    return tab?.kind === 'coordinator'
+      ? coordinatorDockState.forThread(tab.projectId, tab.threadId)
+      : null
+  })
+
+  /**
+   * The registration a coordinator panel reads its own props from: the live one,
+   * or the last one this panel rendered.
+   *
+   * A child's props are getters that re-read their source for as long as the child
+   * is mounted, including the frame it unmounts on, so the board must never find a
+   * null there. It did: the throw came out of the board's own cleanup and aborted
+   * the keyed swap below, which left the pane blank and the board's poll running.
+   * Whether a board is shown at all is still `tabCoordinator`'s answer.
+   */
+  const boardRegistrations = new LastKnown<CoordinatorDockRegistration>()
+  let boardRegistration = $derived(boardRegistrations.get(tabCoordinator))
 
   /**
    * Identity of the surface the active sidebar tab mounts.
@@ -99,8 +130,12 @@
   let activePanelKey = $derived.by(() => {
     const tab = activeContextTab
     if (!tab) return ''
-    if (tab.kind === 'coordinator' && coordinator?.panel.component === 'design') {
-      const props = coordinator.panel.props
+    if (
+      tab.kind === 'coordinator' &&
+      tabCoordinator &&
+      boardRegistration?.panel.component === 'design'
+    ) {
+      const props = boardRegistration.panel.props
       return `work:${props.projectId}:${props.threadId}:${props.kind ?? 'session'}`
     }
     if (tab.kind !== 'files') return tab.id
@@ -322,28 +357,37 @@
             />
           {/await}
         {:else if activeContextTab.kind === 'coordinator'}
-          {#if coordinator}
-            {#if coordinator.panel.component === 'assignment'}
+          <!--
+            The panel a coordinator row published.
+
+            Every branch reads its props from `boardRegistration`, which is this
+            row's live registration or the last one this panel rendered. The live
+            `tabCoordinator` is what decides whether there is a board at all, so a
+            row that stops coordinating still falls through to the empty state
+            below.
+          -->
+          {#if tabCoordinator && boardRegistration}
+            {#if boardRegistration.panel.component === 'assignment'}
               {#await import('../threads/AssignmentCoordinatorPanel.svelte') then { default: AssignmentCoordinatorPanel }}
-                <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+                <AssignmentCoordinatorPanel {...boardRegistration.panel.props} />
               {/await}
-            {:else if coordinator.panel.component === 'achievement'}
+            {:else if boardRegistration.panel.component === 'achievement'}
               {#await import('../threads/AchievementCoordinatorPanel.svelte') then { default: AchievementCoordinatorPanel }}
-                <AchievementCoordinatorPanel {...coordinator.panel.props} />
+                <AchievementCoordinatorPanel {...boardRegistration.panel.props} />
               {/await}
-            {:else if coordinator.panel.component === 'design'}
+            {:else if boardRegistration.panel.component === 'design'}
               {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
-                {#key `${coordinator.projectId}:${coordinator.panel.props.threadId}:${coordinator.panel.props.kind ?? 'session'}`}
+                {#key `${boardRegistration.projectId}:${boardRegistration.panel.props.threadId}:${boardRegistration.panel.props.kind ?? 'session'}`}
                   <DesignCoordinatorPanel
-                    {...coordinator.panel.props}
-                    viewingThreadId={selectedThread?.id ?? coordinator.threadId}
+                    {...boardRegistration.panel.props}
+                    viewingThreadId={selectedThread?.id ?? boardRegistration.threadId}
                     active={active && contextSidebarState.sidebarVisible}
                   />
                 {/key}
               {/await}
             {:else}
               {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
-                <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+                <IndependentAuditCoordinatorPanel {...boardRegistration.panel.props} />
               {/await}
             {/if}
           {:else}

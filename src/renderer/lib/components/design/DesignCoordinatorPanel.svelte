@@ -20,6 +20,7 @@
   import CioVolumeX from '$lib/components/icons/cio/CioVolumeX.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
+  import { LastKnown } from '$lib/last-known'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import {
     ArrowUpDown,
@@ -499,6 +500,19 @@
       boxId: live.boxId
     }
   })
+  /**
+   * The tab the full screen surface shows, with the last one it showed as the
+   * floor of every read.
+   *
+   * This is the same rule the stage below follows: the browser panel that hosts
+   * the view reads its tab through a getter that re-reads its source until the
+   * panel is gone, and the tab turns null the moment the user minimizes the
+   * surface (or the composition stops being the one in front). A null read there
+   * would throw out of that panel's own cleanup and take the board's render with
+   * it. `fullscreenCompositionTab` still decides whether the surface exists.
+   */
+  const fullscreenTabs = new LastKnown<BrowserContextTab>()
+  let shownFullscreenTab = $derived(fullscreenTabs.get(fullscreenCompositionTab))
   /**
    * Whether the folder in front has an entry page, which is what makes it playable.
    *
@@ -1410,7 +1424,12 @@
         back: the stage places the view as it mounts, after the full screen surface
         has let it go.
       -->
-      <CompositionStage tab={liveTab} {active} covered={menuOpen} />
+      {#key liveTab.tabId}
+        <!-- The tab's identity is the stage's identity: a re-keyed tab builds a
+             new stage, so the frame this pane claims, the view it places and the
+             transport it draws all belong to the same tab. -->
+        <CompositionStage tab={liveTab} {active} covered={menuOpen} />
+      {/key}
     {:else if !playable}
       <div
         class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
@@ -2371,7 +2390,7 @@
   </p>
 </ConfirmDialog>
 
-{#if fullscreenCompositionTab}
+{#if fullscreenCompositionTab && shownFullscreenTab}
   <!--
     The composition's own view, full screen.
 
@@ -2381,18 +2400,22 @@
     transport (`BrowserPanel` draws one for any tab showing a composition), so the
     film keeps playing and stays scrubbable. The dialog hosts the browser's native
     view, which is why the surface must not suppress it (see `hostsBrowserView`).
+
+    The surface is switched by the live tab (null once it is minimized) while the
+    panel inside reads the remembered one, so minimizing tears the panel down
+    cleanly instead of handing it a null to read on the way out.
   -->
   <FullscreenPanelDialog
-    tabs={[{ id: fullscreenCompositionTab.id, title: fullscreenCompositionTab.title }]}
-    activeTabId={fullscreenCompositionTab.id}
+    tabs={[{ id: shownFullscreenTab.id, title: shownFullscreenTab.title }]}
+    activeTabId={shownFullscreenTab.id}
     minimizeLabel="Minimize the composition"
     hostsBrowserView
     onSelect={() => {}}
     onMinimize={() => (compositionFullscreen = false)}
   >
     {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
-      {#key fullscreenCompositionTab.id}
-        <BrowserPanel tab={fullscreenCompositionTab} fullscreen />
+      {#key shownFullscreenTab.id}
+        <BrowserPanel tab={shownFullscreenTab} fullscreen />
       {/key}
     {/await}
   </FullscreenPanelDialog>
