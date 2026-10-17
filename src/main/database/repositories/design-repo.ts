@@ -183,10 +183,17 @@ export class DesignRepo {
    * control for every folder it lists, so this sits on an interaction path and must
    * not touch SQLite on the Electron main thread (see `docs/APP-BIBLE.md`). A
    * directory with no row is simply absent from the map.
+   *
+   * A creator whose thread has since been deleted is not reported either. The
+   * reveal control acts on this map, and a row naming a thread that no longer
+   * exists is a control that looks live and does nothing when it is clicked: the
+   * folder reads as unclaimed, which is what it now is, and the title says so.
    */
   async originsViaWorker(projectId: string): Promise<Map<string, string>> {
     const result = await this.db.queryViaWorker(
-      'SELECT directory, thread_id FROM design_origins WHERE project_id = ?',
+      `SELECT o.directory, o.thread_id FROM design_origins o
+         JOIN threads t ON t.id = o.thread_id
+        WHERE o.project_id = ?`,
       [projectId],
       0
     )
