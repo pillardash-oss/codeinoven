@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oven Mono · alphabet</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .ab {
+        display: grid;
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .ab-row {
+        display: grid;
+        grid-template-columns: 4.5rem minmax(0, 1fr) 4.5rem minmax(0, 1fr);
+        gap: 1rem;
+        padding: 0.75rem 1rem;
+        background: var(--color-surface);
+        align-items: baseline;
+      }
+
+      .ab-row .lab {
+        font-size: 0.5625rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+      }
+
+      .ab-row .set {
+        font-size: 1.125rem;
+        letter-spacing: 0.02em;
+        line-height: 1.7;
+        word-break: break-all;
+      }
+
+      .ab-row .set.ref {
+        font-family: var(--font-reference);
+        font-weight: 200;
+        color: var(--color-muted);
+      }
+
+      @media (max-width: 44rem) {
+        .ab-row {
+          grid-template-columns: 1fr;
+          gap: 0.125rem;
+        }
+        .ab-row .set {
+          font-size: 1rem;
+        }
+      }
+
+      .punct {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .punct-cell {
+        background: var(--color-surface);
+        padding: 0.875rem 0.75rem;
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      .punct-cell .glyphs {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+        font-size: 1.75rem;
+        line-height: 1;
+      }
+
+      .punct-cell .glyphs .ref {
+        font-family: var(--font-reference);
+        font-weight: 200;
+        color: var(--color-caption);
+        font-size: 1.375rem;
+      }
+
+      .punct-cell .meta {
+        font-size: 0.5625rem;
+        letter-spacing: 0.08em;
+        color: var(--color-caption);
+      }
+
+      .punct-cell .verdict {
+        font-size: 0.625rem;
+        color: var(--color-muted);
+        line-height: 1.45;
+      }
+
+      .punct-cell .verdict.changed {
+        color: var(--color-foreground);
+      }
+
+      .lig {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .lig-cell {
+        background: var(--color-surface);
+        padding: 0.875rem 0.75rem;
+        display: grid;
+        gap: 0.375rem;
+      }
+
+      .lig-cell .pair {
+        font-size: 1.5rem;
+        line-height: 1.2;
+        white-space: pre;
+      }
+
+      .lig-cell .pair .src {
+        color: var(--color-caption);
+        font-family: var(--font-reference);
+        font-weight: 200;
+        font-size: 1.125rem;
+      }
+
+      .lig-cell .meta {
+        font-size: 0.5625rem;
+        letter-spacing: 0.08em;
+        color: var(--color-caption);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="study-bar" id="bar"></header>
+
+    <main class="shell">
+      <section class="masthead">
+        <div class="kicker"><span class="dot"></span>Alphabet · Oven Mono v1.000</div>
+        <h1 class="study-title">Every letter, both faces</h1>
+        <p class="study-note">
+          The alphabet is deliberately unchanged, because JetBrains Mono's letterforms are what
+          make four hours of reading comfortable. Each row sets Oven Mono above the same characters
+          in the face that ships today, so any difference you see is a difference I made on purpose.
+        </p>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">01</span>
+          <h2>The character sets</h2>
+          <p>
+            Left pair is Oven Mono at 300, right pair is JetBrains Mono at 200. Lower case, upper
+            case, figures and the ASCII symbols a shell actually prints.
+          </p>
+        </header>
+        <div class="body">
+          <div class="ab">
+            <div class="ab-row">
+              <span class="lab">Oven</span>
+              <span class="set">abcdefghijklmnopqrstuvwxyz</span>
+              <span class="lab">Ships</span>
+              <span class="set ref">abcdefghijklmnopqrstuvwxyz</span>
+            </div>
+            <div class="ab-row">
+              <span class="lab">Oven</span>
+              <span class="set">ABCDEFGHIJKLMNOPQRSTUVWXYZ</span>
+              <span class="lab">Ships</span>
+              <span class="set ref">ABCDEFGHIJKLMNOPQRSTUVWXYZ</span>
+            </div>
+            <div class="ab-row">
+              <span class="lab">Oven</span>
+              <span class="set">0123456789</span>
+              <span class="lab">Ships</span>
+              <span class="set ref">0123456789</span>
+            </div>
+            <div class="ab-row">
+              <span class="lab">Oven</span>
+              <span class="set">!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\]^_`{|}~</span>
+              <span class="lab">Ships</span>
+              <span class="set ref">!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\]^_`{|}~</span>
+            </div>
+            <div class="ab-row">
+              <span class="lab">Oven</span>
+              <span class="set">ñáéíóúüçßàèìòùâêîôûëïäö</span>
+              <span class="lab">Ships</span>
+              <span class="set ref">ñáéíóúüçßàèìòùâêîôûëïäö</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">02</span>
+          <h2>Every mark I changed, one by one</h2>
+          <p>
+            The left glyph is what ships today and the right is Oven Mono. Only these change, and
+            each change is the same idea: the mark's flat cut replaces a round taper.
+          </p>
+        </header>
+        <div class="body">
+          <div class="punct">
+            <div class="punct-cell">
+              <span class="meta">U+002E</span>
+              <span class="glyphs"><span class="ref">.</span><span>.</span></span>
+              <span class="verdict changed">Circle to square, cut to 0.86 so the ink weight holds.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+003A</span>
+              <span class="glyphs"><span class="ref">:</span><span>:</span></span>
+              <span class="verdict changed">Both dots squared. Still stacks on the same centres.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+003B</span>
+              <span class="glyphs"><span class="ref">;</span><span>;</span></span>
+              <span class="verdict changed">Upper dot only. The tail stays a comma, not a dot.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+0021</span>
+              <span class="glyphs"><span class="ref">!</span><span>!</span></span>
+              <span class="verdict changed">The point under the stem, squared. Stem untouched.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+003F</span>
+              <span class="glyphs"><span class="ref">?</span><span>?</span></span>
+              <span class="verdict changed">The point only. The bowl is a bowl.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+2026</span>
+              <span class="glyphs"><span class="ref">…</span><span>…</span></span>
+              <span class="verdict changed">Three squares, squared on their mean width.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+0027</span>
+              <span class="glyphs"><span class="ref">'</span><span>'</span></span>
+              <span class="verdict changed">Taper to a flat bar of constant width.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+201A</span>
+              <span class="glyphs"><span class="ref">‚</span><span>‚</span></span>
+              <span class="verdict changed">Same bar, below the baseline.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+0030</span>
+              <span class="glyphs"><span class="ref">0</span><span>0</span></span>
+              <span class="verdict changed">The zero's inner dot, squared to match.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+0069 U+006A</span>
+              <span class="glyphs"><span class="ref">ij</span><span>ij</span></span>
+              <span class="verdict changed">Both tittles, squared. The stems are untouched.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+2022</span>
+              <span class="glyphs"><span class="ref">•</span><span>•</span></span>
+              <span class="verdict">Unchanged on purpose: a list bullet is a bullet.</span>
+            </div>
+            <div class="punct-cell">
+              <span class="meta">U+2018 U+2019</span>
+              <span class="glyphs"><span class="ref">‘’</span><span>‘’</span></span>
+              <span class="verdict">Unchanged on purpose: prose needs to tell the curl's direction.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">03</span>
+          <h2>The code ligatures still fire</h2>
+          <p>
+            A terminal face earns its keep here. Every ligature JetBrains Mono ships is carried
+            through untouched, because a coder reads <code>-&gt;</code> as an arrow, not as a
+            hyphen and a bracket.
+          </p>
+        </header>
+        <div class="body">
+          <div class="lig">
+            <div class="lig-cell">
+              <span class="pair"><span class="src">-&gt;</span> →</span>
+              <span class="meta">ARROW RIGHT</span>
+            </div>
+            <div class="lig-cell">
+              <span class="pair"><span class="src">=&gt;</span> ⇒</span>
+              <span class="meta">FAT ARROW</span>
+            </div>
+            <div class="lig-cell">
+              <span class="pair"><span class="src">!=</span> ≠</span>
+              <span class="meta">NOT EQUAL</span>
+            </div>
+            <div class="lig-cell">
+              <span class="pair"><span class="src">===</span> ≡</span>
+              <span class="meta">IDENTITY</span>
+            </div>
+            <div class="lig-cell">
+              <span class="pair"><span class="src">&lt;=</span> ≤</span>
+              <span class="meta">LESS OR EQUAL</span>
+            </div>
+            <div class="lig-cell">
+              <span class="pair"><span class="src">&gt;=</span> ≥</span>
+              <span class="meta">GREATER OR EQUAL</span>
+            </div>
+            <div class="lig-cell">
+              <span class="pair"><span class="src">|&gt;</span> ▷</span>
+              <span class="meta">PIPE</span>
+            </div>
+            <div class="lig-cell">
+              <span class="pair"><span class="src">&lt;-</span> ←</span>
+              <span class="meta">LEFT ARROW</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">04</span>
+          <h2>Where each weight sits</h2>
+          <p>
+            The same sentence at every stop on the axis, so the ramp reads as one decision rather
+            than five unrelated fonts.
+          </p>
+        </header>
+        <div class="body">
+          <div class="plate">
+            <div style="display: grid; gap: 0.875rem">
+              <span style="font-weight: 300; font-size: 1.375rem"
+                >300 · The agent read the failing test and found the stale fixture.</span
+              >
+              <span style="font-weight: 400; font-size: 1.375rem"
+                >400 · The agent read the failing test and found the stale fixture.</span
+              >
+              <span style="font-weight: 500; font-size: 1.375rem"
+                >500 · The agent read the failing test and found the stale fixture.</span
+              >
+              <span style="font-weight: 600; font-size: 1.375rem"
+                >600 · The agent read the failing test and found the stale fixture.</span
+              >
+              <span style="font-weight: 800; font-size: 1.375rem"
+                >800 · The agent read the failing test and found the stale fixture.</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <p class="footer-note">
+        Back to <a href="./index.html">the family</a>, or see it
+        <a href="./surfaces.html">in the app's own surfaces</a>.
+      </p>
+    </main>
+
+    <script src="./_shell.js"></script>
+    <script>
+      window.CIOShell.render('alphabet.html')
+    </script>
+  </body>
+</html>

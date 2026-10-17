@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oven Mono · canvas</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="study-bar" id="bar"></header>
+    <main class="shell">
+      <h1 class="study-title">Oven Mono, the whole study</h1>
+      <p class="study-note">
+        Three screens and the argument they make: the family and its one device, every character
+        with its reference, then the same binary in the app's own surfaces.
+      </p>
+    </main>
+    <main data-cio-canvas data-cio-columns="2">
+      <section
+        data-cio-frame="index.html"
+        data-cio-title="The family"
+        data-cio-caption="The real binary, its weights, and the dot device"
+      ></section>
+      <section
+        data-cio-frame="alphabet.html"
+        data-cio-title="Alphabet"
+        data-cio-caption="Every character against what ships today, plus the ligatures"
+      ></section>
+      <section
+        data-cio-frame="surfaces.html"
+        data-cio-title="In the app"
+        data-cio-caption="Rail, composer, editor, terminal and the lockup at real sizes"
+      ></section>
+      <section
+        data-cio-frame="index.html"
+        data-cio-title="The family, phone"
+        data-cio-width="390"
+      ></section>
+    </main>
+    <script src="./_shell.js"></script>
+    <script>
+      window.CIOShell.render('canvas.html')
+    </script>
+    <script src="/__cio/canvas.js"></script>
+  </body>
+</html>

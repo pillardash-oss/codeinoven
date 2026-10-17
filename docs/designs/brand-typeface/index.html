@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oven Mono · the family</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .hero-plate {
+        padding: 2.25rem 1.5rem 1.75rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+      }
+
+      .hero-lockup {
+        display: flex;
+        align-items: baseline;
+        gap: 0.875rem;
+        flex-wrap: wrap;
+      }
+
+      .hero-lockup .word {
+        font-size: clamp(2.5rem, 9vw, 5.5rem);
+        font-weight: 300;
+        letter-spacing: -0.045em;
+        line-height: 0.95;
+      }
+
+      .hero-lockup .weight {
+        font-size: 0.6875rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+      }
+
+      .hero-meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+        gap: 1px;
+        margin-top: 1.75rem;
+        border-top: 1px solid var(--color-border);
+        background: var(--color-border);
+      }
+
+      .hero-meta div {
+        padding: 0.75rem 0 0;
+        background: var(--color-surface);
+        font-size: 0.75rem;
+        color: var(--color-muted);
+      }
+
+      .hero-meta b {
+        display: block;
+        font-size: 1.125rem;
+        font-weight: 500;
+        color: var(--color-foreground);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* The dot device. Four cells, each one dot at a size the app actually uses. */
+      .dots {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .dot-cell {
+        background: var(--color-surface);
+        padding: 1.25rem 1rem;
+      }
+
+      .dot-cell .pair {
+        display: flex;
+        align-items: baseline;
+        gap: 0.5rem;
+        font-size: 2.25rem;
+        font-weight: 300;
+        line-height: 1.1;
+      }
+
+      .dot-cell .pair .ref {
+        font-family: var(--font-reference);
+        color: var(--color-caption);
+      }
+
+      .dot-cell .pair .ours {
+        color: var(--color-foreground);
+      }
+
+      .dot-cell p {
+        margin: 0.625rem 0 0;
+        font-size: 0.6875rem;
+        line-height: 1.55;
+        color: var(--color-muted);
+      }
+
+      .dot-cell .cp {
+        font-size: 0.625rem;
+        letter-spacing: 0.08em;
+        color: var(--color-caption);
+      }
+
+      .weights {
+        display: grid;
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .weight-row {
+        display: grid;
+        grid-template-columns: 5.5rem minmax(0, 1fr);
+        gap: 1rem;
+        align-items: baseline;
+        padding: 0.875rem 1rem;
+        background: var(--color-surface);
+      }
+
+      .weight-row .name {
+        font-size: 0.625rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .weight-row .line {
+        font-size: 1.5rem;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+        overflow-x: auto;
+      }
+
+      .compare-grid {
+        display: grid;
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .compare-row {
+        display: grid;
+        grid-template-columns: 7.5rem minmax(0, 1fr);
+        gap: 1rem;
+        padding: 0.875rem 1rem;
+        background: var(--color-surface);
+        align-items: baseline;
+      }
+
+      .compare-row .who {
+        font-size: 0.625rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+      }
+
+      .compare-row .line {
+        font-size: 1.375rem;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+        overflow-x: auto;
+      }
+
+      .compare-row .line.ref {
+        font-family: var(--font-reference);
+        font-weight: 200;
+        color: var(--color-muted);
+      }
+
+      .compare-row .line.ours {
+        font-weight: 300;
+      }
+
+      .grades {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .grade {
+        background: var(--color-surface);
+        padding: 1rem;
+      }
+
+      .grade h3 {
+        font-size: 0.75rem;
+        font-weight: 500;
+        letter-spacing: 0;
+      }
+
+      .grade .sizes {
+        margin-top: 0.625rem;
+      }
+
+      .grade .sizes span {
+        display: block;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        letter-spacing: -0.01em;
+      }
+
+      .grade .note {
+        margin: 0.625rem 0 0;
+        font-size: 0.625rem;
+        color: var(--color-caption);
+        line-height: 1.5;
+      }
+
+      .why {
+        display: grid;
+        gap: 0.75rem;
+        max-width: 46rem;
+      }
+
+      .why div {
+        display: grid;
+        grid-template-columns: 1.25rem minmax(0, 1fr);
+        gap: 0.75rem;
+        font-size: 0.8125rem;
+        line-height: 1.65;
+        color: var(--color-muted);
+        font-weight: 300;
+      }
+
+      .why .n {
+        color: var(--color-caption);
+        font-size: 0.6875rem;
+        padding-top: 0.2rem;
+      }
+
+      .why b {
+        color: var(--color-foreground);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="study-bar" id="bar"></header>
+
+    <main class="shell">
+      <section class="masthead">
+        <div class="kicker"><span class="dot"></span>CodeInOven typeface · v1.000</div>
+        <h1 class="study-title">Oven Mono</h1>
+        <p class="study-note">
+          A real font file, not a drawing. It is built on the skeleton everyone already reads all
+          day, <strong>JetBrains Mono</strong>, and then finished the way the mark is built: every
+          dot becomes a square cut, every ASCII quote becomes a flat bar, and the light end stops
+          being a hairline. Nothing else moves, so no line of the app reflows when it lands.
+        </p>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">01</span>
+          <h2>The face at the size it will be read</h2>
+        </header>
+        <div class="body">
+          <div class="hero-plate">
+            <div class="hero-lockup">
+              <span class="word">CodeInOven</span>
+              <span class="weight">300 · 400 · 500 · 600 · 800</span>
+            </div>
+            <p class="specimen sm" style="margin: 1.25rem 0 0; color: var(--color-muted)">
+              The agent writes the code. You read it, at nine in the morning, for four hours.
+            </p>
+            <div class="hero-meta">
+              <div><b>600</b>advance, every glyph</div>
+              <div><b>550</b>x-height</div>
+              <div><b>1000</b>em</div>
+              <div><b>297</b>Latin codepoints bundled</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">02</span>
+          <h2>The one device: the dot is the knob</h2>
+          <p>
+            The mark is a squared vessel with a gold knob, and its shelf is a bar cut flat. So the
+            face squares its dots. A square reads heavier than a circle of the same width, so each
+            one is cut to 0.86 of its circle to hold the same weight of ink. The left glyph in each
+            cell is what ships today.
+          </p>
+        </header>
+        <div class="body">
+          <div class="dots">
+            <div class="dot-cell">
+              <span class="cp">U+002E full stop</span>
+              <div class="pair"><span class="ref">.</span><span class="ours">.</span></div>
+              <p>A statement ends on a corner, the way the mark's shelf ends.</p>
+            </div>
+            <div class="dot-cell">
+              <span class="cp">U+003A colon</span>
+              <div class="pair"><span class="ref">:</span><span class="ours">:</span></div>
+              <p>Two cut squares. The pair still stacks exactly as before.</p>
+            </div>
+            <div class="dot-cell">
+              <span class="cp">U+0021 exclamation</span>
+              <div class="pair"><span class="ref">!</span><span class="ours">!</span></div>
+              <p>The stem is untouched. Only the point under it is squared.</p>
+            </div>
+            <div class="dot-cell">
+              <span class="cp">U+0027 apostrophe</span>
+              <div class="pair"><span class="ref">'</span><span class="ours">'</span></div>
+              <p>The taper becomes a bar of constant width, cut flat at both ends.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">03</span>
+          <h2>Every weight, and none of them a hairline</h2>
+          <p>
+            The app ships at weight 200 today, which is a hairline on a dark plate and the first
+            thing that strains the eye in a long session. The family starts at 300 and gives the
+            interface a slightly heavier default, with 800 at the top for headings.
+          </p>
+        </header>
+        <div class="body">
+          <div class="weights">
+            <div class="weight-row">
+              <span class="name">300 light</span>
+              <span class="line" style="font-weight: 300">Terminal, editor, prose · the new default</span>
+            </div>
+            <div class="weight-row">
+              <span class="name">400 regular</span>
+              <span class="line" style="font-weight: 400">Terminal, editor, prose · the new default</span>
+            </div>
+            <div class="weight-row">
+              <span class="name">500 medium</span>
+              <span class="line" style="font-weight: 500">Selected rows, panel titles, active tabs</span>
+            </div>
+            <div class="weight-row">
+              <span class="name">600 semibold</span>
+              <span class="line" style="font-weight: 600">Section headings and dialog titles</span>
+            </div>
+            <div class="weight-row">
+              <span class="name">800 extrabold</span>
+              <span class="line" style="font-weight: 800">The wordmark and nothing else</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">04</span>
+          <h2>Against what ships today, at the same size</h2>
+          <p>
+            Both faces are drawn on a 1000 unit em with a 600 advance, so a line occupies the same
+            box in either. Oven Mono wears the same letterforms by construction, so the difference
+            you are meant to see is the punctuation, not the alphabet.
+          </p>
+        </header>
+        <div class="body">
+          <div class="compare-grid">
+            <div class="compare-row">
+              <span class="who">Ships today</span>
+              <span class="line ref">const ok = env.name === 'prod'; // 1.0</span>
+            </div>
+            <div class="compare-row">
+              <span class="who">Oven Mono</span>
+              <span class="line ours">const ok = env.name === 'prod'; // 1.0</span>
+            </div>
+            <div class="compare-row">
+              <span class="who">Ships today</span>
+              <span class="line ref" style="font-size: 0.8125rem"
+                >git rebase -i HEAD~3 &amp;&amp; bun run check:types</span
+              >
+            </div>
+            <div class="compare-row">
+              <span class="who">Oven Mono</span>
+              <span class="line ours" style="font-size: 0.8125rem"
+                >git rebase -i HEAD~3 &amp;&amp; bun run check:types</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">05</span>
+          <h2>Legibility at the sizes the app really uses</h2>
+          <p>
+            Interface type, code and terminal output, in the sizes this app sets them. Each line is
+            set at its real value, so what you read here is what a thread looks like.
+          </p>
+        </header>
+        <div class="body">
+          <div class="grades">
+            <div class="grade">
+              <h3>Conversation body</h3>
+              <div class="sizes" style="font-size: 0.9375rem; font-weight: 300; line-height: 1.65">
+                <span>The agent read the failing test and</span>
+                <span>found the stale fixture. It rewrote</span>
+                <span>the expectation and all 42 tests pass.</span>
+              </div>
+              <p class="note">0.9375rem, weight 300. The longest reading session.</p>
+            </div>
+            <div class="grade">
+              <h3>Interface label</h3>
+              <div class="sizes" style="font-size: 0.8125rem">
+                <span>Refining the icon set (round eleven)</span>
+                <span>Reviewing 3 changed files</span>
+                <span>Waiting for approval</span>
+              </div>
+              <p class="note">0.8125rem. Rail rows, file names, tabs.</p>
+            </div>
+            <div class="grade">
+              <h3>Code</h3>
+              <div class="sizes" style="font-size: 0.75rem; line-height: 1.7">
+                <span>if (!res.ok) throw new AppError({</span>
+                <span>&nbsp;&nbsp;code: res.status, cause: body</span>
+                <span>})</span>
+              </div>
+              <p class="note">0.75rem. Where the dots and the parens must stay apart.</p>
+            </div>
+            <div class="grade">
+              <h3>Terminal</h3>
+              <div class="sizes" style="font-size: 0.75rem; line-height: 1.7">
+                <span>$ bun run check:types</span>
+                <span>src/main/ipc/handlers.ts:42:7</span>
+                <span>$ echo "0.1 + 0.2 = 0.3?"</span>
+              </div>
+              <p class="note">0.75rem. Narrow marks, one cell each, no ligature drift.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">06</span>
+          <h2>Why this is the answer, and what it costs</h2>
+        </header>
+        <div class="body">
+          <div class="why">
+            <div>
+              <span class="n">01</span>
+              <span
+                ><b>It is comfortable because it is not new.</b> The skeleton is JetBrains Mono,
+                which this app already sets everything in. A face invented from scratch has to earn
+                four hours of reading before it earns a brand; this one inherits that and changes
+                only the marks the brand actually owns.</span
+              >
+            </div>
+            <div>
+              <span class="n">02</span>
+              <span
+                ><b>It renders everywhere, from one file.</b> Oven Mono is a variable TrueType
+                font: the same binary installs in the editor, the terminal and the OS, and a 55 KB
+                Latin woff2 covers the app. Fixed 600 advance, so nothing reflows.</span
+              >
+            </div>
+            <div>
+              <span class="n">03</span>
+              <span
+                ><b>The light end is legible.</b> Starting at 300 instead of 200 removes the
+                hairline that makes a dark plate fatiguing, which is a comfort change as much as a
+                brand one.</span
+              >
+            </div>
+            <div>
+              <span class="n">04</span>
+              <span
+                ><b>What it concedes.</b> It is a derivative of an open font, not a drawn original,
+                so the brand lives in the punctuation and the weight ramp rather than in the
+                alphabet. If you want a face whose letterforms are yours alone, that is a
+                multi-month drawing project and this is not it.</span
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <p class="footer-note">
+        Built by <code>.cio/tmp/typeface/build/oven_mono.py</code> from JetBrains Mono v2.304 under
+        the SIL Open Font License 1.1, which permits modification and redistribution provided the
+        reserved name is not used; this family is therefore named Oven Mono and carries the original
+        copyright alongside its own. Files:
+        <code>docs/designs/brand-typeface/fonts/oven-mono-variable.ttf</code> (installable) and
+        <code>oven-mono-latin.woff2</code> (bundled). Read the
+        <a href="./alphabet.html">full alphabet</a> or see it
+        <a href="./surfaces.html">in the app's own surfaces</a>.
+      </p>
+    </main>
+
+    <script src="./_shell.js"></script>
+    <script>
+      window.CIOShell.render('index.html')
+    </script>
+  </body>
+</html>

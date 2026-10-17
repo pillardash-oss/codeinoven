@@ -1,0 +1,90 @@
+/* Mirror of the @theme and .dark token blocks in src/renderer/app.css.
+   The study must not drift from the app, so these values are copied, never invented.
+   The extra tokens below are study-owned: the gold the mark's knob uses, and the plates
+   the type is proofed on. Both default to values the app already ships. */
+
+/* Oven Mono, the real binary this study is about. Two faces of the same file: a small
+   Latin woff2 the app can bundle, and the full variable ttf a terminal installs. */
+@font-face {
+  font-family: 'Oven Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 800;
+  src: url('./fonts/oven-mono-latin.woff2') format('woff2-variations');
+}
+
+/* Let the full binary be installed system-wide from this folder too. */
+@font-face {
+  font-family: 'Oven Mono Full';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 800;
+  src: url('./fonts/oven-mono-variable.ttf') format('truetype-variations');
+}
+
+/* What ships today, for the honest comparison. */
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url('./fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+:root {
+  --color-app: #f7f6f2;
+  --color-surface: #ffffff;
+  --color-elevated: #f0efea;
+  --color-overlay: #e8e7e2;
+  --color-raised: #edece7;
+  --color-selected: #f0efea;
+  --color-foreground: #081825;
+  --color-muted: #4a5568;
+  --color-dimmed: #8b95a5;
+  --color-primary: #081825;
+  --color-primary-hover: #0d2438;
+  --color-on-primary: #f7f6f2;
+  --color-accent: #d4af37;
+  --color-accent-hover: #c4a030;
+  --color-on-accent: #081825;
+  --color-danger: #dc2626;
+  --color-warning: #d97706;
+  --color-info: #2563eb;
+  --color-success: #16a34a;
+  --color-border: #e2e1dc;
+  --color-border-strong: #c8c7c2;
+  --font-app: 'Oven Mono', 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --font-mono: var(--font-app);
+  --font-reference: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  /* The gold the mark's knob is drawn with, and the two plates type is proofed on. */
+  --accent-gold: #d4af37;
+  --plate-dark: #0b0b0d;
+  --plate-light: #f7f6f2;
+  /* The app's --color-dimmed measures 2.8:1 on the light plate and 3.1:1 on the dark one,
+     which is below AA for the caption text this study sets. Small labels therefore take a
+     study-owned tone that clears 4.5:1 on every plate in its theme. This is a study
+     correction, not a change to the app: tokens.css above stays a mirror. */
+  --color-caption: #5f6b7a;
+  color-scheme: light;
+}
+
+.dark {
+  --color-app: #0b0b0d;
+  --color-surface: #141417;
+  --color-elevated: #1c1c20;
+  --color-overlay: #242429;
+  --color-raised: #202025;
+  --color-selected: #2c2c33;
+  --color-foreground: #f5f4f0;
+  --color-muted: #9d9da6;
+  --color-dimmed: #5f5f68;
+  --color-primary: #f5f4f0;
+  --color-primary-hover: #e5e4df;
+  --color-on-primary: #0b0b0d;
+  --color-info: #7ba3d4;
+  --color-success: #34d399;
+  --color-border: #27272c;
+  --color-border-strong: #3b3b42;
+  --color-caption: #9d9da6;
+  color-scheme: dark;
+}
