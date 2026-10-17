@@ -600,6 +600,7 @@ import {
   mermaidValidationFailureMessage,
   mermaidValidationNotice,
   rejectedMermaidMessage,
+  terminalAssistantMessage,
   textForMessage,
   titleAttemptsFromDriver
 } from './chat-engine/chat-engine-message-text'
@@ -26861,6 +26862,11 @@ export class ChatEngine {
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
         .find((message) => message.role === 'assistant')
+      // The turn's answer is the last assistant message that actually carries one.
+      // A turn whose final assistant message is only a task-list publication (the
+      // reconcile continuation that corrects a lagging list and, as instructed,
+      // adds no prose) must still be read as the answer the agent gave before it.
+      const terminalAssistant = terminalAssistantMessage(messages, turnAssistant)
       const turnSelection = this.sessionModelIds.get(sessionId)
       const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
@@ -26947,7 +26953,7 @@ export class ChatEngine {
       }
       const awaitingUser = this.sessionAwaitsUserInput(sessionId)
       const engineeringContractActive = this.engineeringImplementationSessions.has(sessionId)
-      const contractResponse = turnAssistant ? assistantText(turnAssistant).trim() : ''
+      const contractResponse = terminalAssistant ? assistantText(terminalAssistant).trim() : ''
       const contractBlocked =
         engineeringContractActive &&
         hasTerminalSpecContractMarker(contractResponse, SPEC_CONTRACT_BLOCKED_MARKER)
@@ -26960,8 +26966,9 @@ export class ChatEngine {
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
-        (!turnAssistant ||
-          (!assistantText(turnAssistant).trim() && turnAssistant.structuredOutput === undefined))
+        (!terminalAssistant ||
+          (!assistantText(terminalAssistant).trim() &&
+            terminalAssistant.structuredOutput === undefined))
       const contractContinuationRequired =
         engineeringContractActive &&
         !failure &&
@@ -26978,14 +26985,14 @@ export class ChatEngine {
         failure = INCOMPLETE_TURN_MESSAGE
       }
       let mermaidFailures: MermaidValidationFailure[] = []
-      if (!failure && !awaitingUser && !suppressTerminalAnswer && turnAssistant) {
-        const validation = await validateMermaidOutput(assistantText(turnAssistant))
+      if (!failure && !awaitingUser && !suppressTerminalAnswer && terminalAssistant) {
+        const validation = await validateMermaidOutput(assistantText(terminalAssistant))
         mermaidFailures = validation.failures
         if (mermaidFailures.length === 0) {
           this.mermaidRepairAttempts.delete(sessionId)
         } else {
           const rejectionReason = mermaidValidationFailureMessage(mermaidFailures)
-          const rejected = rejectedMermaidMessage(turnAssistant, rejectionReason)
+          const rejected = rejectedMermaidMessage(terminalAssistant, rejectionReason)
           classifiedMessages = classifiedMessages.map((message) =>
             message.id === rejected.id ? rejected : message
           )
@@ -26996,7 +27003,7 @@ export class ChatEngine {
           if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !liveThread?.settings) {
             failure = rejectionReason
             merged = mergeAgentMessages(merged, [
-              mermaidValidationNotice(turnAssistant, rejectionReason)
+              mermaidValidationNotice(terminalAssistant, rejectionReason)
             ])
           }
         }
@@ -27577,7 +27584,7 @@ export class ChatEngine {
       // the assistant's workspace, so the report outlives the evicted thread. The
       // in-app report and its notification are unchanged.
       if (finishedThread && isAssistantThread(finishedThread)) {
-        this.captureAssistantReport(finishedThread, turnAssistant, finalStatus)
+        this.captureAssistantReport(finishedThread, terminalAssistant, finalStatus)
       }
       if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {
@@ -27678,8 +27685,8 @@ export class ChatEngine {
           }
         }
       }
-      if (!failure && !contractBlocked && turnAssistant) {
-        assistantResponse = assistantMemoryDecisionContext(turnAssistant)
+      if (!failure && !contractBlocked && terminalAssistant) {
+        assistantResponse = assistantMemoryDecisionContext(terminalAssistant)
       }
     } catch (error) {
       Logger.error('history mirror failed:', error)

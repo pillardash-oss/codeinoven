@@ -69,7 +69,8 @@ export function piCoreToolsEventsSource(): string {
       'Your turn is ending, but the task list you last published still shows unfinished work: ' +
       unfinished.join('; ') +
       '. The task card is how the user follows the run, and a run that ends on that list reads as abandoned work. Publish the final list before you finish: call ' +
-      '${CIO_TODO_WRITE_TOOL_NAME} once more with the list as it really stands, marking every task you completed as completed and dropping the tasks you no longer intend to do (an empty list clears them). Only end your turn once the list matches what you actually did.'
+      '${CIO_TODO_WRITE_TOOL_NAME} once more with the list as it really stands, marking every task you completed as completed and dropping the tasks you no longer intend to do (an empty list clears them). ' +
+      'When the work is truly complete and only the list lagged, make that one ${CIO_TODO_WRITE_TOOL_NAME} call and nothing else: add no prose and no other tool call. The app keeps the final answer you already gave the user and shows it, so any words you add here would only replace that answer with a redundant second version of it. Write text only if something material truly changed since that answer, and never mark a task complete that you did not actually finish. Only end your turn once the list matches what you actually did.'
     )
   }
 
