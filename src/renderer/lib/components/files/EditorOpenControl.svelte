@@ -49,7 +49,7 @@
 <div class="flex h-7 items-stretch overflow-hidden border border-border bg-elevated">
   <button
     type="button"
-    class="flex min-w-0 items-center gap-1.5 px-2 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+    class="flex w-7 items-center justify-center text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
     aria-label={`Open file in ${preferredName}`}
     title={`Open in ${preferredName}`}
     disabled={disabled || opening}
@@ -62,7 +62,6 @@
     {:else}
       <CioWindow size={13} class="shrink-0" />
     {/if}
-    <span>Open</span>
   </button>
 
   <DropdownMenu.Root>
