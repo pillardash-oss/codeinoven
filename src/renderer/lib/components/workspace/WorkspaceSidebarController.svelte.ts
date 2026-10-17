@@ -2,6 +2,7 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
+import { RowPageBudget } from '$lib/components/shared/RowPageBudget.svelte'
 import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
 import { isOrchestrationChildThread, type Project, type Thread } from '$shared/types'
 import type { ThreadSearchResult } from '$shared/types'
@@ -23,13 +24,17 @@ const MAX_FILTERED_FANOUT = 12
  * and call into one object.
  */
 export class WorkspaceSidebarController {
-  /** Rows shown per group before the "Show more" affordance grows the budget. */
+  /** Rows shown per group before the "Show more" affordance grows the budget.
+   *  A project folder shows a short head; the thread-family lists (the timeline,
+   *  chats, assistant tasks) page at the shared `THREAD_LIST_PAGE_SIZE` instead,
+   *  passed explicitly at each call site. */
   readonly threadsPerPage = 5
 
   // Built-in Set/Map are not reactive in runes mode   mutations must go through SvelteSet/SvelteMap.
   expandedFolders = new SvelteSet<string>()
 
-  private readonly threadShowCount = new SvelteMap<string, number>()
+  /** The one paging budget the sidebar's lists draw from; see `RowPageBudget`. */
+  private readonly rowBudget = new RowPageBudget(this.threadsPerPage)
 
   // Per-project thread search (activation + query)
   readonly projectSearchOpen = new SvelteSet<string>()
@@ -73,22 +78,20 @@ export class WorkspaceSidebarController {
   }
 
   getVisibleCount(groupId: string, pageSize: number = this.threadsPerPage): number {
-    return this.threadShowCount.get(groupId) ?? pageSize
+    return this.rowBudget.visibleCount(groupId, pageSize)
   }
 
   showMoreThreads(groupId: string, total: number, pageSize: number = this.threadsPerPage): void {
-    const current = this.threadShowCount.get(groupId) ?? pageSize
-    this.threadShowCount.set(groupId, Math.min(current + pageSize, total))
+    this.rowBudget.showMore(groupId, total, pageSize)
   }
 
   showLessThreads(groupId: string, pageSize: number = this.threadsPerPage): void {
-    this.threadShowCount.set(groupId, pageSize)
+    this.rowBudget.showLess(groupId, pageSize)
   }
 
   /** Raise a group's row budget so a specific row number renders. */
   ensureRowVisible(groupId: string, needed: number, pageSize: number = this.threadsPerPage): void {
-    const current = this.threadShowCount.get(groupId) ?? pageSize
-    if (needed > current) this.threadShowCount.set(groupId, needed)
+    this.rowBudget.ensureVisible(groupId, needed, pageSize)
   }
 
   /**
@@ -104,12 +107,7 @@ export class WorkspaceSidebarController {
     activeThreadId: string | null,
     pageSize: number = this.threadsPerPage
   ): Thread[] {
-    const count = this.getVisibleCount(groupId, pageSize)
-    const head = threads.slice(0, count)
-    if (!activeThreadId) return [...head]
-    if (head.some((thread) => thread.id === activeThreadId)) return [...head]
-    const active = threads.find((thread) => thread.id === activeThreadId)
-    return active ? [...head, active] : [...head]
+    return this.rowBudget.visibleRows(groupId, threads, activeThreadId, pageSize)
   }
 
   /** Rows still hidden behind "Show more", excluding the artificial active row. */
@@ -121,7 +119,7 @@ export class WorkspaceSidebarController {
   ): number {
     void groupId
     void pageSize
-    return Math.max(0, threads.length - visible.length)
+    return this.rowBudget.hiddenCount(threads, visible)
   }
 
   /** Grow a group's row budget by freshly fetched rows, capped at the real total. */
@@ -131,8 +129,7 @@ export class WorkspaceSidebarController {
     cap: number,
     pageSize: number = this.threadsPerPage
   ): void {
-    const current = this.threadShowCount.get(groupId) ?? pageSize
-    this.threadShowCount.set(groupId, Math.min(current + extra, cap))
+    this.rowBudget.extend(groupId, extra, cap, pageSize)
   }
 
   clearProjectSearch(projectId: string): void {

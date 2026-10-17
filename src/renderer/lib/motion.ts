@@ -116,6 +116,22 @@ export function listRowArrive(): FadeParams {
   return { duration: motionDuration(LIST_ROW_ARRIVE_MS) }
 }
 
+/**
+ * The arrangement string a {@link ListRowReflow} compares between passes: the
+ * rows a list is about to draw, grouped into its sections, in render order.
+ *
+ * Callers hand the same settled lists they render, so a capture and its play
+ * always describe the list on screen: reading the string is what subscribes the
+ * caller's effect to the list, and comparing it is what keeps a recompute that
+ * moved no row off the layout. One builder for every list, so a new list cannot
+ * invent its own format and compare unequal against itself every tick.
+ */
+export function rowArrangement(
+  sections: readonly { key: string; rowKeys: readonly string[] }[]
+): string {
+  return sections.map((section) => `${section.key}#${section.rowKeys.join(',')}`).join('|')
+}
+
 /** How long a page of history takes to settle into place after a load, and how
  *  far it travels. The rate is the app's single arrival rate (160 ms of
  *  easeOutCubic); the travel is longer than the 4 px a row takes because a page of

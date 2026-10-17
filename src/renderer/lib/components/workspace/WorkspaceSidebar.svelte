@@ -14,9 +14,9 @@
   import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
   import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
   import { prefersReducedMotion } from 'svelte/motion'
-  import { fade, slide, type FadeParams } from 'svelte/transition'
+  import { fade, slide } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
-  import { ListRowReflow, listRowArrive } from '$lib/motion'
+  import { ListRowReflow, rowArrangement } from '$lib/motion'
   import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -26,6 +26,8 @@
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ScopeActionsMenu from '$lib/components/shared/ScopeActionsMenu.svelte'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
+  import SidebarListRow from '$lib/components/shared/SidebarListRow.svelte'
+  import { THREAD_LIST_PAGE_SIZE } from '$lib/components/shared/RowPageBudget.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadSearchResultRow from '$lib/components/shared/ThreadSearchResultRow.svelte'
   import SpecConversationSidebar from '$lib/components/specs/SpecConversationSidebar.svelte'
@@ -343,9 +345,11 @@
    * moves, so the cost of one click grew with the size of the history. One page
    * per group keeps that bounded to about a screenful while each group still
    * shows its head, and the rest stays one click (or one scroll away, through
-   * the same affordance the project folders use).
+   * the same affordance the project folders use). The depth is the shared
+   * `THREAD_LIST_PAGE_SIZE`, so a thread-family list (the timeline, chats,
+   * assistant tasks) all mount the same amount.
    */
-  const TIMELINE_PAGE_SIZE = 15
+  const TIMELINE_PAGE_SIZE = THREAD_LIST_PAGE_SIZE
 
   // Rows travel between containers, not inside one keyed list: a regrouping or a
   // project filter tears them out of one status group and builds them inside
@@ -361,9 +365,12 @@
    * did not move a row therefore measures nothing.
    */
   const threadRowArrangement = $derived(
-    threadSections
-      .map((section) => `${section.key}#${section.threads.map((thread) => thread.id).join(',')}`)
-      .join('|')
+    rowArrangement(
+      threadSections.map((section) => ({
+        key: section.key,
+        rowKeys: section.threads.map((thread) => thread.id)
+      }))
+    )
   )
 
   $effect.pre(() => {
@@ -380,9 +387,27 @@
    *  replay an entrance. Same rule the transcript uses for a landing message. */
   const threadsListAttachedAt = Date.now()
 
-  function threadsRowArrive(createdAt: number): FadeParams {
-    return createdAt > threadsListAttachedAt ? listRowArrive() : { duration: 0 }
-  }
+  // The chats list travels on the same pair of measurements as the timeline, so
+  // a recency reorder or a pin moves its rows instead of popping them. It is a
+  // flat list, so its arrangement is one section. The chats pane stays mounted
+  // while another view is on screen, and a hidden row measures zero, so the
+  // reflow skips it rather than animating a move nobody can see.
+  const chatsRowReflow = new ListRowReflow()
+  let chatsListElement = $state<HTMLElement | null>(null)
+  const chatsRowArrangement = $derived(
+    rowArrangement([{ key: 'chats', rowKeys: settledStandaloneThreads.map((thread) => thread.id) }])
+  )
+
+  $effect.pre(() => {
+    chatsRowReflow.capture(chatsListElement, scroller ?? null, chatsRowArrangement)
+  })
+
+  $effect(() => {
+    chatsRowReflow.play(chatsListElement, scroller ?? null, chatsRowArrangement)
+  })
+
+  /** When the chats list first painted; see `threadsListAttachedAt`. */
+  const chatsListAttachedAt = Date.now()
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -845,28 +870,70 @@
         {/if}
 
         {#if settledStandaloneThreads.length > 0}
-          <div class="space-y-px" role="list">
-            {#each settledStandaloneThreads.slice(0, 50) as thread (thread.id)}
-              <ThreadRow
-                {thread}
-                selected={activeThreadId === thread.id}
-                onOpen={onOpenThread}
-                {onRename}
-                {onTogglePin}
-                {onDelete}
-                {onFork}
-                onMoveThread={(draggedId, targetId, pos) => {
-                  const ordered = moveThreadInList(
-                    settledStandaloneThreads,
-                    draggedId,
-                    targetId,
-                    pos
-                  )
-                  if (ordered) void onThreadDrop(thread.projectId, ordered, draggedId)
-                }}
-              />
+          {@const chatsVisible = sidebar.visibleThreads(
+            'chats',
+            settledStandaloneThreads,
+            activeThreadId,
+            THREAD_LIST_PAGE_SIZE
+          )}
+          {@const chatsHidden = sidebar.hiddenThreadCount(
+            'chats',
+            settledStandaloneThreads,
+            chatsVisible,
+            THREAD_LIST_PAGE_SIZE
+          )}
+          <!-- One page of chats is mounted; the rest is one click away, the same
+               budget the timeline spends. The rows share the timeline's reflow
+               grid (`SidebarListRow`), so a recency reorder moves them rather
+               than popping them. -->
+          <div bind:this={chatsListElement} class="space-y-px" role="list">
+            {#each chatsVisible as thread (thread.id)}
+              <SidebarListRow
+                rowKey={thread.id}
+                createdAt={thread.createdAt}
+                attachedAt={chatsListAttachedAt}
+              >
+                <ThreadRow
+                  {thread}
+                  selected={activeThreadId === thread.id}
+                  onOpen={onOpenThread}
+                  {onRename}
+                  {onTogglePin}
+                  {onDelete}
+                  {onFork}
+                  onMoveThread={(draggedId, targetId, pos) => {
+                    const ordered = moveThreadInList(
+                      settledStandaloneThreads,
+                      draggedId,
+                      targetId,
+                      pos
+                    )
+                    if (ordered) void onThreadDrop(thread.projectId, ordered, draggedId)
+                  }}
+                />
+              </SidebarListRow>
             {/each}
           </div>
+          {#if chatsHidden > 0}
+            <button
+              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+              onclick={() =>
+                sidebar.showMoreThreads(
+                  'chats',
+                  settledStandaloneThreads.length,
+                  THREAD_LIST_PAGE_SIZE
+                )}
+            >
+              Show {chatsHidden} more
+            </button>
+          {:else if sidebar.getVisibleCount('chats', THREAD_LIST_PAGE_SIZE) > THREAD_LIST_PAGE_SIZE}
+            <button
+              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+              onclick={() => sidebar.showLessThreads('chats', THREAD_LIST_PAGE_SIZE)}
+            >
+              Show less
+            </button>
+          {/if}
         {:else if pinnedInboxThreads.length === 0}
           <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
             <CioMessage size={20} class="text-dimmed" />
@@ -983,7 +1050,11 @@
               <div class="space-y-px {section.group ? 'pb-5' : ''}" role="list">
                 {#each sectionThreads as thread (thread.id)}
                   {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
-                  <div data-row-key={thread.id} in:fade={threadsRowArrive(thread.createdAt)}>
+                  <SidebarListRow
+                    rowKey={thread.id}
+                    createdAt={thread.createdAt}
+                    attachedAt={threadsListAttachedAt}
+                  >
                     {#if result}
                       <ThreadSearchResultRow
                         {result}
@@ -1013,7 +1084,7 @@
                         }}
                       />
                     {/if}
-                  </div>
+                  </SidebarListRow>
                 {/each}
               </div>
               {#if hiddenSectionCount > 0}
