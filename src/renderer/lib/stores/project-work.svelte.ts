@@ -1,6 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { AuthoredWorkKind, ProjectWorkState } from '$shared/ipc-contract'
+import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
 import { APP_SLUG } from '$shared/brand'
 
 /**
@@ -36,6 +37,17 @@ class ProjectWorkStore {
   #states = new SvelteMap<string, ProjectWorkState>()
   /** Projects whose read is in flight, so callers share one request. */
   #pending = new Map<string, Promise<void>>()
+  /**
+   * The folder each project writes new work into.
+   *
+   * A project's own record, so it is read per project rather than kept as one
+   * app-wide value, and cached because the file tree asks about every row it draws.
+   * The app default answers until the read lands, which is what a project that
+   * never changed its folder would be told anyway.
+   */
+  #roots = new SvelteMap<string, WorkRoots>()
+  /** Projects whose roots are being read, so an explorer asks once per project. */
+  #rootsPending = new Map<string, Promise<void>>()
 
   /** The last answer for a project, or null before the first one arrives. */
   stateFor(projectId: string): ProjectWorkState | null {
@@ -45,6 +57,35 @@ class ProjectWorkStore {
   /** The folders of one kind a project holds, or an empty list before the read. */
   itemsFor(projectId: string, kind: AuthoredWorkKind): ProjectWorkState[AuthoredWorkKind] {
     return this.#states.get(projectId)?.[kind] ?? []
+  }
+
+  /** The folders a project writes new work into, or the app default before the read. */
+  rootsFor(projectId: string): WorkRoots {
+    return this.#roots.get(projectId) ?? { ...DEFAULT_WORK_ROOTS }
+  }
+
+  /** Read a project's folders once, unless a read is already in flight. */
+  ensureRoots(projectId: string): Promise<void> {
+    return this.#roots.has(projectId) ? Promise.resolve() : this.refreshRoots(projectId)
+  }
+
+  /** Read a project's folders again, which a save-path change asks for. */
+  refreshRoots(projectId: string): Promise<void> {
+    const pending = this.#rootsPending.get(projectId)
+    if (pending) return pending
+    const task = invoke('design:workRoots', projectId)
+      .then((roots) => {
+        this.#roots.set(projectId, roots)
+      })
+      .catch(() => {
+        // A project whose folders cannot be read keeps the answer it has, which
+        // at worst names the app default.
+      })
+      .finally(() => {
+        this.#rootsPending.delete(projectId)
+      })
+    this.#rootsPending.set(projectId, task)
+    return task
   }
 
   /** Last folder focused for each project and work kind, shared across threads. */
@@ -143,6 +184,8 @@ class ProjectWorkStore {
     this.#focused.delete(`${projectId}:video`)
     this.#states.delete(projectId)
     this.#pending.delete(projectId)
+    this.#roots.delete(projectId)
+    this.#rootsPending.delete(projectId)
   }
 }
 

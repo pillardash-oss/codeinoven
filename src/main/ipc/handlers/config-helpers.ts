@@ -6,11 +6,6 @@ import {
 } from '../../../lib/speech/types'
 import { THINKING_LEVEL_ORDER } from '../../../lib/thinking-presets'
 import {
-  normalizeWorkRoot,
-  workRootsConflict,
-  type WorkRoots
-} from '../../../lib/design/work-roots'
-import {
   MAX_PROTOTYPE_CDN_ORIGINS,
   normalizePrototypeCdnOrigin
 } from '../../../lib/prototypes/prototype-cdn'
@@ -200,7 +195,6 @@ const CONFIG_PATCH_FIELDS = new Set([
   'auxiliaryAgents',
   'design',
   'modelProfiles',
-  'workRoots',
   'mediaGeneration',
   'rankingJudge',
   'agentBehaviorPrompt',
@@ -370,44 +364,6 @@ const DESIGN_ASSIGNMENT_FIELDS = new Set([
  * Ids are unique because an agent resolves an assignment by id, and two rows
  * sharing one would make the call ambiguous.
  */
-/**
- * The two authored-work folders, stored normalized.
- *
- * Normalized here rather than at every reader so one spelling reaches the file:
- * `designs/`, `./designs` and `designs///` are one setting, and the relocation
- * that follows a change compares two strings that are already canonical. A pair
- * where one root is the other, or sits inside it, is refused outright, because a
- * folder under both would be classified as whichever kind is tested first and the
- * user would see a design listed as a composition.
- */
-function validateWorkRoots(value: unknown): WorkRoots {
-  if (!isRecord(value)) throw new TypeError('Work folders must be an object')
-  for (const field of Object.keys(value)) {
-    if (field !== 'design' && field !== 'video') {
-      throw new TypeError(`Unsupported work folders field: ${field}`)
-    }
-  }
-  const design = normalizeWorkRoot(value.design)
-  if (!design) {
-    throw new TypeError(
-      'The design folder must be a project-relative path such as ".cio/designs" or "designs"'
-    )
-  }
-  const video = normalizeWorkRoot(value.video)
-  if (!video) {
-    throw new TypeError(
-      'The video folder must be a project-relative path such as ".cio/videos" or "videos"'
-    )
-  }
-  const roots: WorkRoots = { design, video }
-  if (workRootsConflict(roots)) {
-    throw new TypeError(
-      'The design and video folders must differ, and neither may sit inside the other'
-    )
-  }
-  return roots
-}
-
 /** Fields one model profile may carry, and no others. */
 const MODEL_PROFILE_FIELDS = new Set([
   'id',
@@ -1117,10 +1073,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('modelProfiles' in value) {
     patch.modelProfiles = validateModelProfiles(value.modelProfiles)
-  }
-
-  if ('workRoots' in value) {
-    patch.workRoots = validateWorkRoots(value.workRoots)
   }
 
   if ('mediaGeneration' in value) {

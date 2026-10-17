@@ -4,6 +4,7 @@
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import type { ProjectFileEntry } from '$shared/types'
   import type { ProjectFilesState } from '$lib/stores/project-files.svelte'
+  import type { WorkRoots } from '$shared/design/work-roots'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FolderTypeIcon from './FolderTypeIcon.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
@@ -43,6 +44,8 @@
     onOpenInTerminal: (entry: ProjectFileEntry) => void
     cioCleanupExcluded: boolean
     onToggleCioCleanupExclusion: (entry: ProjectFileEntry) => void
+    /** The folders this row's project writes designed work into. */
+    workRoots: WorkRoots
     onRowClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowDoubleClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowContextMenu: (entry: ProjectFileEntry) => void
@@ -77,6 +80,7 @@
     onOpenInTerminal,
     cioCleanupExcluded,
     onToggleCioCleanupExclusion,
+    workRoots,
     onRowClick,
     onRowDoubleClick,
     onRowContextMenu,
@@ -159,6 +163,7 @@
     onOpenInBrowser={() => onOpenInBrowser(entry)}
     onOpenInTerminal={() => onOpenInTerminal(entry)}
     {cioCleanupExcluded}
+    {workRoots}
     onToggleCioCleanupExclusion={() => onToggleCioCleanupExclusion(entry)}
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}

@@ -79,7 +79,6 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
-  import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
@@ -1426,17 +1425,14 @@
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
           <p class="mt-0.5 text-sm text-muted">
-            Where design and video work is saved, which model does each kind of it, and the optional
-            video pack.
+            Which model does each kind of design and video work, and the optional video pack. Save
+            folders belong to each project and are changed from its design or video board.
           </p>
           {#if error}
             <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
-        </div>
-        <div class="mb-6">
-          <DesignWorkFoldersSettings {config} {settingsReady} {updateConfig} />
         </div>
         <div class="mb-6">
           <MediaGenerationSettings {config} {settingsReady} {updateConfig} />

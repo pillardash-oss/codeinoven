@@ -34,7 +34,6 @@ import {
   normalizeCioCleanupExcludedCategories
 } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
-import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
 import {
   CIO_PROMPT_DEFINITIONS,
   CIO_PROMPT_MAX_LENGTH,
@@ -101,7 +100,6 @@ const DEFAULT_CONFIG: AppConfig = {
   auxiliaryAgents: {},
   design: { assignments: [] },
   modelProfiles: [],
-  workRoots: { ...DEFAULT_WORK_ROOTS },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -261,10 +259,8 @@ export class StorageEngine {
       mediaGeneration: {
         providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
       },
-      // Read tolerantly: a value a future version wrote, a hand-edited path, or a
-      // pair where one root sits inside the other arrives as a working app with
-      // the defaults rather than as a failed start.
-      workRoots: workRootsFromConfig(config ?? {}),
+      // Read tolerantly, so a hand-edited entry list arrives as a working app
+      // rather than as a failed start.
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),

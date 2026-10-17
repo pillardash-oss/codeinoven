@@ -16,7 +16,6 @@
  */
 
 import type { ScreenCanvasFrame } from '../design/screen-canvas'
-import type { WorkRoots } from '../design/work-roots'
 
 /** Which authored-work session a thread is in. */
 export type AuthoredWorkKind = 'design' | 'video'
@@ -94,7 +93,7 @@ export interface ThreadDesignState {
   /** Project-relative folder a preview should open when none is chosen. */
   defaultDirectory: string
   /**
-   * The folder this kind of work is written into, which is the user's setting.
+   * The folder this kind of work is written into, which is the project's record.
    *
    * The board labels itself with it, so it has to come from main rather than from
    * the renderer's copy of the config: the two can be a save apart, and a board
@@ -117,40 +116,6 @@ export interface ProjectWorkState {
   design: DesignEntry[]
   /** Composition folders in the project's video root, newest first. */
   video: DesignEntry[]
-}
-
-/**
- * What one changed work folder moved.
- *
- * A root is app-wide, so one change touches every project. This is the account of
- * it the user gets: how much moved, and what was deliberately left alone.
- */
-export interface WorkRootRelocationReport {
-  kind: AuthoredWorkKind
-  /** The folder the work was in. */
-  from: string
-  /** The folder it moved to. */
-  to: string
-  /** Projects that held work in the old folder and were visited. */
-  projects: number
-  /** Folders moved into the new folder. */
-  moved: number
-  /** Thread records re-pointed at their folder's new path. */
-  rebased: number
-  /** Folders left in place because the destination already had that name. */
-  clashes: { project: string; name: string }[]
-  /** Folders that could not be moved at all. */
-  failed: { project: string; name: string; reason: string }[]
-}
-
-/** The folders authored work is written into, and what the last change moved. */
-export interface WorkRootState {
-  /** The folders in use now. */
-  roots: WorkRoots
-  /** The folders Reset returns to. */
-  defaults: WorkRoots
-  /** What the last change moved, empty until a root is changed. */
-  reports: WorkRootRelocationReport[]
 }
 
 /** The result of showing a design in the in-app browser. */
@@ -402,13 +367,23 @@ export interface ScreenCanvasState {
   sketchTitles: string[]
 }
 
+/**
+ * How far a save-path change reaches, stated by the caller that asked for it.
+ *
+ * One change is either about a single folder or about the project, and there is
+ * no third combination to guess: `work` moves the one folder the change names and
+ * leaves the project's folder for new work alone, `project` points the project at
+ * the new folder and moves every folder of that kind into it. The two sides used
+ * to be spelled as separate booleans, which let a request mean one thing on the
+ * board and another in the settings page.
+ */
+export type WorkDetailsScope = 'work' | 'project'
+
 export interface UpdateWorkDetails {
   kind: AuthoredWorkKind
   directory: string
   root?: string
-  thisOnly: boolean
-  /** Settings can update the project default without selecting or moving a folder. */
-  newOnly?: boolean
+  scope: WorkDetailsScope
   name?: string
 }
 export interface UpdateWorkDetailsResult {

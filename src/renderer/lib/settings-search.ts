@@ -3,7 +3,6 @@ import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
 import CioCloud from '$lib/components/icons/cio/CioCloud.svelte'
 import CioDisplay from '$lib/components/icons/cio/CioDisplay.svelte'
 import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
 import CioHeartPulse from '$lib/components/icons/cio/CioHeartPulse.svelte'
 import CioKeyboard from '$lib/components/icons/cio/CioKeyboard.svelte'
 import CioMemory from '$lib/components/icons/cio/CioMemory.svelte'
@@ -92,24 +91,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Agent names, audits, and per-agent behavior.',
     keywords: ['workers', 'audit'],
     icon: CioTeam
-  },
-  {
-    id: 'design-work-folders',
-    section: 'design',
-    blockId: 'design-work-folders',
-    title: 'Work folders',
-    description: 'Where designs and videos are saved, and whether Git tracks them.',
-    keywords: [
-      'design folder',
-      'video folder',
-      'save path',
-      'version control',
-      'git',
-      'commit',
-      'move',
-      'output'
-    ],
-    icon: CioFiles
   },
   {
     id: 'design-generation',

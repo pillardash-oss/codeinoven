@@ -29,6 +29,14 @@
     entry: ProjectFileEntry | null
     selectedPaths: string[]
     canPaste: boolean
+    /**
+     * The folders this tree's project writes designed work into.
+     *
+     * A project's own record, passed in rather than read from a global setting:
+     * the protection below is about one project's work, and the app has no
+     * app-wide folder any more.
+     */
+    workRoots: WorkRoots
     children: Snippet
     onCreateFile: () => void
     onCreateFolder: () => void
@@ -57,6 +65,7 @@
     entry,
     selectedPaths,
     canPaste,
+    workRoots,
     children,
     onCreateFile,
     onCreateFolder,
@@ -114,11 +123,7 @@
     entry !== null && entry.path !== '.cio' && isCioScratchPath(entry.path)
   )
   let cioCleanupProtected = $derived(
-    isProtectedFromCioCleanup(
-      entry,
-      appConfigState.workRoots,
-      appConfigState.cioCleanupExcludedCategories
-    )
+    isProtectedFromCioCleanup(entry, workRoots, appConfigState.cioCleanupExcludedCategories)
   )
 
   const itemClass =

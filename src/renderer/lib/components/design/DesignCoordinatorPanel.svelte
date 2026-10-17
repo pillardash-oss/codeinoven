@@ -71,8 +71,7 @@
     DesignEntry,
     DesignScreenShot,
     ScreenCanvasState,
-    ThreadDesignState,
-    WorkRootState
+    ThreadDesignState
   } from '$shared/ipc-contract'
   import WorkDetailsDialog from './WorkDetailsDialog.svelte'
 
@@ -334,11 +333,10 @@
 
   /** Project defaults are separate from the current design or video's own folder. */
   let kind = $derived<AuthoredWorkKind>(requestedKind)
-  let workRoots = $state<WorkRootState | null>(null)
   let detailsMode = $state<'this' | 'all' | 'rename' | null>(null)
 
-  /** The folder in use: main's answer once it has arrived, the board's until then. */
-  let workRoot = $derived(workRoots?.roots[kind] ?? designState?.root ?? '')
+  /** The folder this project writes new work of this kind into. */
+  let workRoot = $derived(projectWorkState.rootsFor(projectId)[kind] || designState?.root || '')
 
   /**
    * The tab's live audio state, read from the same store the tab strip reads.
@@ -643,23 +641,9 @@
     }
   }
 
-  /** Read the folders in use, and what the last change moved. */
-  async function loadWorkRoots(): Promise<WorkRootState | null> {
-    try {
-      const state = await invoke('design:workRootState', projectId)
-      workRoots = state
-      return state
-    } catch {
-      // A board that cannot read the setting still shows the work, so the folder
-      // line falls back to what the board's own state reported.
-      workRoots = null
-      return null
-    }
-  }
-
   async function detailsUpdated(directory: string, moved: number): Promise<void> {
     projectWorkState.selectDirectory(projectId, kind, selectionThreadId, directory)
-    await loadWorkRoots()
+    await projectWorkState.refreshRoots(projectId)
     await loadState()
     await projectWorkState.refresh(projectId)
     await loadGallery()
@@ -1265,7 +1249,7 @@
       await loadGallery()
       await loadCanvas()
     })
-    void loadWorkRoots()
+    void projectWorkState.refreshRoots(projectId)
     return () => {
       if (selectedItem)
         projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)

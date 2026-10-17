@@ -15,7 +15,6 @@ import type {
   ModelProfile
 } from '$shared/types'
 import { findBrowserSearchEngine, type BrowserSearchEngine } from '$shared/browser-search-engines'
-import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
 import { publishBrowserAllowSiteKeymapOverride } from '$lib/browser-keymap-context'
@@ -59,12 +58,6 @@ let contrastLevel = $state<ContrastLevel>(DEFAULT_CONTRAST_LEVEL)
 let zoomLevel = $state(DEFAULT_ZOOM_LEVEL)
 /** The generation backend choice, mirrored so deep components can read it. */
 let mediaGeneration = $state<MediaGenerationConfig>({ providerId: null })
-/**
- * Where a design or video session writes, mirrored because the file tree reads it
- * to tell the user's authored work apart from scratch (CIO Cleanup never removes
- * the former), and the tree is too deep to receive the config as a prop.
- */
-let workRoots = $state<WorkRoots>({ ...DEFAULT_WORK_ROOTS })
 /**
  * The `.cio` folders CIO Cleanup must keep, mirrored because the file tree's
  * context menu reads it to say whether a row is protected, and the tree is too
@@ -167,10 +160,6 @@ export const appConfigState = {
   get mediaGeneration(): MediaGenerationConfig {
     return mediaGeneration
   },
-  /** The project-relative roots authored work is written into. */
-  get workRoots(): WorkRoots {
-    return workRoots
-  },
   /** The `.cio` folders the sweep leaves alone, by category. */
   get cioCleanupExcludedCategories(): CioCleanupCategoryId[] {
     return cioCleanupExcludedCategories
@@ -219,7 +208,6 @@ export const appConfigState = {
     contrastLevel = config.contrastLevel
     zoomLevel = config.zoomLevel
     mediaGeneration = { providerId: config.mediaGeneration.providerId }
-    workRoots = config.workRoots ?? { ...DEFAULT_WORK_ROOTS }
     cioCleanupExcludedCategories = [
       ...(config.cioCleanupExcludedCategories ?? DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES)
     ]

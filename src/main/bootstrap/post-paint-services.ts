@@ -19,8 +19,7 @@ import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/ass
 import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
-import { workRootsFromConfig } from '../../lib/design/work-roots'
-import { loadProjectWorkRoots, setWorkRoots } from '../design/work-roots-state'
+import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -591,11 +590,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   try {
     const startupConfig = await storage.getConfig()
     state.prototypePreviewService.setCdnPolicy(prototypeCdnPolicyFromConfig(startupConfig))
-    // The folders designs and videos are written into. Held for the whole run so a
-    // path resolver never touches the config file, and replaced on every save.
-    setWorkRoots(workRootsFromConfig(startupConfig))
   } catch {
-    // The strict policy and the default folders stand until the config can be read.
+    // The strict policy stands until the config can be read.
   }
   await loadProjectWorkRoots(database)
   state.directoryPreviewService = new DirectoryPreviewService()

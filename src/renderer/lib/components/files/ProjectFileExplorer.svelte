@@ -20,6 +20,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
+  import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
@@ -411,6 +412,10 @@
 
   onMount(() => {
     if (selectedPath) void projectFilesWorkspace.focusFileInExplorer(projectId, selectedPath)
+    // The rows say whether CIO Cleanup leaves them alone, which is decided by the
+    // project's own work folders, so they are read once per project as the tree
+    // opens rather than on every row.
+    void projectWorkState.ensureRoots(projectId)
   })
 
   async function openFilter(): Promise<void> {
@@ -1325,6 +1330,7 @@
     onOpenInTerminal={() => openEntryInTerminal(null)}
     cioCleanupExcluded={false}
     onToggleCioCleanupExclusion={() => undefined}
+    workRoots={projectWorkState.rootsFor(projectId)}
   >
     <OvenSurfaceOverlay
       active={ovenTree}
@@ -1418,6 +1424,7 @@
                   onOpenInTerminal={openEntryInTerminal}
                   cioCleanupExcluded={isRowCioCleanupExcluded(virtualRow.row)}
                   onToggleCioCleanupExclusion={toggleCioCleanupExclusion}
+                  workRoots={projectWorkState.rootsFor(projectId)}
                   onRowClick={handleRowClick}
                   onRowDoubleClick={handleRowDoubleClick}
                   onRowContextMenu={handleRowContextMenu}

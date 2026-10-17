@@ -1,6 +1,13 @@
 import { lstat, mkdir, realpath } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
-import { normalizeWorkRoot, sanitizeWorkName, workRootsConflict } from '../../lib/design/work-roots'
+import {
+  AUTHORED_WORK_KINDS,
+  DEFAULT_WORK_ROOTS,
+  normalizeWorkRoot,
+  sanitizeWorkName,
+  workRootForKind,
+  workRootsConflict
+} from '../../lib/design/work-roots'
 import type { DesignEntry, UpdateWorkDetails, UpdateWorkDetailsResult } from '../../lib/ipc/design'
 import type { Database } from '../database/database'
 import { DesignRepo } from '../database/repositories/design-repo'
@@ -8,7 +15,40 @@ import { isInsideProject } from '../preview/served-folder'
 import { currentWorkRoots, projectWorkRootPaths, saveProjectWorkRoot } from './work-roots-state'
 import { withWorkRegistryLock } from './work-folder-registry'
 
+/**
+ * Renaming one design or video, or moving it, and pointing a project's folder for
+ * new work somewhere else.
+ *
+ * The two are separate operations with separate reach, and the caller says which
+ * one it is asking for: `scope: 'work'` moves the one folder the request names and
+ * writes nothing about the project, `scope: 'project'` records the project's folder
+ * and moves every folder of that kind into it. The scope is the only thing that
+ * decides, so a change made from one design's dialog cannot reach the project, and
+ * a change made from the board cannot claim to have been about one design.
+ *
+ * Everything here is validated against what is on disk before a single folder
+ * moves, and a failure puts the folders that already moved back where they were.
+ */
+
 const pending = new Map<string, Promise<unknown>>()
+
+/**
+ * Whether a folder is one of the project's own collections rather than work.
+ *
+ * Both the app default and the project's recorded folder are containers: every
+ * design or video of the project sits inside one of them. Moving a container moves
+ * all of them at once, so a request naming one is refused rather than quietly
+ * relocating a whole collection behind a dialog that said "this one only".
+ */
+function isWorkRootFolder(projectId: string, directory: string): boolean {
+  if (directory === '.cio') return true
+  return AUTHORED_WORK_KINDS.some((candidate) =>
+    [
+      workRootForKind(DEFAULT_WORK_ROOTS, candidate),
+      ...projectWorkRootPaths(projectId, candidate)
+    ].includes(directory)
+  )
+}
 
 /** Serialize folder moves within a project, including renames from another board. */
 export async function updateWorkDetails(input: {
@@ -39,8 +79,7 @@ async function moveDetails(
     (details.kind !== 'design' && details.kind !== 'video') ||
     typeof details.directory !== 'string' ||
     details.directory.length > 1024 ||
-    (details.newOnly !== undefined && typeof details.newOnly !== 'boolean') ||
-    typeof details.thisOnly !== 'boolean'
+    (details.scope !== 'work' && details.scope !== 'project')
   ) {
     throw new Error('Invalid work details')
   }
@@ -51,6 +90,9 @@ async function moveDetails(
     (root !== undefined && workRootsConflict({ ...roots, [details.kind]: root }))
   ) {
     throw new Error('Choose a project-relative folder separate from the other work folder')
+  }
+  if (details.scope === 'project' && root === undefined) {
+    throw new Error('Choose the project save folder')
   }
   if (details.name !== undefined && (typeof details.name !== 'string' || details.name.length > 240))
     throw new Error('Invalid name')
@@ -72,16 +114,16 @@ async function moveDetails(
   }
   const available = items.filter((item) => !item.missing)
   const selected = available.find((item) => item.directory === details.directory)
-  if (!selected && (details.directory !== '' || details.thisOnly || !root))
+  if (!selected && (details.directory !== '' || details.scope === 'work' || !root))
     throw new Error('This work no longer exists. Refresh the board and try again.')
-  const moving =
-    details.newOnly === true
-      ? []
-      : root !== undefined && !details.thisOnly
-        ? available
-        : selected
-          ? [selected]
-          : []
+  // A folder that is a collection of other work is not a design or a video, and
+  // moving one would take every folder inside it along. The board lists work
+  // rather than containers, so this only fires on a request that names one
+  // directly; refusing it here is what keeps a single move single.
+  const moving = details.scope === 'project' ? available : selected ? [selected] : []
+  if (moving.some((item) => isWorkRootFolder(projectId, item.directory))) {
+    throw new Error('Choose a folder for this one design or video, not the project save folder')
+  }
   if (moving.length > 500) throw new Error('Move at most 500 folders at once')
   const plans = moving
     .map((item) => ({
@@ -133,7 +175,7 @@ async function moveDetails(
       })
       await new Promise<void>((resume) => setImmediate(resume))
     }
-    if (root !== undefined && !details.thisOnly) {
+    if (details.scope === 'project' && root !== undefined) {
       await saveProjectWorkRoot(database, projectId, details.kind, root)
     }
   } catch (error) {

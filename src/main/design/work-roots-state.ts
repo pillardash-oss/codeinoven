@@ -1,43 +1,36 @@
 import { DEFAULT_WORK_ROOTS, workRootForKind, type WorkRoots } from '../../lib/design/work-roots'
 import { normalizeWorkRoot } from '../../lib/design/work-roots'
 import type { Database } from '../database/database'
-import type { AuthoredWorkKind, WorkRootRelocationReport } from '../../lib/ipc/design'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 
-/** App defaults and project overrides, restored before boards and agent tools start. */
-let roots: WorkRoots = { ...DEFAULT_WORK_ROOTS }
-let reports: WorkRootRelocationReport[] = []
-
-/** Seed or replace the live roots. Called at startup and after every config save. */
-export function setWorkRoots(next: WorkRoots): void {
-  roots = { ...next }
-}
-
-/** A copy, so a caller cannot change the live value by accident. */
-export function currentWorkRoots(projectId?: string): WorkRoots {
-  return { ...(projectId ? (projectRoots.get(projectId)?.roots ?? roots) : roots) }
-}
-
-/** One kind's folder, which is what a resolver defaults to. */
-export function currentWorkRoot(kind: AuthoredWorkKind, projectId?: string): string {
-  return workRootForKind(currentWorkRoots(projectId), kind)
-}
-
-/** Remember what the last change moved, for the surfaces that report it. */
-export function setWorkRootReports(next: readonly WorkRootRelocationReport[]): void {
-  reports = next.map((report) => ({ ...report }))
-}
-
-/** What the last change moved, oldest kind first. Empty until a root is changed. */
-export function currentWorkRootReports(): WorkRootRelocationReport[] {
-  return reports.map((report) => ({ ...report }))
-}
+/**
+ * Where each project writes its authored work.
+ *
+ * The app default is a constant and this module holds only project records, so a
+ * project that never changed its folder is answered with the default and nothing
+ * has to be written to say so. The records are the single place a project's folder
+ * comes from: leaving one design, or one video, somewhere else is a property of
+ * that folder rather than of the project, so it never reaches here.
+ */
 
 interface ProjectRoots {
   roots: WorkRoots
+  /** Folders the project used before, kept so old work stays discoverable. */
   previous: Record<AuthoredWorkKind, string[]>
 }
 const projectRoots = new Map<string, ProjectRoots>()
 const PROJECT_ROOT_PREFIX = 'authored-work-roots:'
+
+/** The folders one project writes into: its own record, or the app default. */
+export function currentWorkRoots(projectId?: string): WorkRoots {
+  const recorded = projectId ? projectRoots.get(projectId) : undefined
+  return recorded ? { ...recorded.roots } : { ...DEFAULT_WORK_ROOTS }
+}
+
+/** One kind's folder, which is what a resolver falls back to. */
+export function currentWorkRoot(kind: AuthoredWorkKind, projectId?: string): string {
+  return workRootForKind(currentWorkRoots(projectId), kind)
+}
 
 /** Restore project preferences before preview services and agent tools start. */
 export async function loadProjectWorkRoots(database: Database): Promise<void> {
@@ -96,7 +89,7 @@ export async function saveProjectWorkRoot(
 
 /** All current and historical roots, for conservative scratch-cleanup protection. */
 export function protectedWorkRoots(): WorkRoots[] {
-  const result: WorkRoots[] = [currentWorkRoots()]
+  const result: WorkRoots[] = [{ ...DEFAULT_WORK_ROOTS }]
   for (const [projectId, value] of projectRoots) {
     result.push(value.roots)
     for (const kind of ['design', 'video'] as const) {

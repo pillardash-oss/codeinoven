@@ -11,9 +11,9 @@ import type {
   DesignThumbnail,
   ProjectWorkState,
   ScreenCanvasState,
-  ThreadDesignState,
-  WorkRootState
+  ThreadDesignState
 } from './design'
+import type { WorkRoots } from '../design/work-roots'
 import type { Contract } from './contract-helpers'
 import type { DesignExportFormat, DesignExportResult } from '../design/design-export'
 import type { DesignModelRanking } from '../design/design-review'
@@ -146,11 +146,14 @@ export const invokeDesignContract = {
     ScreenCanvasState | null
   >,
   /**
-   * The folders designs and videos are written into, and what the last change
-   * moved. Read straight after a save, because both surfaces that change a root
-   * have to report what the move did with the work already on disk.
+   * The folders designs and videos are written into for this project.
+   *
+   * Read straight after a save, because the board that changed one has to name
+   * the folder the next design will land in. It is the project's own record, or
+   * the app default when the project never changed it: there is no app-wide value
+   * behind it.
    */
-  'design:workRootState': {} as Contract<[projectId?: string], WorkRootState>,
+  'design:workRoots': {} as Contract<[projectId?: string], WorkRoots>,
   'design:removeMissing': {} as Contract<[projectId: string, directory: string], void>,
   'design:updateDetails': {} as Contract<
     [projectId: string, details: UpdateWorkDetails],
