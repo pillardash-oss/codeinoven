@@ -927,14 +927,29 @@ export class DesignService {
     if (!browser || !tabId) {
       return { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
     }
-    await browser.waitForTabLoad(tabId)
-    const captured = await browser.captureThumbnail(
-      tabId,
-      Math.min(MAX_THUMBNAIL_WIDTH, Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width)))
-    )
-    return captured
-      ? { directory: result.directory, ...captured, tabId }
-      : { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
+    /**
+     * A picture that could not be taken is a missing picture, never a failed board.
+     *
+     * The capture comes from Chromium's compositor, and a view the app is not
+     * showing at that moment can answer with no frame at all (`UnknownVizError`)
+     * instead of a picture. That is a state of the same off-screen capture the
+     * screen sweep already degrades on, so this path answers the way the sweep
+     * does: no picture, which the board already draws as "No frame captured yet."
+     * rather than as an error the user cannot act on.
+     */
+    try {
+      await browser.waitForTabLoad(tabId)
+      const captured = await browser.captureThumbnail(
+        tabId,
+        Math.min(MAX_THUMBNAIL_WIDTH, Math.max(MIN_THUMBNAIL_WIDTH, Math.round(width)))
+      )
+      return captured
+        ? { directory: result.directory, ...captured, tabId }
+        : { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
+    } catch (error) {
+      Logger.dev('A thumbnail could not be captured:', error)
+      return { directory: result.directory, dataUrl: null, width: 0, height: 0, tabId }
+    }
   }
 
   /**
