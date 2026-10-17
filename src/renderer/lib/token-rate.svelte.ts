@@ -5,6 +5,7 @@ import {
   tokensPerSecond,
   type TokenUsageScope
 } from '$shared/usage-rate'
+import type { GenerationObservation } from './generation-details'
 
 /**
  * Live tokens-per-second tracking for the message currently streaming.
@@ -28,6 +29,28 @@ export class LiveGenerationRate {
   #messageId = $state<string | null>(null)
   #now = $state(0)
   #timer: ReturnType<typeof setInterval> | null = null
+  #turnStartedAt: number | null = null
+  #firstOutputAt: number | null = null
+
+  /** Local dispatch time, not the provider's request or inference start. */
+  startTurn(at: number): void {
+    if (this.#turnStartedAt === null) this.#turnStartedAt = at
+  }
+
+  observation(): GenerationObservation | undefined {
+    void this.#now
+    if (!this.#messageId) return undefined
+    const sample = this.#clock.sample(GenerationClock.key(this.#sessionId, this.#messageId))
+    if (!sample) return undefined
+    return {
+      ...sample,
+      charsPerToken: this.charsPerToken,
+      firstOutputDelayMs:
+        this.#turnStartedAt !== null && this.#firstOutputAt !== null
+          ? Math.max(0, this.#firstOutputAt - this.#turnStartedAt)
+          : null
+    }
+  }
 
   get messageId(): string | null {
     return this.#messageId
@@ -50,6 +73,7 @@ export class LiveGenerationRate {
   /** A streamed delta appended to `partId`. */
   noteDelta(messageId: string, partId: string, chars: number): void {
     if (!messageId) return
+    if (chars > 0 && this.#firstOutputAt === null) this.#firstOutputAt = Date.now()
     this.#messageId = messageId
     this.#clock.noteDelta(
       GenerationClock.key(this.#sessionId, messageId),
@@ -63,6 +87,7 @@ export class LiveGenerationRate {
   /** A part snapshot repeating its whole text; only growth counts. */
   noteSnapshot(messageId: string, partId: string, chars: number): void {
     if (!messageId) return
+    if (chars > 0 && this.#firstOutputAt === null) this.#firstOutputAt = Date.now()
     this.#messageId = messageId
     this.#clock.noteSnapshot(
       GenerationClock.key(this.#sessionId, messageId),
@@ -135,6 +160,8 @@ export class LiveGenerationRate {
     this.#clock = new GenerationClock()
     this.#messageId = null
     this.#now = 0
+    this.#turnStartedAt = null
+    this.#firstOutputAt = null
   }
 
   #startTicker(): void {
@@ -147,7 +174,27 @@ export class LiveGenerationRate {
 
 export { generatedTokens }
 
-/** Formats a generation rate as e.g. `40 tok/s` (grouped: `1,234 tok/s`). */
+/**
+ * Formats a generation rate for a fixed column: `40 tok/s`, and `1.4k tok/s`
+ * once the figure would widen the column it sits in. The shoe sizes that column
+ * to the longest plain reading it can show, so a rate past a thousand tokens a
+ * second switches to the compact form rather than pushing the row wider; the
+ * exact figure stays one hover away, in {@link formatTokenRateExact}.
+ */
 export function formatTokenRate(tokensPerSecond: number): string {
-  return `${Math.max(1, Math.round(tokensPerSecond)).toLocaleString()} tok/s`
+  const rate = Math.max(1, tokensPerSecond)
+  if (rate < 1_000) return `${Math.round(rate).toLocaleString()} tok/s`
+  const scaled = rate / 1_000
+  const precision = scaled < 100 ? 1 : 0
+  return `${scaled.toFixed(precision).replace(/\.0$/, '')}k tok/s`
+}
+
+/**
+ * The exact rate behind a compact shoe figure, for the breakdown's own header:
+ * `42.6 tok/s`, `1,431.2 tok/s`. One decimal is what the tracker measures to,
+ * and rounding it further would be the app inventing precision the reading does
+ * not have.
+ */
+export function formatTokenRateExact(tokensPerSecond: number): string {
+  return `${tokensPerSecond.toLocaleString(undefined, { maximumFractionDigits: 1 })} tok/s`
 }

@@ -249,6 +249,7 @@
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
     generationRate?: number | null
+    generationDetails?: import('$lib/generation-details').GenerationDetails
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
@@ -353,6 +354,7 @@
     onModelUsed,
     contextUsage,
     generationRate,
+    generationDetails,
     efficiencyKpis,
     harnessUsage = [],
     onRevealUsage,
@@ -684,6 +686,7 @@
   let usageReading = $derived<ComposerUsage>({
     usage: contextUsage,
     generationRate,
+    generationDetails,
     efficiencyKpis,
     harnessUsage,
     canCompact,

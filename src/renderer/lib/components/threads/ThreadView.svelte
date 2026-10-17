@@ -339,6 +339,11 @@
   } from '$shared/pending-request'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
+  import {
+    generationDetails,
+    type GenerationMessageUsage,
+    type GenerationObservation
+  } from '$lib/generation-details'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
@@ -962,15 +967,69 @@
   const liveTokenRate = new LiveGenerationRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
-  const lastCompletedTokenRate = $derived.by(() => {
+  let finalizedGenerationObservation = $state<{
+    messageId: string
+    observation: GenerationObservation
+  } | null>(null)
+  let streamedGenerationUsage = $state<{ messageId: string; usage: GenerationMessageUsage } | null>(
+    null
+  )
+
+  function recordGenerationUsage(
+    event: Extract<AgentEvent, { type: 'message.completed' | 'usage.updated' }>
+  ): void {
+    const previous =
+      streamedGenerationUsage?.messageId === event.messageId
+        ? streamedGenerationUsage.usage
+        : undefined
+    streamedGenerationUsage = {
+      messageId: event.messageId,
+      usage: {
+        ...previous,
+        ...(event.harnessId ? { harnessId: event.harnessId } : {}),
+        ...(event.providerId ? { providerId: event.providerId } : {}),
+        ...(event.tokens ? { tokens: event.tokens } : {}),
+        ...(event.normalizedUsage ? { normalizedUsage: event.normalizedUsage } : {}),
+        tokenUsageScope: event.tokenUsageScope ?? 'message'
+      }
+    }
+  }
+  const lastCompletedGeneration = $derived.by(() => {
     if (busy) return null
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index]
       if (message.role !== 'assistant') continue
       const rate = messageTokenRate(message, { finalizedTokenRates, liveTokenRate })
-      if (rate !== null) return rate
+      if (rate !== null) return { message, rate }
     }
     return null
+  })
+  const composerGenerationDetails = $derived.by(() => {
+    const id = busy ? liveTokenRate.messageId : lastCompletedGeneration?.message.id
+    const message = busy
+      ? messages.findLast((entry) => entry.id === id)
+      : lastCompletedGeneration?.message
+    // The catalogs own the operator-facing names, so the panel can draw the
+    // harness and the vendor the model ran through instead of printing ids.
+    const provider = message ? messageProvider(message, providers) : undefined
+    return generationDetails({
+      message: {
+        ...message,
+        ...(streamedGenerationUsage?.messageId === id ? streamedGenerationUsage?.usage : {})
+      },
+      observation: busy
+        ? liveTokenRate.observation()
+        : finalizedGenerationObservation?.messageId === id
+          ? finalizedGenerationObservation?.observation
+          : undefined,
+      attribution: message
+        ? {
+            harnessName: messageHarnessName(message, messageHarnessFallback),
+            providerName: provider?.name,
+            modelLabel: messageModelLabel(message, allModels) ?? undefined
+          }
+        : undefined
+    })
   })
   $effect(() => {
     liveTokenRate.begin(sessionId)
@@ -5202,6 +5261,7 @@
   }
 
   function beginLocalTurn(userMessageId: string): void {
+    liveTokenRate.startTurn(Date.now())
     restoredBusy = false
     clearStreamParts()
     locallySubmittedTurnId = userMessageId
@@ -5950,6 +6010,7 @@
       }
       case 'message.completed': {
         if (event.sessionId !== sessionId) return
+        recordGenerationUsage(event)
         acknowledgeLocalTurn()
         // Record what the harness reported before closing the window, so this
         // request's own count teaches the characters-per-token calibration, and
@@ -5987,6 +6048,7 @@
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
+        recordGenerationUsage(event)
         if (event.tokens && generatedTokens(event.tokens) > 0) {
           liveTokenRate.noteReported(
             event.messageId,
@@ -6001,8 +6063,13 @@
         liveTokenRate.settle()
         if (liveTokenRate.messageId) {
           const finalizedId = liveTokenRate.messageId
+          const observation = liveTokenRate.observation()
           const rate = liveTokenRate.finalize()
-          if (rate !== null) finalizedTokenRates[finalizedId] = rate
+          if (rate !== null) {
+            finalizedTokenRates[finalizedId] = rate
+            if (observation)
+              finalizedGenerationObservation = { messageId: finalizedId, observation }
+          }
         }
         const interruptedCompaction = compactionInterrupted()
         if (!setIdleFromSession()) return
@@ -14653,7 +14720,10 @@
                       onSlashCommand={executeHarnessCommand}
                       usageCreditsCommandId={usageCreditsCommand?.id}
                       contextUsage={contextUsageDisplay}
-                      generationRate={busy ? liveTokenRate.rate() : lastCompletedTokenRate}
+                      generationRate={busy
+                        ? liveTokenRate.rate()
+                        : (lastCompletedGeneration?.rate ?? null)}
+                      generationDetails={composerGenerationDetails}
                       efficiencyKpis={storedEfficiencyKpis}
                       onRevealUsage={revealContextUsage}
                       onHideUsage={hideContextUsage}
