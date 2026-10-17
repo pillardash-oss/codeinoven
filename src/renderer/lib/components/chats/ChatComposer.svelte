@@ -9,7 +9,7 @@
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { fade } from 'svelte/transition'
+  import { scale } from 'svelte/transition'
 
   import { motionDuration } from '$lib/motion'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
@@ -1193,6 +1193,13 @@
   /** The mic stays mounted; only the send/stop control follows composer state. */
   let showSendControl = $derived(!disabled && (working || hasSendableContent))
 
+  /** Which glyph the send control carries. The three stay mounted in one box and
+   *  crossfade, so sending reads as the arrow morphing into the stop square
+   *  rather than as one icon being swapped for another. */
+  let sendControlGlyph = $derived<'stop' | 'queue' | 'send'>(
+    canStop ? 'stop' : working ? 'queue' : 'send'
+  )
+
   /** The maximize control is only useful once there is something to expand for,
    *  and it stays while maximized so clearing the text cannot strand the composer
    *  in its expanded size with no way back. */
@@ -2019,12 +2026,13 @@
     {/if}
     <!-- Maximize   floats at the top right of the typing surface so the control
          is out of the writing line; the editor reserves its corner with `pr-10`.
-         It fades in with the first character typed (see `showExpandControl`). -->
+         It scales in with the first character typed (see `showExpandControl`) and
+         scales out again when the field empties, so it never blinks on. -->
     {#if showExpandControl}
       <button
         type="button"
         class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        transition:fade={{ duration: motionDuration(140) }}
+        transition:scale={{ duration: motionDuration(150), start: 0.85 }}
         aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
         aria-pressed={expansion.maximized}
         title={expansion.maximized
@@ -2032,11 +2040,14 @@
           : 'Expand the composer for a taller, wider typing area'}
         onclick={toggleComposerExpansion}
       >
-        {#if expansion.maximized}
-          <CioMinimize size={ICON_SIZE.control} />
-        {:else}
-          <CioMaximize size={ICON_SIZE.control} />
-        {/if}
+        <span class="control-glyphs" aria-hidden="true">
+          <span class="control-glyph" class:is-active={expansion.maximized}>
+            <CioMinimize size={ICON_SIZE.control} />
+          </span>
+          <span class="control-glyph" class:is-active={!expansion.maximized}>
+            <CioMaximize size={ICON_SIZE.control} />
+          </span>
+        </span>
       </button>
     {/if}
 
@@ -2196,52 +2207,58 @@
       {disabled}
     />
 
-    {#if showSendControl}
-      <!-- Send / Queue / Stop button.
+    <!-- Send / Queue / Stop button. It never unmounts: it widens out of the row
+         and fades when the composer has nothing to send or stop, and widens back
+         when it does, so the mic beside it slides instead of the row snapping.
+         Its glyphs share one box, so a send morphs into the stop square.
            - Agent idle:       ArrowUp (send)   primary, disabled when empty
            - Agent working, user typing:  CioClock (queue)   primary, always clickable
            - Agent working, no text:      Square (stop)   quiet at rest, danger tint on hover
            - Stop confirmation pending:   "Stop?" danger label -->
-      <button
-        type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors {pendingStop
-          ? 'bg-danger text-on-danger hover:bg-danger-hover'
-          : canStop
-            ? 'text-muted hover:bg-danger/10 hover:text-danger'
-            : 'bg-accent text-on-accent hover:bg-accent-hover'}"
-        aria-label={pendingStop
-          ? 'Confirm stop'
-          : canStop
-            ? 'Stop agent'
-            : working
-              ? 'Queue message'
-              : 'Send message'}
-        title={pendingStop
-          ? 'Click again to stop'
-          : canStop
-            ? 'Stop the running agent'
-            : working
-              ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
-              : `Send   ${sendModifierLabel}Enter`}
-        disabled={disabled ||
-          (canStop ? false : ovenModelUnavailable) ||
-          (!working && !hasSendableContent)}
-        onclick={() => submit()}
-      >
-        {#if pendingStop}
-          <span class="pending-stop-label text-[0.5625rem] font-semibold">Stop?</span>
-          <span class="pending-stop-icon">
-            <CioStop size={ICON_SIZE.control} />
-          </span>
-        {:else if canStop}
+    <button
+      type="button"
+      class="composer-send-control relative flex h-8 shrink-0 items-center justify-center {pendingStop
+        ? 'bg-danger text-on-danger hover:bg-danger-hover'
+        : canStop
+          ? 'text-muted hover:bg-danger/10 hover:text-danger'
+          : 'bg-accent text-on-accent hover:bg-accent-hover'}"
+      class:is-present={showSendControl}
+      class:is-armed={pendingStop}
+      inert={!showSendControl || undefined}
+      aria-label={pendingStop
+        ? 'Confirm stop'
+        : canStop
+          ? 'Stop agent'
+          : working
+            ? 'Queue message'
+            : 'Send message'}
+      title={pendingStop
+        ? 'Click again to stop'
+        : canStop
+          ? 'Stop the running agent'
+          : working
+            ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
+            : `Send   ${sendModifierLabel}Enter`}
+      disabled={disabled ||
+        (canStop ? false : ovenModelUnavailable) ||
+        (!working && !hasSendableContent)}
+      onclick={() => submit()}
+    >
+      <span class="control-glyphs" aria-hidden="true">
+        <span class="control-glyph" class:is-active={sendControlGlyph === 'stop'}>
           <CioStop size={ICON_SIZE.control} />
-        {:else if working}
+        </span>
+        <span class="control-glyph" class:is-active={sendControlGlyph === 'queue'}>
           <CioClock size={ICON_SIZE.control} />
-        {:else}
+        </span>
+        <span class="control-glyph" class:is-active={sendControlGlyph === 'send'}>
           <CioArrowUp size={ICON_SIZE.control} />
-        {/if}
-      </button>
-    {/if}
+        </span>
+      </span>
+      <span class="pending-stop-label text-[0.5625rem] font-semibold" class:is-active={pendingStop}>
+        Stop?
+      </span>
+    </button>
   </div>
 </div>
 
@@ -2368,13 +2385,96 @@
 
   @media (prefers-reduced-motion: reduce) {
     :global(.chat-composer),
-    :global(.composer-editor) {
+    :global(.composer-editor),
+    .composer-send-control,
+    .control-glyphs,
+    .control-glyph,
+    .pending-stop-label {
       transition: none;
     }
   }
 
-  .pending-stop-icon {
-    display: none;
+  /* Send / Queue / Stop   one control that never unmounts. It widens out of the
+     row and fades when the composer has nothing to send or stop, and widens back
+     in when it does, so the mic beside it slides instead of the row snapping.
+     While collapsed the negative start margin cancels the toolbar's `gap-1`, so
+     the row's right edge is what moves and nothing shifts once the motion ends.
+     Colour rides the same transition, so the gold send and the quiet stop tint
+     into each other. */
+  .composer-send-control {
+    width: 0;
+    /* A flex item's automatic minimum size would otherwise floor the used width
+       at the control's own content, so the collapsed box has to say it may
+       reach zero. */
+    min-width: 0;
+    margin-inline-start: -0.25rem;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      width 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+      margin-inline-start 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+      opacity 150ms ease,
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .composer-send-control.is-present {
+    width: 2rem;
+    margin-inline-start: 0;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* A control's glyphs share one box, all of them mounted: the active one
+     crossfades and settles into place, so a state change reads as one mark
+     becoming another rather than as a swap. Opacity and transform only, so the
+     change never touches layout. */
+  .control-glyphs {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 1.0625rem;
+    height: 1.0625rem;
+    transition: opacity 150ms ease;
+  }
+
+  .control-glyph {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    opacity: 0;
+    transform: scale(0.55) rotate(-32deg);
+    transition:
+      opacity 130ms ease,
+      transform 210ms cubic-bezier(0.215, 0.61, 0.355, 1);
+  }
+
+  .control-glyph.is-active {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* While the word is on screen the square behind it stays off; the narrow tier
+     has no room for the word, so the square carries the armed state there (see
+     the container query below). */
+  .composer-send-control.is-armed .control-glyphs {
+    opacity: 0;
+  }
+
+  .pending-stop-label {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 130ms ease;
+  }
+
+  .pending-stop-label.is-active {
+    opacity: 1;
   }
 
   /* Control labels ellipsize as the composer tightens   they never wrap to a
@@ -2386,12 +2486,12 @@
       padding-inline: 0.5rem;
     }
 
-    .pending-stop-label {
-      display: none;
+    .composer-send-control.is-armed .control-glyphs {
+      opacity: 1;
     }
 
-    .pending-stop-icon {
-      display: block;
+    .pending-stop-label.is-active {
+      opacity: 0;
     }
   }
 
