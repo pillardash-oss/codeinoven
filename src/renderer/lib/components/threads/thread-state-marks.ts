@@ -55,18 +55,19 @@ export interface ThreadStateMark {
    */
   rail?: boolean
   /**
-   * How a mark's rail is lit, for the states that are work in progress.
+   * How a mark's rail is lit, when the mark's rail is one of the spine's.
    *
    * `climbing` is work this window is driving: the light climbs the rail's dashes,
    * one whole dash at a time, from the bottom to the top, and starts again, for as
    * long as the state holds. Only work that is running right now carries it.
    *
-   * `standing` is work another instance is driving: every dash stands lit and
-   * nothing moves. The work is live, but not here, and this window holds neither
-   * its stream nor its stop control. A climbing light would promise the reader a
-   * turn running in front of them with live output to watch and a control to press,
-   * and the standing rail is the honest drawing of the one thing this window can
-   * say: that thread is busy, elsewhere.
+   * `standing` is a spine that stands full: every dash lit, nothing moving. Two
+   * states wear it. Work another instance is driving is live but not here, and this
+   * window holds neither its stream nor its stop control, so a climbing light would
+   * promise the reader a turn running in front of them with live output to watch and
+   * a control to press. A draft waiting on a settled thread is not running at all:
+   * the spine is there to say the thread is asking for the user again, and a light
+   * climbing it would say work was happening.
    *
    * Every other state is something to notice once and act on, so it carries no
    * light at all: its rail is the colour and the shape its own mark names, and the
@@ -146,7 +147,13 @@ export const THREAD_STATE_MARKS = {
     label: 'Draft',
     tone: 'todo',
     colour: 'var(--color-muted)',
-    dash: 'dashed'
+    dash: 'dashed',
+    // A thread nothing has been sent into yet draws no rail: a draft that has not
+    // been written is a note to the user, not a thread asking for them, and the pen
+    // alone says it. A draft waiting on a thread that IS settled brings its own
+    // spine instead (`THREAD_SECONDARY_MARKS.draft`), which is the row that needs to
+    // stand out: the user left a message half typed on finished work.
+    rail: false
   },
   working: {
     icon: Pickaxe,
@@ -215,7 +222,13 @@ export const THREAD_SECONDARY_MARKS = {
     label: 'Draft in the composer',
     tone: 'todo',
     colour: 'var(--color-muted)',
-    dash: 'dashed'
+    dash: 'dashed',
+    // A draft on a settled thread brings the spine into the row, in the draft's own
+    // colour and on the working spine's dashes, standing full because nothing is
+    // running. It asks for the user the same way a running turn does: come back and
+    // finish this. On a thread with a state of its own the state's rail wins and this
+    // mark is only the glyph above it (`threadRailMark`).
+    railLight: 'standing'
   },
   queued: {
     icon: CioClock,
@@ -433,6 +446,28 @@ export function liveRailPaint(
   const cell = 100 / count
   const dash = (cell * LIVE_RAIL.dash) / (LIVE_RAIL.dash + LIVE_RAIL.gap)
   return `repeating-linear-gradient(to top, ${colour} 0 ${dash}%, transparent ${dash}% ${cell}%)`
+}
+
+/**
+ * The mark whose spine a row draws, or null when the row draws no rail at all.
+ *
+ * The thread's own state has first claim: a thread that is still asking for
+ * something wears its own rail, whatever waits above it. A settled thread draws
+ * none, and there a draft waiting on it takes the rail over, because that is the
+ * row a reader has to be told about: unfinished typing on finished work. Nothing
+ * else waiting on a settled thread brings a rail with it: a queued message or a
+ * start after another thread is a note about the next turn, not the thread asking
+ * for the user again.
+ */
+export function threadRailMark(
+  primary: ThreadStateMark,
+  secondary: ThreadStateMark | null
+): ThreadStateMark | null {
+  if (markDrawsRail(primary)) return primary
+  if (secondary !== null && (markRailClimbs(secondary) || markRailStandsLit(secondary))) {
+    return secondary
+  }
+  return null
 }
 
 /**

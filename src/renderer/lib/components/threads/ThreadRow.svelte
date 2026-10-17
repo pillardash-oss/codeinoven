@@ -35,12 +35,12 @@
     liveRailDashCount,
     liveRailPaint,
     markDrawsGlyph,
-    markDrawsRail,
     markRailClimbs,
     markRailStandsLit,
     RAIL_TRACK_INK,
     railPaint,
     THREAD_FOREIGN_MARK,
+    threadRailMark,
     threadSecondaryMark,
     threadStateMark,
     type ThreadRowSecondary
@@ -652,10 +652,19 @@
     secondaryMark ? `${primaryMark.label} · ${secondaryMark.label}` : primaryMark.label
   )
 
-  /** Whether this row draws a rail under its glyph. The rail is the primary
-   *  status, so a settled thread draws none: with nothing left to do it should
-   *  attract no attention, and its glyph stands alone, vertically centred. */
-  let spineRailVisible = $derived(markDrawsRail(primaryMark))
+  /** The mark whose spine this row draws, or null when it draws no rail.
+   *
+   *  The thread's own state has first claim, and a settled thread has no rail of its
+   *  own. A draft waiting on a settled thread takes the rail over, so a done thread
+   *  the user is typing into shows the spine under its pen; a queued message or a
+   *  start-after draws no rail of its own, so those rows keep their quiet glyph
+   *  alone. `threadRailMark` owns that rule, in the vocabulary beside the marks. */
+  let railMark = $derived(threadRailMark(primaryMark, secondaryMark))
+
+  /** Whether this row draws a rail under its glyph at all. A settled thread with
+   *  nothing waiting on it does not: with nothing left to do it should attract no
+   *  attention, and its glyph stands alone, vertically centred. */
+  let spineRailVisible = $derived(railMark !== null)
 
   /** Whether the state's glyph is drawn above the rail at all.
    *
@@ -668,16 +677,15 @@
 
   /** Whether the rail's light climbs it: work this window is driving, lighting one
    *  whole dash at a time from the bottom to the top. */
-  let spineRailClimbs = $derived(markRailClimbs(primaryMark))
+  let spineRailClimbs = $derived(railMark !== null && markRailClimbs(railMark))
 
-  /** Whether the rail stands full instead: work another instance is driving. Every
-   *  dash lit, nothing moving, because this window can watch that run but not drive
-   *  it. */
-  let spineRailStandsLit = $derived(markRailStandsLit(primaryMark))
+  /** Whether the rail stands full instead: every dash lit, nothing moving. Work
+   *  another instance is driving, or a draft waiting on a settled thread. */
+  let spineRailStandsLit = $derived(railMark !== null && markRailStandsLit(railMark))
 
   /** Whether this rail is drawn on the counted live grid rather than the mark's own
-   *  still shape: the climbing light and the standing full rail are the same spine
-   *  seen two ways, so they share its dashes. */
+   *  still shape: the climbing light, the standing full rail and a waiting draft are
+   *  the same spine seen different ways, so they share its dashes. */
   let spineRailOnLiveGrid = $derived(spineRailClimbs || spineRailStandsLit)
 
   /** The live rail's height as laid out, which is the only thing that decides how
@@ -690,23 +698,23 @@
    *  the steps the light climbs it in, from one decision. */
   let spineDashCount = $derived(liveRailDashCount(spineRailHeight))
 
-  /** The rail's paint: the primary status's own colour, in the shape its dash
-   *  names, which is the second carrier beside the hue. The rail is the same
-   *  width as the glyph above it, so the mark reads as one column. A secondary
-   *  status never repaints it: the rail is what the thread is doing, and the
-   *  glyph above is what is waiting on it. */
-  let spineRailPaint = $derived(railPaint(primaryMark))
+  /** The rail's paint: the rail mark's own colour, in the shape its dash names,
+   *  which is the second carrier beside the hue. The rail is the same width as the
+   *  glyph above it, so the mark reads as one column. */
+  let spineRailPaint = $derived(railMark === null ? '' : railPaint(railMark))
 
-  /** The light on a live rail: whole dashes at full strength, on the grid the
-   *  reveal animation steps through, so a step lights a dash and never leaves a
-   *  stretched half dash behind it. A rail that stands full wears the same paint
-   *  without the light, which is what makes the two read as one spine. */
-  let spineLivePaint = $derived(liveRailPaint(primaryMark, spineDashCount))
+  /** The light on a live rail, or the full face of one that stands: whole dashes at
+   *  full strength, on the grid the reveal animation steps through, so a step lights
+   *  a dash and never leaves a stretched half dash behind it. Both wear the same
+   *  paint, which is what makes them read as one spine. */
+  let spineLivePaint = $derived(railMark === null ? '' : liveRailPaint(railMark, spineDashCount))
 
   /** The track a live rail lights along: the same dashes on the same grid, in a
    *  fraction of the state's colour, so the spine keeps its full height and its
    *  shape between one lit dash and the next. */
-  let spineTrackPaint = $derived(liveRailPaint(primaryMark, spineDashCount, RAIL_TRACK_INK))
+  let spineTrackPaint = $derived(
+    railMark === null ? '' : liveRailPaint(railMark, spineDashCount, RAIL_TRACK_INK)
+  )
 
   /** The row's own ground, when the state wants the user. A tint is the second
    *  carrier beside the rail, so approval and error are findable from across the
@@ -1347,23 +1355,26 @@
         {/if}
         {#if spineRailVisible}
           {#if spineRailOnLiveGrid}
-            <!-- The spine at a working thread: short dashes, never more than four,
-                 on a grid that divides the rail's own box. `bind:clientHeight` is
-                 what hands the grid its count, and it is the measured height of the
-                 box, not a guess at it.
+            <!-- The spine: short dashes, never more than four, on a grid that
+                 divides the rail's own box. `bind:clientHeight` is what hands the
+                 grid its count, and it is the measured height of the box, not a
+                 guess at it.
                  Work this window drives climbs the dashes: the light is a clip
                  stepped to the same grid, which is what keeps a step from stopping
                  half way through a dash and stretching it. The box, the row and
                  every row under it stay put, because only the light inside the box
                  moves.
-                 Work another instance drives stands full: the same dashes, all lit,
-                 with no track and no motion. -->
+                 Work another instance drives, and a draft waiting on a settled
+                 thread, stand the same dashes full: no track, no motion.
+                 The label sits on this box only when it is the row's whole mark. A
+                 row that also draws a glyph says its state there, and a second copy
+                 here would have the reader hear it twice. -->
             <span
               class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
               bind:clientHeight={spineRailHeight}
-              role="img"
-              title={markLabel}
-              aria-label={markLabel}
+              role={spineGlyphVisible ? undefined : 'img'}
+              title={spineGlyphVisible ? undefined : markLabel}
+              aria-label={spineGlyphVisible ? undefined : markLabel}
             >
               {#if spineRailClimbs}
                 <span
