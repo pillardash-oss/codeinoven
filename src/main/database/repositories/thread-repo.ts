@@ -1288,11 +1288,18 @@ export class ThreadRepo {
     )
   }
 
-  setPinned(id: string, pinned: boolean, pinnedAt?: number): void {
+  /**
+   * A bookmark is a pin with a glyph, so the two flags always move together and
+   * `bookmarked` implies `pinned`: a surface that only knows about pins (the
+   * scope board's pin toggle) would otherwise leave a row claiming a bookmark
+   * while unpinned, which no view can draw honestly.
+   */
+  setPinned(id: string, pinned: boolean, pinnedAt?: number, bookmarked = false): void {
     this.db.run(
-      'UPDATE threads SET pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?',
+      'UPDATE threads SET pinned = ?, pinned_at = ?, bookmarked = ?, updated_at = ? WHERE id = ?',
       pinned ? 1 : 0,
       pinned ? (pinnedAt ?? Date.now()) : null,
+      pinned && bookmarked ? 1 : 0,
       Date.now(),
       id
     )

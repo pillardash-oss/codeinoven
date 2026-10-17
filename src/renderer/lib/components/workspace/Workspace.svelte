@@ -63,9 +63,9 @@
   import {
     findEmptyNewThread,
     pinnedThreadSort,
+    splitTimelineThreads,
     threadOrderKey,
     threadSort,
-    threadStatusSort,
     threadStatusSortKey,
     threadVisitKey,
     workspaceState
@@ -1991,28 +1991,24 @@
       .sort((a, b) => threadSort(a, b, draftThreadKeys))
   )
 
-  /** Threads mode: active threads of the filtered projects, sorted by the
-   *  selected mode, persisted pins first. An empty project-filter selection
-   *  means all projects. */
-  let allThreadsFlat = $derived.by(() => {
-    const list = allThreads.filter(
-      (t) =>
-        !t.archived &&
-        t.projectId !== INBOX_PROJECT_ID &&
-        // Assistant tasks are Assistant View's own rows, never the Threads
-        // timeline's, so a pinned knowledge thread cannot appear among them.
-        t.projectId !== ASSISTANT_SPACE_ID &&
-        threadProjectFilterState.matches(t.projectId)
+  /** Threads mode: the filtered active threads as the two lists the timeline
+   *  renders   the pinned rows that open the view, then every row that carries
+   *  its own status, ordered by status and then by the row's own place in it. An
+   *  empty project-filter selection means all projects. */
+  let timelineLists = $derived.by(() =>
+    splitTimelineThreads(
+      allThreads.filter(
+        (t) =>
+          !t.archived &&
+          t.projectId !== INBOX_PROJECT_ID &&
+          // Assistant tasks are Assistant View's own rows, never the Threads
+          // timeline's, so a pinned knowledge thread cannot appear among them.
+          t.projectId !== ASSISTANT_SPACE_ID &&
+          threadProjectFilterState.matches(t.projectId)
+      ),
+      draftThreadKeys
     )
-    // Pinned threads keep one shared pin-time order; the default status sort
-    // (to-do top, last-activity middle, done last) applies to unpinned threads.
-    const pinned = list
-      .filter((t) => t.pinned)
-      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
-    const unpinned = list.filter((t) => !t.pinned)
-    unpinned.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
-    return [...pinned, ...unpinned]
-  })
+  )
 
   /**
    * The browser tab on screen while the browser view is the surface the user is
@@ -2076,8 +2072,8 @@
     void ensureRecentScopeBoards(projectIds)
   })
 
-  let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
-  let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
+  let pinnedTimelineThreads = $derived(timelineLists.pinned)
+  let unpinnedTimelineThreads = $derived(timelineLists.statusListed)
 
   /** Every thread the Threads timeline lists, before its project filter. */
   let timelineThreads = $derived(

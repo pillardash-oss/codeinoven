@@ -664,12 +664,43 @@ export function threadStatusSort(
   const ka = threadStatusSortKey(a, draftThreadKeys)
   const kb = threadStatusSortKey(b, draftThreadKeys)
   if (ka !== kb) return ka - kb
+  // A bookmarked row heads the status it is in. A bookmark never lifts a thread
+  // out of that status   it keeps the row at the top of it (see
+  // {@link splitTimelineThreads}), so the group it lands in is the group it
+  // would have been in unpinned, with the bookmarked rows leading it.
+  if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1
   // Same anchor rule as the project folders' sort, so a dropped row holds the
   // slot the user put it in until newer activity or another drop moves it.
   const aKey = threadOrderKey(a)
   const bKey = threadOrderKey(b)
   if (aKey !== bKey) return bKey - aKey
   return a.id.localeCompare(b.id)
+}
+
+/**
+ * The Threads timeline as the two lists it draws: the pinned rows that open it,
+ * and every row that carries its own status below them.
+ *
+ * A bookmarked thread is pinned in the database   that is what keeps it out of
+ * the automatic cleanup   but it is not a pin to the reader. It stays in the
+ * status it is in, at the head of it (see {@link threadStatusSort}), and the
+ * Projects view keeps it at the head of its project's own strip. Only a plain
+ * pin, the one the user made with the pin action, leaves its status for the
+ * pinned section.
+ */
+export function splitTimelineThreads(
+  threads: readonly Thread[],
+  draftThreadKeys?: ReadonlySet<string> | null
+): { pinned: Thread[]; statusListed: Thread[] } {
+  const pinned: Thread[] = []
+  const statusListed: Thread[] = []
+  for (const thread of threads) {
+    if (thread.pinned && !thread.bookmarked) pinned.push(thread)
+    else statusListed.push(thread)
+  }
+  pinned.sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
+  statusListed.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
+  return { pinned, statusListed }
 }
 
 /**

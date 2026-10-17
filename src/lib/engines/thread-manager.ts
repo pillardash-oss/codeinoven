@@ -1224,8 +1224,11 @@ export class ThreadManager {
     }
 
     const pinnedAt = pinned ? Date.now() : undefined
-    this.threadRepo.setPinned(threadId, pinned, pinnedAt)
-    const updated: Thread = { ...existing, pinned, pinnedAt, updatedAt: Date.now() }
+    // Unpinning drops the bookmark with the pin: a bookmarked thread the user
+    // unpins   from any surface   has to come back as a normal thread.
+    const bookmarked = pinned ? (existing.bookmarked ?? false) : false
+    this.threadRepo.setPinned(threadId, pinned, pinnedAt, bookmarked)
+    const updated: Thread = { ...existing, pinned, pinnedAt, bookmarked, updatedAt: Date.now() }
     this.onChange?.(updated)
     return updated
   }

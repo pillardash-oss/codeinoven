@@ -41,10 +41,12 @@ export interface TimelineDropOptions {
  * A row's place is decided by its own status, never by where it sits: the status
  * picks the group (when the list is grouped) and, inside it, the bucket the
  * status sort keeps together - to-do rows first, the working middle, done rows
- * last. So a drop that would carry a row out of the rows it may sit among cannot
- * be honoured: the next sort would put the row straight back, and a row that
- * snaps back is worse than one that never moved. Such a drop is clamped to the
- * edge of the rows the dragged row may join, on the side the pointer came from.
+ * last. A bookmarked row is a class of its own inside that bucket: it heads the
+ * status it is in and no anchor can carry a plain row above it. So a drop that
+ * would carry a row out of the rows it may sit among cannot be honoured: the
+ * next sort would put the row straight back, and a row that snaps back is worse
+ * than one that never moved. Such a drop is clamped to the edge of the rows the
+ * dragged row may join, on the side the pointer came from.
  *
  * The returned list is in the order the pane renders it: groups in display order
  * when grouped, the rows as handed over when flat.
@@ -63,10 +65,17 @@ export function resolveTimelineDrop(
   // status sort would pull it back into.
   const sequence: Thread[] = []
   const runOf = new Map<string, number>()
-  const bucketOf = new Map<string, number>()
+  const bucketOf = new Map<string, string>()
   const place = (thread: Thread, run: number): void => {
     runOf.set(thread.id, run)
-    bucketOf.set(thread.id, threadStatusSortKey(thread, options.draftThreadKeys))
+    // The status bucket plus the bookmark class, because both outrank a plain
+    // anchor: a bookmarked row heads its own status bucket (see
+    // `threadStatusSort`), so a plain row dropped above one is clamped to the
+    // plain rows' edge instead of snapping back under it on the next sort.
+    bucketOf.set(
+      thread.id,
+      `${threadStatusSortKey(thread, options.draftThreadKeys)}:${thread.bookmarked ? 1 : 0}`
+    )
     sequence.push(thread)
   }
   if (options.grouped) {
