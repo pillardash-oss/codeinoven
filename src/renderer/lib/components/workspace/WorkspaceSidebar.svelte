@@ -56,6 +56,7 @@
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import {
+    filterSearchResultsByProject,
     filterThreadsByQuery,
     groupThreadsByStatus,
     threadHasVisibleWork
@@ -177,9 +178,29 @@
   const searchingThreads = $derived(
     sidebar.threadsSearchOpen && Boolean(sidebar.threadsSearchQuery.trim())
   )
-  const searchResultsById = $derived(
-    new Map(sidebar.threadsSearchResults.map((result) => [result.thread.id, result]))
+  /**
+   * The search results this view shows: the family the search returned, narrowed
+   * to the projects the view's filter is set to. Read here rather than at query
+   * time so toggling the filter re-filters the rows on screen immediately; the
+   * controller independently re-queries on a filter change so a newly selected
+   * project's matches are not limited to what the previous selection fetched.
+   */
+  const visibleSearchResults = $derived(
+    filterSearchResultsByProject(sidebar.threadsSearchResults, (projectId) =>
+      threadProjectFilterState.matches(projectId)
+    )
   )
+  const searchResultsById = $derived(
+    new Map(visibleSearchResults.map((result) => [result.thread.id, result]))
+  )
+
+  // A filter change re-queries an open search instead of leaving the previous
+  // selection's results on screen. The controller reads the filter itself and
+  // keys on it, so this effect drives the re-query without keystrokes triggering
+  // one (the read inside the call is what subscribes the effect to the filter).
+  $effect(() => {
+    sidebar.syncThreadsSearchFilter()
+  })
 
   /**
    * Holds activity-driven reordering back so a burst of ticks becomes one move
@@ -250,9 +271,7 @@
     threadGroupingState.enabled
       ? groupThreadsByStatus(
           searchingThreads
-            ? sidebar.threadsSearchResults
-                .filter((result) => threadProjectFilterState.matches(result.thread.projectId))
-                .map((result) => result.thread)
+            ? visibleSearchResults.map((result) => result.thread)
             : settledTimelineThreads,
           draftThreadKeys
         )
@@ -283,7 +302,7 @@
   const threadSections = $derived.by((): ThreadSection[] => {
     if (!threadGroupingState.enabled) {
       const threads = searchingThreads
-        ? sidebar.threadsSearchResults.map((result) => result.thread)
+        ? visibleSearchResults.map((result) => result.thread)
         : settledTimelineThreads
       // No section at all when there is nothing to show, so the list's own empty
       // state still fires for an ungrouped view with no threads.

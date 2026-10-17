@@ -2639,7 +2639,10 @@
             contextLabel: 'threads across all scopes',
             title: 'Search threads across all scopes',
             onOpen: openThreadFromScopeSearch,
-            fts: {}
+            // The board spans one project's scopes, but a search on it stays a
+            // search for threads: the chats, assistant tasks and browser
+            // container that share the threads table are never board threads.
+            fts: { family: 'projects' }
           }
         },
         {
@@ -2706,7 +2709,8 @@
             contextLabel: 'chats',
             title: 'Search chats',
             onOpen: openThread,
-            fts: { projectId: INBOX_PROJECT_ID }
+            // The Chats view is the inbox family and nothing else.
+            fts: { family: 'chats' }
           }
         },
         {
@@ -2721,6 +2725,7 @@
       viewActions.set('chats', chatsActions)
     } else if (mode === 'projects' && scopeState.sidebarContext) {
       // Same paradigm as every other view: search first, then new thread.
+      const scopeContextProjectId = scopeState.sidebarContext.projectId
       const scopedActions: ViewActionItem[] = [
         {
           id: 'search',
@@ -2735,7 +2740,12 @@
             contextLabel: 'threads in this scope',
             title: 'Search threads in this scope',
             onOpen: (thread: Thread) => void openScopedThread(thread),
-            fts: {}
+            // A scope belongs to exactly one project, so its search is that
+            // project's threads and never another project's, a chat's, or an
+            // assistant task's. The scope's bucket is a ledger stage, not a
+            // search scope: narrowing to it would hide matching threads that
+            // the board filters by stage rather than by ownership.
+            fts: { family: 'projects', projectId: scopeContextProjectId }
           }
         },
         {
@@ -2795,7 +2805,9 @@
             contextLabel: 'threads',
             title: 'Search threads',
             onOpen: openThread,
-            fts: {}
+            // The Projects view lists projects and their threads; a chat or an
+            // assistant task belongs to its own view and its own search.
+            fts: { family: 'projects' }
           }
         },
         {

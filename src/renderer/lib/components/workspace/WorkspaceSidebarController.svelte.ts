@@ -1,8 +1,19 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { INBOX_PROJECT_ID, isOrchestrationChildThread, type Project, type Thread } from '$shared/types'
+import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
+import { isOrchestrationChildThread, type Project, type Thread } from '$shared/types'
 import type { ThreadSearchResult } from '$shared/types'
+import { mergeThreadSearchBatches, isProjectFamilyThread } from './workspace-thread-helpers'
+
+/** Result cap for one search - the same cap a single unfiltered query uses. */
+const THREADS_SEARCH_LIMIT = 50
+/**
+ * Widest project filter that still fans out one query per project. Past this the
+ * filter covers most projects anyway, so one family-wide query is cheaper than
+ * two dozen IPC round trips through the serialized worker connection.
+ */
+const MAX_FILTERED_FANOUT = 12
 
 /**
  * Owns the sidebar's list presentation state: which project folders are
@@ -37,6 +48,9 @@ export class WorkspaceSidebarController {
   threadsSearching = $state(false)
   private threadsSearchTimer: ReturnType<typeof setTimeout> | undefined
   private threadsSearchRequestId = 0
+  /** Project-filter selection the live threads search was run under, so a filter
+   *  change re-runs that search instead of leaving stale results on screen. */
+  private threadsSearchFilterKey = threadProjectFilterState.selectedIds.join(',')
 
   /** Initialise expandedFolders: start with all projects expanded, then fold
    *  any the user has previously collapsed. */
@@ -204,15 +218,10 @@ export class WorkspaceSidebarController {
     }
     this.threadsSearching = true
     this.threadsSearchTimer = setTimeout(() => {
-      void invoke('threads:search', safeQuery, { limit: 50 })
+      void this.searchThreadsView(safeQuery)
         .then((results) => {
           if (requestId !== this.threadsSearchRequestId) return
-          this.threadsSearchResults = results.filter(
-            (r) =>
-              !isOrchestrationChildThread(r.thread) &&
-              r.thread.projectId !== INBOX_PROJECT_ID &&
-              !r.thread.archived
-          )
+          this.threadsSearchResults = results
           this.threadsSearching = false
         })
         .catch(() => {
@@ -221,5 +230,73 @@ export class WorkspaceSidebarController {
           this.threadsSearching = false
         })
     }, 120)
+  }
+
+  /**
+   * Re-run an open threads search when the project filter changes.
+   *
+   * The Threads view is the project threads timeline, so its search obeys that
+   * view's own scope: the project family (never the chats, assistant or browser
+   * containers) narrowed to the projects the filter is set to. A filter change
+   * is a scope change, so results already on screen are re-queried rather than
+   * left over from the previous selection. Keyed on the selection so keystrokes
+   * and unrelated re-renders never trigger an extra search.
+   */
+  syncThreadsSearchFilter(): void {
+    const selection = threadProjectFilterState.selectedIds
+    const key = [...selection].join(',')
+    if (key === this.threadsSearchFilterKey) return
+    this.threadsSearchFilterKey = key
+    if (!this.threadsSearchOpen || !this.threadsSearchQuery.trim()) return
+    this.runThreadsSearch(this.threadsSearchQuery)
+  }
+
+  /**
+   * One search for the Threads view. With a project filter on, every selected
+   * project is asked separately so its matches cannot be crowded out of a single
+   * cross-project result cap; with no filter (or a filter spanning most
+   * projects) one family-wide query answers. Either way the answer is narrowed to
+   * the family that view lists: project threads, live, never an orchestration
+   * child. Which of those projects the view then shows is the view's own filter,
+   * applied where its rows render.
+   */
+  private async searchThreadsView(query: string): Promise<ThreadSearchResult[]> {
+    const selection = threadProjectFilterState.selectedIds
+    const fanOut =
+      !threadProjectFilterState.isAll &&
+      selection.length > 0 &&
+      selection.length <= MAX_FILTERED_FANOUT
+        ? [...selection]
+        : []
+    const batches =
+      fanOut.length > 0
+        ? await Promise.all(
+            fanOut.map((projectId) =>
+              invoke('threads:search', query, {
+                family: 'projects',
+                projectId,
+                limit: THREADS_SEARCH_LIMIT
+              }).catch((): ThreadSearchResult[] => [])
+            )
+          )
+        : [
+            await invoke('threads:search', query, {
+              family: 'projects',
+              limit: THREADS_SEARCH_LIMIT
+            })
+          ]
+    return mergeThreadSearchBatches(batches, THREADS_SEARCH_LIMIT).filter((result) =>
+      this.threadsSearchIncludes(result)
+    )
+  }
+
+  /** Whether one search result belongs to the family the Threads view lists. */
+  private threadsSearchIncludes(result: ThreadSearchResult): boolean {
+    const thread = result.thread
+    return (
+      !thread.archived &&
+      !isOrchestrationChildThread(thread) &&
+      isProjectFamilyThread(thread.projectId)
+    )
   }
 }

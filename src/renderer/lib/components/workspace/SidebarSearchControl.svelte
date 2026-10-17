@@ -34,8 +34,6 @@
     size = 'sm'
   }: Props = $props()
 
-  let searchInput: HTMLInputElement | undefined = $state(undefined)
-
   const triggerClass = $derived(
     size === 'md'
       ? 'flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
@@ -43,7 +41,6 @@
   )
 
   const focusSearchInput: Attachment<HTMLInputElement> = (element) => {
-    searchInput = element
     element.focus()
   }
 </script>
@@ -73,28 +70,20 @@
           value={query}
           oninput={(e: Event) => onQueryChange((e.currentTarget as HTMLInputElement).value)}
         />
-        {#if query}
-          <button
-            type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Clear search"
-            title="Clear search"
-            onclick={() => {
-              onQueryChange('')
-              searchInput?.focus()
-            }}
-          >
-            <CioClose size={13} />
-          </button>
-        {/if}
-        <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
-        <Popover.Close
+        <!-- One control, one meaning: the X dismisses the whole search. It used
+             to be two X's side by side ("clear" and "close"), so clicking the
+             left one emptied the query, wiped the sidebar results and left the
+             panel open - a dismiss that only looked like one. Dismissal already
+             clears the query and its results. -->
+        <button
+          type="button"
           class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Close search"
-          title="Close search"
+          aria-label="Dismiss search"
+          title="Dismiss search"
+          onclick={() => onOpenChange(false)}
         >
           <CioClose size={13} />
-        </Popover.Close>
+        </button>
       </div>
     </Popover.Content>
   </Popover.Portal>

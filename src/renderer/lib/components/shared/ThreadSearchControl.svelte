@@ -11,6 +11,10 @@
   interface FtsScope {
     /** Scope the search to one project. Omit for a global search. */
     projectId?: string
+    /** Scope the search to one thread family: the project threads, the chats, or
+     *  one assistant's tasks. Omitted, a search spans every family except the
+     *  hidden browser-chat container. */
+    family?: 'projects' | 'chats' | 'assistant'
     /** Optional client-side filter applied to results (e.g. exclude the inbox). */
     filter?: (thread: Thread) => boolean
   }
@@ -95,6 +99,7 @@
     searchTimer = setTimeout(() => {
       void invoke('threads:search', safeQuery, {
         projectId: scope.projectId,
+        family: scope.family,
         limit: SEARCH_LIMIT
       })
         .then((results) => {
