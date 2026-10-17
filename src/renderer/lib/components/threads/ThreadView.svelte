@@ -14840,17 +14840,19 @@
 
 <!-- The destination picker for a relocation or a copy: the same spotlight the
      rest of the app picks from, listing this project's chats in the order the
-     project view shows them. -->
-<RelocateThreadPicker
-  open={relocationRequest !== null}
-  projectId={thread.projectId}
-  projectName={project?.name ?? 'this project'}
-  sourceThreadId={thread.id}
-  title={relocationPickerTitle}
-  mode={relocationRequest?.mode ?? 'relocate'}
-  onSelect={(target) => void commitComposerRelocation(target)}
-  onClose={closeRelocationPicker}
-/>
+     project view shows them. Mounted only while a carry is being picked. -->
+{#if relocationRequest}
+  <RelocateThreadPicker
+    projectId={thread.projectId}
+    projectName={project?.name ?? 'this project'}
+    sourceThreadId={thread.id}
+    item={relocationRequest.item}
+    mode={relocationRequest.mode}
+    title={relocationPickerTitle}
+    onSelect={(target) => void commitComposerRelocation(target)}
+    onClose={closeRelocationPicker}
+  />
+{/if}
 
 <TranscriptExportModal
   open={transcriptExportOpen}

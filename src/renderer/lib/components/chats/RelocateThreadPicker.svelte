@@ -2,27 +2,33 @@
   import CioChat from '$lib/components/icons/cio/CioChat.svelte'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
   import { invoke } from '$lib/ipc.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadPaletteRow } from '$lib/threads/thread-palette-row'
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
-  import type { ComposerRelocationMode } from './composer-relocation'
+  import {
+    carryBlockedReason,
+    type ComposerRelocationItem,
+    type ComposerRelocationMode
+  } from './composer-relocation'
 
   interface Props {
-    open: boolean
     projectId: string
     /** Names the project on every row, so the destination is never in doubt. */
     projectName: string
     /** The chat the content is coming from: never a destination itself. */
     sourceThreadId: string
-    /** What the picker completes, e.g. `Relocate doc comment`. */
-    title: string
+    /** What is being carried, so a row can say when it cannot take it. */
+    item: ComposerRelocationItem
     /** Which verb the search field asks for: a thread to relocate into, or one
      *  to copy into. */
     mode: ComposerRelocationMode
+    /** What the picker completes, e.g. `Relocate doc comment`. */
+    title: string
     onSelect: (thread: Thread) => void
     onClose: () => void
   }
 
-  let { open, projectId, projectName, sourceThreadId, title, mode, onSelect, onClose }: Props =
+  let { projectId, projectName, sourceThreadId, item, mode, title, onSelect, onClose }: Props =
     $props()
 
   let threads = $state<Thread[]>([])
@@ -37,8 +43,23 @@
     return `relocate:${threadId}`
   }
 
+  /**
+   * Why this destination cannot take the carry, or null when it can.
+   *
+   * A composer holds a bounded number of references and a carry never takes the
+   * place of what the destination holds, so a chat that cannot fit it says so on
+   * its own row instead of the carry being refused after it was picked. A chat
+   * whose draft this window has not read answers null: the carry itself is the
+   * authority, and it refuses with the same sentence.
+   */
+  function blockedReason(thread: Thread): string | null {
+    return carryBlockedReason({
+      item,
+      existingReferences: rendererRecovery.draftPromptReferences(thread.projectId, thread.id)
+    })
+  }
+
   $effect(() => {
-    if (!open || !projectId) return
     const request = ++requestId
     loading = true
     void invoke('thread:list', projectId)
@@ -57,14 +78,18 @@
   })
 
   const actions = $derived<ActionDefinition[]>(
-    threads.map((thread) =>
-      threadPaletteRow({
-        id: rowId(thread.id),
-        thread,
-        // One project is being picked from, so every row is named by it.
-        container: { label: projectName, icon: CioChat }
-      })
-    )
+    threads.map((thread) => {
+      const blocked = blockedReason(thread)
+      return {
+        ...threadPaletteRow({
+          id: rowId(thread.id),
+          thread,
+          // One project is being picked from, so every row is named by it.
+          container: { label: projectName, icon: CioChat }
+        }),
+        ...(blocked ? { disabledReason: blocked } : {})
+      }
+    })
   )
 
   function selectThread(selection: ActionSelection): void {
@@ -73,21 +98,19 @@
   }
 </script>
 
-<!-- The picker is a dialog palette, so its module is only needed once it is
-     open. Deferring the import keeps this component out of the conversation's
-     own chunk: it is reachable from the composer of every project thread. -->
-{#if open}
-  {#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
-    <CommandPalette
-      {open}
-      {title}
-      {actions}
-      placeholder={`Search threads to ${mode} into…`}
-      emptyLabel={loading ? 'Loading threads…' : 'No other threads in this project'}
-      headerIcon={CioChat}
-      onSelect={selectThread}
-      {onClose}
-      shortcutLabel="ESC"
-    />
-  {/await}
-{/if}
+<!-- The picker is a dialog palette, so its module is only needed once the user
+     asks for it: this component is mounted for one carry and unmounted with it,
+     which keeps CommandPalette out of the conversation's own chunk. -->
+{#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
+  <CommandPalette
+    open
+    {title}
+    {actions}
+    placeholder={`Search threads to ${mode} into…`}
+    emptyLabel={loading ? 'Loading threads…' : 'No other threads in this project'}
+    headerIcon={CioChat}
+    onSelect={selectThread}
+    {onClose}
+    shortcutLabel="ESC"
+  />
+{/await}
