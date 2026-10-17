@@ -147,9 +147,67 @@ export interface ComposerRelocationInput {
   mode: ComposerRelocationMode
 }
 
-/** Carry one composer item to another chat of the same project. */
+/**
+ * Carry one composer item to another chat of the same project.
+ *
+ * The carry is a transaction, so a failure can never leave content in two places
+ * or in none:
+ *
+ * 1. the destination is written and its draft is committed and awaited, so
+ *    "carried" means persisted, not merely held in this window's memory;
+ * 2. only then does the source give the item up, and its draft is committed and
+ *    awaited too, so a restart cannot bring the item back to a chat it left;
+ * 3. any failure restores every draft it touched, newest state last, and the
+ *    caller reports it with nothing changed. A destination that cannot be read
+ *    is refused before anything is written at all.
+ */
 export async function applyComposerRelocation(input: ComposerRelocationInput): Promise<void> {
-  const entry = await targetDraftEntry(input.projectId, input.targetThreadId)
+  const { projectId, sourceThreadId, targetThreadId } = input
+  // Read before writing: an unknown destination draft must never be overwritten.
+  const targetBefore = await targetDraftEntry(projectId, targetThreadId)
+  const carried = carryInto(targetBefore, input)
+  const targetAfter = carried.entry
+
+  try {
+    writeDraft(projectId, targetThreadId, targetAfter)
+    syncReferences(projectId, targetThreadId, targetAfter)
+    await commitDraft(projectId, targetThreadId)
+  } catch (error) {
+    restoreDraft(projectId, targetThreadId, targetBefore)
+    throw error
+  }
+
+  if (input.mode !== 'relocate') return
+
+  // The item is in the destination for good, so the source may give it up.
+  const sourceBefore = sourceDraft(input)
+  const sourceAfter = dropFromSource(sourceBefore, input)
+  try {
+    writeDraft(projectId, sourceThreadId, sourceAfter)
+    syncReferences(projectId, sourceThreadId, sourceAfter)
+    await commitDraft(projectId, sourceThreadId)
+  } catch (error) {
+    // The move failed as a whole: the source keeps its item and the destination
+    // is put back exactly as it was.
+    restoreDraft(projectId, sourceThreadId, sourceBefore)
+    restoreDraft(projectId, targetThreadId, targetBefore)
+    await commitDraft(projectId, targetThreadId).catch(() => undefined)
+    throw error
+  }
+}
+
+/**
+ * The destination's draft with the carried item added to it.
+ *
+ * Nothing the destination holds is replaced: a file it already attached keeps
+ * its one chip for its `file://` key, and a reference id it already holds is the
+ * same reference, so the carried content updates that entry where it sits rather
+ * than arriving under a repeated key.
+ */
+function carryInto(
+  entry: ComposerDraftEntry | null,
+  input: ComposerRelocationInput
+): { entry: ComposerDraftEntry } {
   const carried: ComposerDraftEntry = {
     text: entry?.text ?? '',
     attachments: entry?.attachments ?? [],
@@ -160,39 +218,53 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
   }
 
   if (input.item.kind === 'attachment') {
-    // Appending to a file the destination already attached would leave two chips
-    // with one `file://` key, so the duplicate guard drops the repeat: the file
-    // is already there and the destination keeps its single chip for it.
     carried.attachments = uniqueAttachments([...carried.attachments, input.item.attachment])
-    writeTargetDraft(input.projectId, input.targetThreadId, carried)
-    if (input.mode === 'relocate') dropSourceAttachment(input, input.item.attachment)
-    return
+    return { entry: carried }
   }
 
-  const carriedReferences = itemReferences(input.item).map((reference) =>
+  const references = itemReferences(input.item).map((reference) =>
     // A copy is a new reference, never the same one twice: a reference is
     // identified by its id, and both chats must be able to edit their own.
     input.mode === 'copy' ? { ...reference, id: copiedReferenceId() } : reference
   )
-  // The destination's own annotations are kept and the carried ones join them,
-  // never in place of them. A reference id that is already there is the same
-  // reference, so the carried content updates that entry where it sits rather
-  // than arriving as a second chip the composer would reject as a repeated key.
-  carried.promptReferences = carriedReferences.reduce<ResponseReferenceAnchor[]>(
-    (references, reference) => mergeReferenceById(references, reference),
+  carried.promptReferences = references.reduce<ResponseReferenceAnchor[]>(
+    (known, reference) => mergeReferenceById(known, reference),
     carried.promptReferences
   )
-  writeTargetDraft(input.projectId, input.targetThreadId, carried)
-  responseReferencesState.setForThread(
-    input.projectId,
-    input.targetThreadId,
-    carried.promptReferences
-  )
-  if (input.mode === 'relocate') {
-    dropSourceReferences(
-      input,
-      carriedReferences.map((reference) => reference.id)
-    )
+  return { entry: carried }
+}
+
+/** The source's draft with the carried item taken out of it. */
+function dropFromSource(
+  entry: ComposerDraftEntry,
+  input: ComposerRelocationInput
+): ComposerDraftEntry {
+  if (input.item.kind === 'attachment') {
+    const identity = attachmentFileIdentity(input.item.attachment)
+    return {
+      ...entry,
+      attachments: entry.attachments.filter(
+        (candidate) => attachmentFileIdentity(candidate) !== identity
+      )
+    }
+  }
+  const moved = new SvelteSet(itemReferences(input.item).map((reference) => reference.id))
+  return {
+    ...entry,
+    promptReferences: entry.promptReferences.filter((candidate) => !moved.has(candidate.id))
+  }
+}
+
+/** Every part of a thread's composer draft, so a rollback is exact. */
+function sourceDraft(input: ComposerRelocationInput): ComposerDraftEntry {
+  const { projectId, sourceThreadId } = input
+  return {
+    text: rendererRecovery.draftFor(projectId, sourceThreadId),
+    attachments: rendererRecovery.attachmentsFor(projectId, sourceThreadId),
+    projectReferences: rendererRecovery.projectReferencesFor(projectId, sourceThreadId),
+    taskReferences: rendererRecovery.taskReferencesFor(projectId, sourceThreadId),
+    promptReferences: rendererRecovery.draftPromptReferences(projectId, sourceThreadId),
+    startAfterThreads: rendererRecovery.startAfterThreadsFor(projectId, sourceThreadId)
   }
 }
 
@@ -234,10 +306,9 @@ function copiedReferenceId(): string {
  * Write a thread's composer draft the way its own composer writes it.
  *
  * The start-after threads go first because `setDraft` carries the entry's
- * existing ones over, and the debounced database commit reads the entry the
- * last write left behind.
+ * existing ones over, and the commit reads the entry the last write left behind.
  */
-function writeTargetDraft(projectId: string, threadId: string, entry: ComposerDraftEntry): void {
+function writeDraft(projectId: string, threadId: string, entry: ComposerDraftEntry): void {
   if (entry.startAfterThreads.length > 0) {
     rendererRecovery.setStartAfterThreads(projectId, threadId, entry.startAfterThreads)
   }
@@ -252,38 +323,38 @@ function writeTargetDraft(projectId: string, threadId: string, entry: ComposerDr
   )
 }
 
-/** Take a moved attachment out of the source composer, keeping everything else. */
-function dropSourceAttachment(
-  input: Pick<ComposerRelocationInput, 'projectId' | 'sourceThreadId'>,
-  attachment: PromptAttachment
-): void {
-  const { projectId, sourceThreadId } = input
-  const identity = attachmentFileIdentity(attachment)
-  rendererRecovery.setDraft(
-    projectId,
-    sourceThreadId,
-    rendererRecovery.draftFor(projectId, sourceThreadId),
-    rendererRecovery
-      .attachmentsFor(projectId, sourceThreadId)
-      .filter((candidate) => attachmentFileIdentity(candidate) !== identity),
-    rendererRecovery.projectReferencesFor(projectId, sourceThreadId),
-    rendererRecovery.taskReferencesFor(projectId, sourceThreadId),
-    rendererRecovery.draftPromptReferences(projectId, sourceThreadId)
-  )
+/**
+ * Keep the in-memory reference store in step with a draft this carry wrote.
+ *
+ * The store is what draws the pins, the chips and the popover rows, so a draft
+ * written for a thread the user is looking at is only half-written until the
+ * store agrees with it.
+ */
+function syncReferences(projectId: string, threadId: string, entry: ComposerDraftEntry): void {
+  responseReferencesState.setForThread(projectId, threadId, entry.promptReferences)
 }
 
-/** Take moved references out of the source composer, keeping everything else. */
-function dropSourceReferences(
-  input: Pick<ComposerRelocationInput, 'projectId' | 'sourceThreadId'>,
-  referenceIds: readonly string[]
-): void {
-  const { projectId, sourceThreadId } = input
-  const moved = new SvelteSet(referenceIds)
-  responseReferencesState.setForThread(
-    projectId,
-    sourceThreadId,
-    responseReferencesState
-      .forThread(projectId, sourceThreadId)
-      .filter((candidate) => !moved.has(candidate.id))
-  )
+/**
+ * Commit a thread's composer draft now and wait for main to have it.
+ *
+ * The composer's own commits are debounced by ten seconds of inactivity, which
+ * is right for typing and wrong for a carry: "carried" has to mean persisted
+ * before the source gives anything up, or a window that dies in between loses the
+ * item from both chats.
+ */
+async function commitDraft(projectId: string, threadId: string): Promise<void> {
+  const draftJson = rendererRecovery.composerDraftJson(projectId, threadId)
+  await invoke('thread:setDraftState', projectId, threadId, draftJson !== null, draftJson)
+}
+
+/** Put a thread's draft back exactly as it was before a carry touched it. */
+function restoreDraft(projectId: string, threadId: string, entry: ComposerDraftEntry | null): void {
+  if (entry === null) {
+    // Nothing was there before, so nothing may be left behind.
+    rendererRecovery.clearDraft(projectId, threadId)
+    responseReferencesState.setForThread(projectId, threadId, [])
+    return
+  }
+  writeDraft(projectId, threadId, entry)
+  syncReferences(projectId, threadId, entry)
 }

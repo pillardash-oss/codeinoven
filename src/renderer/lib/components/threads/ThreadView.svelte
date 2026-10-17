@@ -9854,10 +9854,11 @@
   /**
    * Carry the requested item to the chosen chat and land there with it.
    *
-   * The item is written into the destination's composer draft, so the picked
-   * chat opens with the file attached or the comment pinned and ready to send;
-   * a move also takes it out of this composer. The composer is remounted on the
-   * way out because it was drawn from the draft the move just changed.
+   * The carry is a transaction: the destination is written and persisted first,
+   * and only then does this composer give the item up, so a failure leaves every
+   * draft exactly as it was and nothing is reported as moved. The composer is
+   * remounted on the way out because it was drawn from the draft the move just
+   * changed.
    */
   async function commitComposerRelocation(target: Thread): Promise<void> {
     const request = relocationRequest
@@ -9873,7 +9874,7 @@
         mode: request.mode
       })
     } catch (error) {
-      reportError(error, `The ${noun} could not be carried to that chat.`)
+      reportError(error, `Could not carry the ${noun} to that chat; nothing was changed.`)
       return
     }
     toast.success(`${request.mode === 'copy' ? 'Copied' : 'Moved'} ${noun} to ${target.title}`)
