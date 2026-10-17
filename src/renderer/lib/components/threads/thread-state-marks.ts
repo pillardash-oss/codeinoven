@@ -4,8 +4,9 @@ import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
 import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
 import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
 import CioTemporaryChat from '$lib/components/icons/cio/CioTemporaryChat.svelte'
+import CioTools from '$lib/components/icons/cio/CioTools.svelte'
 import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
-import { AlarmClock, Inbox, Pickaxe, Toolbox } from '@lucide/svelte'
+import { AlarmClock, Inbox, Pickaxe } from '@lucide/svelte'
 import type { Component } from 'svelte'
 import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
 import type { ThreadStatusTone } from '$shared/thread-status-policy'
@@ -176,7 +177,7 @@ export const THREAD_STATE_MARKS = {
     dash: 'dashed'
   },
   spec: {
-    icon: Toolbox,
+    icon: CioTools,
     label: 'Spec ready',
     tone: 'spec',
     colour: 'var(--color-thread-spec)',
