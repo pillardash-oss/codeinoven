@@ -24,6 +24,43 @@ export type IntentSearchProvider = (
 ) => Promise<IntentThreadMatch[]>
 
 /**
+ * How long a search waits for semantic matches before it answers with the
+ * keyword results it already has.
+ *
+ * A resident embedding runtime answers a query in tens of milliseconds
+ * (measured: 45 ms for a whole hybrid search, end to end), so the budget is not
+ * a latency allowance for the normal case. It bounds the two cases that are not
+ * normal: a query landing behind an indexing sweep's batch (a thread is up to
+ * six windows of work) and a runtime that is still booting its model (measured:
+ * 22 s). Neither may hold an interactive search open, so intent ranking joins
+ * the answer only when it is ready in time and is otherwise dropped.
+ */
+export const INTENT_SEARCH_BUDGET_MS = 1_500
+
+/**
+ * Resolve with `work`'s value when it lands inside `budgetMs`, and with null
+ * when it does not.
+ *
+ * The loser of the race stays observed either way: `Promise.race` holds both
+ * inputs, so a late rejection can never surface as an unhandled rejection. The
+ * work itself is not cancelled - a boot that missed its budget keeps warming the
+ * runtime for the next query.
+ */
+export async function withinBudget<T>(work: Promise<T>, budgetMs: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      work,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), budgetMs)
+      })
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+/**
  * Search across thread titles and conversation content (user messages + agent
  * final output). The FTS queries run on the worker's connection (serialized)
  * with a primary-connection fallback.
@@ -56,7 +93,7 @@ export class ThreadSearchService {
     const { results: keyword, limit } = await this.keywordSearch(raw, options)
     if (!this.intentProvider) return keyword
     try {
-      const matches = await this.intentProvider(raw, options)
+      const matches = await this.intentMatchesWithinBudget(raw, options)
       if (matches.length === 0) return keyword
       const threads = await this.threadRepo.listByIdsViaWorker(
         matches.map((match) => match.threadId)
@@ -77,6 +114,35 @@ export class ThreadSearchService {
       Logger.dev('Intent search enrichment failed; returning keyword results.', error)
       return keyword
     }
+  }
+
+  /**
+   * Semantic matches that arrived in time to join the answer, or none.
+   *
+   * The provider is asked only after the keyword answer is in hand, and it is
+   * raced against {@link INTENT_SEARCH_BUDGET_MS}: the keyword results are the
+   * search, semantic ranking is an enhancement, and an enhancement never delays
+   * the answer or leaves the caller waiting on a local model. A provider that
+   * fails or misses the deadline is logged and dropped.
+   */
+  private async intentMatchesWithinBudget(
+    raw: string,
+    options: ThreadSearchOptions
+  ): Promise<IntentThreadMatch[]> {
+    const provider = this.intentProvider
+    if (!provider) return []
+    const pending = provider(raw, options).catch((error) => {
+      Logger.dev('Intent search failed; returning keyword results.', error)
+      return [] as IntentThreadMatch[]
+    })
+    const matches = await withinBudget(pending, INTENT_SEARCH_BUDGET_MS)
+    if (matches === null) {
+      Logger.dev('Intent search missed its budget; returning keyword results.', {
+        budgetMs: INTENT_SEARCH_BUDGET_MS
+      })
+      return []
+    }
+    return matches
   }
 
   private async keywordSearch(

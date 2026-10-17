@@ -2668,6 +2668,7 @@
           props: {
             open: sidebar.threadsSearchOpen,
             query: sidebar.threadsSearchQuery,
+            loading: sidebar.threadsSearching,
             onOpenChange: (open: boolean) => {
               if (open) sidebar.openThreadsSearch()
               else sidebar.closeThreadsSearch()

@@ -23,6 +23,14 @@ export interface EmbeddingRuntime {
   readonly id: EmbeddingRuntimeId
   /** Whether the runtime can actually run on this machine right now. */
   isAvailable(): Promise<boolean>
+  /**
+   * Whether the model is loaded and a query could embed without a boot.
+   *
+   * A boot is tens of seconds of model loading (measured: 22 s for the shipped
+   * EmbeddingGemma model on CPU), so callers that have to answer an interactive
+   * request ask this first and warm the runtime in the background instead.
+   */
+  isResident(): boolean
   /** Embed a batch of texts. Order of the result matches the input order. */
   embed(texts: readonly string[], signal: AbortSignal): Promise<Float32Array[]>
   contextBudget(): Promise<number>

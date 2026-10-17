@@ -1,6 +1,7 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
 import { isOrchestrationChildThread, type Project, type Thread } from '$shared/types'
 import type { ThreadSearchResult } from '$shared/types'
@@ -46,6 +47,17 @@ export class WorkspaceSidebarController {
   threadsSearchQuery = $state('')
   threadsSearchResults = $state<ThreadSearchResult[]>([])
   threadsSearching = $state(false)
+  /**
+   * Whether the sidebar list is showing search results rather than the timeline
+   * the reader was already on.
+   *
+   * It turns on when a search first settles, not when a key is pressed. The
+   * panel replaces the list, so turning it on with the query emptied the sidebar
+   * for as long as the search took to answer - and left it empty for good when
+   * the answer never came. It goes off again when the query is cleared or the
+   * search is dismissed, which puts the timeline back.
+   */
+  threadsSearchShowingResults = $state(false)
   private threadsSearchTimer: ReturnType<typeof setTimeout> | undefined
   private threadsSearchRequestId = 0
   /** Project-filter selection the live threads search was run under, so a filter
@@ -200,6 +212,7 @@ export class WorkspaceSidebarController {
     this.threadsSearchOpen = false
     this.threadsSearchQuery = ''
     this.threadsSearchResults = []
+    this.threadsSearchShowingResults = false
     this.threadsSearching = false
     this.threadsSearchRequestId++
     if (this.threadsSearchTimer) clearTimeout(this.threadsSearchTimer)
@@ -213,21 +226,28 @@ export class WorkspaceSidebarController {
     const requestId = ++this.threadsSearchRequestId
     if (!safeQuery) {
       this.threadsSearchResults = []
+      this.threadsSearchShowingResults = false
       this.threadsSearching = false
       return
     }
+    // The list keeps whatever it is showing until the answer lands: the panel
+    // swaps on the first result set, never on the keystroke that asked for it.
     this.threadsSearching = true
     this.threadsSearchTimer = setTimeout(() => {
       void this.searchThreadsView(safeQuery)
         .then((results) => {
           if (requestId !== this.threadsSearchRequestId) return
           this.threadsSearchResults = results
+          this.threadsSearchShowingResults = true
           this.threadsSearching = false
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (requestId !== this.threadsSearchRequestId) return
           this.threadsSearchResults = []
           this.threadsSearching = false
+          // The list keeps whatever it was showing: a search that failed found
+          // nothing out, so it must not read as "no matching threads".
+          logRendererError('Thread search failed', error)
         })
     }, 120)
   }

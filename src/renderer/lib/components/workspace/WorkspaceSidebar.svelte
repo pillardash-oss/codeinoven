@@ -175,8 +175,17 @@
   let scopedSidebarVisible = $derived(mode === 'projects' && scopeState.sidebarContext !== null)
   let projectsTreeVisible = $derived(mode === 'projects' && scopeState.sidebarContext === null)
 
-  const searchingThreads = $derived(
-    sidebar.threadsSearchOpen && Boolean(sidebar.threadsSearchQuery.trim())
+  /**
+   * Whether the list is showing search results instead of the timeline.
+   *
+   * The controller turns this on when a search settles, not when a key is typed:
+   * the panel replaces the whole list, so entering search mode before the first
+   * answer was ready emptied the sidebar on the keystroke and left it showing
+   * `Searching…` for as long as the query took. Until results exist the timeline
+   * the reader was on stays exactly where it was.
+   */
+  const searchPanelActive = $derived(
+    sidebar.threadsSearchOpen && sidebar.threadsSearchShowingResults
   )
   /**
    * The search results this view shows: the family the search returned, narrowed
@@ -270,7 +279,7 @@
   const threadGroups = $derived(
     threadGroupingState.enabled
       ? groupThreadsByStatus(
-          searchingThreads
+          searchPanelActive
             ? visibleSearchResults.map((result) => result.thread)
             : settledTimelineThreads,
           draftThreadKeys
@@ -301,7 +310,7 @@
 
   const threadSections = $derived.by((): ThreadSection[] => {
     if (!threadGroupingState.enabled) {
-      const threads = searchingThreads
+      const threads = searchPanelActive
         ? visibleSearchResults.map((result) => result.thread)
         : settledTimelineThreads
       // No section at all when there is nothing to show, so the list's own empty
@@ -860,7 +869,7 @@
         {/if}
       </SidebarListPane>
       <SidebarListPane name="threads" visible={!loading && mode === 'threads'}>
-        {#if !searchingThreads}
+        {#if !searchPanelActive}
           <PinnedSection
             sectionKey="threads"
             label="Pinned Threads"
@@ -923,7 +932,7 @@
                  Search results are never budgeted: they are the rows the user
                  just asked for, already capped by the search itself. -->
             {@const sectionThreads =
-              searchingThreads || section.threads.length <= TIMELINE_PAGE_SIZE
+              searchPanelActive || section.threads.length <= TIMELINE_PAGE_SIZE
                 ? section.threads
                 : sidebar.visibleThreads(
                     section.key,
@@ -931,7 +940,7 @@
                     activeThreadId,
                     TIMELINE_PAGE_SIZE
                   )}
-            {@const hiddenSectionCount = searchingThreads
+            {@const hiddenSectionCount = searchPanelActive
               ? 0
               : sidebar.hiddenThreadCount(
                   section.key,
@@ -966,7 +975,7 @@
               {/if}
               <div class="space-y-px {section.group ? 'pb-5' : ''}" role="list">
                 {#each sectionThreads as thread (thread.id)}
-                  {@const result = searchingThreads ? searchResultsById.get(thread.id) : undefined}
+                  {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
                   <div data-row-key={thread.id} in:fade={threadsRowArrive(thread.createdAt)}>
                     {#if result}
                       <ThreadSearchResultRow
@@ -1022,9 +1031,9 @@
               {/if}
             </section>
           {:else}
-            {#if searchingThreads || pinnedTimelineThreads.length === 0}
+            {#if searchPanelActive || pinnedTimelineThreads.length === 0}
               <p class="px-2 py-6 text-center text-xs text-dimmed">
-                {searchingThreads
+                {searchPanelActive
                   ? sidebar.threadsSearching
                     ? 'Searching…'
                     : 'No matching threads'
@@ -1037,7 +1046,7 @@
             {/if}
           {/each}
         </div>
-        {#if !searchingThreads && hasMoreHistory}
+        {#if !searchPanelActive && hasMoreHistory}
           <button
             class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
             disabled={historyLoading}

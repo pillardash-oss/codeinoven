@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import { Popover } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
 
@@ -13,6 +14,13 @@
     onOpenChange: (open: boolean) => void
     /** Called when the user types in the search input. */
     onQueryChange: (value: string) => void
+    /**
+     * Whether a search for the typed query is still in flight. Shows the
+     * indicator in the input row, which is where the only visible sign of a
+     * search in progress lives: the list behind the popover keeps the rows it
+     * was showing until results replace them.
+     */
+    loading?: boolean
     /** Accessible label for the trigger button and popover. */
     ariaLabel: string
     /** Tooltip shown on the trigger button. */
@@ -31,6 +39,7 @@
     ariaLabel,
     title,
     placeholder,
+    loading = false,
     size = 'sm'
   }: Props = $props()
 
@@ -70,6 +79,15 @@
           value={query}
           oninput={(e: Event) => onQueryChange((e.currentTarget as HTMLInputElement).value)}
         />
+        {#if loading}
+          <span
+            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed"
+            role="status"
+            aria-label="Searching"
+          >
+            <CioSpinner size={13} class="animate-spin" />
+          </span>
+        {/if}
         <!-- One control, one meaning: the X dismisses the whole search. It used
              to be two X's side by side ("clear" and "close"), so clicking the
              left one emptied the query, wiped the sidebar results and left the

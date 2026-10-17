@@ -375,6 +375,11 @@ export class SearchService {
    * Returns an empty list when intent search is off, no model is ready, nothing is
    * indexed yet, or the embedding fails, so the hybrid search falls back to
    * keyword results.
+   *
+   * A cold runtime is never booted here. Booting it loads the embedding model
+   * and takes tens of seconds, which is far more than an interactive search can
+   * wait, so the query answers keyword-only and the boot runs in the background
+   * for the next one.
    */
   async searchIntent(query: string, limit: number): Promise<IntentThreadMatch[]> {
     const model = this.activeModel()
@@ -383,14 +388,15 @@ export class SearchService {
     if (!this.canEmbed()) return []
     const trimmed = query.trim()
     if (trimmed.length === 0) return []
+    const document = `${model.queryPrefix}${trimmed}`
+    if (!this.runtimeResident()) {
+      this.warmRuntime(model, document)
+      return []
+    }
     const controller = new AbortController()
     try {
       const runtime = await this.ensureRuntime(model)
-      const vector = await this.embedOne(
-        runtime,
-        `${model.queryPrefix}${trimmed}`,
-        controller.signal
-      )
+      const vector = await this.embedOne(runtime, document, controller.signal)
       // A rebuild, disable, or model change may have started during embedding.
       if (!this.settings.enabled || this.settings.activeModelId !== model.id) return []
       return this.index.search(vector, Math.max(1, limit))
@@ -571,6 +577,33 @@ export class SearchService {
     if (!vector) throw new Error('The embedding model returned no vector.')
     normalizeInPlace(vector)
     return vector
+  }
+
+  /**
+   * Load the embedding model in the background, so the next query can rank
+   * semantically.
+   *
+   * The runtime disposes itself after a minute idle to hand its memory back, so
+   * the first query of a session always finds it cold. Paying for the load here
+   * is what keeps it off the interactive path: the query that found it cold
+   * answers from keyword results, and the one after it is hybrid again. Going
+   * through `embed` rather than a bare boot is deliberate - it is what re-arms
+   * the runtime's idle timer, so a warm-up nobody follows up on is retired
+   * again a minute later instead of holding the model for the rest of the
+   * session.
+   */
+  private warmRuntime(model: InstalledSearchModel, text: string): void {
+    void (async () => {
+      const runtime = await this.ensureRuntime(model)
+      await this.embedOne(runtime, text, new AbortController().signal)
+    })().catch((error) => {
+      Logger.dev('Embedding runtime warm-up failed.', error)
+    })
+  }
+
+  /** Whether a query could embed right now instead of waiting on a model load. */
+  private runtimeResident(): boolean {
+    return this.runtime?.isResident() ?? false
   }
 
   /**
