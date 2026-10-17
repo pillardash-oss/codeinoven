@@ -17,8 +17,6 @@
  * how; the guide's job is to say what the next step is and get out of the way.
  */
 
-import type { SettingsSection } from '$lib/stores/renderer-recovery'
-
 /**
  * The dock's width, in rem. The dock draws itself at this width and the marker
  * reads the same number to find the edge its rule lands on, because a guide that
@@ -27,16 +25,20 @@ import type { SettingsSection } from '$lib/stores/renderer-recovery'
  */
 export const GUIDE_DOCK_WIDTH_REM = 21.5
 
-/** The content views that own an empty state and, with it, a guided walk. */
-export type WorkspaceTourView = 'projects' | 'threads' | 'chats' | 'assistant'
+/** The content views that own a guided walk of themselves. */
+export type WorkspaceTourView = 'projects' | 'threads' | 'chats' | 'assistant' | 'browser'
 
 /**
- * The guide a shell view owns, or null for a view without an empty state.
+ * The guide a shell view owns, or null for a view without one.
  * Scope is the same view as Projects, so it reads the same guide.
  */
 export function workspaceTourViewFor(view: string): WorkspaceTourView | null {
   if (view === 'projects-scope') return 'projects'
-  return view === 'projects' || view === 'threads' || view === 'chats' || view === 'assistant'
+  return view === 'projects' ||
+    view === 'threads' ||
+    view === 'chats' ||
+    view === 'assistant' ||
+    view === 'browser'
     ? view
     : null
 }
@@ -55,8 +57,11 @@ export type GuideShape = 'control' | 'region' | 'edge'
  *
  * - `locator` where the lit element lives, from the rail inward.
  * - `anatomy` the composer drawn as the four decisions it holds.
+ * - `harnesses` the agent list: every harness this app knows, Pi first, each one
+ *   clickable to the place it is connected or installed.
+ * - `actions` the rows a stop offers, one per thing the user can do from here.
  */
-export type GuideTreatment = 'locator' | 'anatomy'
+export type GuideTreatment = 'locator' | 'anatomy' | 'harnesses' | 'actions'
 
 /** One key row: a keymap action, so a rebind shows up in the guide. */
 export interface GuideKey {
@@ -68,24 +73,42 @@ export interface GuideKey {
 /**
  * What a stop's own button does, in the app's terms. The guide names the step;
  * the app performs it, because only the app knows how to add a project, open a
- * settings page or put the caret in the composer.
+ * harness, or put the caret in the composer.
  */
 export type GuideActionKind =
   | { kind: 'add-project' }
   | { kind: 'focus-composer' }
-  | { kind: 'connect-harness'; harnessId: string }
-  | { kind: 'open-settings'; section: SettingsSection }
+  /**
+   * Open a harness where it belongs: one this machine already runs opens its
+   * provider accounts, and one it does not have yet opens the page that
+   * installs it.
+   */
+  | { kind: 'open-harness'; harnessId: string }
+  /** Start this guide over from its first stop. */
+  | { kind: 'restart-guide' }
+  /** End this guide and walk the target view's own guide instead. */
+  | { kind: 'open-view-guide'; view: WorkspaceTourView }
+  /** Connect the GitHub account the app reads and manages repositories with. */
+  | { kind: 'connect-github' }
 
 export interface GuideAction {
   /** Button label. A verb, short enough for the dock's footer. */
   label: string
   run: GuideActionKind
-  /**
-   * True when the action hands the user to another view. The guide then waits,
-   * with no dock and no marker, until they come back to the view it belongs to,
-   * instead of pointing at a view they have left.
-   */
-  leavesTheView?: boolean
+}
+
+/**
+ * One row a stop offers: a thing the user can do from here, in the app's terms.
+ *
+ * A row does its own job where the user already is, so it never moves the guide
+ * on: the stop's own Next is what does that, and a row that hands the user to
+ * another view ends the guide it belongs to on purpose.
+ */
+export interface GuideChoice {
+  label: string
+  /** One line saying what the row does, drawn under its label. */
+  detail: string
+  run: GuideActionKind
 }
 
 /** The composer's four decisions, in the order the composer itself shows them. */
@@ -118,6 +141,16 @@ export interface GuideStop {
    * asks for one thing and offers one alternative.
    */
   alternative?: GuideAction
+  /** The rows this stop offers under its copy, for a `actions` treatment. */
+  choices?: readonly GuideChoice[]
+  /**
+   * What this stop insists on before it lets the user walk on. `harness` holds
+   * the guide until this machine has at least one agent it can actually run,
+   * either because it came with the app or because the user has just installed
+   * or connected one. A stop with a gate can be left only through its Next, so
+   * it is the one step a first run cannot skip past.
+   */
+  gate?: 'harness'
 }
 
 export interface ViewGuide {
@@ -193,16 +226,49 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
         eyebrow: 'The agent',
         title: 'Pi is already here, so you can start',
         description:
-          'Pi comes with CodeInOven and needs nothing installed first. It reads the project you pick, writes the code, and reports back in the conversation. If you would rather use a different agent, every one this machine can run is on the Harnesses page, and the account Pi answers with is set there too.',
+          'Pi comes with CodeInOven: nothing to install, and nothing to sign into before your first message. Every other agent this app knows is listed below. Pick one and it opens where it belongs, its accounts if this machine already runs it, the page that installs it if it does not.',
         path: ['Rail', 'Settings'],
         tag: 'the agent',
-        treatment: 'locator',
-        action: { label: 'Start with Pi', run: { kind: 'connect-harness', harnessId: 'pi' } },
-        alternative: {
-          label: 'Other agents',
-          run: { kind: 'open-settings', section: 'harnesses' },
-          leavesTheView: true
-        }
+        treatment: 'harnesses',
+        gate: 'harness'
+      },
+      {
+        anchor: 'view-switcher',
+        shape: 'edge',
+        eyebrow: 'Other actions',
+        title: 'Everything else you can start from here',
+        description:
+          'This tour can be re-run at any time, from this view\u2019s start list or from the command palette. The other views walk themselves the same way, and the account below is what lets the app open, read and manage your repositories.',
+        path: ['Rail'],
+        tag: 'other actions',
+        treatment: 'actions',
+        choices: [
+          {
+            label: 'Run this tour again',
+            detail: 'Start the Projects guide over from its first stop.',
+            run: { kind: 'restart-guide' }
+          },
+          {
+            label: 'Chat tour',
+            detail: 'The Chats view, where a conversation needs no project.',
+            run: { kind: 'open-view-guide', view: 'chats' }
+          },
+          {
+            label: 'Assistant tour',
+            detail: 'Assistants and the work they run without you.',
+            run: { kind: 'open-view-guide', view: 'assistant' }
+          },
+          {
+            label: 'Browser tour',
+            detail: 'A real browser inside the app, with the agent on the page.',
+            run: { kind: 'open-view-guide', view: 'browser' }
+          },
+          {
+            label: 'Connect GitHub',
+            detail: 'Sign in so the app can clone, push and open pull requests.',
+            run: { kind: 'connect-github' }
+          }
+        ]
       },
       {
         anchor: 'composer',
@@ -385,6 +451,47 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
           'Every run lands in the sidebar under its assistant and raises its own notice naming that assistant, so a scheduled job never finishes silently.',
         path: ['Header', 'Notifications'],
         tag: 'nothing silent',
+        treatment: 'locator'
+      }
+    ]
+  },
+  browser: {
+    name: 'Browser guide',
+    viewName: 'Browser',
+    stops: [
+      {
+        anchor: 'view-switcher',
+        shape: 'edge',
+        eyebrow: 'Where you are',
+        title: 'A real browser, in the same window',
+        description:
+          'The browser is one of the seven views, with its own tabs, its own logins and its own history. What it shows is the page itself rather than a picture of one, which is exactly why an agent can read it and work on it.',
+        path: ['Rail'],
+        tag: 'start',
+        treatment: 'locator',
+        keys: [{ action: 'nav-browser', label: 'Browser' }]
+      },
+      {
+        anchor: 'browser-address',
+        shape: 'control',
+        eyebrow: 'The way in',
+        title: 'One control opens every page',
+        description:
+          'Type an address, or words you would have typed into a search engine: the same control handles both. Pages open in tabs of their own, and the strip beside them is where you move between what you have open.',
+        path: ['Body', 'Address bar'],
+        tag: 'the way in',
+        treatment: 'locator',
+        keys: [{ action: 'browser-focus-address', label: 'Focus the address bar' }]
+      },
+      {
+        anchor: 'browser-body',
+        shape: 'region',
+        eyebrow: 'The page',
+        title: 'The agent reads the page you are reading',
+        description:
+          'The panel beside the page starts a conversation about it, and that conversation keeps the page as its context: point the agent at what is on screen, or ask it to change the code behind it, without copying anything anywhere.',
+        path: ['Body', 'Page'],
+        tag: 'the page',
         treatment: 'locator'
       }
     ]

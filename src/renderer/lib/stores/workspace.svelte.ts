@@ -492,20 +492,6 @@ class WorkspaceState {
     return true
   }
 
-  /** Incremented to signal the app shell to open the getting-started tour. */
-  requestOnboardingCount = $state(0)
-  private consumedOnboardingRequestCount = 0
-
-  requestOnboarding(): void {
-    this.requestOnboardingCount++
-  }
-
-  consumeOnboardingRequest(): boolean {
-    if (this.consumedOnboardingRequestCount === this.requestOnboardingCount) return false
-    this.consumedOnboardingRequestCount = this.requestOnboardingCount
-    return true
-  }
-
   /** A view asked for its own tour, from that view's empty state or the command
    *  palette. Value-carrying like `requestProjectFileOpen`: the requested view
    *  *is* the request, so one slot plus a count is the whole handshake. */

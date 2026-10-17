@@ -181,10 +181,6 @@
     /** True while the Scope page is on screen   thread switches must keep the
      *  scope store's active project in sync with the selected thread. */
     scopeViewActive?: boolean
-    /** True while the getting-started tour is on screen. That tour explains the
-     *  left sidebar, so the shell paints it even when the view's sidebar has
-     *  nothing in it yet, which is exactly the state a first run is in. */
-    setupTourOpen?: boolean
     navigate: (view: MainView) => void
     /** The project view a Ctrl+Tab return to the project family lands on: the
      *  view the user last used for the family, which is also the one the rail's
@@ -200,7 +196,6 @@
     mode,
     active = true,
     scopeViewActive = false,
-    setupTourOpen = false,
     navigate,
     lastProjectViewLanding = () => 'projects',
     config,
@@ -2106,11 +2101,14 @@
    *
    * Emptiness is judged on the view's own lists before any search or project
    * filter, because collapsing the sidebar over a filter the user applied would
-   * take away the very control they filtered with. Loading counts as content, so
-   * the sidebar never blinks away while the first page is still arriving.
+   * take away the very control they filtered with. A first page that has not
+   * landed yet is not content either: a view with nothing in it paints no panel
+   * and offers no toggle row, so the panel arrives together with the rows that
+   * justify it instead of standing empty for the length of the load, which is
+   * exactly the shape a project-less or chat-less view starts in.
    */
   let workspaceSidebarHasContent = $derived.by(() => {
-    if (loading || workspaceState.specStudioOpen) return true
+    if (workspaceState.specStudioOpen) return true
     if (mode === 'assistant') {
       // A run is content too: a thread opened from a notification can be a run
       // whose task sits beyond the bounded recent slice, and its row must still
@@ -2134,11 +2132,9 @@
   /**
    * Whether the left sidebar is painted at all. A sidebar with nothing in it is
    * not rendered, so no dock and no edge-hover overlay offer a panel with no
-   * content; the getting-started tour keeps it on screen because the sidebar
-   * itself is what one of its steps explains, and a first run is exactly the
-   * moment the sidebar is empty.
+   * content.
    */
-  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent || setupTourOpen)
+  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent)
 
   // ─── Data loading ────────────────────────────────────────────────────────
 

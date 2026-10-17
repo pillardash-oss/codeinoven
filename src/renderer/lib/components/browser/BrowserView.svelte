@@ -382,7 +382,10 @@
        resizes, folds and slides exactly like the workspace one. -->
   <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
 
-  <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+  <!-- The page column: the browser's own body, which is what a browser is for.
+       It carries the guide's anchor for the page itself, so the browser's tour
+       can point at the one region the rest of the view is chrome around. -->
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-guide="browser-body">
     {#if activeTab}
       {#key activeTab.id}
         <BrowserWorkspace tab={activeTab} />

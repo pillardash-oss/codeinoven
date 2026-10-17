@@ -706,6 +706,7 @@
           ]}
           title="Search or enter an address"
           aria-label="Search or enter an address"
+          data-guide="browser-address"
           onclick={onOpenAddress}
         >
           {address === '' ? 'Search or enter an address' : address}

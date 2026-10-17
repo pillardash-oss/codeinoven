@@ -231,15 +231,6 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       source: applicationSource,
       icon: CioNotifications,
       keywords: ['alerts', 'completed', 'attention']
-    },
-    {
-      id: 'app:getting-started',
-      title: 'Open getting started guide',
-      description: 'Tour the workspace and set up a project and coding agent',
-      category: 'navigation',
-      source: applicationSource,
-      icon: CioLearn,
-      keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
     }
   ]
 

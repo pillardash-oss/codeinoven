@@ -91,8 +91,8 @@
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
@@ -189,10 +189,8 @@
   }
 
   let newProjectSpotlightOpen = $state(false)
-  let onboardingOpen = $state(false)
-  let onboardingStep = $state(0)
-  let onboardingInitialized = false
-  let onboardingProjectPickerActive = false
+  /** Set once the first run has been checked, so the guide is offered exactly once. */
+  let firstRunChecked = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   let paletteContextActions = $derived(
@@ -491,19 +489,23 @@
     )
   )
 
-  /** Welcome screen (and other surfaces) can request the getting-started tour. */
-  $effect(() => {
-    if (workspaceState.consumeOnboardingRequest()) {
-      onboardingStep = 0
-      onboardingOpen = true
-    }
-  })
-
   /** A view's empty state, or the palette, can request that view's own guide. */
   $effect(() => {
     const view = workspaceState.consumeViewTourRequest()
     if (!view) return
     guideState.start(view)
+  })
+
+  /**
+   * Walking the Projects guide to its end is what finishes the first run. There
+   * is no separate setup tour: the guide is the sequence, so a user who closes
+   * it half way is offered it again on the next launch, and one who walks it
+   * through is done for good.
+   */
+  $effect(() => {
+    if (!config.onboardingCompleted && guideState.hasSeen('projects')) {
+      void updateConfig({ onboardingCompleted: true })
+    }
   })
 
   /**
@@ -516,43 +518,90 @@
    * answers false, and the guide stays on it rather than walking on as if the
    * agent were connected.
    */
-  async function runGuideAction(action: GuideActionKind): Promise<boolean> {
-    if (action.kind === 'add-project') {
+  async function runGuideAction(run: GuideActionKind): Promise<boolean> {
+    if (run.kind === 'add-project') {
       openNewProjectSpotlight()
       return true
     }
-    if (action.kind === 'focus-composer') {
+    if (run.kind === 'focus-composer') {
       focusVisibleComposer()
       return true
     }
-    if (action.kind === 'connect-harness') {
-      const harness = providerStore.providers.find((entry) => entry.id === action.harnessId)
-      if (harness && harness.status === 'available' && harness.integration === 'ready') return true
-      if (!harness || harness.status !== 'available') {
-        // The agent is not on this machine yet: open its own install guide, the
-        // same page the setup tour offers, and leave the step standing.
-        try {
-          const info = await invoke('harnessInstall:getInfo', action.harnessId)
-          await openInBrowser(info.pageUrl)
-        } catch {
-          navigate(settingsViewForSection('harnesses'))
-        }
-        return false
+    if (run.kind === 'open-harness') {
+      const harness = providerStore.providers.find((entry) => entry.id === run.harnessId)
+      // Pi ships inside the app, so it can take credentials whether or not this
+      // machine has a copy of its own: every other harness has to be installed
+      // and driven before its provider list means anything.
+      const usable =
+        harness !== undefined && (run.harnessId === 'pi' || providerStore.canAddProvider(harness))
+      if (usable) {
+        // Installed and driven: the account it answers with is managed right
+        // here, over the view, by the same flow the settings page opens. Its
+        // accounts are re-read on connect, because the badge that says how many
+        // this harness has, and the gate below, both hang off that number.
+        providerConnectFlow.open(run.harnessId, {
+          onConnected: () => {
+            void providerStore.checkOne(run.harnessId)
+            void harnessAccountCache.list(run.harnessId, true).catch(() => [])
+          }
+        })
+        return true
       }
-      await providerStore.checkOne(action.harnessId)
-      return true
+      // Not on this machine yet: its own page in settings installs it. The guide
+      // holds its place while the user is away and comes back on this step, so
+      // the Next they were waiting for is still there when they return.
+      guideState.holdForUser()
+      navigate(settingsViewForSection('harnesses'))
+      return false
     }
-    navigate(settingsViewForSection(action.section))
-    return true
+    if (run.kind === 'restart-guide') {
+      const view = guideState.view
+      if (view) guideState.start(view)
+      return false
+    }
+    if (run.kind === 'open-view-guide') {
+      // The hand-off is the whole reason the stop that offers it exists: this
+      // guide is finished with the user, and the view they picked walks them
+      // through itself instead.
+      guideState.close()
+      navigate(run.view)
+      workspaceState.requestViewTour(run.view)
+      return false
+    }
+    if (run.kind === 'connect-github') {
+      githubSignIn.start()
+      return false
+    }
+    return false
   }
 
   /** The dock's own button asks for the step the stop is about. */
   $effect(() => {
-    const action = guideState.consumeActionRequest()
-    if (!action) return
-    void runGuideAction(action.run).then((done) => {
-      if (done) guideState.completeAction()
+    const request = guideState.consumeActionRequest()
+    if (!request) return
+    void runGuideAction(request.run).then((done) => {
+      // A control inside a stop does its work where the user already is, so it
+      // never moves the guide on: only the stop's own step button advances.
+      if (done && request.advance) guideState.completeAction()
     })
+  })
+
+  /**
+   * The agent step's gate: the guide walks on once this machine has an agent it
+   * can actually run, or once the user has an account connected to one. Both
+   * halves come from state the guide cannot fake: the harness probe the settings
+   * page reads, and the account registry the model picker reads. A harness that
+   * finishes installing, or an account connected mid-step, therefore opens the
+   * gate by itself, and a user who arrives with either is never held.
+   */
+  $effect(() => {
+    const installed = providerStore.providers.some(
+      (provider) => provider.status === 'available' && provider.integration === 'ready'
+    )
+    const connected = providerStore.providers.some(
+      (provider) => (harnessAccountCache.cached(provider.id)?.length ?? 0) > 0
+    )
+    guideState.setStepReady(installed || connected)
   })
 
   /**
@@ -570,15 +619,17 @@
       appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
-      if (!onboardingInitialized) {
-        onboardingOpen = !config.onboardingCompleted
-        onboardingInitialized = true
+      // The guide owns the first run: a user who has never walked the Projects
+      // guide gets it as soon as there is a config to read.
+      if (!firstRunChecked) {
+        firstRunChecked = true
+        if (!config.onboardingCompleted) workspaceState.requestViewTour('projects')
       }
     } catch {
       settingsError = 'Settings could not be loaded. Defaults are being used.'
-      if (!onboardingInitialized) {
-        onboardingOpen = true
-        onboardingInitialized = true
+      if (!firstRunChecked) {
+        firstRunChecked = true
+        workspaceState.requestViewTour('projects')
       }
     } finally {
       settingsReady = true
@@ -911,10 +962,6 @@
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
-      case 'app:getting-started':
-        onboardingStep = 0
-        onboardingOpen = true
-        return
       case 'app:tour-view': {
         const view = workspaceTourViewFor(activeView)
         if (view) workspaceState.requestViewTour(view)
@@ -1139,11 +1186,6 @@
     newProjectSpotlightOpen = false
     navigate('projects')
     await handleProjectCreated(project)
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingStep = 7
-      onboardingOpen = true
-    }
   }
 
   /** Spotlight flow: a picked folder already exists as a project   focus it. */
@@ -1158,11 +1200,6 @@
     } else {
       workspaceState.clearThread()
       workspaceState.activeProject = project
-    }
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingStep = 7
-      onboardingOpen = true
     }
   }
 
@@ -1228,37 +1265,8 @@
     }
   }
 
-  function updateOnboardingStep(step: number): void {
-    // The first-run tour stays in Projects: the composer spotlight falls back
-    // to a centered callout there (its anchor only exists in Chats), and the
-    // Chats view owns its own tour when the user opens it for the first time.
-    // Adding a project therefore never yanks the user into the Chats view.
-    onboardingStep = step
-  }
-
-  function chooseOnboardingProject(): void {
-    onboardingOpen = false
-    onboardingProjectPickerActive = true
-    newProjectSpotlightOpen = true
-  }
-
   function closeNewProjectSpotlight(): void {
     newProjectSpotlightOpen = false
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingOpen = true
-    }
-  }
-
-  function finishOnboarding(): void {
-    onboardingOpen = false
-    onboardingProjectPickerActive = false
-    void updateConfig({ onboardingCompleted: true })
-  }
-
-  function browseHarnessesFromOnboarding(): void {
-    finishOnboarding()
-    navigate('settings-harnesses')
   }
 
   /**
@@ -1979,7 +1987,6 @@
           mode={lastContentView}
           active={showsContentView}
           scopeViewActive={activeView === 'scope'}
-          setupTourOpen={onboardingOpen}
           {navigate}
           lastProjectViewLanding={() => navigation.projectFamilyLanding()}
           {config}
@@ -2096,19 +2103,6 @@
         onExisting={handleSpotlightExistingProject}
       />
     {/await}
-  {/if}
-  {#if onboardingOpen}
-    {#key onboardingStep}
-      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
-        <OnboardingTour
-          step={onboardingStep}
-          onStepChange={updateOnboardingStep}
-          onChooseProject={chooseOnboardingProject}
-          onBrowseHarnesses={browseHarnessesFromOnboarding}
-          onFinish={finishOnboarding}
-        />
-      {/await}
-    {/key}
   {/if}
   {#if startAtLoginOfferOpen}
     <!-- The one-time start-at-login offer. Raised right after an assistant is given

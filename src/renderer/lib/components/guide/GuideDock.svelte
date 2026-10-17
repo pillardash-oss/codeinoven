@@ -4,13 +4,17 @@
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import { onMount } from 'svelte'
 
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { cubicOut } from 'svelte/easing'
   import { fly } from 'svelte/transition'
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { COMPOSER_DECISIONS, GUIDE_DOCK_WIDTH_REM } from '$lib/guide/guide-stops'
   import { guideState } from '$lib/guide/guide-state.svelte'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { motionDuration, slideWidth } from '$lib/motion'
+  import type { ProviderConnectionInfo } from '$shared/types'
 
   /**
    * The commentary dock: everything a guide says, in a column beside the app,
@@ -31,6 +35,80 @@
   /** The other way to take this step, for a user the primary does not fit. */
   const alternative = $derived(stop?.alternative ?? null)
 
+  /**
+   * The harnesses this app knows, Pi first.
+   *
+   * Pi is the agent that ships with the app, so it leads the list as the one a
+   * first run can start with, and everything else follows in the order the app
+   * itself discovers them. Every tile is a door: one this machine already runs
+   * opens its accounts, one it does not have yet opens the page that installs it.
+   */
+  const harnesses = $derived(
+    [...providerStore.providers].sort((left, right) =>
+      left.id === 'pi' ? -1 : right.id === 'pi' ? 1 : 0
+    )
+  )
+
+  /** One line of state under a harness's name, in the same words the settings
+   *  page uses, so the two never disagree about what this machine has. */
+  function harnessState(provider: ProviderConnectionInfo): string {
+    if (provider.status === 'checking') return 'Checking'
+    if (provider.status === 'available' && provider.integration === 'ready') return 'Ready'
+    if (provider.status === 'available') return 'Detected'
+    if (provider.status === 'error') return 'Needs attention'
+    return 'Not installed'
+  }
+
+  /**
+   * What Pi's own tile says.
+   *
+   * Pi ships inside CodeInOven, so it is never missing: `Installed` means this
+   * machine also has a copy of its own, and `Bundled` means the copy in the app
+   * is the one that will run. Either way its tile opens Pi's provider accounts,
+   * because a bundled agent can take credentials immediately.
+   */
+  function piState(provider: ProviderConnectionInfo): string {
+    return provider.status === 'available' ? 'Installed' : 'Bundled'
+  }
+
+  /**
+   * How many accounts this harness already answers with, from the same registry
+   * the model picker and the accounts page read. The count is what makes the
+   * badge worth reading: one connected account is a harness in use, and several
+   * is a harness the user has already made a decision about.
+   */
+  function connectedCountFor(harnessId: string): number {
+    return harnessAccountCache.cached(harnessId)?.length ?? 0
+  }
+
+  /**
+   * True while a gated stop is holding the guide at this step.
+   *
+   * A gate is the one thing a first run cannot walk past: the agent step stays
+   * put until this machine has an agent it can actually run, so its Next is
+   * disabled, its keyboard chord does nothing (`guideState.next` refuses the
+   * same), and the dots that would jump over it are disabled too. A user who
+   * already has an agent arrives with the gate open.
+   */
+  const heldByGate = $derived(stop?.gate !== undefined && !guideState.stepReady)
+
+  /** Index of the guide's gated stop, or -1 when no stop is gated. */
+  const gateIndex = $derived(
+    guide ? guide.stops.findIndex((candidate) => candidate.gate !== undefined) : -1
+  )
+
+  /** A dot past the gate is a skip, so it is disabled until the gate is open. */
+  function dotBlocked(dot: number): boolean {
+    return heldByGate && gateIndex >= 0 && dot > gateIndex
+  }
+
+  /** What the step button in the footer promises to do, for its tooltip. */
+  function nextLabel(): string {
+    if (heldByGate) return 'Connect or install an agent to continue'
+    if (guideState.onLastStop) return 'Finish the guide'
+    return action ? 'Skip this step' : 'Next stop'
+  }
+
   let root = $state<HTMLElement | undefined>(undefined)
 
   const padded = (value: number): string => String(value).padStart(2, '0')
@@ -43,6 +121,9 @@
    */
   onMount(() => {
     root?.focus({ preventScroll: true })
+    // The accounts a harness already answers with, so the harness list can say
+    // which ones are in use before the settings page is ever opened.
+    void harnessAccountCache.warm().catch(() => [])
     const onKeydown = (event: KeyboardEvent): void => {
       if (event.defaultPrevented) return
       if (keymapState.matches('guide-next', event)) {
@@ -125,7 +206,103 @@
             <p class="mt-1.5 text-[0.8125rem] leading-relaxed text-muted">{stop.description}</p>
 
             <div class="mt-3.5 border-t border-border pt-3">
-              {#if stop.treatment === 'anatomy'}
+              {#if stop.treatment === 'harnesses'}
+                <span
+                  class="text-[0.5625rem] font-semibold uppercase tracking-[0.16em] text-dimmed"
+                >
+                  The agents
+                </span>
+                {#if harnesses.length === 0}
+                  <p class="mt-2 text-[0.6875rem] text-muted">
+                    Looking for the agents on this machine.
+                  </p>
+                {:else}
+                  <div class="mt-2 flex flex-col gap-1">
+                    {#each harnesses as harness (harness.id)}
+                      {@const ready = providerStore.canAddProvider(harness)}
+                      {@const openable = harness.id === 'pi' || ready}
+                      {@const busy = harness.status === 'checking' && !openable}
+                      {@const connected = connectedCountFor(harness.id)}
+                      <button
+                        type="button"
+                        class="flex items-center gap-2 border px-2 py-1.5 text-left transition-colors disabled:opacity-60 {harness.id ===
+                        'pi'
+                          ? 'border-accent bg-surface'
+                          : 'border-border bg-elevated'} {busy
+                          ? ''
+                          : 'hover:border-border-strong hover:bg-raised'}"
+                        title={busy
+                          ? `${harness.name} is being checked`
+                          : openable
+                            ? `Manage ${harness.name}’s provider accounts`
+                            : `Open ${harness.name} in settings to install it`}
+                        aria-label={busy
+                          ? `${harness.name}: checking`
+                          : openable
+                            ? `${harness.name}: manage provider accounts`
+                            : `${harness.name}: open in settings to install`}
+                        disabled={busy}
+                        onclick={() =>
+                          guideState.requestChoice({ kind: 'open-harness', harnessId: harness.id })}
+                      >
+                        <AgentIcon agentId={harness.id} label={harness.name} size={20} />
+                        <span class="min-w-0 flex-1">
+                          <span class="block truncate text-[0.75rem] text-foreground"
+                            >{harness.name}</span
+                          >
+                          <span class="block truncate text-[0.625rem] text-dimmed">
+                            {harness.id === 'pi' ? 'Ships with CodeInOven' : harnessState(harness)}
+                          </span>
+                        </span>
+                        {#if connected > 0}
+                          <!-- Already answering with accounts: the badge says how
+                               many, which is the one thing the settings page
+                               would have told the user. -->
+                          <span
+                            class="shrink-0 border border-success/30 bg-success/10 px-1 py-0.5 text-[0.5625rem] uppercase tracking-[0.12em] text-success"
+                          >
+                            Connected · {connected}
+                          </span>
+                        {:else}
+                          <span
+                            class="shrink-0 border border-border px-1 py-0.5 text-[0.5625rem] uppercase tracking-[0.12em] {ready
+                              ? 'text-success'
+                              : 'text-dimmed'}"
+                          >
+                            {harness.id === 'pi' ? piState(harness) : harnessState(harness)}
+                          </span>
+                        {/if}
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
+              {:else if stop.treatment === 'actions'}
+                <span
+                  class="text-[0.5625rem] font-semibold uppercase tracking-[0.16em] text-dimmed"
+                >
+                  Start another
+                </span>
+                <div class="mt-2 flex flex-col gap-1">
+                  {#each stop.choices ?? [] as choice (choice.label)}
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 border border-border bg-elevated px-2 py-1.5 text-left transition-colors hover:border-border-strong hover:bg-raised"
+                      title={choice.label}
+                      onclick={() => guideState.requestChoice(choice.run)}
+                    >
+                      <span class="min-w-0 flex-1">
+                        <span class="block truncate text-[0.75rem] text-foreground"
+                          >{choice.label}</span
+                        >
+                        <span class="block text-[0.625rem] leading-snug text-dimmed"
+                          >{choice.detail}</span
+                        >
+                      </span>
+                      <CioArrowRight size={12} />
+                    </button>
+                  {/each}
+                </div>
+              {:else if stop.treatment === 'anatomy'}
                 <span
                   class="text-[0.5625rem] font-semibold uppercase tracking-[0.16em] text-dimmed"
                 >
@@ -195,12 +372,15 @@
           {#each Array.from({ length: stopCount }, (_, dot) => dot) as dot (dot)}
             <button
               type="button"
-              class="h-1.5 border transition-[width,background-color,border-color] duration-150 {dot ===
+              class="h-1.5 border transition-[width,background-color,border-color] duration-150 disabled:opacity-40 {dot ===
               stopIndex
                 ? 'w-4.5 border-accent bg-accent'
                 : 'w-1.5 border-border bg-raised hover:border-border-strong'}"
               aria-label={`Stop ${dot + 1} of ${stopCount}`}
-              title={`Stop ${dot + 1} of ${stopCount}`}
+              title={dotBlocked(dot)
+                ? 'Connect or install an agent before walking past this step'
+                : `Stop ${dot + 1} of ${stopCount}`}
+              disabled={dotBlocked(dot)}
               onclick={() => guideState.goTo(dot)}
             ></button>
           {/each}
@@ -249,7 +429,9 @@
                is always the same slot: rightmost. A stop with its own action
                row above keeps this one quieter, because the labelled step is
                the loud one, and calls it Skip, because it does not do the
-               step. The order never changes between stops. -->
+               step. A gated stop has no action and only one way on: its Next,
+               which stays disabled until the gate is open. The order never
+               changes between stops. -->
           <button
             type="button"
             class="flex h-8 items-center gap-1.5 border border-border px-2 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
@@ -263,14 +445,11 @@
           </button>
           <button
             type="button"
-            class="flex h-8 items-center gap-1.5 px-2.5 text-[0.6875rem] transition-colors {action
+            class="flex h-8 items-center gap-1.5 px-2.5 text-[0.6875rem] transition-colors disabled:opacity-40 {action
               ? 'border border-border text-muted hover:bg-elevated hover:text-foreground'
-              : 'border border-primary bg-primary font-medium text-on-primary hover:bg-primary-hover'}"
-            title={guideState.onLastStop
-              ? 'Finish the guide'
-              : action
-                ? 'Skip this step'
-                : 'Next stop'}
+              : 'border border-primary bg-primary font-medium text-on-primary hover:bg-primary-hover disabled:hover:bg-primary'}"
+            title={nextLabel()}
+            disabled={heldByGate}
             onclick={() => guideState.next()}
           >
             {guideState.onLastStop ? 'Done' : action ? 'Skip' : 'Next'}
