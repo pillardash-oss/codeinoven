@@ -265,7 +265,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       projectPath,
       options,
       candidates,
-      buildTitlePrompt(options.message.slice(0, 2_000)),
+      buildTitlePrompt(options.message),
       sanitizeGeneratedTitle
     )
     this.lastTitleAttempts = outcome.attempts
