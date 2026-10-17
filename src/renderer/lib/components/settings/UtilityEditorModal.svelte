@@ -842,7 +842,7 @@
             {canToggleAvailability
               ? 'This is a built-in skill: its commands are yours to rewrite, and you can switch it off when you already have your own.'
               : draft.kind === 'image_descriptor'
-                ? 'This is a built-in utility: only the vision model can be changed. Everything else is managed by the app.'
+                ? 'This is a built-in utility: only the vision model can be picked. Everything else is managed by the app.'
                 : 'This is a built-in utility. The app manages it, so this view is read-only.'}
           </p>
         {/if}
@@ -968,7 +968,13 @@
           {/if}
         {/if}
 
-        <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} locked={configLocked} />
+        <UtilityEditorModalConfigFields
+          bind:draft
+          {isNative}
+          {allowSse}
+          locked={configLocked}
+          providers={providerCatalog.allCached()}
+        />
 
         {#if !isNative && draft.kind === 'mcp' && draft.transport !== 'stdio'}
           <UtilityEditorModalMcpAuth utility={savedUtility} onChanged={handleMcpAuthChanged} />

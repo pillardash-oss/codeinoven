@@ -1,10 +1,18 @@
 <script lang="ts">
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
+  import type { ProviderCatalog } from '$shared/types'
   import { skillPlaceholder, type UtilityDraft } from './utility-editor-modal-helpers'
 
   interface Props {
     draft: UtilityDraft
     isNative: boolean
+    /**
+     * Catalogs every harness reports, so the vision-model picker can list the
+     * models that can actually see an image.
+     */
+    providers?: ProviderCatalog[]
     /**
      * Pi 0.99 rejects `type: "sse"` outright ("legacy SSE transport is not
      * supported; use the streamable HTTP URL"), so its own entries must not
@@ -19,7 +27,13 @@
     locked?: boolean
   }
 
-  let { draft = $bindable(), isNative, allowSse = true, locked = false }: Props = $props()
+  let {
+    draft = $bindable(),
+    isNative,
+    allowSse = true,
+    locked = false,
+    providers = []
+  }: Props = $props()
 </script>
 
 <fieldset class="space-y-3 border p-3 {locked ? 'opacity-60' : ''}">
@@ -33,7 +47,7 @@
           : draft.kind === 'computer_use'
             ? 'Computer-use backend'
             : draft.kind === 'image_descriptor'
-              ? 'Image descriptor model'
+              ? 'Vision model'
               : 'Provider connection'}
   </legend>
   {#if draft.kind === 'mcp'}
@@ -150,39 +164,24 @@
       />
     </label>
   {:else if draft.kind === 'image_descriptor'}
-    <label class="block space-y-1 text-xs font-medium">
-      <span>Harness ID</span>
-      <input
-        class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
-        placeholder="opencode"
-        disabled={locked}
-        bind:value={draft.descriptorHarnessId}
-      />
-    </label>
-    <div class="grid grid-cols-2 gap-3">
-      <label class="space-y-1 text-xs font-medium">
-        <span>Provider ID</span>
-        <input
-          class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
-          placeholder="anthropic"
-          disabled={locked}
-          bind:value={draft.descriptorProviderId}
-        />
-      </label>
-      <label class="space-y-1 text-xs font-medium">
-        <span>Model ID (vision)</span>
-        <input
-          class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
-          placeholder="claude-sonnet-4-5"
-          disabled={locked}
-          bind:value={draft.descriptorModelId}
-        />
-      </label>
-    </div>
+    <ModelPicker
+      {providers}
+      harnessId={draft.descriptorHarnessId || providers[0]?.harnessId || DEFAULT_HARNESS}
+      providerId={draft.descriptorProviderId}
+      modelId={draft.descriptorModelId}
+      visionOnly
+      side="bottom"
+      variant="field"
+      label={draft.descriptorModelId ? undefined : 'Choose a vision model'}
+      onSelect={(providerId, modelId, harnessId) => {
+        draft.descriptorProviderId = providerId
+        draft.descriptorModelId = modelId
+        draft.descriptorHarnessId = harnessId
+      }}
+    />
     <p class="text-[0.6875rem] text-dimmed">
-      A model from the harness catalog that can see images. Text-only models call this utility to
-      describe attached images. Leave the fields empty to let the app pick a vision model
-      automatically.
+      The vision model this utility describes images with. Text-only models call it for images
+      attached to their turn. Leave it unpicked and the app chooses a vision model automatically.
     </p>
   {:else}
     <label class="block space-y-1 text-xs font-medium">

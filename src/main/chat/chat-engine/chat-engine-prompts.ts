@@ -1,7 +1,6 @@
 import { BRAINSTORM_ALIGNMENT_UTILITY_ID } from '../../../lib/brainstorm/brainstorm-alignment'
 import { toPosixPath } from '../../../lib/paths'
 import type { HarnessCapabilities } from '../../drivers/driver.interface'
-import { IMAGE_DESCRIPTOR_PROMPT } from '../../providers/image-descriptor-provider'
 import { APP_NAME } from '../../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
 import {
@@ -654,8 +653,6 @@ registerCioPromptDefault(
 
 registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
 
-registerCioPromptDefault('image-description', IMAGE_DESCRIPTOR_PROMPT)
-
 export function buildSpecRevisionSystemPrompt(
   specPath: string,
   annotations: ReadonlyArray<{ section: string; body: string; quote?: string; status: string }>
@@ -720,8 +717,7 @@ export function composeTurnSystemPrompt(input: {
   // Only the day-to-day conversations carry the executive budget: a previous
   // engineering lifecycle turn loses the technical detail the later stages need,
   // and an assistant already carries a stricter reply contract of its own.
-  const dayToDayConversation =
-    input.behaviorMode === 'implement' || input.behaviorMode === 'chat'
+  const dayToDayConversation = input.behaviorMode === 'implement' || input.behaviorMode === 'chat'
   return [
     input.chatPrompt,
     input.memoryInstruction,

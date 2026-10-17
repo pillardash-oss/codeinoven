@@ -266,6 +266,7 @@ import {
   type UtilitySuggestionResolution
 } from '../../lib/utility-suggestion'
 import {
+  IMAGE_DESCRIPTOR_PROMPT,
   imageDescriptorInactivityTimeoutMs,
   resolveVisionAttachment
 } from '../providers/image-descriptor-provider'
@@ -12363,7 +12364,10 @@ export class ChatEngine {
         'Image upload or vision-model response',
         () => new ImageDescriptorInactivityError(timeoutMs, attempt, nextTimeoutMs)
       )
-      const imageDescriptionPrompt = await this.cioPrompt('image-description')
+      // The descriptor prompt is app-owned wiring, not a template: it is the
+      // instruction every vision call is dispatched with, and a text-only model
+      // reading the result depends on its shape.
+      const imageDescriptionPrompt = IMAGE_DESCRIPTOR_PROMPT
       const request: SendPromptOptions = {
         sessionId,
         settings,
@@ -12426,7 +12430,7 @@ export class ChatEngine {
           attempt: attempt + 1,
           harnessId: selection.harnessId,
           settings,
-          inputText: await this.cioPrompt('image-description'),
+          inputText: IMAGE_DESCRIPTOR_PROMPT,
           response,
           failure
         })

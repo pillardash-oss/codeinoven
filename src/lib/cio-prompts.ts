@@ -15,17 +15,9 @@ export type CioPromptMode =
   | 'assignment'
   | 'achievement'
   | 'audit'
-  | 'utility'
 
 export type CioPromptGroup =
-  | 'Foundation'
-  | 'Assistant'
-  | 'Chat'
-  | 'Engineering'
-  | 'Assignment'
-  | 'Achievement'
-  | 'Audit'
-  | 'Utilities'
+  'Foundation' | 'Assistant' | 'Chat' | 'Engineering' | 'Assignment' | 'Achievement' | 'Audit'
 
 export type CioPromptId =
   | 'work-ethics'
@@ -45,7 +37,6 @@ export type CioPromptId =
   | 'audit-report'
   | 'independent-audit-report'
   | 'audit-repair'
-  | 'image-description'
 
 export interface CioPromptDefinition {
   id: CioPromptId
@@ -282,16 +273,6 @@ ${SKILLS_SECTION_BODY}`
     modes: ['audit', 'assignment', 'achievement'],
     defaultTemplate:
       'Repair a persisted {{APP_NAME}} audit-report JSON file after deterministic validation fails. Read only the supplied attempt and correct only listed validation errors. Preserve findings and evidence, do not inspect the project again, and return one complete corrected JSON object.'
-  },
-  {
-    id: 'image-description',
-    filename: 'image-description.md',
-    title: 'Image description',
-    description: 'Guides the vision model that translates images into exhaustive text evidence.',
-    group: 'Utilities',
-    modes: ['utility'],
-    defaultTemplate:
-      'Describe this image exhaustively in reading order from top-left to bottom-right so another model can use it for a mission-critical operation. Skip no identifiable detail: layout, subjects, objects, people, actions, text verbatim, colors, spatial relationships, textures, lighting, anomalies, and edges.'
   }
 ] as const
 
