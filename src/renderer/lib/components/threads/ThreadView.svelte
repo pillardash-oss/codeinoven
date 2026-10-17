@@ -12466,6 +12466,7 @@
   })
 
   onDestroy(() => {
+    liveTokenRate.clear()
     if (responseRangeRetryFrame) cancelAnimationFrame(responseRangeRetryFrame)
     responseRangeRetryFrame = 0
     releaseAnnotationHighlights(responseHighlightOwner, RESPONSE_HIGHLIGHT_NAME)
@@ -14622,6 +14623,7 @@
                       onSlashCommand={executeHarnessCommand}
                       usageCreditsCommandId={usageCreditsCommand?.id}
                       contextUsage={contextUsageDisplay}
+                      generationRate={busy ? liveTokenRate.rate() : null}
                       efficiencyKpis={storedEfficiencyKpis}
                       onRevealUsage={revealContextUsage}
                       onHideUsage={hideContextUsage}

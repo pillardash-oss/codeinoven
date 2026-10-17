@@ -248,6 +248,7 @@
     onModelUsed?: (modelKey: string) => void
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
+    generationRate?: number | null
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
@@ -351,6 +352,7 @@
     recentModels = [],
     onModelUsed,
     contextUsage,
+    generationRate,
     efficiencyKpis,
     harnessUsage = [],
     onRevealUsage,
@@ -681,6 +683,7 @@
    */
   let usageReading = $derived<ComposerUsage>({
     usage: contextUsage,
+    generationRate,
     efficiencyKpis,
     harnessUsage,
     canCompact,

@@ -40,6 +40,7 @@
    */
   export interface ComposerUsage {
     usage?: AgentContextUsage
+    generationRate?: number | null
     efficiencyKpis?: UsageEfficiencyKpis
     harnessUsage?: AgentHarnessUsage[]
     canCompact?: boolean
@@ -86,6 +87,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
+  import { formatTokenRate } from '$lib/token-rate.svelte'
   import type { ScopeBucket, ScopeChoice, ScopeEnvironmentMode } from '$shared/types'
   import type { AgentContextUsage, AgentHarnessUsage, UsageEfficiencyKpis } from '$shared/types'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
@@ -507,6 +509,15 @@
     onHide={usage.onHide}
     refreshing={usage.refreshing ?? false}
   />
+
+  {#if isWorking}
+    <span
+      class="flex h-6 shrink-0 items-center px-2 text-[0.625rem] text-muted tabular-nums"
+      title="Approximate generation speed for the current message. Excludes tool waits; token counts may be estimated from streamed text."
+    >
+      {usage.generationRate != null ? `~${formatTokenRate(usage.generationRate)}` : '… tok/s'}
+    </span>
+  {/if}
 
   <!-- The tips: the keys that end a message, there only to be read. Nothing here
        lights up, because there is nothing to pick, and they are the first thing
