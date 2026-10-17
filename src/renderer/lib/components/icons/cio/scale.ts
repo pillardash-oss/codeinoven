@@ -25,3 +25,15 @@ export const ICON_SIZE = {
 
 /** A step of the scale, for a prop that takes one. */
 export type IconSize = (typeof ICON_SIZE)[keyof typeof ICON_SIZE]
+
+/**
+ * The weight a mark is drawn at on a rail.
+ *
+ * Size and weight are one decision, because the same number reads heavier the
+ * smaller it gets: the assistant's own tiers step down as they grow (1.8 at rail
+ * size, 1.6 at a medium mark). The rail draws the largest mark in the app out of
+ * the same 24-unit box every other icon uses, and the set's 1.8 there read
+ * heavier and larger than the marks around it, so the rail asks for one step
+ * under the set's default.
+ */
+export const RAIL_ICON_STROKE = 1.6

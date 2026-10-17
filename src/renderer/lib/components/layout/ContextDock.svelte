@@ -1,5 +1,5 @@
 <script module lang="ts">
-  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import { ICON_SIZE, RAIL_ICON_STROKE } from '$lib/components/icons/cio/scale'
   import type { Component, Snippet } from 'svelte'
   import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
@@ -190,7 +190,7 @@
               <span class="h-3.5 w-3.5" style="background-color: {item.appearance.color}"></span>
             {/if}
           {:else if Icon}
-            <Icon size={ICON_SIZE.rail} />
+            <Icon size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
           {/if}
           {#if item.playing}
             <RailAudioBadge label={item.label} />
