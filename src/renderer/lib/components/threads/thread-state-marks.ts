@@ -1,4 +1,3 @@
-import CioClock from '$lib/components/icons/cio/CioClock.svelte'
 import CioInbox from '$lib/components/icons/cio/CioInbox.svelte'
 import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
 import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
