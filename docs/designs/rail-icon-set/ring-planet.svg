@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="r1-hoop" viewBox="0 0 24 24" fill="none">
+    <!-- planet inside an inclined hoop: planet r5.8, opening 8.8x5.8 at 24 degrees, band 2.4 -->
+<circle cx="12" cy="12" r="5.8" fill="currentColor"/><ellipse cx="12" cy="12" rx="10.000" ry="7.000" transform="rotate(24 12 12)" fill="none" stroke="currentColor" stroke-width="2.4"/>
+  </symbol>
+  <symbol id="r2-wide" viewBox="0 0 24 24" fill="none">
+    <!-- roomier hoop, wider gap: planet r5.4, opening 9.2x5.6 at 24 degrees, band 2.4 -->
+<circle cx="12" cy="12" r="5.4" fill="currentColor"/><ellipse cx="12" cy="12" rx="10.400" ry="6.800" transform="rotate(24 12 12)" fill="none" stroke="currentColor" stroke-width="2.4"/>
+  </symbol>
+  <symbol id="r3-saturn" viewBox="0 0 24 24" fill="none">
+    <!-- planet pokes out above and below: planet r6.6, opening 9x5 at 24 degrees, band 2.4 -->
+<circle cx="12" cy="12" r="6.6" fill="currentColor"/><ellipse cx="12" cy="12" rx="10.200" ry="6.200" transform="rotate(24 12 12)" fill="none" stroke="currentColor" stroke-width="2.4"/>
+  </symbol>
+  <symbol id="r4-round" viewBox="0 0 24 24" fill="none">
+    <!-- rounder ring, steeper incline: planet r5.6, opening 8.8x6.2 at 28 degrees, band 2.2 -->
+<circle cx="12" cy="12" r="5.6" fill="currentColor"/><ellipse cx="12" cy="12" rx="9.900" ry="7.300" transform="rotate(28 12 12)" fill="none" stroke="currentColor" stroke-width="2.2"/>
+  </symbol>
+</svg>

@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · round five</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .disc-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+        margin-top: 1.25rem;
+      }
+
+      .disc {
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        display: flex;
+        flex-direction: column;
+      }
+
+      .disc > header {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        padding: 0.625rem 0.875rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-overlay);
+      }
+
+      .disc > header svg {
+        width: 1rem;
+        height: 1rem;
+        display: block;
+        color: var(--color-foreground);
+        flex: none;
+      }
+
+      .disc > header b {
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .disc > header .tag {
+        margin-left: auto;
+        font-size: 0.5625rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+      }
+
+      .disc .stage {
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        gap: 2rem;
+        padding: 1.5rem 1rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-app);
+      }
+
+      .disc .stage figure {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .disc .stage svg {
+        display: block;
+        color: var(--color-foreground);
+      }
+
+      .disc .stage figcaption {
+        font-size: 0.5625rem;
+        color: var(--color-dimmed);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .disc .stage .rail-context {
+        padding: 0.5rem;
+        background: var(--color-surface);
+        display: flex;
+        flex-direction: column;
+        gap: 0.125rem;
+        align-items: center;
+      }
+
+      .disc .stage .rail-context .it {
+        width: 2rem;
+        height: 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-muted);
+      }
+
+      .disc .stage .rail-context .it[data-current] {
+        background: var(--color-elevated);
+        color: var(--color-foreground);
+      }
+
+      .disc .stage .rail-context .it svg {
+        width: 1rem;
+        height: 1rem;
+      }
+
+      .disc p {
+        margin: 0;
+        padding: 0.875rem;
+        font-size: 0.6875rem;
+        line-height: 1.6;
+        color: var(--color-muted);
+      }
+
+      .disc p b {
+        color: var(--color-foreground);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">CodeInOven · brand work · round five</div>
+          <h1>A solid disc, and <em>what the scale costs</em></h1>
+          <p class="lede">
+            You dropped a reference: a solid blue disc with a bold mark knocked
+            out of it. I cannot see images, so I measured it instead of guessing.
+            It is one solid disc 260 pixels across with a single knockout whose
+            widest span is 108 pixels, so the knockout takes 41 percent of the
+            disc, there is no outline anywhere, and the disc supplies all the
+            mass. That construction is the answer to the whole size conversation,
+            because mass reads at 16px where an outline does not. Four candidates
+            below draw our own meanings in it, at a size reconciled against the
+            rest of the set.
+          </p>
+        </div>
+        <div class="lockup">
+          <svg viewBox="0 0 96 96" aria-label="CodeInOven mark">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <div>
+            <b>CodeInOven</b>
+            <span>mass first, then the shape</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ══ What I read from the reference ══════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>1 · What your reference actually is</h2>
+          <span class="note">measured from the picture you dropped</span>
+        </div>
+        <div class="size-test">
+          <div class="size-test-head">
+            <span></span>
+            <span>Measurement</span>
+            <span>Value</span>
+            <span>Why it matters</span>
+          </div>
+          <div class="size-test-row" style="grid-template-columns: 11rem 10rem 8rem 1fr">
+            <div class="row-label"><b>One solid disc</b>no outline</div>
+            <div>260 px across</div>
+            <div>100%</div>
+            <div class="row-label">The disc carries all the mass. There is not a single stroke in it.</div>
+          </div>
+          <div class="size-test-row" style="grid-template-columns: 11rem 10rem 8rem 1fr">
+            <div class="row-label"><b>One knockout</b>the whole mark</div>
+            <div>108 px at its widest</div>
+            <div>41%</div>
+            <div class="row-label">The meaning is a hole, not a line. That is what survives the rasterizer.</div>
+          </div>
+          <div class="size-test-row" style="grid-template-columns: 11rem 10rem 8rem 1fr">
+            <div class="row-label"><b>One colour</b></div>
+            <div>flat fill</div>
+            <div>-</div>
+            <div class="row-label">Nothing is shaded, so it takes the theme's ink like everything else.</div>
+          </div>
+        </div>
+        <p class="footnote">
+          I did not copy the reference's own mark. It appears to be a swoosh of
+          some kind, and identifying a third party's logo precisely from a
+          screenshot is not something I can do reliably, so I drew our own
+          meanings in the same construction rather than redrawing their mark.
+        </p>
+      </section>
+
+      <!-- ══ The scale finding ═══════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>2 · What the scale costs</h2>
+          <span class="note">ink mass, measured at the reference size</span>
+        </div>
+        <p class="lede">
+          A disc is a heavier construction than an outline, so the first version
+          was wrong and the measurement caught it. At full extent a disc measures
+          48 to 57 percent ink. The stroke set runs 17 to 44, and the assistant
+          mark, the icon you told me not to change, is 24.9. A full disc would
+          have out-shouted the very mark it sits beside. So the disc was shrunk to
+          r=10.2, which measures 43.9 percent: the set's own ceiling, where
+          Utilities sits at 42 and Tasks at 44.
+        </p>
+
+        <table class="scale-table">
+          <thead>
+            <tr>
+              <th style="width: 15rem">Mark</th>
+              <th style="width: 9rem">Construction</th>
+              <th style="width: 8rem">Ink mass</th>
+              <th style="width: 8rem">Extent</th>
+              <th>Reading</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name">Lucide globe</td>
+              <td class="before">outline</td>
+              <td>40%</td>
+              <td>22.0</td>
+              <td>The icon being replaced. The disc has to meet it.</td>
+            </tr>
+            <tr>
+              <td class="name">Assistant mark</td>
+              <td class="before">outline</td>
+              <td>25%</td>
+              <td>21.0</td>
+              <td>Unchanged. The lightest thing in the rail, and the anchor.</td>
+            </tr>
+            <tr>
+              <td class="name">Disc at full extent</td>
+              <td class="before">solid</td>
+              <td class="before">48 to 57%</td>
+              <td class="before">22.6</td>
+              <td>Rejected. Heavier than anything in the set.</td>
+            </tr>
+            <tr>
+              <td class="name">Disc, reconciled</td>
+              <td class="after">solid</td>
+              <td class="after">36 to 44%</td>
+              <td class="after">20.5</td>
+              <td>Ships. At the set's ceiling, and still more visible than any stroke glyph because mass reads before outline does.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ══ The candidates ══════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>3 · Four browsers, knocked out of a disc</h2>
+          <span class="note">16px as the rail draws, 64px to read the drawing, and beside the assistant</span>
+        </div>
+
+        <div class="disc-grid">
+          <div class="disc">
+            <header>
+              <svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-globe" /></svg>
+              <b>The globe</b>
+              <span class="tag">38% ink</span>
+            </header>
+            <div class="stage">
+              <figure>
+                <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-globe" /></svg>
+                <figcaption>16px</figcaption>
+              </figure>
+              <figure>
+                <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-globe" /></svg>
+                <figcaption>64px</figcaption>
+              </figure>
+              <figure>
+                <span class="rail-context">
+                  <span class="it"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                  <span class="it" data-current><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-globe" /></svg></span>
+                </span>
+                <figcaption>beside the assistant</figcaption>
+              </figure>
+            </div>
+            <p>
+              <b>Heaviest of the four at 44 percent</b> in the rose's company, 38
+              here. The equatorial band and the meridian are both cut through, so
+              it reads as a sphere rather than a target. This is the safest of the
+              four and the least distinctive.
+            </p>
+          </div>
+
+          <div class="disc">
+            <header>
+              <svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg>
+              <b>The compass rose</b>
+              <span class="tag">44% ink</span>
+            </header>
+            <div class="stage">
+              <figure>
+                <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg>
+                <figcaption>16px</figcaption>
+              </figure>
+              <figure>
+                <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg>
+                <figcaption>64px</figcaption>
+              </figure>
+              <figure>
+                <span class="rail-context">
+                  <span class="it"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                  <span class="it" data-current><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></span>
+                </span>
+                <figcaption>beside the assistant</figcaption>
+              </figure>
+            </div>
+            <p>
+              <b>The strongest silhouette of the four.</b> A four-point star cut
+              out of the disc: the widest knockout, the clearest read at 16px, and
+              the only one that is unmistakably not an icon anybody else uses for
+              a browser. The risk is that a rose is chart vocabulary before it is
+              web vocabulary.
+            </p>
+          </div>
+
+          <div class="disc">
+            <header>
+              <svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg>
+              <b>The orbit</b>
+              <span class="tag">38% ink</span>
+            </header>
+            <div class="stage">
+              <figure>
+                <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg>
+                <figcaption>16px</figcaption>
+              </figure>
+              <figure>
+                <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg>
+                <figcaption>64px</figcaption>
+              </figure>
+              <figure>
+                <span class="rail-context">
+                  <span class="it"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                  <span class="it" data-current><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg></span>
+                </span>
+                <figcaption>beside the assistant</figcaption>
+              </figure>
+            </div>
+            <p>
+              <b>The closest in spirit to your reference.</b> A bold ring cut out
+              of the disc, closer to the gesture you dropped than anything else
+              here. A tilted ring was tried first and fragmented into specks at
+              16px, because a tilted ellipse's extremes are near-parallel edges
+              the rasterizer splits. Upright, the thickness carries it.
+            </p>
+          </div>
+
+          <div class="disc">
+            <header>
+              <svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-page" /></svg>
+              <b>The page</b>
+              <span class="tag">36% ink</span>
+            </header>
+            <div class="stage">
+              <figure>
+                <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-page" /></svg>
+                <figcaption>16px</figcaption>
+              </figure>
+              <figure>
+                <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-page" /></svg>
+                <figcaption>64px</figcaption>
+              </figure>
+              <figure>
+                <span class="rail-context">
+                  <span class="it"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                  <span class="it" data-current><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-page" /></svg></span>
+                </span>
+                <figcaption>beside the assistant</figcaption>
+              </figure>
+            </div>
+            <p>
+              <b>The most literal.</b> A page with a tab standing above it, cut
+              out of the disc. It names exactly what the view is and it is the
+              lightest of the four at 36 percent, so it sits closest to the
+              assistant mark's 25. The cost is that a page shape is generic, and
+              the tab reads as a chimney at the smallest size.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ In the rail ═════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>4 · In the rail</h2>
+          <span class="note">the whole set at the real 16px, with the rose in place</span>
+        </div>
+        <p class="lede">
+          The disc marks above are single-colour and follow the theme like
+          everything else, so they take the rail's idle and current tones without
+          being recoloured. Below, the set as it would ship with the rose as the
+          browser: seven views, then the four utilities.
+        </p>
+        <div class="rail-pair">
+          <div class="window">
+            <nav class="rail" aria-label="Rail with the rose disc browser">
+              <div class="group">
+                <span class="item" data-current title="Project"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-tasks" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-utilities" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="window">
+            <nav class="rail" aria-label="Rail with the globe disc browser">
+              <div class="group">
+                <span class="item" title="Project"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-globe" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-tasks" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-utilities" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="footnote">
+          <b>The honest trade.</b> A disc is more visible than an outline at 16px,
+          which is exactly what you asked for, and it costs extent: 20.5 units
+          against the stroke set's 22.6. Mass reads before size does, so it still
+          wins at the rail size, but if a disc browser is chosen while the other
+          ten stay outlines, the rail has two visual languages in it and the
+          browser will be the loudest item. The alternative is the whole rail in
+          the disc construction, which is a bigger piece of work and would mean
+          re-deciding every glyph.
+        </p>
+      </section>
+
+      <!-- ══ Still open ══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>5 · Still open</h2>
+          <span class="note">three questions, none of them answered by me guessing</span>
+        </div>
+        <p class="lede">
+          Which of the four, if any. Whether the rail should go fully disc, since
+          mixing constructions has a cost I have stated. And the update button,
+          unchanged since round three: one control cycling six state glyphs, still
+          waiting on what that control is rather than how it is drawn.
+        </p>
+        <p class="footnote">
+          Earlier rounds: <a href="./index.html">one</a>,
+          <a href="./round-two.html">two</a>,
+          <a href="./round-three.html">three</a>,
+          <a href="./round-four.html">four</a>. The disc marks are generated by
+          <code>.cio/tmp/build-disc-browser.py</code> so the knockouts stay exact,
+          and every number here comes from
+          <code>.cio/tmp/final-compare.ts</code>,
+          <code>.cio/tmp/density.ts</code> and
+          <code>.cio/tmp/disc-sweep.ts</code>.
+        </p>
+      </section>
+    </div>
+  </body>
+</html>

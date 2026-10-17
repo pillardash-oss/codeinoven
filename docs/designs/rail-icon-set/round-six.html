@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · round six</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      /* The browser chrome, mocked at the real sizes so a mark is judged where it
+         will actually appear rather than on a swatch. */
+      .chrome {
+        margin-top: 1.25rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        overflow: hidden;
+      }
+
+      .chrome > header {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-overlay);
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+      }
+
+      .chrome > header .where {
+        margin-left: auto;
+        letter-spacing: 0;
+        text-transform: none;
+        font-weight: 400;
+      }
+
+      .chrome .body {
+        padding: 0.75rem;
+        background: var(--color-app);
+      }
+
+      /* A browser tab strip. */
+      .tabs {
+        display: flex;
+        align-items: flex-end;
+        gap: 0.25rem;
+        padding: 0.375rem 0.375rem 0;
+        background: var(--color-app);
+        border-bottom: 1px solid var(--color-border);
+      }
+
+      .tab {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        min-width: 9rem;
+        max-width: 14rem;
+        padding: 0.4375rem 0.625rem;
+        border: 1px solid transparent;
+        border-bottom: 0;
+        font-size: 0.6875rem;
+        color: var(--color-muted);
+        background: transparent;
+      }
+
+      .tab[data-current] {
+        background: var(--color-surface);
+        border-color: var(--color-border);
+        color: var(--color-foreground);
+      }
+
+      /* The fallback glyph slot: 12px in the tab strip, 16px on the rail, 20-22
+         in a card or an empty state. */
+      .tab .glyph {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: currentColor;
+      }
+
+      .tab .glyph svg {
+        width: 0.75rem;
+        height: 0.75rem;
+        display: block;
+      }
+
+      .tab .label {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* The right context dock, which is where the thread browser is named. */
+      .dock {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.125rem;
+        width: 2.5rem;
+        padding: 0.5rem 0;
+        background: var(--color-surface);
+        border: 1px solid var(--color-border);
+      }
+
+      .dock .it {
+        position: relative;
+        width: 2rem;
+        height: 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--color-muted);
+      }
+
+      .dock .it[data-current] {
+        background: var(--color-elevated);
+        color: var(--color-foreground);
+      }
+
+      .dock .it svg {
+        width: 1rem;
+        height: 1rem;
+        display: block;
+      }
+
+      .side-by-side {
+        display: flex;
+        gap: 1.5rem;
+        align-items: flex-start;
+        margin-top: 1.25rem;
+      }
+
+      .side-by-side > * {
+        flex: 1;
+        min-width: 0;
+      }
+
+      /* An empty state, where the mark is drawn large. */
+      .empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 2rem 1rem;
+        text-align: center;
+      }
+
+      .empty svg {
+        width: 2rem;
+        height: 2rem;
+        display: block;
+        color: var(--color-dimmed);
+      }
+
+      .empty p {
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--color-muted);
+      }
+
+      .pair {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1.25rem;
+        margin-top: 1.25rem;
+      }
+
+      .pair > section {
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+      }
+
+      .pair > section > h3 {
+        margin: 0;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-overlay);
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+      }
+
+      .notes {
+        margin: 0;
+        padding: 0.875rem 0.875rem 0.875rem 1.75rem;
+        font-size: 0.6875rem;
+        line-height: 1.65;
+        color: var(--color-muted);
+      }
+
+      .notes li + li {
+        margin-top: 0.375rem;
+      }
+
+      .notes b {
+        color: var(--color-foreground);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">CodeInOven · brand work · round six</div>
+          <h1>The rose, and <em>both browsers</em></h1>
+          <p class="lede">
+            Both corrections are in. The rose is the chosen browser mark, and the
+            orbit is fixed: it was drawn with the ring inside the planet, and it
+            is now a planet with a ring around it, which meant rebuilding it
+            topologically rather than nudging the geometry. Below, both marks in
+            the two places they will actually live: the global browser's chrome,
+            and the thread browser's right dock and tab strip, which is where the
+            rail's Browser view puts a thread's own pages.
+          </p>
+        </div>
+        <div class="lockup">
+          <svg viewBox="0 0 96 96" aria-label="CodeInOven mark">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <div>
+            <b>CodeInOven</b>
+            <span>finally, a rose that is not a chart</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ══ The correction ═══════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>1 · The orbit, corrected</h2>
+          <span class="note">you were right, and it was worse than a flip</span>
+        </div>
+        <p class="lede">
+          You said the ring is supposed to be around the planet, not inside it.
+          Correct, and the cause was topological rather than geometric, so
+          adjusting the radii would never have fixed it. The first version listed
+          the planet's circle twice, and under a fill rule the ring's band
+          therefore resolved as a hole inside the disc. A flat single-colour mark
+          can only express planet, gap and ring if the three are nested outward
+          from the centre, so a ray from the middle now crosses three boundaries
+          and alternates ink, hole, ink, hole.
+        </p>
+
+        <div class="pair">
+          <section>
+            <h3>Before, rejected</h3>
+            <div class="body">
+              <div class="empty">
+                <svg viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd"><path d="M1.8,12a10.2,10.2 0 1 0 20.4,0a10.2,10.2 0 1 0 -20.4,0 Z M20.800,12.000L20.767,12.453L20.666,12.903L20.500,13.346L20.269,13.779L19.976,14.198L19.621,14.600L19.209,14.983L18.741,15.342L18.223,15.677L17.657,15.983L17.047,16.260L16.400,16.503L15.719,16.713L15.010,16.886L14.278,17.023L13.528,17.121L12.767,17.180L12.000,17.200L11.233,17.180L10.472,17.121L9.722,17.023L8.990,16.886L8.281,16.713L7.600,16.503L6.953,16.260L6.343,15.983L5.777,15.677L5.259,15.342L4.791,14.983L4.379,14.600L4.024,14.198L3.731,13.779L3.500,13.346L3.334,12.903L3.233,12.453L3.200,12.000L3.233,11.547L3.334,11.097L3.500,10.654L3.731,10.221L4.024,9.802L4.379,9.400L4.791,9.017L5.259,8.658L5.777,8.323L6.343,8.017L6.953,7.740L7.600,7.497L8.281,7.287L8.990,7.114L9.722,6.977L10.472,6.879L11.233,6.820L12.000,6.800L12.767,6.820L13.528,6.879L14.278,6.977L15.010,7.114L15.719,7.287L16.400,7.497L17.047,7.740L17.657,8.017L18.223,8.323L18.741,8.658L19.209,9.017L19.621,9.400L19.976,9.802L20.269,10.221L20.500,10.654L20.666,11.097L20.767,11.547Z M17.680,12.000L17.658,12.181L17.594,12.361L17.486,12.538L17.337,12.711L17.148,12.879L16.919,13.040L16.653,13.193L16.351,13.337L16.016,13.471L15.651,13.593L15.258,13.704L14.840,13.801L14.400,13.885L13.943,13.955L13.470,14.009L12.986,14.048L12.495,14.072L12.000,14.080L11.505,14.072L11.014,14.048L10.530,14.009L10.057,13.955L9.600,13.885L9.160,13.801L8.742,13.704L8.349,13.593L7.984,13.471L7.649,13.337L7.347,13.193L7.081,13.040L6.852,12.879L6.663,12.711L6.514,12.538L6.406,12.361L6.342,12.181L6.320,12.000L6.342,11.819L6.406,11.639L6.514,11.462L6.663,11.289L6.852,11.121L7.081,10.960L7.347,10.807L7.649,10.663L7.984,10.529L8.349,10.407L8.742,10.296L9.160,10.199L9.600,10.115L10.057,10.045L10.530,9.991L11.014,9.952L11.505,9.928L12.000,9.920L12.495,9.928L12.986,9.952L13.470,9.991L13.943,10.045L14.400,10.115L14.840,10.199L15.258,10.296L15.651,10.407L16.016,10.529L16.351,10.663L16.653,10.807L16.919,10.960L17.148,11.121L17.337,11.289L17.486,11.462L17.594,11.639L17.658,11.819Z" /></svg>
+                <p>Ring cut out of the inside of the disc, which reads as a ring lying inside the planet.</p>
+              </div>
+            </div>
+          </section>
+          <section>
+            <h3>After, corrected</h3>
+            <div class="body">
+              <div class="empty">
+                <svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg>
+                <p>A solid planet with a gap around it and a ring beyond the gap.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <p class="footnote">
+          <b>What the nesting costs.</b> All three bands have to clear 1.5 units,
+          which is one device pixel at 16px, and three bands plus a planet have to
+          fit in a 24-unit grid. So the planet is deliberately small. A very flat
+          ring cannot encircle the planet at all, which is why the corrected orbit
+          is rounder than the version you saw.
+        </p>
+      </section>
+
+      <!-- ══ Global browser ═══════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>2 · The global browser</h2>
+          <span class="note">the tab strip and the address bar, with the rose as the fallback mark</span>
+        </div>
+        <p class="lede">
+          The global browser draws a page's own favicon when it has one and falls
+          back to a generic mark when it does not. That fallback is where the rose
+          goes. This is the surface where the mark is seen most often, and at 12px
+          in the tab strip, which is smaller than the rail.
+        </p>
+
+        <div class="chrome">
+          <header>
+            Rose, in the global browser
+            <span class="where">fallback glyph at 12px, tab strip and address bar</span>
+          </header>
+          <div class="body" style="padding: 0">
+            <div class="tabs">
+              <span class="tab" data-current>
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></span>
+                <span class="label">New tab</span>
+              </span>
+              <span class="tab">
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></span>
+                <span class="label">github.com/pillardash-oss</span>
+              </span>
+              <span class="tab">
+                <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></svg></span>
+                <span class="label">the old globe, for comparison</span>
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.625rem 0.75rem; border-bottom: 1px solid var(--color-border); background: var(--color-surface)">
+              <span style="display: flex; align-items: center; justify-content: center; width: 1rem; height: 1rem; color: var(--color-dimmed)">
+                <svg viewBox="0 0 24 24" style="width: 1rem; height: 1rem; display: block"><use href="./browser-disc.svg#h-browser-rose" /></svg>
+              </span>
+              <span style="flex: 1; font-size: 0.6875rem; padding: 0.25rem 0.5rem; border: 1px solid var(--color-border); background: var(--color-app); color: var(--color-muted)">
+                codeinoven.com
+              </span>
+            </div>
+          </div>
+        </div>
+        <p class="footnote">
+          <b>Read it at the size it ships.</b> The first two tabs above draw the
+          rose at 12px, the size the tab strip uses, which is <em>smaller</em> than
+          the rail's 16px. At that size a rose's four points are the whole mark,
+          and the inner details are gone. That is fine, because the point of the
+          cut is the silhouette, but it is worth seeing before it ships rather
+          than after.
+        </p>
+      </section>
+
+      <!-- ══ Thread browser ═══════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>3 · The thread browser</h2>
+          <span class="note">the right dock and the tab strip a thread's own pages use</span>
+        </div>
+        <p class="lede">
+          A thread's browser is a panel on the conversation, not the whole window,
+          so its mark appears in two places: the right context dock, where the
+          panel is toggled, and the panel's own tab strip. Today both draw a
+          Lucide globe-with-code (`GlobeCode`), which is the closest thing the set
+          has to the global browser's mark and therefore the least able to tell
+          the two apart.
+        </p>
+
+        <div class="side-by-side">
+          <div>
+            <div class="chrome" style="margin-top: 0">
+              <header>
+                Right context dock
+                <span class="where">16px, the rail's own size</span>
+              </header>
+              <div class="body" style="display: flex; gap: 1.5rem; justify-content: center">
+                <div class="dock">
+                  <span class="it" title="History"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v4h4" /><path d="M12 8v4l3 2" /></svg></span>
+                  <span class="it" title="Notepad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16" /><path d="M4 11h16" /><path d="M4 16h10" /></svg></span>
+                  <span class="it" data-current title="Browser"><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></span>
+                  <span class="it" title="Terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14" /><path d="M5 12h14" /><path d="M5 18h8" /></svg></span>
+                </div>
+                <div class="dock">
+                  <span class="it" title="History"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v4h4" /><path d="M12 8v4l3 2" /></svg></span>
+                  <span class="it" title="Notepad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16" /><path d="M4 11h16" /><path d="M4 16h10" /></svg></span>
+                  <span class="it" title="Browser, today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" /><path d="M9 18c-4.51 2-5-2-7-2" /></svg></span>
+                  <span class="it" title="Terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14" /><path d="M5 12h14" /><path d="M5 18h8" /></svg></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="chrome" style="margin-top: 0">
+              <header>
+                Thread browser panel
+                <span class="where">its own tab strip at 12px</span>
+              </header>
+              <div class="body" style="padding: 0">
+                <div class="tabs">
+                  <span class="tab" data-current>
+                    <span class="glyph"><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></span>
+                    <span class="label">docs codeinoven</span>
+                  </span>
+                  <span class="tab">
+                    <span class="glyph"><svg viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></span>
+                    <span class="label">localhost:3000</span>
+                  </span>
+                  <span class="tab">
+                    <span class="glyph"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" /><path d="M9 18c-4.51 2-5-2-7-2" /></svg></span>
+                    <span class="label">GlobeCode, today</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p class="footnote">
+          <b>The question this raises.</b> If the global browser wears the rose and
+          the thread browser wears the orbit, the two are told apart by shape, which
+          is exactly what the current pair of globes fails to do. The alternative is
+          the rose in both, on the grounds that a browser is a browser and only the
+          context differs. I have shown the split here because it is the version
+          that uses both corrected marks; say the word and I will make it consistent
+          instead.
+        </p>
+      </section>
+
+      <!-- ══ The two marks side by side ═══════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>4 · The two marks, at every size that matters</h2>
+          <span class="note">12px in a tab strip, 16px on the rail, 20px in an empty state</span>
+        </div>
+        <div class="size-test">
+          <div class="size-test-head">
+            <span></span>
+            <span>12px</span>
+            <span>16px</span>
+            <span>20px</span>
+            <span>32px</span>
+            <span>64px</span>
+          </div>
+          <div class="size-test-row" style="grid-template-columns: 8.5rem repeat(5, minmax(0, 1fr))">
+            <div class="row-label"><b>The rose</b>44% ink</div>
+            <div class="cell"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></div>
+            <div class="cell"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></div>
+            <div class="cell"><svg width="20" height="20" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></div>
+            <div class="cell"><svg width="32" height="32" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></div>
+            <div class="cell"><svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-rose" /></svg></div>
+          </div>
+          <div class="size-test-row" style="grid-template-columns: 8.5rem repeat(5, minmax(0, 1fr))">
+            <div class="row-label"><b>The orbit</b>33% ink, corrected</div>
+            <div class="cell"><svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg></div>
+            <div class="cell"><svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg></div>
+            <div class="cell"><svg width="20" height="20" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg></div>
+            <div class="cell"><svg width="32" height="32" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg></div>
+            <div class="cell"><svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-disc.svg#h-browser-orbit" /></svg></div>
+          </div>
+        </div>
+        <p class="footnote">
+          <b>Where the orbit is weaker.</b> At 12px the orbit's gap closes and it
+          reads as a plain disc, which the rose never does. So if the orbit is used
+          in a tab strip rather than the dock, it is the rose that should go there.
+          That is a real difference between the two, not a preference.
+        </p>
+      </section>
+
+      <!-- ══ Still open ═══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>5 · Still open</h2>
+          <span class="note">the two questions this round adds, and the one it does not close</span>
+        </div>
+        <ul class="notes">
+          <li><b>Split or consistent.</b> Rose for the global browser and orbit for the thread browser, or the rose in both. The split uses both corrected marks and distinguishes the two at a glance; consistency is simpler and says a browser is a browser.</li>
+          <li><b>Scope.</b> The rose is currently the rail's Browser view. The tab strips and the dock are three more call sites, and the thread browser's four `GlobeCode` uses are the ones that would change.</li>
+          <li><b>The update button</b> is still untouched since round three: one control cycling six state glyphs, waiting on what that control is rather than how it is drawn.</li>
+        </ul>
+        <p class="footnote">
+          Earlier rounds: <a href="./index.html">one</a>,
+          <a href="./round-two.html">two</a>,
+          <a href="./round-three.html">three</a>,
+          <a href="./round-four.html">four</a>,
+          <a href="./round-five.html">five</a>. Both marks are generated by
+          <code>.cio/tmp/build-disc-browser.py</code> so the knockouts stay exact;
+          the fill-rule behaviour is checked by
+          <code>.cio/tmp/disc-regions.ts</code>.
+        </p>
+      </section>
+    </div>
+  </body>
+</html>

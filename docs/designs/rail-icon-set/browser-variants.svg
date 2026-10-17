@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <!--
+    Browser candidates, drawn at the set's own weight (1.9 units) before fitting.
+
+    Three marks, one meaning. The globe is here for comparison, then two that are
+    unique to CodeInOven. None is a framed rectangle with a horizontal band across
+    it, because that is a bank card.
+
+    These are the raw drawings. `fit-sprite.ts` measures each one and emits the
+    fitted sprite, so the footprint is measured rather than guessed at, which is
+    what keeps a glyph from being clipped at the rail size.
+  -->
+  <symbol id="g-browser-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="8.3" />
+    <path d="M3.7 12h16.6" />
+    <ellipse cx="12" cy="12" rx="3.9" ry="8.3" />
+  </symbol>
+
+  <symbol id="g-browser-tab" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <!-- The pane, drawn as one line with a tab rising out of its own top edge. No
+         other glyph in the set and no Lucide icon leaves its own bounding box
+         like this, so the silhouette is unique at 16px while still naming exactly
+         what the rail's Browser view is: a tab sitting above a page. -->
+    <path
+      d="M2.5 19A2 2 0 0 1 4.5 21H19.5A2 2 0 0 1 21.5 19V8A2 2 0 0 1 19.5 6H11.5V4.4A1.4 1.4 0 0 0 10.1 3H6.9A1.4 1.4 0 0 0 5.5 4.4V6H4.5A2 2 0 0 1 2.5 8Z"
+    />
+    <rect x="5.6" y="10.6" width="12.8" height="2.8" rx="1.4" fill="currentColor" stroke="none" />
+  </symbol>
+
+  <symbol id="g-browser-rose" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <!-- The world as a thing you navigate rather than a thing you look at: a
+         compass rose inscribed in the sphere, with the equator across it. The
+         diamond is what makes it ours, since a circle with a meridian is every
+         other app's globe while a circle with a rose is a direction. -->
+    <circle cx="12" cy="12" r="9.4" />
+    <path d="M2.6 12h18.8" />
+    <path d="M12 5.6 18.4 12 12 18.4 5.6 12Z" />
+  </symbol>
+</svg>
