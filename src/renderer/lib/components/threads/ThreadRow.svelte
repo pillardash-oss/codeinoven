@@ -31,6 +31,7 @@
     type ThreadIndicator
   } from '$lib/components/threads/thread-indicator'
   import {
+    LIVE_RAIL_DASH_MS,
     liveRailDashCount,
     liveRailPaint,
     markDrawsGlyph,
@@ -664,9 +665,10 @@
    *  showing. */
   let spineGlyphVisible = $derived(markDrawsGlyph(primaryMark, secondaryMark !== null))
 
-  /** Whether the rail is live work, lighting from the bottom of its box to the
-   *  top and starting over. The box never changes height: only the light moves
-   *  inside it, so the row, and every row under it, stays exactly where it is. */
+  /** Whether the rail is live work, lighting from the bottom of its box to the top,
+   *  going out in the same instant it reaches the top, and starting over. The box
+   *  never changes height: only the light moves inside it, so the row, and every row
+   *  under it, stays exactly where it is. */
   let spineRailFills = $derived(markRailFills(primaryMark))
 
   /** The live rail's height as laid out, which is the only thing that decides how
@@ -1357,7 +1359,8 @@
               ></span>
               <span
                 class="spine-lit absolute inset-0"
-                style="background: {spineLivePaint}; --spine-steps: {spineDashCount};"
+                style="background: {spineLivePaint}; --spine-steps: {spineDashCount}; --spine-beat: {LIVE_RAIL_DASH_MS /
+                  1000}s;"
                 aria-hidden="true"
               ></span>
             </span>
@@ -1810,38 +1813,34 @@
 <style>
   /*
    * Live work. The rail's dashes are drawn by the row; this is only the light that
-   * climbs them. It steps one whole dash at a time from the bottom to the top,
-   * holds a beat at the top, then steps back down and starts again, for as long as
-   * the thread keeps working.
+   * climbs them. The light spans the whole cycle: one whole dash at a time from the
+   * bottom to the top, and the top dash hands straight over to the bottom one. There
+   * is no beat at the top and no beat of dark holding the restart back, because both
+   * read as an invisible fifth dash waiting its turn: 1, 2, 3, 4, 1, 2, 3, 4.
    *
-   * The step count and the grid the dashes are painted on are the same decision, so
-   * the count is measured off the rail's own height (`liveRailDashCount`) and handed
-   * to this rule as `--spine-steps` by the markup. Steps, not a smooth sweep: a light
-   * that moved continuously would leave the dash it is passing half lit and half
-   * stretched.
+   * One dash per `LIVE_RAIL_DASH_MS`, whatever the count, so a two-dash rail keeps
+   * the same rhythm as a four-dash one. The count is measured off the rail's own
+   * height (`liveRailDashCount`) and handed to this rule by the markup, along with
+   * the beat. Steps, not a smooth sweep: a light that moved continuously would leave
+   * the dash it is passing half lit and half stretched.
    *
    * A clip animates no box, so nothing in the row or the list below it moves while
-   * the light climbs, and the browser only has to repaint this one small column
-   * when a step lands.
+   * the light climbs, and the browser only has to repaint this one small column when
+   * a step lands.
    */
   @keyframes cio-spine-light {
     0% {
       clip-path: inset(100% 0 0 0);
     }
-    75% {
-      clip-path: inset(0 0 0 0);
-    }
-    85% {
-      clip-path: inset(0 0 0 0);
-    }
     100% {
-      clip-path: inset(100% 0 0 0);
+      clip-path: inset(0 0 0 0);
     }
   }
 
   .spine-lit {
     clip-path: inset(100% 0 0 0);
-    animation: cio-spine-light 2s steps(var(--spine-steps, 8), start) infinite;
+    animation: cio-spine-light calc(var(--spine-steps, 4) * var(--spine-beat, 0.45s))
+      steps(var(--spine-steps, 4), start) infinite;
   }
 
   /* Reduced motion keeps the state and drops the loop: every dash stands lit, so

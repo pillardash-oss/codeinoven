@@ -335,6 +335,16 @@ const RAIL_STRIPES: Record<'dashed' | 'dotted', RailStripe> = {
 export const LIVE_RAIL = { dash: 4, gap: 3, maxDashes: 4 } as const
 
 /**
+ * How long one dash of a live rail stays lit before the next one lights, in
+ * milliseconds.
+ *
+ * A cycle is this times the dash count, so the rhythm a reader follows is the same
+ * on a short rail as on a tall one: one dash every beat, and the top dash handing
+ * straight over to the bottom one.
+ */
+export const LIVE_RAIL_DASH_MS = 450
+
+/**
  * How many dashes a live rail of this height has room for, at least one and never
  * more than `LIVE_RAIL.maxDashes`.
  *
