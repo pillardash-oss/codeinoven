@@ -1764,6 +1764,16 @@ export class ChatEngine {
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
+    // An agent can enter a design or a video session without the user typing the
+    // tag for it, by picking up the capability itself. The thread's row is the
+    // durable record of that session: it is what docks the coordinator board
+    // while the work is being made, and what keeps the thread's later turns
+    // carrying the session's contract instead of leaving each turn to rediscover
+    // the tool mid-flight.
+    this.utilityOrchestration.setAuthoredWorkSessionRecorder(
+      ({ projectId, threadId, kind }) =>
+        void this.rememberAuthoredWorkKind(projectId, threadId, kind)
+    )
     // Design work the user routed to a model of their own choosing. The config
     // is read per call, so re-assigning a model applies to the next delegation
     // rather than the next app run, and the app never substitutes a model.
@@ -3874,14 +3884,24 @@ export class ChatEngine {
    * whether this turn is the one that opened it. The same memo-and-rescan shape
    * as the utility tag, so an edit or rollback that removes the tag takes the
    * session with it.
+   *
+   * The thread's row answers before the scan does, because the row is the durable
+   * record of the session and it is already in hand. A session the agent opened
+   * itself   it picked the capability up and the row was written then   is still
+   * that thread's session, and a thread that has ever designed something keeps
+   * designing: without this, both would be handed turns with no design contract
+   * and no active capability, which is exactly the state a model hand-rolls the
+   * markup in and never checks it.
    */
   private async designSessionFor(
     projectId: string,
     threadId: string,
-    requestedThisTurn: boolean
+    requestedThisTurn: boolean,
+    recordedKind?: AuthoredWorkKind
   ): Promise<DesignSessionMode> {
     if (requestedThisTurn) return 'start'
     if (this.cioDesignThreads.has(threadId)) return 'continue'
+    if (recordedKind === 'design') return 'continue'
     const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
     const opened = userMessages.some((message) => isCioDesignRequest(message.content))
     if (opened) this.cioDesignThreads.set(threadId, true)
@@ -3910,16 +3930,18 @@ export class ChatEngine {
   /**
    * Whether a video session was opened in this thread, now or earlier, and
    * whether this turn is the one that opened it. The same memo-and-rescan shape
-   * as the design tag, so an edit or rollback that removes the tag takes the
-   * session with it.
+   * as the design tag, and the same durable record behind it: the row answers
+   * first, so a composition the agent started on its own keeps its session.
    */
   private async videoSessionFor(
     projectId: string,
     threadId: string,
-    requestedThisTurn: boolean
+    requestedThisTurn: boolean,
+    recordedKind?: AuthoredWorkKind
   ): Promise<VideoSessionMode> {
     if (requestedThisTurn) return 'start'
     if (this.cioVideoThreads.has(threadId)) return 'continue'
+    if (recordedKind === 'video') return 'continue'
     const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
     const opened = userMessages.some((message) => isCioVideoRequest(message.content))
     if (opened) this.cioVideoThreads.set(threadId, true)
@@ -3939,7 +3961,12 @@ export class ChatEngine {
    * the kind in the durable set as well as naming the session it is in now: a
    * thread that designed something and later cut a video about it keeps both
    * marks. The manager writes nothing for a kind the thread already holds.
-   * Best-effort: the marker is cosmetic and a failed write must never fail a turn.
+   *
+   * The row is also the session's durable record: the coordinator board reads it
+   * to dock, and the next turn reads it to keep carrying the session's contract,
+   * so a session the agent opened by picking the capability up is the same fact
+   * to every reader as one the user opened with the tag. Best-effort: the work
+   * itself is already happening and a failed write must never fail a turn.
    */
   private async rememberAuthoredWorkKind(
     projectId: string,
@@ -10090,14 +10117,24 @@ export class ChatEngine {
     // capability and gets the continuation instead.
     const designRequested = origin === 'user' && isCioDesignRequest(text)
     if (designRequested) this.cioDesignThreads.set(threadId, true)
-    const designSession = await this.designSessionFor(projectId, threadId, designRequested)
+    const designSession = await this.designSessionFor(
+      projectId,
+      threadId,
+      designRequested,
+      targetThread?.authoredWorkKind
+    )
     // A video session is user-started the same way, and it lasts for the thread:
     // the turn that types @cio-video gets the session briefing and promotes the
     // video capability to an active one, and every later turn keeps the
     // capability and gets the continuation instead.
     const videoRequested = origin === 'user' && isCioVideoRequest(text)
     if (videoRequested) this.cioVideoThreads.set(threadId, true)
-    const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
+    const videoSession = await this.videoSessionFor(
+      projectId,
+      threadId,
+      videoRequested,
+      targetThread?.authoredWorkKind
+    )
     // An orchestration session is user-started on the same terms. It is what
     // grants the workstation tools, so the turn that types @cio-hey
     // gets the dispatch contract and every later turn of the thread keeps the

@@ -31,6 +31,7 @@ import {
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
 import type { DesignSessionMode } from './cio-design-prompt'
 import type { VideoSessionMode } from './cio-video-prompt'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -365,6 +366,18 @@ export type VideoCapabilityExecutor = (
 ) => Promise<unknown>
 
 /**
+ * Reports that a turn entered an authored-work session by activating the
+ * app-owned capability for it. The chat engine supplies this because it owns the
+ * thread rows: recording the kind there is what docks the coordinator board and
+ * keeps the session alive on the thread's later turns.
+ */
+export type AuthoredWorkSessionRecorder = (input: {
+  projectId: string
+  threadId: string
+  kind: AuthoredWorkKind
+}) => void
+
+/**
  * Runs one gateway invocation of the app-owned scope and worktree capability
  * for the turn that made it. The chat engine supplies it because it owns the
  * thread's scope, project root and permission tier.
@@ -592,6 +605,8 @@ export class UtilityOrchestrationService {
   private orchestrationExecutor: OrchestrationExecutor | null = null
   private appControlExecutor: AppControlExecutor | null = null
   private engineeringExecutor: EngineeringToolExecutor | null = null
+  /** How the app learns that this turn entered a design or video session. */
+  private authoredWorkSessionRecorder: AuthoredWorkSessionRecorder | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
   private readonly bankWrites = new Map<string, Promise<void>>()
   constructor(
@@ -731,6 +746,21 @@ export class UtilityOrchestrationService {
    */
   setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     this.designPreviewExecutor = executor
+  }
+
+  /**
+   * Register what the app does when an agent picks up an authored-work
+   * capability.
+   *
+   * Activating `cio:design` or `cio:video` is an agent entering that session,
+   * whether or not the user typed the tag for it. The app records the kind the
+   * moment that happens, which is what docks the coordinator board while the
+   * work is being made rather than at the first preview, and what keeps the
+   * thread's later turns inside the session. The engine supplies this because it
+   * owns the thread rows and their broadcasts.
+   */
+  setAuthoredWorkSessionRecorder(recorder: AuthoredWorkSessionRecorder | null): void {
+    this.authoredWorkSessionRecorder = recorder
   }
 
   /**
@@ -2102,6 +2132,9 @@ export class UtilityOrchestrationService {
       }
     }
     state.activated.set(utilityId, resolved)
+    // The agent just entered an authored-work session by picking the capability
+    // up, so the app is told about it now rather than at the first preview.
+    this.noteAuthoredWorkSession(state, utilityId)
     // First activation in this thread registers the utility in the durable
     // thread utilities bank so every later turn can invoke it by id directly.
     await this.registerThreadBankEntry(state, resolved.utility)
@@ -2117,6 +2150,36 @@ export class UtilityOrchestrationService {
         kind: resolved.utility.kind
       },
       capability
+    }
+  }
+
+  /**
+   * Tell the app that this turn entered an authored-work session.
+   *
+   * Only the two app-owned authored-work capabilities count as entering one:
+   * picking up any other utility is neither a design nor a composition. Reported
+   * on the real activation and not on the already-active no-op, because the
+   * first activation is the moment the agent entered the session. Best-effort,
+   * because the record is how the user watches the work rather than the work
+   * itself, and a failed write must never fail the activation that was asked
+   * for.
+   */
+  private noteAuthoredWorkSession(state: TurnState, utilityId: string): void {
+    const kind: AuthoredWorkKind | null =
+      utilityId === APP_DESIGN_UTILITY_ID
+        ? 'design'
+        : utilityId === APP_VIDEO_UTILITY_ID
+          ? 'video'
+          : null
+    if (!kind) return
+    try {
+      this.authoredWorkSessionRecorder?.({
+        projectId: state.request.projectId,
+        threadId: state.request.threadId,
+        kind
+      })
+    } catch (error) {
+      Logger.error('Authored-work session record failed:', error)
     }
   }
 
