@@ -68,7 +68,7 @@
   import CardHead from '../shared/CardHead.svelte'
   import CardNotice from '../shared/CardNotice.svelte'
   import ClampedText from '../shared/ClampedText.svelte'
-  import { dismissSlide } from '../shared/card-motion'
+  import { cardArrive, dismissSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
@@ -206,6 +206,7 @@
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
+  import { promptArrive } from '$lib/motion'
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
@@ -536,6 +537,11 @@
   // Intentional initial-value captures   Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
+  /** When this view attached. A prompt is only brand new to this view when it was
+   *  created after this stamp: a message that predates it is history this view
+   *  mounted, and history must not play the arrival it never had (see
+   *  `promptArrive`). The view is keyed by thread, so a switch stamps again. */
+  const viewAttachedAt = Date.now()
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
   /** Minimum first paint: only the newest few messages mount on the first
    *  frame, so a long thread paints instantly on switch. */
@@ -13093,7 +13099,17 @@
               </div>
             {:else if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
-                <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
+                <!-- The whole block travels, the ledger row and the action row
+                     that hangs under it: a prompt this view watched arrive rises
+                     the last few pixels into place, while history (and a message
+                     it mounts for a jump) appears where it belongs. The motion is
+                     transform and opacity only, so the reader's scroll position
+                     and the tail lock never wait on it (`promptArrive`). -->
+                <div
+                  id={`msg-${msg.id}`}
+                  class="message-block group flex min-w-0 flex-col"
+                  in:fly={promptArrive(msg.createdAt, viewAttachedAt)}
+                >
                   {#if editingMessageId === msg.id}
                     <RichMarkdownEditor
                       bind:this={messageEditEditor}
@@ -14017,10 +14033,13 @@
         <!-- Queued message card   attached to the top of the composer. It stacks on the
        edge of whatever the composer slot shows, so its own bottom rule is dropped
        and the surface below carries the join: a broken line when a card is what
-       follows, the composer's dashed top rule when the composer is. The head names
-       what waits, and Send now (the steer key) is a head control. -->
+       follows, the composer's dashed top rule when the composer is. It opens the
+       way it closes, on the slot rather than the card: the space grows out of the
+       composer's edge (`cardArrive`) exactly as the card's own dismissal collapses
+       it, so parking a message never snaps the transcript up by a card's height.
+       The head names what waits, and Send now (the steer key) is a head control. -->
         {#if queuedCardVisible}
-          <div class="conversation-gutter shrink-0 px-6">
+          <div class="conversation-gutter shrink-0 px-6" in:slide={cardArrive()}>
             <div class="mx-auto max-w-3xl">
               <ComposerQueuedCard
                 text={queuedMessage}

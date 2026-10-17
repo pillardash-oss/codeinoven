@@ -4,6 +4,8 @@ import { motionDuration, prefersReducedMotion } from '$lib/motion'
 
 /** Body fold/unfold time for a card above the composer. */
 const FOLD_MS = 160
+/** Opening time for a card landing on the composer's top edge. */
+const OPEN_MS = 160
 /** Collapse-out time for a card that leaves the composer stack. */
 const DISMISS_MS = 140
 /** Entry-to-entry time for a card that walks through several entries. */
@@ -61,14 +63,34 @@ export function playFoldClip(node: HTMLElement, from: number, to: number): void 
 }
 
 /**
+ * The opening a card plays as it lands on the composer's top edge: the space it
+ * takes grows out of the surface below it, so the transcript above gives ground
+ * frame by frame instead of the whole stack jumping by a card's height in one
+ * paint.
+ *
+ * Use as `in:slide={cardArrive()}` on the block that appears   the composer-stack
+ * slot that holds the card. Height only, no travel and no fade: the card is
+ * revealed by its own growing clip, so it reads as rising out of the composer's
+ * edge while the composer (which is anchored to the bottom) stays put. A `fly`
+ * beside the clip would move the card inside a box that is still opening, which
+ * reads as two motions fighting over the same edge.
+ */
+export function cardArrive(): SlideParams {
+  return { duration: motionDuration(OPEN_MS), easing: cubicOut }
+}
+
+/**
  * Collapse-out animation for a card leaving the composer stack: closing it with
  * its own control, or the agent resolving what it asked for.
  *
- * Use as `out:slide={dismissSlide()}` on the card's root element. It is an
- * `out:` (not `transition:`) so a card arriving never animates, and Svelte only
- * plays it when the card's own block is removed: an ancestor block being
- * replaced (a thread switch, or the whole conversation view being dropped) tears
- * the card down in the same frame, so the outgoing view can never linger.
+ * Use as `out:slide={dismissSlide()}` on the card's root element. It stays an
+ * `out:` rather than a `transition:` because the arrival is its own motion with
+ * its own trigger (`cardArrive`): a card re-created by something that is not a
+ * landing   a keyed remount, a thread switch   must not replay a dismissal on
+ * its way in. Svelte only plays it when the card's own block is removed: an
+ * ancestor block being replaced (a thread switch, or the whole conversation view
+ * being dropped) tears the card down in the same frame, so the outgoing view can
+ * never linger.
  */
 export function dismissSlide(): SlideParams {
   return { duration: motionDuration(DISMISS_MS), easing: cubicOut }

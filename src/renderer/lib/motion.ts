@@ -1,6 +1,6 @@
 import { cubicOut } from 'svelte/easing'
 import { flip, type AnimationConfig } from 'svelte/animate'
-import type { TransitionConfig } from 'svelte/transition'
+import type { FlyParams, TransitionConfig } from 'svelte/transition'
 
 /** True when the user has asked the OS for reduced motion. Shared by the
  *  transitions (`motionDuration`) and by the few animations scripted by hand,
@@ -15,6 +15,35 @@ export function prefersReducedMotion(): boolean {
  *  entirely (which would otherwise require a second code path per component). */
 export function motionDuration(ms: number): number {
   return prefersReducedMotion() ? 0 : ms
+}
+
+/** How far a prompt rises as it lands, and over how long. The rate matches the
+ *  other arrivals in the app (a row inside a card, a step reading): 160 ms of
+ *  easeOutCubic, a few pixels of travel. */
+const PROMPT_ARRIVE_MS = 160
+const PROMPT_ARRIVE_TRAVEL = 4
+
+/**
+ * Arrival for a prompt landing in the transcript: the message the reader just
+ * sent, one the queue released for them, or one another window pushed into the
+ * thread. Used as `in:fly` on the user message block, so it rises the last few
+ * pixels into place instead of blinking on.
+ *
+ * A message created before the view attached gets no duration at all: a thread
+ * mounts its history a page at a time, and the pages that land after the first
+ * paint would otherwise all rise, which reads as the transcript replaying itself
+ * rather than as something arriving. The two stamps are compared here rather than
+ * at each call site, so every surface that mounts a message follows one rule.
+ *
+ * Transform and opacity only, so the block's layout box is final on its first
+ * frame and neither the scroll position nor the tail lock waits on the motion.
+ */
+export function promptArrive(createdAt: number, viewAttachedAt: number): FlyParams {
+  return {
+    y: PROMPT_ARRIVE_TRAVEL,
+    duration: createdAt > viewAttachedAt ? motionDuration(PROMPT_ARRIVE_MS) : 0,
+    easing: cubicOut
+  }
 }
 
 /**
