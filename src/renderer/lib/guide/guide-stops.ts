@@ -175,10 +175,11 @@ const CHAT_SEND_KEYS: readonly GuideKey[] = [
 
 /**
  * Every guide, in the order each view teaches itself. The Project guide is the
- * first-run sequence rather than a description of the view: it adds the project,
- * opens setup, and puts the caret in the composer, because a tour that only
- * talks has not onboarded anybody. The other views orient a user who already has
- * work and only need to say what belongs where.
+ * first-run sequence rather than a description of the view: it names the rail
+ * and the header, adds the project, connects an agent, puts the caret in the
+ * composer, and closes on the tours the other views own, because a tour that
+ * only talks has not onboarded anybody. The other views orient a user who
+ * already has work and only need to say what belongs where.
  */
 export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
   projects: {
@@ -189,32 +190,37 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
         anchor: 'view-switcher',
         shape: 'edge',
         eyebrow: 'Where you are',
-        title: 'The rail switches the whole workspace',
+        title: 'The rail is where you switch views',
         description:
-          'Seven views, one chord each. A gold square marks the one you are in, and nothing else on the rail is gold.',
+          'Projects holds the folders you added. Threads gathers the conversations you had in them. Chats need no project at all, and the Assistant runs work without you. The gold square marks the view you are in, and every view keeps its place while you are away.',
         path: ['Rail'],
         tag: 'start',
         treatment: 'locator',
         keys: RAIL_KEYS
       },
       {
-        anchor: 'view-actions',
+        anchor: 'header',
         shape: 'region',
-        eyebrow: "This view's actions",
-        title: 'The header runs the view you are in',
+        eyebrow: 'The header',
+        title: 'The header names where you are, and takes you back',
         description:
-          'Search every thread in the project, or bring another project in. Switch views and this slot switches with you.',
-        path: ['Header', 'View actions'],
+          'The middle names whatever is on screen. The arrows on the left walk back and forward through everywhere you have been, view changes included, so a wrong turn costs one keystroke. Right beside them sit the actions that belong to the view you are in.',
+        path: ['Header'],
         tag: 'orientation',
-        treatment: 'locator'
+        treatment: 'locator',
+        keys: [
+          { action: 'nav-history-back', label: 'Back to the last screen' },
+          { action: 'nav-history-forward', label: 'Forward again' },
+          { action: 'nav-find', label: 'Find in what the view is showing' }
+        ]
       },
       {
         anchor: 'empty-state-actions',
         shape: 'region',
         eyebrow: 'Start here',
-        title: 'One project is one folder',
+        title: 'A project is a folder on this computer',
         description:
-          'This list is the whole way in, and it is the same list on an empty day. A project is a folder on this computer, or a clone over Git, and its first thread opens as soon as it is added.',
+          'Add a folder you already work in, or clone one from Git. Each project keeps its own threads, its own files and its own runs, and its first thread opens the moment it is added.',
         path: ['Body', 'Start list'],
         tag: 'first action',
         treatment: 'locator',
@@ -226,11 +232,35 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
         eyebrow: 'The agent',
         title: 'Pi is already here, so you can start',
         description:
-          'Pi comes with CodeInOven: nothing to install, and nothing to sign into before your first message. Every other agent this app knows is listed below. Pick one and it opens where it belongs, its accounts if this machine already runs it, the page that installs it if it does not.',
+          'Pi comes with CodeInOven, so you can start without installing anything or signing in anywhere. Every other agent this app knows is listed below: pick one and it opens where it belongs, its accounts if this machine already has it, the page that installs it if it does not.',
         path: ['Rail', 'Settings'],
         tag: 'the agent',
         treatment: 'harnesses',
         gate: 'harness'
+      },
+      {
+        anchor: 'composer',
+        shape: 'region',
+        eyebrow: 'Your first message',
+        title: 'Say what you want built, in plain words',
+        description:
+          'Describe the outcome the way you would describe it to a colleague, and let the agent work out the steps. The model answers, the permission level decides what it may change without asking you first, and everything after it stays in this thread.',
+        path: ['Body', 'Composer'],
+        tag: 'first message',
+        treatment: 'anatomy',
+        keys: CHAT_SEND_KEYS,
+        action: { label: 'Say hello', run: { kind: 'focus-composer' } }
+      },
+      {
+        anchor: 'notifications',
+        shape: 'control',
+        eyebrow: 'Nothing happens silently',
+        title: 'Finished work reports back on the bell',
+        description:
+          'A run that finished, a question waiting on you, a spec that needs review: each one lands here, named after the project and the thread it came from, and opens straight back to where the work stopped.',
+        path: ['Header', 'Notifications'],
+        tag: 'nothing silent',
+        treatment: 'locator'
       },
       {
         anchor: 'view-switcher',
@@ -238,7 +268,7 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
         eyebrow: 'Other actions',
         title: 'Everything else you can start from here',
         description:
-          'This tour can be re-run at any time, from this view\u2019s start list or from the command palette. The other views walk themselves the same way, and the account below is what lets the app open, read and manage your repositories.',
+          'This tour runs again whenever you want it, from this view’s start list or from the command palette. The other views walk themselves the same way, and connecting GitHub is what lets the app clone, push and open pull requests for you.',
         path: ['Rail'],
         tag: 'other actions',
         treatment: 'actions',
@@ -250,17 +280,17 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
           },
           {
             label: 'Chat tour',
-            detail: 'The Chats view, where a conversation needs no project.',
+            detail: 'Conversations that belong to no project.',
             run: { kind: 'open-view-guide', view: 'chats' }
           },
           {
             label: 'Assistant tour',
-            detail: 'Assistants and the work they run without you.',
+            detail: 'Assistants, and the tasks they keep running for you.',
             run: { kind: 'open-view-guide', view: 'assistant' }
           },
           {
             label: 'Browser tour',
-            detail: 'A real browser inside the app, with the agent on the page.',
+            detail: 'A real browser in the app, with the agent on the page.',
             run: { kind: 'open-view-guide', view: 'browser' }
           },
           {
@@ -269,30 +299,6 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
             run: { kind: 'connect-github' }
           }
         ]
-      },
-      {
-        anchor: 'composer',
-        shape: 'region',
-        eyebrow: 'Your first message',
-        title: 'Say what you want built, in plain words',
-        description:
-          'The model answers, the permission level decides what it may do on its own, and the thread keeps everything after it. Start here, and the rest of the app fills in around the work.',
-        path: ['Body', 'Composer'],
-        tag: 'first message',
-        treatment: 'anatomy',
-        keys: CHAT_SEND_KEYS,
-        action: { label: 'Say hello', run: { kind: 'focus-composer' } }
-      },
-      {
-        anchor: 'notifications',
-        shape: 'control',
-        eyebrow: 'Nothing silent',
-        title: 'Finished work reports back here',
-        description:
-          'Every view raises its own entries on the bell: a run that finished, a spec waiting, a question parked. Each entry opens the thread it came from, so you can leave a long run and come back to exactly what changed.',
-        path: ['Header', 'Notifications'],
-        tag: 'nothing silent',
-        treatment: 'locator'
       }
     ]
   },
@@ -463,9 +469,9 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
         anchor: 'view-switcher',
         shape: 'edge',
         eyebrow: 'Where you are',
-        title: 'A real browser, in the same window',
+        title: 'A real browser, inside the app',
         description:
-          'The browser is one of the seven views, with its own tabs, its own logins and its own history. What it shows is the page itself rather than a picture of one, which is exactly why an agent can read it and work on it.',
+          'The browser is one of the rail’s views, with its own tabs, its own logins and its own history. What it shows is the page itself rather than a picture of one, which is why the agent can read it and work on it.',
         path: ['Rail'],
         tag: 'start',
         treatment: 'locator',
@@ -477,7 +483,7 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
         eyebrow: 'The way in',
         title: 'One control opens every page',
         description:
-          'Type an address, or words you would have typed into a search engine: the same control handles both. Pages open in tabs of their own, and the strip beside them is where you move between what you have open.',
+          'Type an address, or the words you would have typed into a search engine: one control takes both. Every page opens in its own tab, and the strip beside it is where you move between them.',
         path: ['Body', 'Address bar'],
         tag: 'the way in',
         treatment: 'locator',
@@ -489,7 +495,7 @@ export const VIEW_GUIDES: Record<WorkspaceTourView, ViewGuide> = {
         eyebrow: 'The page',
         title: 'The agent reads the page you are reading',
         description:
-          'The panel beside the page starts a conversation about it, and that conversation keeps the page as its context: point the agent at what is on screen, or ask it to change the code behind it, without copying anything anywhere.',
+          'Open the agent panel beside a page and that conversation keeps the page as its context. Ask about what is on screen, or ask for the code behind it to change, without copying anything anywhere.',
         path: ['Body', 'Page'],
         tag: 'the page',
         treatment: 'locator'

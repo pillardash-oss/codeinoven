@@ -242,6 +242,7 @@
      bell stays on the dock's x axis on every platform. -->
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
+  data-guide="header"
   style={trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
