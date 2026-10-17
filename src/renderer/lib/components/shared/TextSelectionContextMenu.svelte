@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
@@ -564,7 +565,7 @@
                 title="Open in the CIO browser tab for this project"
                 onclick={() => openLinkInCioBrowser(target!.linkHref!)}
               >
-                <CioBrowser class="size-3.5 shrink-0 text-text-muted" />
+                <CioThreadBrowser class="size-3.5 shrink-0 text-text-muted" />
                 Open in Thread Browser
               </button>
             {/if}

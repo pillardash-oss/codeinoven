@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -322,7 +322,7 @@
         title="Open gateway dashboard   {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
-        <CioBrowser size={ICON_SIZE.control} />
+        <CioThreadBrowser size={ICON_SIZE.control} />
       </button>
     {/if}
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioClipboardPaste from '$lib/components/icons/cio/CioClipboardPaste.svelte'
   import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
   import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
@@ -148,7 +148,7 @@
 
       {#if canOpenInBrowser}
         <ContextMenu.Item class={itemClass} onSelect={onOpenInBrowser}>
-          <CioBrowser size={13} class="text-muted" />
+          <CioThreadBrowser size={13} class="text-muted" />
           Open in browser
         </ContextMenu.Item>
       {/if}

@@ -1,7 +1,7 @@
 <script lang="ts">
   import CioChat from '$lib/components/icons/cio/CioChat.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioThreadBrowser from '$lib/components/icons/cio/CioThreadBrowser.svelte'
   import CioClose from '$lib/components/icons/cio/CioClose.svelte'
   import CioCpu from '$lib/components/icons/cio/CioCpu.svelte'
   import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
@@ -1042,7 +1042,7 @@
                 aria-label={`Open ${processName(process.command)} in the thread browser`}
                 onclick={() => void openInBrowser(process)}
               >
-                <CioBrowser size={ICON_SIZE.row} />
+                <CioThreadBrowser size={ICON_SIZE.row} />
               </button>
               <button
                 type="button"
