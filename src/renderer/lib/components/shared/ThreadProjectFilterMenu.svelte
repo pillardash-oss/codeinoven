@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Funnel, Inbox } from '@lucide/svelte'
+  import { Inbox } from '@lucide/svelte'
+  import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
   import { ContextMenu } from 'bits-ui'
   import {
     THREAD_GROUP_ICONS,
@@ -36,7 +37,7 @@
   class="h-7 w-7 {filterActive ? 'text-primary' : 'text-muted'}"
 >
   <span class="relative flex items-center justify-center">
-    <Funnel size={15} strokeWidth={1.8} />
+    <CioFilter size={15} />
     {#if filterActive}
       <span
         class="absolute -top-1.5 -right-2 flex min-w-3 items-center justify-center bg-primary px-0.5 text-[0.5rem] font-semibold leading-3 tabular-nums text-on-primary"
@@ -73,9 +74,7 @@
     </button>
   </ContextMenu.Trigger>
   <ContextMenu.Portal>
-    <ContextMenu.Content
-      class="z-60 min-w-64 border border-border bg-surface p-1 shadow-lg"
-    >
+    <ContextMenu.Content class="z-60 min-w-64 border border-border bg-surface p-1 shadow-lg">
       <ContextMenu.Item
         class="flex items-center gap-2 px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
         textValue="All"
