@@ -2,7 +2,7 @@ import { attachmentPreviewKind } from '$lib/mime'
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { parseComposerDraftEntry, type ComposerDraftEntry } from '$lib/stores/renderer-recovery'
-import { responseReferencesState } from '$lib/stores/response-references.svelte'
+import { mergeReferenceById, responseReferencesState } from '$lib/stores/response-references.svelte'
 import type { PromptAttachment, PromptReference } from '$shared/types'
 import { attachmentFileIdentity, uniqueAttachments } from './chat-composer-attachments'
 
@@ -31,6 +31,12 @@ import { attachmentFileIdentity, uniqueAttachments } from './chat-composer-attac
  * retained in its own scratch, and neither becomes a different file because
  * another chat references it   duplicating it would leave two files where the
  * user attached one.
+ *
+ * Nothing the destination already holds is replaced by arriving content: its own
+ * references and attachments are kept and the carried item joins them. A file it
+ * already attached keeps its one chip, and a reference id that is somehow
+ * already there is the same reference, so the carried content updates that entry
+ * where it sits instead of adding a second chip under a repeated key.
  */
 
 /** What a relocation carries: one composer attachment or one composer reference. */
@@ -117,6 +123,9 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
   }
 
   if (input.item.kind === 'attachment') {
+    // Appending to a file the destination already attached would leave two chips
+    // with one `file://` key, so the duplicate guard drops the repeat: the file
+    // is already there and the destination keeps its single chip for it.
     carried.attachments = uniqueAttachments([...carried.attachments, input.item.attachment])
     writeTargetDraft(input.projectId, input.targetThreadId, carried)
     if (input.mode === 'relocate') dropSourceAttachment(input, input.item.attachment)
@@ -129,7 +138,13 @@ export async function applyComposerRelocation(input: ComposerRelocationInput): P
     input.mode === 'copy'
       ? { ...input.item.reference, id: copiedReferenceId() }
       : input.item.reference
-  carried.promptReferences = [...carried.promptReferences, reference]
+  // The destination's own annotations are kept and the carried one is added to
+  // them, never in place of them. A reference id that is somehow already there
+  // is the same reference, so the carried content updates that entry where it
+  // sits rather than arriving as a second chip the composer would reject as a
+  // repeated key. The composer's own ceiling of twenty references per thread
+  // still applies to the result, exactly as it does to any other composer write.
+  carried.promptReferences = mergeReferenceById(carried.promptReferences, reference)
   writeTargetDraft(input.projectId, input.targetThreadId, carried)
   responseReferencesState.setForThread(
     input.projectId,
