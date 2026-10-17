@@ -21,6 +21,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { roomAbove } from '$lib/popover-room'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -439,20 +440,6 @@
   }
 
   /**
-   * The top of the box an upward-opening popover is clipped by: the nearest
-   * ancestor with a non-visible overflow, which in the dock is the sidebar's
-   * content region and in full screen is the surface itself.
-   */
-  function clipTop(element: HTMLElement): number {
-    let node = element.parentElement
-    while (node) {
-      if (getComputedStyle(node).overflowY !== 'visible') return node.getBoundingClientRect().top
-      node = node.parentElement
-    }
-    return 0
-  }
-
-  /**
    * Cap the popover to the room above the composer, so a long candidate list in a
    * short sidebar scrolls inside the panel instead of having its first rows cut
    * off by the panel's own clipping.
@@ -462,9 +449,10 @@
       mentionMaxHeight = mentionMenuMaxHeight(Number.POSITIVE_INFINITY)
       return
     }
-    const anchorTop = mentionAnchor.getBoundingClientRect().top
     // 8px keeps the popover off the edge it is clipped at.
-    mentionMaxHeight = mentionMenuMaxHeight(anchorTop - clipTop(mentionAnchor) - 8)
+    mentionMaxHeight = mentionMenuMaxHeight(
+      roomAbove(mentionAnchor, mentionAnchor.getBoundingClientRect().top, 8)
+    )
   }
 
   function closeMentions(): void {
