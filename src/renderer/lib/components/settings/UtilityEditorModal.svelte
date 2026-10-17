@@ -170,6 +170,16 @@
   let canToggleAvailability = $derived(
     editingRegistry !== null && canToggleUtilityEnabled(editingRegistry)
   )
+  /**
+   * App-owned entries the app supplies the wiring for have no configuration a
+   * user may change, so the editor shows theirs read-only. Two exceptions stay
+   * writable: the image descriptor, whose whole purpose is choosing the vision
+   * model, and a built-in skill's commands, which the banner invites rewriting
+   * and which move with the switch that can retire the skill.
+   */
+  let configLocked = $derived(
+    isAppOwned && !canToggleAvailability && draft.kind !== 'image_descriptor'
+  )
 
   /** Installed, supported harnesses the editor may bind a capability to.
    *  Follows the model picker's protocol: the provider catalog (persisted
@@ -831,7 +841,9 @@
           <p class="border border-primary/30 bg-primary/10 px-3 py-2 text-[0.6875rem] text-primary">
             {canToggleAvailability
               ? 'This is a built-in skill: its commands are yours to rewrite, and you can switch it off when you already have your own.'
-              : 'This is a built-in utility: only the vision model can be changed. Everything else is managed by the app.'}
+              : draft.kind === 'image_descriptor'
+                ? 'This is a built-in utility: only the vision model can be changed. Everything else is managed by the app.'
+                : 'This is a built-in utility. The app manages it, so this view is read-only.'}
           </p>
         {/if}
 
@@ -956,7 +968,7 @@
           {/if}
         {/if}
 
-        <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} />
+        <UtilityEditorModalConfigFields bind:draft {isNative} {allowSse} locked={configLocked} />
 
         {#if !isNative && draft.kind === 'mcp' && draft.transport !== 'stdio'}
           <UtilityEditorModalMcpAuth utility={savedUtility} onChanged={handleMcpAuthChanged} />
@@ -997,6 +1009,7 @@
         {isNative}
         hasDraftId={draft.id !== null}
         {isAppOwned}
+        readOnly={configLocked}
         {saving}
         canImportPlugin={pluginManifest.trim() !== ''}
         onBack={resetSetup}

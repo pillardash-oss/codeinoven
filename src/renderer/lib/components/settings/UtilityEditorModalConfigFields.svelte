@@ -11,12 +11,18 @@
      * be offered a transport saving them would break.
      */
     allowSse?: boolean
+    /**
+     * Shows the section read-only. An app-owned entry whose wiring the app
+     * supplies has no configuration a user may change, so the editor shows
+     * what the app installed instead of offering an edit it would not honour.
+     */
+    locked?: boolean
   }
 
-  let { draft = $bindable(), isNative, allowSse = true }: Props = $props()
+  let { draft = $bindable(), isNative, allowSse = true, locked = false }: Props = $props()
 </script>
 
-<fieldset class="space-y-3 border p-3">
+<fieldset class="space-y-3 border p-3 {locked ? 'opacity-60' : ''}">
   <legend class="px-1 text-xs font-semibold">
     {draft.kind === 'skill'
       ? 'SKILL.md'
@@ -35,6 +41,7 @@
       <span>Transport</span>
       <select
         class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+        disabled={locked}
         bind:value={draft.transport}
       >
         <option value="stdio">stdio</option>
@@ -49,6 +56,7 @@
         <span>Command</span>
         <input
           class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+          disabled={locked}
           bind:value={draft.command}
         />
       </label>
@@ -56,6 +64,7 @@
         <span>Arguments · one per line</span>
         <textarea
           class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
+          disabled={locked}
           bind:value={draft.args}></textarea>
       </label>
     {:else}
@@ -64,6 +73,7 @@
         <input
           class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
           type="url"
+          disabled={locked}
           bind:value={draft.url}
         />
       </label>
@@ -74,6 +84,7 @@
         <textarea
           class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
           placeholder={'{ "Authorization": "Bearer {env:API_TOKEN}" }'}
+          disabled={locked}
           bind:value={draft.headers}></textarea>
       </label>
     {/if}
@@ -83,12 +94,14 @@
         <textarea
           class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
           placeholder={'{ "NODE_ENV": "production" }'}
+          disabled={locked}
           bind:value={draft.environment}></textarea>
       </label>
     {/if}
   {:else if draft.kind === 'skill'}
     <RichMarkdownEditor
       id="utility-skill-markdown"
+      disabled={locked}
       bind:value={draft.instructions}
       placeholder={skillPlaceholder}
       ariaLabel="Skill Markdown"
@@ -105,6 +118,7 @@
       <input
         class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         type="url"
+        disabled={locked}
         bind:value={draft.endpoint}
       />
     </label>
@@ -113,6 +127,7 @@
       <textarea
         class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
         placeholder={'{ "Authorization": "Bearer {env:WEB_API_KEY}" }'}
+        disabled={locked}
         bind:value={draft.headers}></textarea>
     </label>
   {:else if draft.kind === 'computer_use'}
@@ -121,6 +136,7 @@
       <input
         class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         required
+        disabled={locked}
         bind:value={draft.backend}
       />
     </label>
@@ -129,6 +145,7 @@
       <input
         class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         type="url"
+        disabled={locked}
         bind:value={draft.endpoint}
       />
     </label>
@@ -138,6 +155,7 @@
       <input
         class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
         placeholder="opencode"
+        disabled={locked}
         bind:value={draft.descriptorHarnessId}
       />
     </label>
@@ -147,6 +165,7 @@
         <input
           class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
           placeholder="anthropic"
+          disabled={locked}
           bind:value={draft.descriptorProviderId}
         />
       </label>
@@ -155,6 +174,7 @@
         <input
           class="h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
           placeholder="claude-sonnet-4-5"
+          disabled={locked}
           bind:value={draft.descriptorModelId}
         />
       </label>
@@ -170,6 +190,7 @@
       <input
         class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         required
+        disabled={locked}
         bind:value={draft.providerId}
       />
     </label>
@@ -179,6 +200,7 @@
         <input
           class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
           type="url"
+          disabled={locked}
           bind:value={draft.endpoint}
         />
       </label>
@@ -186,6 +208,7 @@
         <span>Default model</span>
         <input
           class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
+          disabled={locked}
           bind:value={draft.defaultModel}
         />
       </label>

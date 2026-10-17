@@ -7,6 +7,11 @@
     isNative: boolean
     hasDraftId: boolean
     isAppOwned: boolean
+    /**
+     * The draft has nothing an editor may change, so the footer offers no save:
+     * a built-in utility's section is shown for reading, not for editing.
+     */
+    readOnly?: boolean
     saving: boolean
     canImportPlugin: boolean
     onBack: () => void
@@ -20,6 +25,7 @@
     isNative,
     hasDraftId,
     isAppOwned,
+    readOnly = false,
     saving,
     canImportPlugin,
     onBack,
@@ -71,7 +77,7 @@
         data-modal-dismiss
         onclick={onClose}
       >
-        {hasDraftId || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
+        {hasDraftId || isNative || setupPreset !== null ? (readOnly ? 'Close' : 'Cancel') : 'Close'}
       </button>
       {#if (hasDraftId || isNative) && !isAppOwned}
         <button
@@ -84,7 +90,7 @@
           Delete
         </button>
       {/if}
-      {#if hasDraftId || isNative || setupPreset !== null}
+      {#if (hasDraftId || isNative || setupPreset !== null) && !readOnly}
         <button
           class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"

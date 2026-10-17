@@ -578,7 +578,8 @@ export class UtilityRegistryService {
       // App-owned identity stays the app's call, and so does availability, with
       // one exception: app-owned knowledge is advice rather than wiring, so a
       // user who already has a better runbook for a topic may switch ours off.
-      // See `canToggleUtilityEnabled`.
+      // See `canToggleUtilityEnabled`. Configuration is the app's too, apart
+      // from what `appOwnedConfigIsWritable` allows through.
       const lockedAppOwnedField =
         patch.name ??
         patch.description ??
@@ -595,6 +596,15 @@ export class UtilityRegistryService {
       if (current.appOwned && lockedAppOwnedField !== undefined) {
         throw new Error(
           'App-owned utility identity, activation, scope, credentials, and bindings are locked'
+        )
+      }
+      if (
+        current.appOwned &&
+        patch.config !== undefined &&
+        !appOwnedConfigIsWritable(current, patch.config)
+      ) {
+        throw new Error(
+          'This app-owned utility is managed by the app: its configuration cannot be changed'
         )
       }
       const normalized = normalizeInput({
@@ -785,6 +795,48 @@ function sameUtilityIdentity(
   if ([...incomingNames].some((name) => existingNames.has(name))) return true
   if (incomingNames.size > 0 && existingNames.size > 0) return false
   return existing.name.trim().toLocaleLowerCase() === incoming.name.trim().toLocaleLowerCase()
+}
+
+/**
+ * Whether an app-owned utility's `config` may be rewritten.
+ *
+ * The app supplies the wiring these entries stand for, so their configuration
+ * is the app's: a browser backend or an MCP command a whole turn depends on
+ * must not be editable into a state the user cannot explain. Two writes stay
+ * allowed. The image descriptor exists only to choose a vision model, which is
+ * the one thing its editor offers, so any of its fields may move. The OAuth
+ * block belongs to whichever connection was authorized, so a grant may still
+ * be recorded or dropped   every other key must come back unchanged.
+ */
+function appOwnedConfigIsWritable(
+  current: UtilityDefinition,
+  config: UtilityConfigMap[UtilityKind]
+): boolean {
+  if (current.kind === 'image_descriptor') return true
+  const next = asConfigRecord(config)
+  const previous = asConfigRecord(current.config)
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
+  keys.delete('oauth')
+  return [...keys].every((key) => valuesEqual(previous[key], next[key]))
+}
+
+function asConfigRecord(config: UtilityConfigMap[UtilityKind]): Record<string, unknown> {
+  return isRecord(config) ? config : {}
+}
+
+/** Structural equality for the plain JSON values a utility config holds. */
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => valuesEqual(value, right[index]))
+  }
+  if (isRecord(left) && isRecord(right)) {
+    const leftKeys = Object.keys(left)
+    if (leftKeys.length !== Object.keys(right).length) return false
+    return leftKeys.every((key) => key in right && valuesEqual(left[key], right[key]))
+  }
+  return false
 }
 
 function utilityTransportNames(utility: UtilityDefinition | UtilityDefinitionInput): Set<string> {
