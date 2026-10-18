@@ -41,8 +41,8 @@
     "source-map-js": "1.2.2"
   },
   "scripts": {
-    "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps && bun scripts/ensure-pty-helper.ts && bun run icons:build",
-    "predev": "bun scripts/ensure-ffmpeg-binary.ts && bun scripts/ensure-pty-helper.ts && bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
+    "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps && bun scripts/ensure-pty-helper.ts",
+    "predev": "bun run --filter @pillardash-oss/cio-icon build && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/ensure-pty-helper.ts && bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "dev:probe": "bun scripts/dev-probe.ts",
     "probe": "bun scripts/probe.ts",
@@ -79,7 +79,10 @@
     "release:mirror": "bun scripts/publish-release-mirror.ts",
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
-    "msix:build": "bun scripts/msix.ts"
+    "msix:build": "bun scripts/msix.ts",
+    "prebuild": "bun run --filter @pillardash-oss/cio-icon build",
+    "prebuild:production": "bun run --filter @pillardash-oss/cio-icon build",
+    "precheck": "bun run --filter @pillardash-oss/cio-icon build"
   },
   "dependencies": {
     "@pillardash-oss/cio-icon": "workspace:*",
