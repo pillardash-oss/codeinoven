@@ -6,8 +6,7 @@
  * This script rewrites CFBundleDisplayName / CFBundleName in Info.plist and
  * swaps the bundle icon, then re-signs the modified bundle so the dev
  * experience matches the packaged app.
- * Runs via `postinstall` and `predev` hooks; exits instantly when the bundle
- * is already branded and its icon is current.
+ * Runs via the `predev` hook; only changes bundle resources when necessary.
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -32,26 +31,39 @@ if (!existsSync(plistPath)) {
   process.exit(0)
 }
 
-const current = readFileSync(plistPath, 'utf8')
-const alreadyBranded =
-  new RegExp(`<key>CFBundleName</key>\\s*<string>${APP_NAME}</string>`).test(current) &&
-  new RegExp(`<key>CFBundleIdentifier</key>\\s*<string>${APP_ID}</string>`).test(current)
+// Keep Electron's conventional entry path available for packagers, while dev
+// launches use the product executable so macOS attributes capture correctly.
+const executableDirectory = join(appBundle, 'Contents/MacOS')
+const brandedExecutable = join(executableDirectory, APP_NAME)
+const originalExecutable = join(executableDirectory, 'Electron')
 let resourcesChanged = false
+if (!existsSync(brandedExecutable)) {
+  copyFileSync(originalExecutable, brandedExecutable)
+  resourcesChanged = true
+}
+writeFileSync(
+  join(root, 'node_modules/electron/path.txt'),
+  `Electron.app/Contents/MacOS/${APP_NAME}`
+)
 
-if (!alreadyBranded) {
-  // Patch the display name and bundle name. CFBundleExecutable must remain
-  // "Electron" because it has to match the actual binary filename.
-  let plist = current
-  for (const [key, value] of [
-    ['CFBundleDisplayName', APP_NAME],
-    ['CFBundleName', APP_NAME],
-    ['CFBundleIdentifier', APP_ID]
-  ]) {
-    plist = plist.replace(
-      new RegExp(`(<key>${key}</key>\\s*<string>)[^<]*(</string>)`),
-      `$1${value}$2`
-    )
-  }
+const current = readFileSync(plistPath, 'utf8')
+let plist = current
+for (const [key, value] of [
+  ['CFBundleDisplayName', APP_NAME],
+  ['CFBundleName', APP_NAME],
+  ['CFBundleIdentifier', APP_ID],
+  ['CFBundleExecutable', APP_NAME],
+  [
+    'NSMicrophoneUsageDescription',
+    `Record audio for local dictation and transcription in ${APP_NAME}.`
+  ]
+]) {
+  const entry = new RegExp(`(<key>${key}</key>\\s*<string>)[^<]*(</string>)`)
+  plist = entry.test(plist)
+    ? plist.replace(entry, `$1${value}$2`)
+    : plist.replace('</dict>', `\t<key>${key}</key>\n\t<string>${value}</string>\n</dict>`)
+}
+if (plist !== current) {
   writeFileSync(plistPath, plist, 'utf8')
   resourcesChanged = true
 }

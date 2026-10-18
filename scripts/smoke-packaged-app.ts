@@ -80,7 +80,7 @@ async function executableFor(options: SmokeOptions): Promise<string> {
   const productName = 'CodeInOven'
   const candidates =
     options.target === 'mac'
-      ? [join(options.appDir, `${productName}.app`, 'Contents', 'MacOS', productName)]
+      ? [join(options.appDir, `${productName}.app`, 'Contents', 'MacOS', `${productName} Launcher`)]
       : options.target === 'win'
         ? [join(options.appDir, `${productName}.exe`)]
         : [join(options.appDir, 'codeinoven'), join(options.appDir, productName)]
