@@ -54,6 +54,9 @@ window.CIOShell = (() => {
     for (const node of document.querySelectorAll('[data-cut-name]')) {
       node.textContent = NAME[cutId] || NAME.mono
     }
+    for (const node of document.querySelectorAll('[data-cut-weight]')) {
+      node.textContent = cutId === 'box' ? '200' : '300'
+    }
     for (const node of document.querySelectorAll('[data-cut-primary]')) {
       node.style.fontFamily =
         cutId === 'box'

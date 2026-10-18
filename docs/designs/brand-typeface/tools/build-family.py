@@ -382,7 +382,7 @@ def plan_dots() -> dict[str, list[int]]:
 # the corner, and collapsing a longer run into the one corner its outer tangents meet at
 # reads well on a bowl but swallows the counters of a tight spiral: the capital S, whose
 # whole side is one run, came out solid. The cut keeps the corners the alphabet actually has.
-TURN_MIN = 20.0
+TURN_MIN = 38.0
 
 # Keep it a text face. A parenthesis drawn square is a bracket, and a reader scanning a line
 # of code needs to tell one from the other, so the pair stays round in every cut.

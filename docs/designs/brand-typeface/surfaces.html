@@ -62,6 +62,45 @@
         font-weight: 600;
       }
 
+      .glyph-proof {
+        display: grid;
+        gap: 1px;
+        border: 1px solid var(--color-border);
+        background: var(--color-border);
+      }
+
+      .glyph-proof > div {
+        display: grid;
+        grid-template-columns: minmax(8rem, 0.45fr) 1fr;
+        align-items: center;
+        gap: 1rem;
+        padding: 0.625rem 0.75rem;
+        background: var(--color-surface);
+      }
+
+      .glyph-proof .label {
+        color: var(--color-muted);
+        font-size: 0.625rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .glyph-proof .glyphs {
+        font-size: 1.75rem;
+        line-height: 1.25;
+        letter-spacing: 0.08em;
+        white-space: nowrap;
+        font-weight: var(--specimen-weight);
+      }
+
+      .glyph-proof .glyphs.reference {
+        font-family: var(--font-reference);
+      }
+
+      .glyph-proof .glyphs.selected {
+        font-family: var(--font-app);
+      }
+
       .rail-row {
         display: flex;
         align-items: center;
@@ -276,6 +315,17 @@
         gap: 1rem;
       }
 
+      @media (max-width: 44rem) {
+        .glyph-proof > div {
+          grid-template-columns: 1fr;
+          gap: 0.25rem;
+        }
+
+        .glyph-proof .glyphs {
+          font-size: 1.5rem;
+        }
+      }
+
       /* Below a phone the rail and the composer stack to one column, and the long rail
          labels wrap rather than pushing the row wider than the screen. */
       @media (max-width: 26rem) {
@@ -346,11 +396,10 @@
         <div class="kicker"><span class="dot"></span>In the app · <span data-cut-name>Oven Mono</span> v1.000</div>
         <h1 class="study-title">The surfaces you will actually read</h1>
         <p class="study-note">
-          The same binary set in the app's own components, at the sizes the app uses, in the app's
-          own colours. This is the screen to judge comfort on: rail rows, a code block, a terminal,
-          a composer, and a numbers row where figures must not wobble. The whole screen answers to
-          the cut the bar has selected, so <strong>Oven Box</strong> here is the squared cut in the
-          app's own surfaces, not in a specimen.
+          Real app components at their usual sizes and colours, with Oven Box shown beside the
+          JetBrains Mono face the app ships today. The active cut is loaded from its font file, so
+          compare the c, n and other letter shapes in both close-up and in the rail, editor and
+          terminal.
         </p>
       </section>
 
@@ -438,6 +487,16 @@
           </p>
         </header>
         <div class="body">
+          <div class="glyph-proof" aria-label="Close-up comparison of letter shapes">
+            <div>
+              <span class="label">JetBrains Mono · ships today</span>
+              <span class="glyphs reference">c n s o 0 1 2 5</span>
+            </div>
+            <div>
+              <span class="label"><span data-cut-name>Oven Mono</span> · selected cut</span>
+              <span class="glyphs selected">c n s o 0 1 2 5</span>
+            </div>
+          </div>
           <div class="two">
             <div class="code">
               <div class="code-head">

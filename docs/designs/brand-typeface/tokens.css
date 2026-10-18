@@ -10,7 +10,7 @@
   font-style: normal;
   font-display: swap;
   font-weight: 300 800;
-  src: url('./fonts/oven-mono-latin.woff2') format('woff2-variations');
+  src: url('./fonts/oven-mono-latin.woff2') format('woff2');
 }
 
 /* Let the full binary be installed system-wide from this folder too. */
@@ -19,7 +19,7 @@
   font-style: normal;
   font-display: swap;
   font-weight: 300 800;
-  src: url('./fonts/oven-mono-variable.ttf') format('truetype-variations');
+  src: url('./fonts/oven-mono-variable.ttf') format('truetype');
 }
 
 /* Oven Box, the squared cut of the same family: the same binary, with every drawn corner
@@ -29,7 +29,7 @@
   font-style: normal;
   font-display: swap;
   font-weight: 200 800;
-  src: url('./fonts/oven-box-latin.woff2') format('woff2-variations');
+  src: url('./fonts/oven-box-latin.woff2') format('woff2');
 }
 
 @font-face {
@@ -37,7 +37,7 @@
   font-style: normal;
   font-display: swap;
   font-weight: 200 800;
-  src: url('./fonts/oven-box-variable.ttf') format('truetype-variations');
+  src: url('./fonts/oven-box-variable.ttf') format('truetype');
 }
 
 /* What ships today, for the honest comparison. */
@@ -50,6 +50,7 @@
 }
 
 :root {
+  --specimen-weight: 300;
   --color-app: #f7f6f2;
   --color-surface: #ffffff;
   --color-elevated: #f0efea;
@@ -92,6 +93,7 @@
    Mono and Box control writes it. Oven Box is the squared cut and carries JetBrains Mono's own
    light end, so it answers at weight 200 where Oven Mono starts at 300. */
 :root[data-cut='box'] {
+  --specimen-weight: 200;
   --font-app:
     'Oven Box', 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
