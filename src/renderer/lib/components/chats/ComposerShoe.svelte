@@ -36,6 +36,7 @@
    */
   export interface ComposerUsage {
     usage?: AgentContextUsage
+    previewContextWindow?: number
     generationRate?: number | null
     generationDetails?: import('$lib/generation-details').GenerationDetails
     efficiencyKpis?: UsageEfficiencyKpis
@@ -509,6 +510,7 @@
        the composer it belongs to. -->
   <ContextUsageIndicator
     usage={usage.usage}
+    previewContextWindow={usage.previewContextWindow}
     efficiencyKpis={usage.efficiencyKpis}
     harnessUsage={usage.harnessUsage ?? []}
     canCompact={usage.canCompact ?? false}

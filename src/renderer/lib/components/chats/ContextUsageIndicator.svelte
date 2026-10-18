@@ -22,6 +22,8 @@
 
   interface Props {
     usage?: AgentContextUsage
+    /** Destination window selected in the composer, for a pre-send preview. */
+    previewContextWindow?: number
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
@@ -41,6 +43,7 @@
 
   let {
     usage,
+    previewContextWindow,
     efficiencyKpis,
     harnessUsage = [],
     canCompact = false,
@@ -63,10 +66,20 @@
   const RING_RADIUS = 10
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
 
+  const displayedContextWindow = $derived(previewContextWindow ?? usage?.contextWindow)
+  const displayedContextPercent = $derived(
+    usage?.contextUsed !== undefined &&
+      displayedContextWindow !== undefined &&
+      displayedContextWindow > 0
+      ? (usage.contextUsed / displayedContextWindow) * 100
+      : previewContextWindow === undefined
+        ? usage?.contextPercent
+        : undefined
+  )
   const boundedPercent = $derived(
-    usage?.contextPercent === undefined
+    displayedContextPercent === undefined
       ? undefined
-      : Math.max(0, Math.min(100, usage.contextPercent))
+      : Math.max(0, Math.min(100, displayedContextPercent))
   )
   /**
    * A zero total only goes unreported when something on the thread was never
@@ -363,8 +376,8 @@
         {usage?.contextUsed !== undefined
           ? `${usage.contextEstimated ? '≈' : ''}${compactCount(usage.contextUsed)}`
           : 'Unavailable'}
-        {#if usage?.contextWindow}
-          / {compactCount(usage.contextWindow)}
+        {#if displayedContextWindow}
+          / {compactCount(displayedContextWindow)}
         {/if}
       </span>
     </div>
@@ -381,11 +394,13 @@
         style={`width: ${boundedPercent ?? 0}%`}
       ></div>
     </div>
-    {#if usage?.contextWindow && usage.contextUsed !== undefined}
+    {#if displayedContextWindow && usage?.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">
         <span>Used {compactCount(usage.contextUsed)}</span>
-        <span>Available {compactCount(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
-        <span>Window {compactCount(usage.contextWindow)}</span>
+        <span
+          >Available {compactCount(Math.max(0, displayedContextWindow - usage.contextUsed))}</span
+        >
+        <span>Window {compactCount(displayedContextWindow)}</span>
       </div>
     {/if}
     {#if usage?.contextEstimated}

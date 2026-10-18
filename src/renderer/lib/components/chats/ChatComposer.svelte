@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioArrowUp from '$lib/components/icons/cio/CioArrowUp.svelte'
   import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioArchive from '$lib/components/icons/cio/CioArchive.svelte'
   import CioFlame from '$lib/components/icons/cio/CioFlame.svelte'
   import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
   import CioMinimize from '$lib/components/icons/cio/CioMinimize.svelte'
@@ -688,20 +689,6 @@
    * battery is how the user checks what a model choice will cost before sending
    * the first message of a thread, and hovering it is what fetches live quota.
    */
-  let usageReading = $derived<ComposerUsage>({
-    usage: contextUsage,
-    generationRate,
-    generationDetails,
-    efficiencyKpis,
-    harnessUsage,
-    canCompact,
-    compacting,
-    onCompact,
-    onActivateBankedReset,
-    onReveal: onRevealUsage,
-    onHide: onHideUsage,
-    refreshing: usageRefreshing
-  })
   /** The shared model picker, so the `/profile` action can open its profiles panel. */
   let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
@@ -975,6 +962,25 @@
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
   )
+  let usageReading = $derived<ComposerUsage>({
+    usage: contextUsage,
+    previewContextWindow:
+      resolved.contextWindow !== undefined &&
+      selectedModel?.contextWindows?.includes(resolved.contextWindow)
+        ? resolved.contextWindow
+        : selectedModel?.contextWindow,
+    generationRate,
+    generationDetails,
+    efficiencyKpis,
+    harnessUsage,
+    canCompact,
+    compacting,
+    onCompact,
+    onActivateBankedReset,
+    onReveal: onRevealUsage,
+    onHide: onHideUsage,
+    refreshing: usageRefreshing
+  })
 
   /**
    * True when this composer has nothing to run a turn with. Sending such a turn
@@ -1206,6 +1212,12 @@
    *  rather than as one icon being swapped for another. */
   let sendControlGlyph = $derived<'stop' | 'queue' | 'send'>(
     canStop ? 'stop' : working ? 'queue' : 'send'
+  )
+  let compactBeforeSend = $derived(
+    !working &&
+      contextUsage?.contextUsed !== undefined &&
+      usageReading.previewContextWindow !== undefined &&
+      contextUsage.contextUsed >= Math.round(usageReading.previewContextWindow * 0.8)
   )
 
   /** The maximize control is only useful once there is something to expand for,
@@ -2257,14 +2269,18 @@
           ? 'Stop agent'
           : working
             ? 'Queue message'
-            : 'Send message'}
+            : compactBeforeSend
+              ? 'Compact context and send message'
+              : 'Send message'}
       title={pendingStop
         ? 'Click again to stop'
         : canStop
           ? 'Stop the running agent'
           : working
             ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
-            : `Send   ${sendModifierLabel}Enter`}
+            : compactBeforeSend
+              ? `Compact context, then send   ${sendModifierLabel}Enter`
+              : `Send   ${sendModifierLabel}Enter`}
       disabled={disabled ||
         (canStop ? false : ovenModelUnavailable) ||
         (!working && !hasSendableContent)}
@@ -2278,7 +2294,14 @@
           <CioClock size={ICON_SIZE.control} />
         </span>
         <span class="control-glyph" class:is-active={sendControlGlyph === 'send'}>
-          <CioArrowUp size={ICON_SIZE.control} />
+          {#if compactBeforeSend}
+            <span class="flex items-center">
+              <CioArchive size={ICON_SIZE.control} />
+              <CioArrowUp size={ICON_SIZE.control} />
+            </span>
+          {:else}
+            <CioArrowUp size={ICON_SIZE.control} />
+          {/if}
         </span>
       </span>
       <span class="pending-stop-label text-[0.5625rem] font-semibold" class:is-active={pendingStop}>
