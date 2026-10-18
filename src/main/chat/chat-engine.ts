@@ -1357,12 +1357,12 @@ export class ChatEngine {
    * after a harness switch, keyed by session id. `boundary` is the id of the
    * last message the parked native transcript already contains, or null to
    * replay the whole thread; `recap` memoizes the rendered delta for the
-   * session's lifetime, and `persistent` records whether the driver keeps that
-   * recap in its own transcript (see `retainsRecapInTranscript`).
+   * session's lifetime, and `repeat` says whether that delta has to ride every
+   * later turn (a driver that does not retain a recap) instead of one.
    */
   private readonly parkedSessionReplay = new Map<
     string,
-    { boundary: string | null; persistent: boolean; recap?: string; recapBudget?: number }
+    { boundary: string | null; repeat: boolean; recap?: string; recapBudget?: number }
   >()
 
   /** Latest provider lifecycle state, retained across renderer remounts. */
@@ -6003,7 +6003,7 @@ export class ChatEngine {
         nativeHistoryBound = true
         this.parkedSessionReplay.set(sessionId, {
           boundary: parked.lastMessageId ?? null,
-          persistent: driver.retainsRecapInTranscript !== false
+          repeat: driver.retainsRecapInTranscript === false
         })
         Logger.info('Resumed a parked harness session after harness switch', {
           projectId,
@@ -10572,7 +10572,7 @@ export class ChatEngine {
     // that keeps it natively no longer needs it replayed into a later prefix.
     // A driver that does not (pi) keeps the entry, because its transcript will
     // never hold the delta and the next turn still needs it.
-    if (this.parkedSessionReplay.get(sessionId)?.persistent !== false) {
+    if (this.parkedSessionReplay.get(sessionId)?.repeat !== true) {
       this.parkedSessionReplay.delete(sessionId)
     }
     this.sessionStatuses.set(sessionId, { state: 'idle' })
@@ -13594,6 +13594,12 @@ export class ChatEngine {
         replay.boundary === null
           ? -1
           : mirror.findIndex((message) => message.id === replay.boundary)
+      // The message the parked transcript stopped at is gone from the mirror, so
+      // what the harness already holds cannot be known. Replaying the whole
+      // thread once is a fallback; replaying it on every later turn would put
+      // the entire conversation back into each request and grow the cost with
+      // thread age, so this case is delivered once.
+      if (replay.boundary !== null && boundaryIndex < 0) replay.repeat = false
       const delta = boundaryIndex >= 0 ? mirror.slice(boundaryIndex + 1) : mirror
       const recap = delta.length === 0 ? '' : formatHistoryRecap(delta, { maxInputTokens: budget })
       replay.recap = recap
