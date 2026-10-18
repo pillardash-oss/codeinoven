@@ -32,6 +32,28 @@ export interface AppControlExecutor {
 }
 
 /**
+ * Config fields the user owns alone, stripped from every agent-driven patch.
+ *
+ * `agentDefaults.pawn` picks the model a pawn agent runs on. An agent spawns a
+ * pawn on its own model when the value is unset, so it never has a reason to
+ * write it, and a default that an agent could repoint would stop meaning what
+ * the user chose. The settings page writes it through the same
+ * `config:update` channel, so the field is only removed here, at the
+ * agent-facing door.
+ */
+function withoutUserOwnedConfig(patch: unknown): unknown {
+  if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) return patch
+  const candidate = patch as Record<string, unknown>
+  const agentDefaults = candidate['agentDefaults']
+  if (typeof agentDefaults !== 'object' || agentDefaults === null || Array.isArray(agentDefaults))
+    return patch
+  const defaults = { ...(agentDefaults as Record<string, unknown>) }
+  if (!('pawn' in defaults)) return patch
+  delete defaults['pawn']
+  return { ...candidate, agentDefaults: defaults }
+}
+
+/**
  * Words that mark a channel or action as destructive.
  *
  * Deliberately conservative in the blocking direction: a false positive costs
@@ -236,7 +258,8 @@ export function createAppControlExecutor(
           `"${channel}" is a destructive operation. Ask the user to confirm, then call again with destructiveConfirmed: true.`
         )
       }
-      target = { kind: 'channel', channel, args }
+      const safeArgs = channel === 'config:update' ? args.map(withoutUserOwnedConfig) : args
+      target = { kind: 'channel', channel, args: safeArgs }
     } else if (action !== null) {
       const known = await actions()
       const match = known.find((entry) => entry.id === action)

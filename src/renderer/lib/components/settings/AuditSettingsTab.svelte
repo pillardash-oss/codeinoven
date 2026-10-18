@@ -12,6 +12,7 @@
   import { modelKey } from '$lib/model-keys'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
+  import CioSubagent from 'cio-icon/CioSubagent.svelte'
   import WorkerNamesSettings from './WorkerNamesSettings.svelte'
   import type {
     AgentDefaultsConfig,
@@ -32,29 +33,48 @@
 
   let { config, settingsReady, updateConfig }: Props = $props()
 
+  /**
+   * The roles the Agents page configures. `pawn` is not an Engineering role: its
+   * value configures the worker threads an agent spawns for itself, so it lives
+   * beside the roles without joining them.
+   */
+  type RoleId = AgentRole | 'pawn'
+
   const roles = [
     {
       id: 'seniorEngineer',
       label: 'Sr. Engineer',
       description: 'Plans the specification and coordinates Assignment work.',
+      emptyHint: 'Not set · uses the current thread model',
       icon: CioMemory
     },
     {
       id: 'worker',
       label: 'Worker',
       description: 'Implements Assignment tasks when a task or phase has no override.',
+      emptyHint: 'Not set · uses the current thread model',
       icon: CioHammer
     },
     {
       id: 'auditor',
       label: 'Auditor',
       description: 'Independently audits completed Engineering and Achievement work.',
+      emptyHint: 'Not set · uses the current thread model',
       icon: CioShieldCheck
+    },
+    {
+      id: 'pawn',
+      label: 'Pawn',
+      description:
+        'Background worker thread an agent spawns for itself. It answers only to that agent, you never prompt it, and any harness, account and model can serve it.',
+      emptyHint: 'Not set · a pawn runs on the spawning model at the lowest thinking level',
+      icon: CioSubagent
     }
   ] satisfies Array<{
-    id: AgentRole
+    id: RoleId
     label: string
     description: string
+    emptyHint: string
     icon: typeof CioMemory
   }>
 
@@ -86,12 +106,12 @@
     void load()
   })
 
-  function selectionFor(role: AgentRole): AgentModelSelection | undefined {
+  function selectionFor(role: RoleId): AgentModelSelection | undefined {
     return defaults[role]
   }
 
   async function selectModel(
-    role: AgentRole,
+    role: RoleId,
     providerId: string,
     modelId: string,
     nextHarnessId?: string,
@@ -119,7 +139,7 @@
     await updateConfig({ agentDefaults: next })
   }
 
-  async function selectThinking(role: AgentRole, level: ThinkingLevel): Promise<void> {
+  async function selectThinking(role: RoleId, level: ThinkingLevel): Promise<void> {
     if (!defaults[role]) return
     const next: AgentDefaultsConfig = {
       ...defaults,
@@ -130,7 +150,7 @@
   }
 
   async function selectRuntime(
-    role: AgentRole,
+    role: RoleId,
     runtime: import('$shared/types').ModelRuntimeSettings
   ): Promise<void> {
     if (!defaults[role]) return
@@ -142,7 +162,7 @@
     await updateConfig({ agentDefaults: next })
   }
 
-  async function clearModel(role: AgentRole): Promise<void> {
+  async function clearModel(role: RoleId): Promise<void> {
     const next = { ...defaults }
     delete next[role]
     defaults = next
@@ -289,8 +309,8 @@
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Agents</h1>
     <p class="mt-0.5 text-sm text-muted">
-      Choose global models for Engineering roles and image description. A thread can still override
-      them.
+      Choose global models for Engineering roles, pawn agents and image description. A thread can
+      still override them.
     </p>
   </div>
 
@@ -306,7 +326,7 @@
             <p class="mt-0.5 text-xs text-muted">{role.description}</p>
             {#if !selection}
               <p class="mt-1 text-[0.6875rem] text-dimmed">
-                Not set · uses the current thread model
+                {role.emptyHint}
               </p>
             {/if}
           </div>
