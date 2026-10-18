@@ -77,19 +77,6 @@
   let hasInstalledAsr = $derived(storeHasInstalledAsr ?? false)
   let voiceRecordingEnabled = $derived(fetchedVoiceRecordingEnabled)
 
-  // Unknown availability stays hidden. Keep a live recording/transcription's
-  // control available even if a capability refresh arrives while it finishes.
-  let hidden = $derived(
-    !hasInstalledAsr &&
-      !voiceRecordingEnabled &&
-      !(
-        belongsHere &&
-        speechController.state.state !== 'idle' &&
-        speechController.state.state !== 'failed'
-      ) &&
-      !transcribingHere
-  )
-
   function refreshFetchedState(): Promise<void> {
     availabilityRefresh ??= fetchAvailability().finally(() => {
       availabilityRefresh = null
@@ -150,6 +137,19 @@
 
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
   const transcribingHere = $derived(speechController.isTranscribingTarget(targetId))
+  // Unknown availability stays hidden. Keep a live recording/transcription's
+  // control available even if a capability refresh arrives while it finishes.
+  let hidden = $derived(
+    !hasInstalledAsr &&
+      !voiceRecordingEnabled &&
+      !(
+        belongsHere &&
+        speechController.state.state !== 'idle' &&
+        speechController.state.state !== 'failed'
+      ) &&
+      !transcribingHere
+  )
+
   /** Armed delivery stage of the transcription in flight, if the user armed it. */
   const voiceSendStage = $derived(speechController.voiceSendStageForTarget(targetId))
   const canAutoSendVoice = $derived(speechController.canAutoSendVoice(targetId))

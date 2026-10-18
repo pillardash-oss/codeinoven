@@ -278,21 +278,21 @@
   {@const label = artifact?.label ?? parsedImport?.displayName ?? row.installed.artifactId}
   {@const byteSize = artifact?.byteSize ?? row.installed.byteSize ?? 0}
   <span
-    class="size-1.5 shrink-0 {isActive
-      ? 'bg-primary'
-      : row.installed.available
-        ? 'bg-border-strong'
-        : 'bg-danger'}"
+    class="size-1.5 shrink-0 {!row.installed.available
+      ? 'bg-danger'
+      : isActive
+        ? 'bg-primary'
+        : 'bg-border-strong'}"
     aria-hidden="true"
   ></span>
   <div class="min-w-0 flex-1">
     <p class="truncate text-sm font-medium" title={label}>{label}</p>
-    <p class="truncate text-xs text-dimmed">
+    <p class="truncate text-xs text-dimmed" title={row.installed.unavailableReason}>
       {runtimeBadge(row.installed.runtime)}{#if byteSize}
         · {formatBytes(byteSize)}{/if}{#if artifact}
         · {artifact.license}{/if}{#if artifact?.languages.length}
         · {artifact.languages.join(', ')}{/if}{#if !row.installed.available}
-        · Not found{/if}
+        · {row.installed.unavailableReason ?? 'Unavailable'}{/if}
     </p>
     {#if !artifact && row.installed.importPath}
       <p class="truncate font-mono text-[0.6875rem] text-dimmed" title={row.installed.importPath}>
@@ -300,7 +300,7 @@
       </p>
     {/if}
   </div>
-  {#if isActive}
+  {#if isActive && row.installed.available}
     <span
       class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
       >Active</span
