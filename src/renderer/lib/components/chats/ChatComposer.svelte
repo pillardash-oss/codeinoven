@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isMacPlatform } from '$lib/shortcut-display'
   import CioArrowUp from 'cio-icon/CioArrowUp.svelte'
   import CioClock from 'cio-icon/CioClock.svelte'
   import CioCompactSend from 'cio-icon/CioCompactSend.svelte'
@@ -591,7 +592,7 @@
   // svelte-ignore state_referenced_locally
   const composerEditorId = `chat-composer-${projectId ?? 'no-project'}-${threadId ?? 'none'}`
   /** macOS shows ⌘; Windows/Linux show Ctrl   matches the global send shortcut. */
-  const sendModifierLabel = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘' : 'Ctrl+'
+  const sendModifierLabel = isMacPlatform() ? '⌘' : 'Ctrl+'
   const mentions = createComposerMentionSearch({
     getAssignmentTasks: () => assignmentTasks,
     getFileTagProjectId: () => fileTagProjectId
@@ -2277,7 +2278,7 @@
         : canStop
           ? 'Stop the running agent'
           : working
-            ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
+            ? `Queue   ${sendModifierLabel}Enter · Steer   ${isMacPlatform() ? '⌘⇧' : 'Ctrl+Shift+'}Enter`
             : compactBeforeSend
               ? `Compact context, then send   ${sendModifierLabel}Enter`
               : `Send   ${sendModifierLabel}Enter`}

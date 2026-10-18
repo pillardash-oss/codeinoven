@@ -268,7 +268,7 @@ export function keyTokenLabel(key: string, isMac: boolean): string {
     case 'alt':
       return isMac ? '⌥' : 'Alt'
     case 'cmd':
-      return '⌘'
+      return isMac ? '⌘' : 'Super'
     case 'ctrl':
       return 'Ctrl'
     case 'double-mod':

@@ -230,7 +230,7 @@
         type="button"
         class="titlebar-no-drag flex h-7 items-center gap-1 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!dirty || saving}
-        title="Save attachment (Cmd/Ctrl+S)"
+        title={`Save attachment (${keymapState.labelFor('files-save')})`}
         onclick={() => void saveText()}
       >
         {#if saving}

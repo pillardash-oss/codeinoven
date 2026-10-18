@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import CioAlertCircle from 'cio-icon/CioAlertCircle.svelte'
   import CioClipboardPaste from 'cio-icon/CioClipboardPaste.svelte'
   import CioDownload from 'cio-icon/CioDownload.svelte'
@@ -125,9 +126,9 @@
     <div class="min-w-0">
       <h1 class="text-xl font-bold tracking-tight">Search by intent</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Ranks the Cmd+K thread search with meaning-based matches as well as keywords. Title matches
-        stay first, semantic matches follow, keyword-only finds come last. The search buttons on the
-        panels stay keyword-only.
+        Ranks the {keymapState.labelFor('nav-command-palette')} thread search with meaning-based matches
+        as well as keywords. Title matches stay first, semantic matches follow, keyword-only finds come
+        last. The search buttons on the panels stay keyword-only.
       </p>
       {#if !canEnable}
         <p class="mt-1.5 text-xs text-dimmed">

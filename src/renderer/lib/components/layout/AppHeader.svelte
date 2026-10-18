@@ -1,4 +1,6 @@
 <script lang="ts">
+  const isWindows = window.api?.windowInfo.platform === 'win32'
+
   import CioBack from 'cio-icon/CioBack.svelte'
   import CioForward from 'cio-icon/CioForward.svelte'
   import CioNotes from 'cio-icon/CioNotes.svelte'
@@ -243,7 +245,9 @@
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
   data-guide="header"
-  style={trafficLightInsetStyle({ mirrorRightInset: false })}
+  style={isWindows
+    ? 'padding-right: max(0.25rem, calc(100vw - env(titlebar-area-width, 100vw)))'
+    : trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <button
@@ -254,7 +258,9 @@
       onclick={() => threadSwitcherRequest.requestOpen()}
     >
       <VendorIcon name="CodeInOven" size={20} />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"> cio </span>
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"
+        >{isWindows ? 'CodeInOven' : 'cio'}</span
+      >
     </button>
 
     <!-- Global navigation: back / forward -->

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { isMacPlatform } from '$lib/shortcut-display'
   import CioAttention from 'cio-icon/CioAttention.svelte'
   import CioAudioLines from 'cio-icon/CioAudioLines.svelte'
   import CioCheck from 'cio-icon/CioCheck.svelte'
@@ -6733,8 +6734,7 @@
   // ─── Message queue & steer  ───────────────────────────────────────────────
 
   /** Shortcut label for the steer combo   macOS shows ⌘⇧, others Ctrl+Shift+. */
-  const steerModifierLabel =
-    navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘⇧' : 'Ctrl+Shift+'
+  const steerModifierLabel = isMacPlatform() ? '⌘⇧' : 'Ctrl+Shift+'
 
   let queuedMessage = $state('')
   let queuedAttachments = $state<PromptAttachment[]>([])

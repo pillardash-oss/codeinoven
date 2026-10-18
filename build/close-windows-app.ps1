@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory = $true)][string]$InstallDirectory,
   [Parameter(Mandatory = $true)][string]$LauncherFileName,
+  [ValidateRange(0, 25)][int]$WaitSeconds = 0,
   [switch]$Stop
 )
 
@@ -27,6 +28,12 @@ try {
   }
 
   $running = @(Get-InstalledAppProcesses)
+  # Updates wait for the complete shutdown pipeline and launcher supervisor.
+  $deadline = [DateTime]::UtcNow.AddSeconds($WaitSeconds)
+  while ($running.Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) {
+    Start-Sleep -Milliseconds 500
+    $running = @(Get-InstalledAppProcesses)
+  }
   if ($running.Count -eq 0) { exit 0 }
   if (-not $Stop) { exit 10 }
 

@@ -462,7 +462,7 @@
           <button
             type="button"
             class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Search log (Ctrl/Cmd+F)"
+            title={`Search log (${keymapState.labelFor('files-deployment-find')})`}
             aria-label="Search log"
             onclick={openSearch}
           >

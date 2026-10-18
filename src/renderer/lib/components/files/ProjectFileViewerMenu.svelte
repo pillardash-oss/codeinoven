@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import CioBraces from 'cio-icon/CioBraces.svelte'
   import CioCheck from 'cio-icon/CioCheck.svelte'
   import CioEllipsis from 'cio-icon/CioEllipsis.svelte'
@@ -85,8 +86,8 @@
   <button
     type="button"
     class={btnClass}
-    aria-label="Undo (Cmd+Z)"
-    title="Undo (Cmd+Z)"
+    aria-label={`Undo (${keymapState.labelFor('editor-undo')})`}
+    title={`Undo (${keymapState.labelFor('editor-undo')})`}
     disabled={!canUndo}
     onclick={onUndo}
   >
@@ -95,8 +96,8 @@
   <button
     type="button"
     class={btnClass}
-    aria-label="Redo (Shift+Cmd+Z)"
-    title="Redo (Shift+Cmd+Z)"
+    aria-label={`Redo (${keymapState.labelFor('editor-redo')})`}
+    title={`Redo (${keymapState.labelFor('editor-redo')})`}
     disabled={!canRedo}
     onclick={onRedo}
   >

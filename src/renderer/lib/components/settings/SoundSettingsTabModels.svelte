@@ -192,7 +192,7 @@
         : 'bg-elevated text-muted border-border hover:text-foreground'}"
       onclick={() => (runtimeFilter = 'all')}>All</button
     >
-    {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
+    {#each runtimesForSubTab(activeModelSubTab).filter( (runtime) => catalogArtifacts.some((artifact) => artifact.runtime === runtime) ) as rt (rt)}
       <button
         type="button"
         class="border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt

@@ -1005,7 +1005,9 @@
             (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
             (activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving))}
           saving={activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving)}
-          saveLabel={activeFileInMergeEditor ? conflictSaveText : 'Save file (Cmd/Ctrl+S)'}
+          saveLabel={activeFileInMergeEditor
+            ? conflictSaveText
+            : `Save file (${keymapState.labelFor('files-save')})`}
           saveTitle={activeFileInMergeEditor ? conflictSaveTitle : undefined}
           fullscreen={false}
           onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
@@ -1326,7 +1328,9 @@
         disabled={deletedAtCheckpoint ||
           (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
           (activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving)}
-        title={activeFileInMergeEditor ? conflictSaveTitle : 'Save file (Cmd/Ctrl+S)'}
+        title={activeFileInMergeEditor
+          ? conflictSaveTitle
+          : `Save file (${keymapState.labelFor('files-save')})`}
         onclick={runPanelSave}
       >
         {#if activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving}

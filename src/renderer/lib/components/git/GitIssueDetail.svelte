@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import CioAttention from 'cio-icon/CioAttention.svelte'
   import CioBack from 'cio-icon/CioBack.svelte'
   import CioClose from 'cio-icon/CioClose.svelte'
@@ -352,7 +353,7 @@
   }
 
   function onComposerKeydown(event: KeyboardEvent): void {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    if (keymapState.matches('ui-modal-primary-action', event)) {
       event.preventDefault()
       void submitComment()
     }
@@ -712,7 +713,9 @@
         bind:value={draft}
         onkeydown={onComposerKeydown}></textarea>
       <div class="mt-1.5 flex items-center justify-end gap-2">
-        <span class="text-[0.5625rem] text-dimmed">⌘/Ctrl+Enter to post</span>
+        <span class="text-[0.5625rem] text-dimmed"
+          >{keymapState.labelFor('ui-modal-primary-action')} to post</span
+        >
         <button
           type="button"
           class="flex h-7 cursor-pointer items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"

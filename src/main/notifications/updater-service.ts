@@ -39,6 +39,7 @@ import {
   type UpdateArtifactInfo
 } from './updater-download'
 
+const UPDATE_CHECK_TIMEOUT_MS = 30_000
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
 const PENDING_INSTALL_FILE = 'updater/install-pending.json'
@@ -459,25 +460,30 @@ export class UpdaterService {
       Logger.error('Updater: check-cycle hook failed', error)
     }
     if (!this._status.canAutoUpdate) return this.status
+    if (this.checkInFlight) return this.status
     this.explicitCheckInFlight = explicit
     this.checkInFlight = true
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       await this.applyConfiguredChannel()
-      await autoUpdater
-        .checkForUpdates()
-        .catch((error: unknown) => {
-          Logger.error('Updater: check failed', error)
-          this.settleCheckFailure(error)
+      await Promise.race([
+        autoUpdater.checkForUpdates(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error('Update check timed out. Please try again.')),
+            UPDATE_CHECK_TIMEOUT_MS
+          )
         })
-        .finally(() => {
-          this.checkInFlight = false
-          this.explicitCheckInFlight = false
-        })
+      ])
+      // Some updater implementations resolve without emitting a terminal event.
+      if (this._status.state === 'checking') this.updateState({ state: 'idle' })
     } catch (error: unknown) {
       Logger.error('Updater: check failed', error)
+      this.settleCheckFailure(error)
+    } finally {
+      if (timeout) clearTimeout(timeout)
       this.checkInFlight = false
       this.explicitCheckInFlight = false
-      this.settleCheckFailure(error)
     }
     return this.status
   }

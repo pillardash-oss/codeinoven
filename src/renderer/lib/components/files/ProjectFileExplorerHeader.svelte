@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import CioChevronsDown from 'cio-icon/CioChevronsDown.svelte'
   import CioChevronsUp from 'cio-icon/CioChevronsUp.svelte'
   import CioFolderOpen from 'cio-icon/CioFolderOpen.svelte'
@@ -140,7 +141,7 @@
       filterOpen ? 'bg-elevated text-foreground' : ''
     ]}
     aria-label="Search project files"
-    title="Search project files (Cmd/Ctrl+F)"
+    title={`Search project files (${keymapState.labelFor('nav-find')})`}
     aria-pressed={filterOpen}
     onclick={onToggleFilter}
   >

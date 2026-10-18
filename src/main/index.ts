@@ -464,7 +464,10 @@ function createWindow(): BrowserWindow {
     backgroundColor: getStartupBackground(),
     title: APP_NAME,
     icon: getAppIconPath(),
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
+    ...(process.platform === 'win32'
+      ? { titleBarOverlay: { color: getStartupBackground(), height: 48 } }
+      : {}),
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',

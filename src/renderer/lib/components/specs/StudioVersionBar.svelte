@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import CioArchive from 'cio-icon/CioArchive.svelte'
   import CioAttention from 'cio-icon/CioAttention.svelte'
   import CioCheck from 'cio-icon/CioCheck.svelte'
@@ -141,7 +142,7 @@
   <button
     class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
     disabled={busy || savePending}
-    title="Save changes (Cmd/Ctrl+S)"
+    title={`Save changes (${keymapState.labelFor('studio-save')})`}
     onclick={onSave}
   >
     <CioSave size={11} />
