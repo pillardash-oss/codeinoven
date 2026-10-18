@@ -1221,10 +1221,24 @@
       contextUsage.contextUsed >= Math.round(usageReading.previewContextWindow * 0.8)
   )
 
-  /** The maximize control is only useful once there is something to expand for,
-   *  and it stays while maximized so clearing the text cannot strand the composer
-   *  in its expanded size with no way back. */
-  let showExpandControl = $derived(hasText || expansion.maximized)
+  let hasThirdEditorLine = $state(false)
+
+  /** Observe rendered height so wrapped lines and explicit newlines both count. */
+  function observeEditorLines(surface: HTMLDivElement): () => void {
+    const editor = surface.querySelector<HTMLElement>('[role="textbox"]')
+    if (!editor) return () => {}
+    const observer = new ResizeObserver(() => {
+      const style = getComputedStyle(editor)
+      const contentHeight =
+        editor.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+      hasThirdEditorLine = contentHeight > parseFloat(style.lineHeight) * 2 + 1
+    })
+    observer.observe(editor)
+    return () => observer.disconnect()
+  }
+
+  /** Keep collapse available even after the expanded editor is cleared. */
+  let showExpandControl = $derived(hasThirdEditorLine || expansion.maximized)
 
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
@@ -2043,7 +2057,7 @@
     onReferenceMenuOpenChange={handleReferenceMenuOpenChange}
   />
 
-  <div class="relative" style="--editor-gutter: 2.25rem">
+  <div class="relative" style="--editor-gutter: 2.25rem" {@attach observeEditorLines}>
     {#if slashOpen}
       <SlashActionMenu
         actions={slash.available}
@@ -2065,8 +2079,7 @@
     {/if}
     <!-- Maximize   floats at the top right of the typing surface so the control
          is out of the writing line; the editor reserves its corner with `pr-10`.
-         It scales in with the first character typed (see `showExpandControl`) and
-         scales out again when the field empties, so it never blinks on. -->
+         It appears on the third rendered line and stays available while expanded. -->
     {#if showExpandControl}
       <button
         type="button"
@@ -2097,9 +2110,7 @@
     <RichMarkdownEditor
       bind:this={richEditor}
       id={composerEditorId}
-      class="composer-editor w-full overflow-y-auto pt-3 pb-1 pl-9 text-sm leading-5 text-foreground outline-none {showExpandControl
-        ? 'pr-10'
-        : 'pr-3.5'}"
+      class="composer-editor w-full overflow-y-auto pt-3 pr-10 pb-1 pl-9 text-sm leading-5 text-foreground outline-none"
       bind:value
       {placeholder}
       {autofocus}
