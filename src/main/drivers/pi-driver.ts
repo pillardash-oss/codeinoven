@@ -287,6 +287,10 @@ export class PiDriver extends PersistentCliDriver {
   private readonly compactionReadySessions = new Set<string>()
   readonly id = 'pi'
   readonly name = 'Pi'
+  // The recap rides the core-tools context hook for the turn it belongs to and
+  // is never written into pi's own transcript (see publishCioHistoryRecap), so
+  // the engine replays a parked branch's delta on every turn instead of once.
+  readonly retainsRecapInTranscript = false
   readonly capabilities: HarnessCapabilities = {
     runtimeTopology: { kind: 'shared_daemon', scope: 'application', sessionWorkers: true },
     streaming: true,
@@ -1233,6 +1237,25 @@ export class PiDriver extends PersistentCliDriver {
     this.silentContinues.delete(sessionId)
     await this.removeGatewayHandoff(sessionId)
     await super.deleteSession(projectPath, sessionId)
+  }
+
+  /**
+   * Park this session instead of releasing it: the record and its native
+   * transcript stay on disk so a switch back to pi resumes them, but the live
+   * RPC process, the gateway handoff and the turn bookkeeping are dropped now,
+   * because a parked session must not keep a background pi runtime alive.
+   */
+  override async parkThreadSession(
+    projectPath: string,
+    threadId: string,
+    sessionId: string
+  ): Promise<void> {
+    this.disposeRpcClient(sessionId)
+    this.activeTurns.delete(sessionId)
+    this.turnStates.delete(sessionId)
+    this.silentContinues.delete(sessionId)
+    await this.removeGatewayHandoff(sessionId)
+    await super.parkThreadSession(projectPath, threadId, sessionId)
   }
 
   override releaseProjectResources(projectPath: string): void {

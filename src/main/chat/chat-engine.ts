@@ -305,6 +305,7 @@ import type {
   AgentQuestion,
   AgentSessionStatus,
   AgentSubagentActivity,
+  AgentToolStatus,
   AgentToolCatalog,
   AgentToolDefinition,
   AgentToolHarness,
@@ -1350,6 +1351,19 @@ export class ChatEngine {
    * avoid loading provider history a second time (A-13).
    */
   private readonly sessionNativeHistory = new Map<string, boolean>()
+
+  /**
+   * Where the conversation resumes for a session adopted from a parked branch
+   * after a harness switch, keyed by session id. `boundary` is the id of the
+   * last message the parked native transcript already contains, or null to
+   * replay the whole thread; `recap` memoizes the rendered delta for the
+   * session's lifetime, and `persistent` records whether the driver keeps that
+   * recap in its own transcript (see `retainsRecapInTranscript`).
+   */
+  private readonly parkedSessionReplay = new Map<
+    string,
+    { boundary: string | null; persistent: boolean; recap?: string; recapBudget?: number }
+  >()
 
   /** Latest provider lifecycle state, retained across renderer remounts. */
   private sessionStatuses = new Map<string, AgentSessionStatus>()
@@ -5966,7 +5980,18 @@ export class ChatEngine {
       }
     }
     if (!sessionId) {
-      sessionId = await driver.createSession(projectPath, thread.title)
+      // A harness switch is a branch, not a reset. The harness being switched
+      // to kept its own session for this thread when the thread last left it,
+      // and that record still carries a resumable native transcript, so adopt
+      // it and resume warm instead of minting a cold session and replaying the
+      // conversation into it. Only the turns produced on the other harness are
+      // missing from that transcript, and those ride the turn as a delta recap
+      // (see `parkedSessionReplay`).
+      const parked =
+        switchedRuntime && previousHarnessId && previousHarnessId !== driverId
+          ? await this.findParkedThreadSession(driver, projectPath, threadId)
+          : null
+      sessionId = parked?.sessionId ?? (await driver.createSession(projectPath, thread.title))
       const boundThread = await this.threadManager.setSessionId(
         projectId,
         threadId,
@@ -5974,23 +5999,38 @@ export class ChatEngine {
         driverId,
         accountId
       )
-      // Stamp the thread onto the driver record so the session can be
-      // relocated across harness switches (see the switch branch below).
-      try {
-        await driver.tagSessionThread?.(projectPath, sessionId, threadId)
-      } catch (error) {
-        Logger.dev('Session thread tagging failed:', error)
-      }
-      // A harness switch discards the returning harness's session slot, but
-      // that harness still holds the thread's real native transcript. Restore
-      // the binding so the next RPC spawn resumes it instead of cold-starting
-      // on the engine's history recap.
-      if (switchedRuntime) {
+      if (parked) {
+        nativeHistoryBound = true
+        this.parkedSessionReplay.set(sessionId, {
+          boundary: parked.lastMessageId ?? null,
+          persistent: driver.retainsRecapInTranscript !== false
+        })
+        Logger.info('Resumed a parked harness session after harness switch', {
+          projectId,
+          threadId,
+          harnessId: driverId,
+          sessionId,
+          replayFrom: parked.lastMessageId ?? 'thread-start'
+        })
+      } else {
+        // Stamp the thread onto the driver record so the session can be
+        // relocated across harness switches (see the switch branch below).
         try {
-          nativeHistoryBound =
-            (await driver.restoreNativeBinding?.(projectPath, sessionId, threadId)) ?? false
+          await driver.tagSessionThread?.(projectPath, sessionId, threadId)
         } catch (error) {
-          Logger.dev('Native binding restore after harness switch failed:', error)
+          Logger.dev('Session thread tagging failed:', error)
+        }
+        // A harness switch discards the returning harness's session slot, but
+        // that harness still holds the thread's real native transcript. Restore
+        // the binding so the next RPC spawn resumes it instead of cold-starting
+        // on the engine's history recap.
+        if (switchedRuntime) {
+          try {
+            nativeHistoryBound =
+              (await driver.restoreNativeBinding?.(projectPath, sessionId, threadId)) ?? false
+          } catch (error) {
+            Logger.dev('Native binding restore after harness switch failed:', error)
+          }
         }
       }
       // The replacement session must adopt the replaced session's native
@@ -6185,6 +6225,7 @@ export class ChatEngine {
     this.searchNudgeAttempts.delete(sessionId)
     this.todoReconcileAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
+    this.parkedSessionReplay.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
     this.clearPendingQuestionsForSession(sessionId)
     this.clearPendingPermissionsForSession(sessionId)
@@ -6193,10 +6234,12 @@ export class ChatEngine {
   }
 
   /**
-   * Best-effort delete a harness session that a thread abandoned when its
+   * Best-effort retire a harness session that a thread abandoned when its
    * harness was switched. Retires in-memory state first so the orphaned
-   * session never broadcasts again, then asks the previous driver to remove its
-   * native session so its context, prompt cache, and storage are reclaimed.
+   * session never broadcasts again, then parks the previous driver's session:
+   * the record and its native transcript stay on disk so a switch back to that
+   * harness resumes it warm instead of rebuilding it cold. Drivers without a
+   * parked-session contract keep the old behavior and release the session.
    * Never throws: a failed cleanup must not block the already-successful switch.
    */
   private async releaseOrphanedHarnessSession(
@@ -6254,7 +6297,28 @@ export class ChatEngine {
         })
       }
     }
-    if (!previousDriver?.deleteSession) {
+    if (!previousDriver) return
+    if (previousDriver.parkThreadSession) {
+      try {
+        await previousDriver.parkThreadSession(projectPath, threadId, previousSessionId)
+        Logger.info('Parked orphaned harness session after harness switch', {
+          projectId,
+          threadId,
+          previousHarnessId,
+          previousSessionId
+        })
+        return
+      } catch (error) {
+        Logger.info('Failed to park orphaned harness session after harness switch', {
+          projectId,
+          threadId,
+          previousHarnessId,
+          previousSessionId,
+          detail: rawErrorMessage(error)
+        })
+      }
+    }
+    if (!previousDriver.deleteSession) {
       Logger.info('Orphaned harness session has no deletable native session', {
         projectId,
         threadId,
@@ -6988,7 +7052,10 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     sessionId = validateEntityId(sessionId, 'Session ID', 512)
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
-    const cached = await this.threadManager.loadSubagentMessages(projectId, threadId, sessionId)
+    // A pawn's transcript lives on the pawn's own thread, so the load follows
+    // the resolved owner rather than the thread whose card opened the view. For
+    // a nested sub-agent the owner is that same thread, so nothing changes.
+    const cached = await this.threadManager.loadSubagentMessages(projectId, owner.threadId, sessionId)
     if (cached.length > 0) {
       // The DB mirror is the store of truth for a settled sub-agent: reopen
       // must be a single DB read, not a harness probe. Only a still-running
@@ -7039,6 +7106,33 @@ export class ChatEngine {
 
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
+
+    // A pawn agent's session belongs to its own thread, and the pawn's card in
+    // the spawning conversation opens it by that session id. Resolve it here so
+    // a reopen (where nothing is tracked in memory yet) still finds the pawn:
+    // the thread must point back at the thread whose card opened it.
+    const pawnThread = (await this.threadManager.listThreads(projectId)).find(
+      (candidate) => candidate.sessionId === sessionId && candidate.coordinatorThreadId === threadId
+    )
+    if (pawnThread) {
+      const pawnDriverId = pawnThread.settings?.harnessId ?? DEFAULT_HARNESS
+      const { projectPath: pawnPath } = await this.resolve(
+        projectId,
+        pawnDriverId,
+        pawnThread.id,
+        pawnThread.sessionAccountId ?? pawnThread.settings?.accountId
+      )
+      const pawnOwner: ChildSessionInfo = {
+        projectId,
+        threadId: pawnThread.id,
+        projectPath: pawnPath,
+        driverId: pawnDriverId,
+        accountId: pawnThread.sessionAccountId ?? pawnThread.settings?.accountId
+      }
+      this.childSessionOwners.set(sessionId, pawnOwner)
+      return pawnOwner
+    }
+
     const records = await this.threadManager.loadMessageRecords(projectId, threadId)
     const referencedByThread = records.some((message) =>
       [...message.parts, ...(message.transportParts ?? [])].some(
@@ -7373,7 +7467,9 @@ export class ChatEngine {
     const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const driver = this.driverForRuntime(owner.driverId, owner.accountId)
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
-    await this.threadManager.markStoppedByUser(projectId, threadId)
+    // The thread that owns the child is the one whose stop state this belongs
+    // to: for a nested sub-agent that is the parent, for a pawn its own thread.
+    await this.threadManager.markStoppedByUser(owner.projectId, owner.threadId)
     this.userAbortedSessions.add(sessionId)
     if (owner.parentSessionId && driver.abortSubagent) {
       // The harness keeps this worker inside its parent's process, so aborting
@@ -10468,6 +10564,13 @@ export class ChatEngine {
       }
     }
     const historyRecap = composition.recapText
+    // The recap is now part of the turn's persisted driver text, so a driver
+    // that keeps it natively no longer needs it replayed into a later prefix.
+    // A driver that does not (pi) keeps the entry, because its transcript will
+    // never hold the delta and the next turn still needs it.
+    if (this.parkedSessionReplay.get(sessionId)?.persistent !== false) {
+      this.parkedSessionReplay.delete(sessionId)
+    }
     this.sessionStatuses.set(sessionId, { state: 'idle' })
     this.handledIdleSessions.delete(sessionId)
     // A fresh turn on this session is no longer a continuation of a stop the
@@ -13330,6 +13433,35 @@ export class ChatEngine {
   }
 
   /**
+   * The target harness's own session for a thread, when the thread left it with
+   * a resumable native transcript still on disk. This is the branch half of a
+   * switch: adopting the record keeps the harness's transcript and prompt cache
+   * alive, so the turn resumes instead of rebuilding. A record whose native
+   * transcript is gone, or that never had one, is not adoptable, because
+   * adopting it would pay a cold replay anyway.
+   */
+  private async findParkedThreadSession(
+    driver: HarnessDriver,
+    projectPath: string,
+    threadId: string
+  ): Promise<{ sessionId: string; lastMessageId?: string } | null> {
+    if (!driver.findThreadSession) return null
+    try {
+      const parked = await driver.findThreadSession(projectPath, threadId)
+      if (!parked?.native) return null
+      const held = await this.probeNativeHistory(driver, projectPath, parked.sessionId)
+      if (held === false) return null
+      return {
+        sessionId: parked.sessionId,
+        ...(parked.lastMessageId ? { lastMessageId: parked.lastMessageId } : {})
+      }
+    } catch (error) {
+      Logger.dev('Parked harness session lookup failed:', error)
+      return null
+    }
+  }
+
+  /**
    * Ask the driver whether the harness itself holds a session's conversation.
    *
    * Returns undefined for a driver that cannot answer, so callers keep their
@@ -13441,6 +13573,27 @@ export class ChatEngine {
       if (!recap) {
         void this.rescueUnreplayableHistory(projectId, threadId, driverId).catch(() => {})
       }
+      return recap
+    }
+    // A session adopted from a parked branch already owns the conversation up to
+    // the message it stopped at. Only what happened while the thread was on the
+    // other harness is missing, so replay that delta instead of the whole
+    // transcript: the parked prefix stays a provider cache read and the fresh
+    // tokens are just this turn's. The rendered delta is memoized for the life
+    // of the session; a driver that does not retain a recap natively keeps
+    // replaying it, one that does drops it after the turn is dispatched.
+    const replaySessionId = thread?.sessionId
+    const replay = replaySessionId ? this.parkedSessionReplay.get(replaySessionId) : undefined
+    if (replay) {
+      if (replay.recap !== undefined && (replay.recapBudget ?? 0) >= budget) return replay.recap
+      const boundaryIndex =
+        replay.boundary === null
+          ? -1
+          : mirror.findIndex((message) => message.id === replay.boundary)
+      const delta = boundaryIndex >= 0 ? mirror.slice(boundaryIndex + 1) : mirror
+      const recap = delta.length === 0 ? '' : formatHistoryRecap(delta, { maxInputTokens: budget })
+      replay.recap = recap
+      replay.recapBudget = budget
       return recap
     }
     if (thread?.sessionId && sameHarness) {
@@ -17748,6 +17901,52 @@ export class ChatEngine {
    * plain reason the agent can relay or act on.
    */
   /**
+   * Publish a pawn agent's activity onto the thread that spawned it.
+   *
+   * A pawn is a real thread, so its own transcript lives on that thread; the
+   * spawning conversation gets the same card a nested sub-agent gets, carrying
+   * the prompt the agent gave, the pawn's own session id (which its transcript
+   * view loads) and, when it settles, its final report. The part is written to
+   * the thread as a working-trace message and broadcast, so it survives a reopen
+   * and updates live, exactly like a sub-agent part the harness streamed.
+   */
+  private async publishPawnActivity(
+    projectId: string,
+    spawnerThreadId: string,
+    spawnerSessionId: string,
+    activity: AgentSubagentActivity
+  ): Promise<void> {
+    const part: Extract<AgentPart, { type: 'subagent' }> = {
+      type: 'subagent',
+      id: `pawn:${projectId}:${activity.childSessionId ?? spawnerThreadId}`,
+      messageID: `pawn:${projectId}:${activity.childSessionId ?? spawnerThreadId}`,
+      callID: `pawn:${projectId}:${activity.childSessionId ?? spawnerThreadId}`,
+      activity
+    }
+    await this.threadManager
+      .upsertMessages(projectId, spawnerThreadId, [
+        {
+          id: part.messageID,
+          role: 'assistant',
+          origin: 'subagent',
+          visibility: 'working_trace',
+          createdAt: activity.time?.start ?? Date.now(),
+          ...(activity.time?.end === undefined ? {} : { completedAt: activity.time.end }),
+          parts: [part]
+        }
+      ])
+      .catch((error: unknown) =>
+        Logger.info('Pawn activity could not be persisted', {
+          spawnerThreadId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      )
+    if (this.sessionRegistry.get(spawnerSessionId)) {
+      this.broadcast({ type: 'message.part.updated', sessionId: spawnerSessionId, part })
+    }
+  }
+
+  /**
    * How long a foreground pawn agent call waits inline for its thread to answer.
    *
    * A gateway call is carried by a harness transport that allows
@@ -17827,6 +18026,36 @@ export class ChatEngine {
       settings.accountId
     )
     const sessionId = await this.ensureSession(projectId, pawn.id, driverId)
+    const startedAt = Date.now()
+    // A pawn's session belongs to the pawn's own thread. Registering the owner
+    // here is what lets the spawning conversation's card open the pawn's
+    // transcript: the child-session lookup resolves this session to that thread
+    // and reads its mirrored messages, while the pawn keeps running.
+    this.childSessionOwners.set(sessionId, {
+      projectId,
+      threadId: pawn.id,
+      projectPath,
+      driverId,
+      accountId: settings.accountId
+    })
+    this.childSessionActivityStatuses.set(sessionId, 'running')
+    const pawnActivity = (
+      status: AgentToolStatus,
+      patch: Partial<AgentSubagentActivity> = {}
+    ): AgentSubagentActivity => ({
+      status,
+      agent: purpose || 'Pawn agent',
+      description: purpose,
+      prompt: instructions,
+      childSessionId: sessionId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      background,
+      pawn: true,
+      time: { start: startedAt, ...(status === 'running' ? {} : { end: Date.now() }) },
+      ...patch
+    })
+    await this.publishPawnActivity(projectId, threadId, context.sessionId, pawnActivity('running'))
     const prompt = [
       `You are a CodeInOven pawn agent: an independent worker thread spawned by the agent working on thread ${threadId}, and you answer to that agent alone.`,
       purpose ? `Purpose: ${purpose}.` : '',
@@ -17879,6 +18108,14 @@ export class ChatEngine {
       ])
       if (verdict === 'completed') {
         const output = await this.pawnFinalMessage(driver, projectPath, sessionId)
+        const report = output || 'The pawn agent returned no message.'
+        this.childSessionActivityStatuses.set(sessionId, 'completed')
+        await this.publishPawnActivity(
+          projectId,
+          threadId,
+          context.sessionId,
+          pawnActivity('completed', { output: report })
+        )
         return {
           pawnId: pawn.id,
           threadId: pawn.id,
@@ -17886,23 +18123,45 @@ export class ChatEngine {
           status: 'completed',
           model: { providerId: settings.providerId, modelId: settings.modelId },
           thinkingLevel: settings.thinkingLevel,
-          output: output || 'The pawn agent returned no message.'
+          output: report
         }
       }
-      if (verdict !== 'running') throw new Error(`Pawn agent failed: ${verdict}`)
+      if (verdict !== 'running') {
+        this.childSessionActivityStatuses.set(sessionId, 'error')
+        await this.publishPawnActivity(
+          projectId,
+          threadId,
+          context.sessionId,
+          pawnActivity('error', { error: verdict })
+        )
+        throw new Error(`Pawn agent failed: ${verdict}`)
+      }
     }
 
     // Background, or a foreground call that outlived its inline budget: report
     // once, when the pawn's thread actually finishes.
     void completion
       .then(
-        () => this.pawnFinalMessage(driver, projectPath, sessionId),
-        (error: unknown) =>
-          `The pawn agent failed: ${error instanceof Error ? error.message : String(error)}`
+        () => ({ ok: true as const }),
+        (error: unknown) => ({
+          ok: false as const,
+          message: `The pawn agent failed: ${error instanceof Error ? error.message : String(error)}`
+        })
       )
-      .then((output) =>
-        this.reportPawnCompletion(projectId, spawnerSettings, pawn, purpose, output)
-      )
+      .then(async (result) => {
+        const output = result.ok
+          ? await this.pawnFinalMessage(driver, projectPath, sessionId)
+          : result.message
+        const report = output || 'The pawn agent returned no message.'
+        this.childSessionActivityStatuses.set(sessionId, result.ok ? 'completed' : 'error')
+        await this.publishPawnActivity(
+          projectId,
+          threadId,
+          context.sessionId,
+          pawnActivity(result.ok ? 'completed' : 'error', result.ok ? { output: report } : { error: report })
+        )
+        await this.reportPawnCompletion(projectId, spawnerSettings, pawn, purpose, report)
+      })
       .catch((error: unknown) =>
         Logger.info('Pawn agent report could not reach its spawner', {
           threadId: pawn.id,

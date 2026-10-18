@@ -183,6 +183,20 @@ All notable changes to CodeInOven are documented here. This project follows
   seconds hands it to the operating system's browser instead, with the code
   already on the clipboard and the reason stated in a toast.
 
+- **A harness switch keeps both branches, so switching back is warm.** A switch
+  used to mint a cold session on the target harness and delete the source
+  session, its native transcript and its provider prompt cache, so both
+  directions of every switch paid a full replay. The source session is now
+  parked instead: its record and native transcript stay on disk (one branch per
+  harness and thread, freshly replaced ones pruned), its live process is
+  stopped so nothing lingers in the background, and the next switch back adopts
+  that session and resumes it. Only the turns produced while the thread was on
+  the other harness are replayed, as a small delta instead of the whole
+  transcript, which keeps the parked prefix a cache read. pi replays that delta
+  on every turn because its history recap rides a context hook for one turn and
+  never reaches its transcript; drivers that fold the recap into the turn's own
+  prompt text already persist it and replay it once.
+
 ### Changed
 
 - **A new assistant introduces itself, and the Getting started thread stops
