@@ -2295,9 +2295,9 @@
         </span>
         <span class="control-glyph" class:is-active={sendControlGlyph === 'send'}>
           {#if compactBeforeSend}
-            <span class="flex items-center">
-              <CioArchive size={ICON_SIZE.control} />
-              <CioArrowUp size={ICON_SIZE.control} />
+            <span class="absolute inset-0 flex items-center justify-center">
+              <CioArchive size={ICON_SIZE.inline} class="shrink-0" />
+              <CioArrowUp size={ICON_SIZE.inline} class="shrink-0" />
             </span>
           {:else}
             <CioArrowUp size={ICON_SIZE.control} />
