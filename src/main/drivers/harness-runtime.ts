@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { delimiter, join, win32 } from 'node:path'
+import { mkdir } from 'node:fs/promises'
+import { delimiter, join, resolve, win32 } from 'node:path'
 import { app } from 'electron'
 import type { HarnessExecutionTarget } from '../../lib/types'
 import {
@@ -690,7 +691,16 @@ export async function prepareHarnessInvocation(
   args: string[],
   options: HarnessInvocationOptions = {}
 ): Promise<PreparedHarnessInvocation> {
-  const env = options.env ?? buildProcessEnvironment()
+  const env = { ...(options.env ?? buildProcessEnvironment()) }
+  if (options.cwd) {
+    // Set all runtime conventions before launch so harness children inherit
+    // workspace scratch without changing the desktop process environment.
+    const directory = resolve(options.cwd, '.cio', 'tmp')
+    await mkdir(directory, { recursive: true })
+    env['TMPDIR'] = directory
+    env['TEMP'] = directory
+    env['TMP'] = directory
+  }
   if (process.platform !== 'win32') {
     if (!resolveExecutablePath(command, env)) {
       const bundled = bundledPiRuntime(command, options.bundledEntry)

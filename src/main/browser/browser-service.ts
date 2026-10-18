@@ -1,6 +1,6 @@
 import { designMotionPageScript } from '../design/design-motion-page'
 import type { AuthoredMotion } from '../../lib/design/motion-policy'
-import { dialog } from '../system/file-dialogs'
+import { agentDialog, dialog } from '../system/file-dialogs'
 import {
   showBrowserNewTabMenu,
   validateBrowserNewTabMenuInput
@@ -2403,7 +2403,7 @@ export class BrowserService {
       }
     } else {
       const filters = fileChooserFilters(accept)
-      const choice = await dialog.showOpenDialog(this.window, {
+      const choice = await agentDialog.showOpenDialog(this.window, {
         title: `Choose files for upload to ${safeOrigin(beforeUrl)}`,
         buttonLabel: 'Upload',
         properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
