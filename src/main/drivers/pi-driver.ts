@@ -669,6 +669,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<Array<Record<string, unknown>>> {
     let models: unknown
     const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc', ...overlay.args], {
+      prepareWindowsTools: false,
       cwd: projectPath,
       env: {
         ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
@@ -700,6 +701,7 @@ export class PiDriver extends PersistentCliDriver {
     const cwd = projectPath ?? [...this.sessionProjects.values()][0] ?? process.cwd()
     if (!(await resolveHarnessRuntime('pi', cwd))) return []
     const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc'], {
+      prepareWindowsTools: false,
       cwd,
       env: {
         ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),

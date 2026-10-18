@@ -10,6 +10,7 @@ import {
   resolveExecutablePath
 } from './cli-environment'
 import { spawnInUtilityHost } from './harness-utility-host'
+import { Logger } from '../system/logger'
 
 /**
  * Entry points of the bundled Pi resource (see `scripts/build-pi-harness.ts`).
@@ -671,6 +672,8 @@ function prepareNativeInvocation(
 }
 
 export interface HarnessInvocationOptions {
+  /** Metadata/auth-only commands do not need a Bash installation. */
+  prepareWindowsTools?: boolean
   cwd?: string
   env?: NodeJS.ProcessEnv
   /**
@@ -691,7 +694,7 @@ export async function prepareHarnessInvocation(
   args: string[],
   options: HarnessInvocationOptions = {}
 ): Promise<PreparedHarnessInvocation> {
-  const env = { ...(options.env ?? buildProcessEnvironment()) }
+  let env = { ...(options.env ?? buildProcessEnvironment()) }
   if (options.cwd) {
     // Set all runtime conventions before launch so harness children inherit
     // workspace scratch without changing the desktop process environment. A
@@ -736,6 +739,17 @@ export async function prepareHarnessInvocation(
     options.bundledEntry
   )
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
+  if (runtime.target.kind !== 'wsl' && options.prepareWindowsTools !== false) {
+    const { ensureWindowsGitRuntime } = await import('./windows-git-runtime')
+    try {
+      const git = await ensureWindowsGitRuntime(env)
+      env = buildProcessEnvironment(env)
+      if (git) env['CLAUDE_CODE_GIT_BASH_PATH'] = git.bash
+    } catch (error) {
+      // Native PowerShell/CMD remain usable when provisioning cannot reach GitHub.
+      Logger.info('Windows Git setup unavailable; continuing with native shells', error)
+    }
+  }
   if (runtime.target.kind === 'bundled') {
     return {
       command: runtime.executable,
@@ -980,6 +994,7 @@ export async function runHarnessCommand(
   } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   const prepared = await prepareHarnessInvocation(command, args, {
+    prepareWindowsTools: options.prepareWindowsTools ?? false,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     ...(options.env ? { env: options.env } : {}),
     ...(options.bundledEntry ? { bundledEntry: options.bundledEntry } : {})

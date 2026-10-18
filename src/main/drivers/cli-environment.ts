@@ -1,6 +1,12 @@
 import { accessSync, constants, existsSync, readdirSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { isAbsolute, join } from 'path'
+import {
+  commonWindowsGitRoots,
+  selectedWindowsGitRuntime,
+  windowsGitBins,
+  windowsPathValue
+} from './windows-git-paths'
 
 /** Parse a versioned nvm dir name like `v24.18.0` into `[major, minor, patch]`. */
 function parseVersion(name: string): [number, number, number] | null {
@@ -172,6 +178,7 @@ export function buildProcessEnvironment(
   const installed = installedVersionNames(root, platform)
 
   const preferred = preferredNodeBin(base, platform)
+  const windowsGit = platform === 'win32' ? selectedWindowsGitRuntime() : null
 
   const preferredManagerPaths =
     platform === 'win32'
@@ -227,8 +234,10 @@ export function buildProcessEnvironment(
     [
       ...(preferred ? [preferred] : []),
       ...preferredManagerPaths,
-      ...(base['PATH'] ?? '').split(sep),
+      ...(windowsGit ? windowsGitBins(windowsGit.root) : []),
+      ...(platform === 'win32' ? windowsPathValue(base) : (base['PATH'] ?? '')).split(sep),
       ...commonPaths,
+      ...(platform === 'win32' ? commonWindowsGitRoots(base).flatMap(windowsGitBins) : []),
       ...versionBins
     ],
     platform
@@ -237,6 +246,14 @@ export function buildProcessEnvironment(
   const environment: NodeJS.ProcessEnv = {
     ...base,
     PATH: pathEntries.join(sep)
+  }
+  if (platform === 'win32') {
+    // Node otherwise picks the first case-insensitive PATH key, discarding additions.
+    for (const key of Object.keys(environment)) {
+      if (key !== 'PATH' && key.toLowerCase() === 'path') delete environment[key]
+    }
+    if (windowsGit && !base['CLAUDE_CODE_GIT_BASH_PATH'])
+      environment['CLAUDE_CODE_GIT_BASH_PATH'] = windowsGit.bash
   }
   // Git read commands (status, diff) opportunistically refresh the index and
   // grab `.git/index.lock` to do it. Multiple app-owned processes share one
