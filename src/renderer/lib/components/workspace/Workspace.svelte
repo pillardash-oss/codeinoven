@@ -880,6 +880,16 @@
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
+    // The sidebar's panels are scoped to the project it is docked on, so make
+    // sure it is docked on the thread on screen before anything reads it. A
+    // surface that moved the visible thread without activating the sidebar would
+    // otherwise leave another project's coordinator board on screen.
+    contextSidebarState.ensureDockedThread(
+      thread.projectId,
+      thread.id,
+      thread.title,
+      activeThreadRowId(thread) ?? thread.id
+    )
     // Read as a dependency: a new message on this thread re-runs the refresh.
     void thread.lastActivity
     void designCoordinatorState.refresh(thread.projectId, thread.id)

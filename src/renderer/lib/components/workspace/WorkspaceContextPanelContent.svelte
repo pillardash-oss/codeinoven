@@ -84,7 +84,17 @@
     onAdoptAssistantTask
   }: Props = $props()
 
-  let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
+  let activeContextTab = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    if (!tab) return null
+    // The context sidebar is scoped to the project it is docked on, so a tab is
+    // only ever rendered for that project. A mismatch means the sidebar has not
+    // followed the thread on screen yet (see `ensureDockedThread`), and drawing
+    // the older project's panel in the meantime is what put another project's
+    // coordinator board on screen. Refusing the tab drops it instead.
+    if (activeProject && 'projectId' in tab && tab.projectId !== activeProject.id) return null
+    return tab
+  })
 
   /**
    * The coordinator the active tab belongs to.
@@ -113,7 +123,13 @@
    * Whether a board is shown at all is still `tabCoordinator`'s answer.
    */
   const boardRegistrations = new LastKnown<CoordinatorDockRegistration>()
-  let boardRegistration = $derived(boardRegistrations.get(tabCoordinator))
+  let boardRegistration = $derived.by(() => {
+    const known = boardRegistrations.get(tabCoordinator)
+    // A board belongs to the project it was published for, so it is refused when
+    // the workspace is showing another one.
+    if (known && activeProject && known.projectId !== activeProject.id) return null
+    return known
+  })
 
   /**
    * Identity of the surface the active sidebar tab mounts.

@@ -390,6 +390,40 @@ class ContextSidebarState {
     return this.activeProjectId === projectId ? this.activeThreadId : null
   }
 
+  /** The project the sidebar's context is docked on. A caller that shows a
+   *  thread reads this to tell whether the sidebar already follows it. */
+  get dockedProjectId(): string | null {
+    return this.activeProjectId
+  }
+
+  /**
+   * Keep the sidebar docked on the thread the workspace is showing.
+   *
+   * Every ordinary thread open goes through `activateThread`, so this is a
+   * repair rather than the normal path. It exists because a surface that changes
+   * the visible thread without going through that call leaves the sidebar on the
+   * project it was docked on before, and the sidebar's panels are scoped to the
+   * project it is docked on: another project's coordinator board then stays on
+   * screen until the user toggles something. Acting only on a mismatch means a
+   * sidebar that is already correct is never re-activated.
+   */
+  ensureDockedThread(
+    projectId: string,
+    threadId: string,
+    threadTitle?: string,
+    rowThreadId?: string
+  ): void {
+    const row = rowThreadId ?? threadId
+    if (
+      this.activeProjectId === projectId &&
+      this.activeThreadId === threadId &&
+      this.activeRowThreadId === row
+    ) {
+      return
+    }
+    this.activateThread(projectId, threadId, threadTitle, rowThreadId)
+  }
+
   /** `rowThreadId` is the sidebar row that represents `threadId`. A worker or
    *  auditor child passes its coordinator so the child opens the parent's tab
    *  context, which is where the coordinator panel is docked. It defaults to
