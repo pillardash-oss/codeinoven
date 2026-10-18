@@ -1,0 +1,86 @@
+/* CodeInOven Mobile tokens.
+   The colour values below are copied from the app's own @theme and .dark blocks in
+   src/renderer/app.css, never invented: the phone must read as the same product as the
+   desktop app. The two faces are the shipped brand binaries (Oven Box for UI, Oven Mono
+   for measured values), the same files the brand typeface study proofs. */
+
+@font-face {
+  font-family: 'Oven Box';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('./fonts/oven-box-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Oven Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 800;
+  src: url('./fonts/oven-mono-latin.woff2') format('woff2');
+}
+
+:root {
+  /* Surfaces */
+  --color-app: #0b0b0d;
+  --color-surface: #141417;
+  --color-elevated: #1c1c20;
+  --color-overlay: #242429;
+  --color-raised: #202025;
+  --color-selected: #2c2c33;
+
+  /* Ink */
+  --color-foreground: #f5f4f0;
+  --color-muted: #9d9da6;
+  /* The app's --color-dimmed is 3.1:1 on the obsidian plate, below AA for the small
+     labels a phone leans on. Small text therefore takes --color-caption, the same
+     correction the brand typeface study makes; --color-dimmed stays for rules,
+     disabled ink and non-text marks only. */
+  --color-dimmed: #5f5f68;
+  --color-caption: #9d9da6;
+
+  /* Brand */
+  --color-primary: #f5f4f0;
+  --color-primary-hover: #e5e4df;
+  --color-on-primary: #0b0b0d;
+  --color-accent: #d4af37;
+  --color-accent-hover: #c4a030;
+  --color-on-accent: #081825;
+
+  /* Status */
+  --color-danger: #dc2626;
+  --color-warning: #d97706;
+  --color-info: #7ba3d4;
+  --color-success: #34d399;
+  /* Text-level corrections of the semantic pair: the fill values are 3.8:1 and 4.1:1 on
+     obsidian, so small diff numerals take these instead. Fills keep the shipping values. */
+  --color-success-text: #6ee7b0;
+  --color-danger-text: #f87171;
+
+  /* Thread state marks, identical meanings to the desktop rail */
+  --color-thread-pinned: #eab308;
+  --color-thread-working: var(--color-info);
+  --color-thread-spec: #a78bfa;
+  --color-thread-unread: var(--color-success);
+  --color-thread-error: var(--color-danger);
+  --color-thread-done: var(--color-muted);
+
+  /* Rules */
+  --color-border: #27272c;
+  --color-border-strong: #3b3b42;
+
+  /* Type */
+  --font-app: 'Oven Box', 'Oven Mono', ui-monospace, monospace;
+  --font-mono: 'Oven Mono', 'Oven Box', ui-monospace, monospace;
+
+  /* Spacing unit is 4px: every gap and pad below is a multiple of it. */
+  --unit: 0.25rem;
+  --radius: 2px;
+
+  /* Phone frame */
+  --status-bar-height: 2.75rem;
+  --top-bar-height: 3rem;
+  --dock-height: 3.5rem;
+
+  color-scheme: dark;
+}

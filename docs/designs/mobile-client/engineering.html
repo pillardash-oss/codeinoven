@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeInOven Mobile, Auto Pilot run</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="screen-page">
+    <nav class="screen-nav" aria-label="Screens">
+      <a href="./approvals.html">Approvals</a>
+      <span>/</span>
+      <span class="now">Auto Pilot</span>
+      <span class="spacer"></span>
+      <a href="./usage.html">Next, Usage</a>
+    </nav>
+
+    <main class="screen">
+      <h1 class="screen-label"><b>04</b> Auto Pilot run</h1>
+      <p class="screen-note">
+        A whole engineering run on a phone: the five stages, the artifacts they produced, the
+        diff sitting uncommitted, and one row that says who is doing what right now.
+      </p>
+
+      <div class="phone">
+        <div class="statusbar">
+          <span>9:41</span>
+          <span class="sb-right">
+            <svg viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><rect x="0" y="8" width="2" height="4" /><rect x="4" y="5" width="2" height="7" /><rect x="8" y="2" width="2" height="10" /><rect x="12" y="0" width="2" height="12" opacity="0.4" /></svg>
+            <svg viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><rect x="0" y="2" width="13" height="8" rx="1" opacity="0.35" /><rect x="1.5" y="3.5" width="8" height="5" /><rect x="14" y="4.5" width="2" height="3" /></svg>
+          </span>
+        </div>
+
+        <header class="appbar">
+          <button class="icon-btn" type="button" title="Back to threads" aria-label="Back to threads">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 4 6 10l6 6" /></svg>
+          </button>
+          <div>
+            <h2>Auto Pilot, thread rows</h2>
+            <p class="crumb">codeinoven / row-marks</p>
+          </div>
+          <span class="spacer"></span>
+          <button class="icon-btn" type="button" title="Pause after this task" aria-label="Pause after this task">
+            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><rect x="5" y="4" width="3.5" height="12" /><rect x="11.5" y="4" width="3.5" height="12" /></svg>
+          </button>
+        </header>
+
+        <div class="scroller">
+          <!-- Coordinator summary -->
+          <div class="card" style="margin: 0.75rem; gap: 0.5rem">
+            <div class="card-head">
+              <span class="tag">Auto Pilot</span>
+              <span>3 of 5 stages</span>
+              <span class="spacer"></span>
+              <span class="tabular">58%</span>
+            </div>
+            <div class="meter">
+              <div class="track"><i style="width: 58%"></i></div>
+              <p class="label"><span>Implementing</span><span>est. 9m left</span></p>
+            </div>
+            <div class="working">
+              <span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>3 workers, 14 of 23 tasks done</span>
+              <span class="spacer"></span>
+              <span class="elapsed">22m</span>
+            </div>
+          </div>
+
+          <!-- Stages -->
+          <p class="section-label">Stages</p>
+          <div class="phase-list">
+            <div class="phase" data-state="done">
+              <span class="step">01</span>
+              <span>
+                <span class="name">Brainstorm</span>
+                <span class="sub">6 directions, 2 kept</span>
+              </span>
+              <span class="phase-state">Done</span>
+            </div>
+            <div class="phase" data-state="done">
+              <span class="step">02</span>
+              <span>
+                <span class="name">PRD</span>
+                <span class="sub">Finalized, v3</span>
+              </span>
+              <span class="phase-state">Done</span>
+            </div>
+            <div class="phase" data-state="done">
+              <span class="step">03</span>
+              <span>
+                <span class="name">Spec</span>
+                <span class="sub">Approved spec.md, 12 sections</span>
+              </span>
+              <span class="phase-state">Done</span>
+            </div>
+            <div class="phase" data-state="active">
+              <span class="step">04</span>
+              <span>
+                <span class="name">Assignment</span>
+                <span class="sub">3 workers · phase 3 of 5</span>
+              </span>
+              <span class="phase-state">Running</span>
+            </div>
+            <div class="phase" data-state="blocked">
+              <span class="step">05</span>
+              <span>
+                <span class="name">Achievement</span>
+                <span class="sub">Blocked on a failing check</span>
+              </span>
+              <span class="phase-state">Waiting</span>
+            </div>
+          </div>
+
+          <!-- Artifacts -->
+          <p class="section-label">Artifacts <span class="count">.cio/specs/row-marks</span></p>
+          <div class="artifacts">
+            <button class="artifact" type="button">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><path d="M3 2h7l3 3v9H3z" /><path d="M10 2v3h3" /></svg>
+              <span class="fname">spec.md</span>
+              <span class="fmeta">12 sections</span>
+            </button>
+            <button class="artifact" type="button">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><path d="M3 2h7l3 3v9H3z" /><path d="M10 2v3h3" /></svg>
+              <span class="fname">plan.md</span>
+              <span class="fmeta">5 phases, 23 tasks</span>
+            </button>
+            <button class="artifact" type="button">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><path d="M3 2h7l3 3v9H3z" /><path d="M10 2v3h3" /></svg>
+              <span class="fname">progress.md</span>
+              <span class="fmeta">14 done, 9 to go</span>
+            </button>
+            <button class="artifact" type="button">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><path d="M3 2h7l3 3v9H3z" /><path d="M10 2v3h3" /></svg>
+              <span class="fname">assignment.md</span>
+              <span class="fmeta">signed off, 3 workers</span>
+            </button>
+          </div>
+
+          <!-- Uncommitted diff -->
+          <p class="section-label">Uncommitted <span class="count">+173 / −71</span></p>
+          <div class="diff" style="margin: 0 0.75rem 0.75rem">
+            <div class="diff-head">
+              <span class="path">row-status.ts</span>
+              <span class="stats"><span class="plus">+52</span><span class="minus">−21</span></span>
+            </div>
+            <pre><span class="ln"><span class="no">56</span>export function stateOf(row: ThreadRow): Mark {</span><span class="ln del"><span class="no">57</span>  return row.unread ? 'dot' : 'none'</span><span class="ln add"><span class="no">57</span>  if (row.approval) return 'attention'</span><span class="ln add"><span class="no">58</span>  if (row.working) return 'live'</span><span class="ln add"><span class="no">59</span>  return row.unread ? 'unread' : 'settled'</span><span class="ln"><span class="no">60</span>}</span></pre>
+          </div>
+        </div>
+
+        <div class="composer" style="gap: 0.5rem">
+          <div class="composer-actions">
+            <button class="btn grow" type="button">Review spec</button>
+            <button class="btn quiet" type="button">Retry stage</button>
+          </div>
+          <div class="composer-actions" style="border-top: 1px solid var(--color-border); padding-top: 0.5rem">
+            <span class="icon-row">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><circle cx="8" cy="8" r="6" /></svg>
+              Failing check: bundle budget 918 KiB of 900
+            </span>
+            <span class="spacer"></span>
+            <button class="btn primary" type="button">Commit</button>
+          </div>
+        </div>
+      </div>
+      <p class="screen-note">
+        Achievement is blocked rather than failed: the run holds, names the check that stopped it,
+        and offers the two moves that matter, retry the stage or commit what already passes.
+      </p>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeInOven Mobile, design</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="cover">
+      <div class="cover-top">
+        <svg class="brand-mark" viewBox="0 0 96 96" aria-hidden="true">
+          <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter" />
+          <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+          <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+          <circle cx="84" cy="48" r="5" fill="#d4af37" />
+        </svg>
+        <div class="wordmark">
+          <strong>CodeInOven</strong>
+          <span class="eyebrow">Mobile client, design study</span>
+        </div>
+        <span class="spacer"></span>
+        <a class="eyebrow cover-link" href="./canvas.html">All screens, canvas</a>
+      </div>
+
+      <div class="stack">
+        <h1>
+          Your agents, in your pocket.<br />
+          <span class="h1-quiet">Same instrument, one hand.</span>
+        </h1>
+        <p class="lede">
+          A standalone client, not a remote control for a desktop window: it starts its own threads,
+          picks its own project, stage and model, and runs engineering work from a phone. Obsidian
+          surfaces, ivory ink, and gold reserved for exactly one thing on each screen, the control
+          that moves the work forward.
+        </p>
+      </div>
+
+      <div class="cover-grid">
+        <div class="cover-col">
+          <h2>What it does</h2>
+          <ul class="stack-tight">
+            <li>Threads, grouped by what they need: attention, working, pinned, recent.</li>
+            <li>Full turns read on the phone, with tool calls and changed files inline.</li>
+            <li>Every approval the desktop asks for: permission, secret, question, gate.</li>
+            <li>Engineering stages from Brainstorm to Achievement, Auto Pilot included.</li>
+            <li>Usage, quota and model choice, in the same units the desktop reports.</li>
+          </ul>
+        </div>
+        <div class="cover-col">
+          <h2>What it deliberately leaves out</h2>
+          <ul class="stack-tight">
+            <li>The terminal, the file editor, the embedded browser and the design board.</li>
+            <li>Process management, updater, login items: the phone is not a workstation.</li>
+            <li>Nothing is faked to fill the gap. Omitted surfaces are absent, not greyed.</li>
+          </ul>
+        </div>
+        <div class="cover-col">
+          <h2>Rules this study holds itself to</h2>
+          <ul class="stack-tight">
+            <li>Tokens from src/renderer/app.css, dark values only, no invented palette.</li>
+            <li>Oven Box for the interface, Oven Mono for every measured value.</li>
+            <li>4px spacing unit, 2px corners, hairline rules instead of shadows.</li>
+            <li>Falsy left, truthy right on every card footer and every dialog.</li>
+            <li>44px minimum touch targets, visible focus, no motion without meaning.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="stack-tight">
+        <h2 class="eyebrow">Screens</h2>
+        <nav class="screens-index" aria-label="Screens">
+          <a href="./threads.html">
+            <span class="n">01</span>
+            <span>
+              <span class="t">Inbox</span>
+              <span class="d">Threads grouped by state, one accent rule for the row that needs you.</span>
+            </span>
+            <span class="go">open</span>
+          </a>
+          <a href="./conversation.html">
+            <span class="n">02</span>
+            <span>
+              <span class="t">Conversation</span>
+              <span class="d">A running turn, its tool calls, and the composer's state machine.</span>
+            </span>
+            <span class="go">open</span>
+          </a>
+          <a href="./approvals.html">
+            <span class="n">03</span>
+            <span>
+              <span class="t">Approvals</span>
+              <span class="d">Permission, secret, question and a decided card, each with its own clock.</span>
+            </span>
+            <span class="go">open</span>
+          </a>
+          <a href="./engineering.html">
+            <span class="n">04</span>
+            <span>
+              <span class="t">Auto Pilot</span>
+              <span class="d">Five stages, lifecycle artifacts, an uncommitted diff, a blocked gate.</span>
+            </span>
+            <span class="go">open</span>
+          </a>
+          <a href="./usage.html">
+            <span class="n">05</span>
+            <span>
+              <span class="t">Usage and model</span>
+              <span class="d">Context, spend, quota and the picker that changes the next turn.</span>
+            </span>
+            <span class="go">open</span>
+          </a>
+          <a href="./compose.html">
+            <span class="n">06</span>
+            <span>
+              <span class="t">New thread</span>
+              <span class="d">Project, stage, Auto Pilot, model, worktree, first message.</span>
+            </span>
+            <span class="go">open</span>
+          </a>
+        </nav>
+      </div>
+    </div>
+  </body>
+</html>

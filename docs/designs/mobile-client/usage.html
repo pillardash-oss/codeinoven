@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeInOven Mobile, Usage and model</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="screen-page">
+    <nav class="screen-nav" aria-label="Screens">
+      <a href="./engineering.html">Auto Pilot</a>
+      <span>/</span>
+      <span class="now">Usage</span>
+      <span class="spacer"></span>
+      <a href="./compose.html">Next, New thread</a>
+    </nav>
+
+    <main class="screen">
+      <h1 class="screen-label"><b>05</b> Usage and model</h1>
+      <p class="screen-note">
+        The same measured facts as the desktop popover, sized for a thumb: context battery, spend,
+        quota, and the model picker that changes what the next turn costs.
+      </p>
+
+      <div class="phone">
+        <div class="statusbar">
+          <span>9:41</span>
+          <span class="sb-right">
+            <svg viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><rect x="0" y="8" width="2" height="4" /><rect x="4" y="5" width="2" height="7" /><rect x="8" y="2" width="2" height="10" /><rect x="12" y="0" width="2" height="12" opacity="0.4" /></svg>
+            <svg viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><rect x="0" y="2" width="13" height="8" rx="1" opacity="0.35" /><rect x="1.5" y="3.5" width="8" height="5" /><rect x="14" y="4.5" width="2" height="3" /></svg>
+          </span>
+        </div>
+
+        <header class="appbar">
+          <button class="icon-btn" type="button" title="Close usage" aria-label="Close usage">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15" /></svg>
+          </button>
+          <h2>Usage</h2>
+          <span class="spacer"></span>
+          <button class="icon-btn" type="button" title="Usage for the last 7 days" aria-label="Usage range: last 7 days">
+            <b class="mono" style="font-size: 0.6875rem">7d</b>
+          </button>
+        </header>
+
+        <div class="scroller">
+          <div class="stats">
+            <div class="stat">
+              <span class="k">Spend today</span>
+              <span class="v">$4.18</span>
+              <span class="d">$18.40 this week</span>
+            </div>
+            <div class="stat">
+              <span class="k">Context</span>
+              <span class="v">62%</span>
+              <span class="d">124k of 200k</span>
+            </div>
+            <div class="stat">
+              <span class="k">Tokens in</span>
+              <span class="v">1.24M</span>
+              <span class="d good">92% cache hit</span>
+            </div>
+            <div class="stat">
+              <span class="k">Tokens out</span>
+              <span class="v">186k</span>
+              <span class="d">48 tok/s median</span>
+            </div>
+          </div>
+
+          <p class="section-label">Daily spend</p>
+          <div class="bars-chart" role="img" aria-label="Daily spend for the last seven days, highest on Thursday at 4 dollars 18 cents">
+            <div class="bar"><i style="height: 42%"></i><span>M</span></div>
+            <div class="bar"><i style="height: 68%"></i><span>T</span></div>
+            <div class="bar"><i style="height: 24%"></i><span>W</span></div>
+            <div class="bar"><i style="height: 100%"></i><span>T</span></div>
+            <div class="bar"><i style="height: 55%"></i><span>F</span></div>
+            <div class="bar"><i style="height: 12%"></i><span>S</span></div>
+            <div class="bar" data-today="true"><i style="height: 88%"></i><span>S</span></div>
+          </div>
+
+          <p class="section-label">Quota</p>
+          <div style="padding: 0 1rem 0.75rem" class="stack">
+            <div class="stack-tight">
+              <div class="meter">
+                <div class="track"><i style="width: 74%"></i></div>
+                <p class="label"><span>Claude, weekly</span><span>74% used</span></p>
+              </div>
+              <p class="mono text-dimmed" style="font-size: 0.625rem">Resets in 2d 6h</p>
+            </div>
+            <div class="stack-tight">
+              <div class="meter">
+                <div class="track"><i class="hot" style="width: 91%"></i></div>
+                <p class="label"><span>Codex, 5 hour</span><span>91% used</span></p>
+              </div>
+              <p class="mono text-dimmed" style="font-size: 0.625rem">Resets in 41m · burning fast</p>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="sheet-head">
+            <h3>Next turn runs on</h3>
+            <button class="btn quiet" type="button">Change</button>
+          </div>
+
+          <div role="radiogroup" aria-label="Model for the next turn">
+          <button class="choice" type="button" role="radio" aria-checked="true">
+            <span>
+              <span class="name">claude-opus-4.6</span>
+              <span class="desc">Anthropic, thinking high · $15 / $75 per Mtok</span>
+            </span>
+            <svg class="check" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" aria-hidden="true"><path d="M3 8.5l3.5 3.5L13 4" /></svg>
+          </button>
+          <button class="choice" type="button" role="radio" aria-checked="false">
+            <span>
+              <span class="name">gpt-5.2-codex</span>
+              <span class="desc">OpenAI, thinking medium · $1.25 / $10 per Mtok</span>
+            </span>
+          </button>
+          <button class="choice" type="button" role="radio" aria-checked="false">
+            <span>
+              <span class="name">deepseek-v4</span>
+              <span class="desc">DeepSeek, thinking off · $0.28 / $0.42 per Mtok</span>
+            </span>
+          </button>
+          </div>
+
+          <div style="padding: 1rem" class="stack">
+            <div class="card" style="gap: 0.5rem">
+              <div class="card-head"><span class="tag">Note</span><span>Cost is reported by the harness</span></div>
+              <p>
+                Two turns on this thread have no reported cost, so the day total is a floor rather
+                than a sum.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="screen-note">
+        Nothing here is a summary the phone invents: it is the same measurement the desktop usage
+        indicator shows, with the reasoning token breakdown one tap away.
+      </p>
+    </main>
+  </body>
+</html>

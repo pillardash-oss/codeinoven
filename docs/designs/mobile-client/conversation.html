@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CodeInOven Mobile, Conversation</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="screen-page">
+    <nav class="screen-nav" aria-label="Screens">
+      <a href="./threads.html">Threads</a>
+      <span>/</span>
+      <span class="now">Conversation</span>
+      <span class="spacer"></span>
+      <a href="./approvals.html">Next, Approvals</a>
+    </nav>
+
+    <main class="screen">
+      <h1 class="screen-label"><b>02</b> Conversation</h1>
+      <p class="screen-note">
+        The turn in progress: what the agent said, what it ran, what it changed. The composer
+        holds one context bar and a single action that changes meaning with state.
+      </p>
+
+      <div class="phone">
+        <div class="statusbar">
+          <span>9:41</span>
+          <span class="sb-right">
+            <svg viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><rect x="0" y="8" width="2" height="4" /><rect x="4" y="5" width="2" height="7" /><rect x="8" y="2" width="2" height="10" /><rect x="12" y="0" width="2" height="12" opacity="0.4" /></svg>
+            <svg viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><rect x="0" y="2" width="13" height="8" rx="1" opacity="0.35" /><rect x="1.5" y="3.5" width="8" height="5" /><rect x="14" y="4.5" width="2" height="3" /></svg>
+          </span>
+        </div>
+
+        <header class="appbar">
+          <button class="icon-btn" type="button" title="Back to threads" aria-label="Back to threads">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M12 4 6 10l6 6" /></svg>
+          </button>
+          <div>
+            <h2>Thread row status marks</h2>
+            <p class="crumb">codeinoven / main</p>
+          </div>
+          <span class="spacer"></span>
+          <button class="icon-btn" type="button" title="Thread actions" aria-label="Thread actions">
+            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><rect x="3" y="8.5" width="3" height="3" /><rect x="8.5" y="8.5" width="3" height="3" /><rect x="14" y="8.5" width="3" height="3" /></svg>
+          </button>
+        </header>
+
+        <div class="scroller">
+          <div class="thread-head">
+            <h1>Surface them as a 6px square, same meanings as desktop</h1>
+            <div class="thread-meta">
+              <span>Auto Pilot</span><span class="dot"></span>
+              <span>Spec approved</span><span class="dot"></span>
+              <span>claude-opus-4.6</span>
+            </div>
+            <div class="working">
+              <span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span>Implementing, phase 3 of 5</span>
+              <span class="spacer"></span>
+              <span class="elapsed">6m 12s</span>
+            </div>
+          </div>
+
+          <div class="transcript">
+            <div class="turn user">
+              <p class="who">You</p>
+              <p class="bubble">Make the thread rows readable at arm's length. I keep misreading a failed thread as a finished one.</p>
+            </div>
+
+            <div class="turn agent">
+              <p class="who">Agent</p>
+              <div class="prose">
+                <p>
+                  The two states were the same grey. Each row now carries one mark in the rail's
+                  own vocabulary: a square for settled work, a live bar for a running turn, a
+                  triangle for anything waiting on you.
+                </p>
+              </div>
+              <div class="stack-tight">
+                <div class="tool-line">
+                  <svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><rect x="2" y="2" width="12" height="12" /><path d="M5 8h6" /></svg>
+                  <span class="path">thread-state-marks.ts</span>
+                  <span class="stat"><span class="plus">+18</span> <span class="minus">−9</span></span>
+                </div>
+                <div class="tool-line">
+                  <svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><rect x="2" y="2" width="12" height="12" /><path d="M5 8h6" /></svg>
+                  <span class="path">ThreadRow.svelte</span>
+                  <span class="stat"><span class="plus">+34</span> <span class="minus">−21</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="turn agent">
+              <p class="who">Agent</p>
+              <div class="prose">
+                <p class="muted">Running the thread-list checks before I touch the rail sizes.</p>
+              </div>
+              <div class="tool-line">
+                <svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><path d="M3 4h4v11H3z" /><path d="M9 4h4v11H9z" /></svg>
+                <span class="path">bun test src/renderer/lib/components/threads</span>
+                <span class="stat">running</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <form class="composer" onsubmit="return false">
+          <p class="field"><span class="placeholder">Steer this turn, or ask for the diff instead</span></p>
+
+          <div class="shoe">
+            <button class="seg" type="button" title="Engineering mode" aria-label="Engineering mode: Auto Pilot">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="miter" aria-hidden="true"><path d="M10 2l4 4-8 8H2v-4z" /></svg>
+              <b>Auto Pilot</b>
+            </button>
+            <button class="seg" type="button" title="Permission level: full access" aria-label="Permission level: full access">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2l5 2v5c0 3-2.2 4.6-5 5-2.8-.4-5-2-5-5V4z" /></svg>
+              <b>Full access</b>
+            </button>
+            <button class="seg" type="button" title="Model: claude-opus-4.6" aria-label="Model: claude-opus-4.6">
+              <b>opus 4.6</b>
+              <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="square" aria-hidden="true"><path d="M5 7l3 3 3-3" /></svg>
+            </button>
+            <button class="seg" type="button" title="Context usage: 62 percent of the window" aria-label="Context usage: 62 percent of the window">
+              <b>62%</b>
+            </button>
+          </div>
+
+          <div class="composer-actions">
+            <button class="icon-btn" type="button" title="Attach a file" aria-label="Attach a file">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+            </button>
+            <button class="icon-btn" type="button" title="Voice input" aria-label="Voice input">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7.5" y="2.5" width="5" height="9" /><path d="M5 9.5a5 5 0 0 0 10 0M10 14.5V18" /></svg>
+            </button>
+            <span class="spacer"></span>
+            <button class="send queue" type="submit" title="Queue this message" aria-label="Queue this message">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><circle cx="10" cy="10" r="6.5" /><path d="M10 6.5V10l2.5 1.5" /></svg>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <p class="screen-note">
+        With text in the field while a turn runs, the action is a clock: your message queues and
+        the agent keeps working. Empty the field and it becomes a stop square, pressed once to
+        arm and twice to stop.
+      </p>
+    </main>
+  </body>
+</html>
