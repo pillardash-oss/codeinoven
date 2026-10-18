@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAudioLines from '@codeinoven/icons/CioAudioLines.svelte'
-  import CioCaptions from '@codeinoven/icons/CioCaptions.svelte'
-  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
-  import CioTabSettings from '@codeinoven/icons/CioTabSettings.svelte'
+  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
+  import CioCaptions from '@pillardash-oss/cio-icon/CioCaptions.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'

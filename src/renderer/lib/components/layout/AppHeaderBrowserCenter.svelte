@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioBrowser from '@codeinoven/icons/CioBrowser.svelte'
-  import CioMic from '@codeinoven/icons/CioMic.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioVolume from '@codeinoven/icons/CioVolume.svelte'
-  import CioVolumeX from '@codeinoven/icons/CioVolumeX.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pillardash-oss/cio-icon/CioVolumeX.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
 

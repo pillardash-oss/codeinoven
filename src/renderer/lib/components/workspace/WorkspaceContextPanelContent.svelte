@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioNetwork from '@codeinoven/icons/CioNetwork.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
   import type { SvelteMap } from 'svelte/reactivity'
   import { ovenRootKey } from '$lib/oven-root-target'
   import { fly } from 'svelte/transition'

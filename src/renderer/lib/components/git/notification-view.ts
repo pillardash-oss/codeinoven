@@ -8,12 +8,12 @@
  * and not the other is exactly the drift this module prevents.
  */
 
-import CioCommit from '@codeinoven/icons/CioCommit.svelte'
-import CioDot from '@codeinoven/icons/CioDot.svelte'
-import CioMessage from '@codeinoven/icons/CioMessage.svelte'
-import CioNotifications from '@codeinoven/icons/CioNotifications.svelte'
-import CioPullRequest from '@codeinoven/icons/CioPullRequest.svelte'
-import CioTag from '@codeinoven/icons/CioTag.svelte'
+import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
 import type { GitHubNotification, IssueSummary, PullRequestSummary } from '$shared/types'
 
 /**

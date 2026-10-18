@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFolder from '@codeinoven/icons/CioFolder.svelte'
-  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import Modal from '../ui/Modal.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'

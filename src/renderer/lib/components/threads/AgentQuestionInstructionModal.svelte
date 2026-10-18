@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
-  import CioCopy from '@codeinoven/icons/CioCopy.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
   import { copyText } from '$lib/copy-text'
   import Modal from '../ui/Modal.svelte'
 

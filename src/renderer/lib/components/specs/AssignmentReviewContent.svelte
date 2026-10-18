@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioFiles from '@codeinoven/icons/CioFiles.svelte'
-  import CioMessagePlus from '@codeinoven/icons/CioMessagePlus.svelte'
-  import CioTabInfo from '@codeinoven/icons/CioTabInfo.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import WorkerScopePicker from '../shared/WorkerScopePicker.svelte'

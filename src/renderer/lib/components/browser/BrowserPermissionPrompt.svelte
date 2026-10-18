@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioExternalLink from '@codeinoven/icons/CioExternalLink.svelte'
-  import CioShieldAlert from '@codeinoven/icons/CioShieldAlert.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioShieldAlert from '@pillardash-oss/cio-icon/CioShieldAlert.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
 

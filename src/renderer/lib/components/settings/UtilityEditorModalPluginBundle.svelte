@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioUpload from '@codeinoven/icons/CioUpload.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   interface Props {
     editorError: string
     pluginManifest: string

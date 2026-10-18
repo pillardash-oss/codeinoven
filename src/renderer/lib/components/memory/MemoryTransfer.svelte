@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioUpload from '@codeinoven/icons/CioUpload.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { MemoryExportKind, MemoryImportPreview } from '$shared/types'
 

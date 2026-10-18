@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioBack from '@codeinoven/icons/CioBack.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   interface Props {
     setupPreset: string | null
     isNative: boolean

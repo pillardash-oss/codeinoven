@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioAlertCircle from '@codeinoven/icons/CioAlertCircle.svelte'
-  import CioClipboardPaste from '@codeinoven/icons/CioClipboardPaste.svelte'
-  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
-  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
-  import CioUpload from '@codeinoven/icons/CioUpload.svelte'
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioClipboardPaste from '@pillardash-oss/cio-icon/CioClipboardPaste.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { onDestroy, onMount } from 'svelte'
 
   import { invoke } from '$lib/ipc.svelte'

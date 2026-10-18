@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
-  import CioFolderInput from '@codeinoven/icons/CioFolderInput.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioFolderInput from '@pillardash-oss/cio-icon/CioFolderInput.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'

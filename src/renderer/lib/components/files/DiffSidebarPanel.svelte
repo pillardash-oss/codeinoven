@@ -464,14 +464,14 @@
 </script>
 
 <script lang="ts">
-  import CioBack from '@codeinoven/icons/CioBack.svelte'
-  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
-  import CioDiff from '@codeinoven/icons/CioDiff.svelte'
-  import CioEye from '@codeinoven/icons/CioEye.svelte'
-  import CioForward from '@codeinoven/icons/CioForward.svelte'
-  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioUndo from '@codeinoven/icons/CioUndo.svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileDiffView from './FileDiffView.svelte'

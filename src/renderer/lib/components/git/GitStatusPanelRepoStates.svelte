@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioFork from '@codeinoven/icons/CioFork.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioUnplug from '@codeinoven/icons/CioUnplug.svelte'
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUnplug from '@pillardash-oss/cio-icon/CioUnplug.svelte'
   import { gitState } from '$lib/stores/git.svelte'
 
   interface Props {

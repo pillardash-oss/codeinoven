@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
   import BrowserDownloadRow from '../browser/BrowserDownloadRow.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'

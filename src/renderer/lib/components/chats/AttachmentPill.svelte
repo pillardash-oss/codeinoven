@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioAudioLines from '@codeinoven/icons/CioAudioLines.svelte'
-  import CioClapper from '@codeinoven/icons/CioClapper.svelte'
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioFileText from '@codeinoven/icons/CioFileText.svelte'
-  import CioImage from '@codeinoven/icons/CioImage.svelte'
+  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
   import { attachmentPreviewKind } from '$lib/mime'
   import type { PromptAttachment } from '$shared/types'
 

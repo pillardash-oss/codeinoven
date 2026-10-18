@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
-  import CioCheckCircle from '@codeinoven/icons/CioCheckCircle.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   /**
    * One dock row for every minimized background job.
    *

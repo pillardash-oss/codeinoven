@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'

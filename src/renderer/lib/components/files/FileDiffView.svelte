@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
-  import CioForward from '@codeinoven/icons/CioForward.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
   import DiffRows from './DiffRows.svelte'
   import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioWindow from '@codeinoven/icons/CioWindow.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   interface Props {
     /** True when this trace was rehydrated from persisted state instead of a live run. */
     rehydrated: boolean

@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioCheckCircle from '@codeinoven/icons/CioCheckCircle.svelte'
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioKey from '@codeinoven/icons/CioKey.svelte'
-  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
-  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioUnplug from '@codeinoven/icons/CioUnplug.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUnplug from '@pillardash-oss/cio-icon/CioUnplug.svelte'
   import type {
     HarnessAccount,
     OfferedProvider,

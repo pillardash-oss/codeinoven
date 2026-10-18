@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 
   /**

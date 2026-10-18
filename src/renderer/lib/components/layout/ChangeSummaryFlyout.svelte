@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioDiff from '@codeinoven/icons/CioDiff.svelte'
-  import CioFile from '@codeinoven/icons/CioFile.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioFile from '@pillardash-oss/cio-icon/CioFile.svelte'
   import { threadChangesState } from '$lib/stores/thread-changes.svelte'
 
   const current = $derived(threadChangesState.current)

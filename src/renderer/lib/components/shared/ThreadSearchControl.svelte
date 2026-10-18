@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { Popover } from 'bits-ui'
   import { isOrchestrationChildThread, type Thread, type ThreadSearchResult } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'

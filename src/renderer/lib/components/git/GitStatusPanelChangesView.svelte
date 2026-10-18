@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
-  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
-  import CioCommit from '@codeinoven/icons/CioCommit.svelte'
-  import CioFolder from '@codeinoven/icons/CioFolder.svelte'
-  import CioFolderOpen from '@codeinoven/icons/CioFolderOpen.svelte'
-  import CioForward from '@codeinoven/icons/CioForward.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type {
     GitCommitInfo,
     GitDiff,

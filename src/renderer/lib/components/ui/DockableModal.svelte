@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioGrip from '@codeinoven/icons/CioGrip.svelte'
-  import CioMinus from '@codeinoven/icons/CioMinus.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioGrip from '@pillardash-oss/cio-icon/CioGrip.svelte'
+  import CioMinus from '@pillardash-oss/cio-icon/CioMinus.svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { Snippet } from 'svelte'
   import { BitsConfig } from 'bits-ui'

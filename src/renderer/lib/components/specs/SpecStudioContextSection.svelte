@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioFileText from '@codeinoven/icons/CioFileText.svelte'
-  import CioMessage from '@codeinoven/icons/CioMessage.svelte'
-  import CioPaperclip from '@codeinoven/icons/CioPaperclip.svelte'
-  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
-  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
-  import CioShieldCheck from '@codeinoven/icons/CioShieldCheck.svelte'
-  import CioUpload from '@codeinoven/icons/CioUpload.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioPaperclip from '@pillardash-oss/cio-icon/CioPaperclip.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   import type {

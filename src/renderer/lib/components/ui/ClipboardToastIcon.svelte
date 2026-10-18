@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClipboardCheck from '@codeinoven/icons/CioClipboardCheck.svelte'
+  import CioClipboardCheck from '@pillardash-oss/cio-icon/CioClipboardCheck.svelte'
   /**
    * The copy confirmation's card icon, as svelte-sonner draws it.
    *

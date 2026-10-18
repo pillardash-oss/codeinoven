@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
-  import CioGitCompareArrows from '@codeinoven/icons/CioGitCompareArrows.svelte'
-  import CioPullRequest from '@codeinoven/icons/CioPullRequest.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioGitCompareArrows from '@pillardash-oss/cio-icon/CioGitCompareArrows.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitSyncDirection } from '$shared/types'
 

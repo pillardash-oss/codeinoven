@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioFork from '@codeinoven/icons/CioFork.svelte'
-  import CioMessagePlus from '@codeinoven/icons/CioMessagePlus.svelte'
-  import CioTemporaryChat from '@codeinoven/icons/CioTemporaryChat.svelte'
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   interface Props {
     text: string

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 

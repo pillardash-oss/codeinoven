@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioBookmark from '@codeinoven/icons/CioBookmark.svelte'
-  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
-  import CioPackagePlus from '@codeinoven/icons/CioPackagePlus.svelte'
-  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
-  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioPackagePlus from '@pillardash-oss/cio-icon/CioPackagePlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import {
     cachedAgentPluginIcon,
     cachedAgentPluginMarketplaces,

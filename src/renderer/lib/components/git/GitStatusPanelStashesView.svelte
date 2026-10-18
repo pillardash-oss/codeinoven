@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioArchive from '@codeinoven/icons/CioArchive.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import type { GitDiff, GitFileChange, GitRestoreTarget, GitStashEntry } from '$shared/types'
   import GitFileRow from './GitFileRow.svelte'
   import { formatCompactAge } from '$shared/date-time-format'

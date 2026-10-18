@@ -1,6 +1,6 @@
 import type { Component } from 'svelte'
 import type { ThreadGroup } from '$lib/stores/thread-grouping.svelte'
-import CioHammer from '@codeinoven/icons/CioHammer.svelte'
+import CioHammer from '@pillardash-oss/cio-icon/CioHammer.svelte'
 import { THREAD_GROUP_MARK } from './thread-state-marks'
 
 /**

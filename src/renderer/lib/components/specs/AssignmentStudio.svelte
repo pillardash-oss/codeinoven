@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioArrowRight from '@codeinoven/icons/CioArrowRight.svelte'
-  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
-  import CioMessage from '@codeinoven/icons/CioMessage.svelte'
-  import CioNetwork from '@codeinoven/icons/CioNetwork.svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'

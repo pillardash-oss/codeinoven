@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onDestroy, onMount } from 'svelte'
 
   import { invoke, subscribe } from '$lib/ipc.svelte'

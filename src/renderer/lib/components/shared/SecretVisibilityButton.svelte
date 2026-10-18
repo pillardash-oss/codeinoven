@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioEye from '@codeinoven/icons/CioEye.svelte'
-  import CioEyeOff from '@codeinoven/icons/CioEyeOff.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioEyeOff from '@pillardash-oss/cio-icon/CioEyeOff.svelte'
   let {
     revealed,
     title,

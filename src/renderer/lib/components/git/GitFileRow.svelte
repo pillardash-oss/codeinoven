@@ -1,12 +1,12 @@
 <script lang="ts">
-  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
-  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
-  import CioFileMinus from '@codeinoven/icons/CioFileMinus.svelte'
-  import CioForward from '@codeinoven/icons/CioForward.svelte'
-  import CioMerge from '@codeinoven/icons/CioMerge.svelte'
-  import CioMinus from '@codeinoven/icons/CioMinus.svelte'
-  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioFileMinus from '@pillardash-oss/cio-icon/CioFileMinus.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioMinus from '@pillardash-oss/cio-icon/CioMinus.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type {
     GitDiff,
     GitFileChange,

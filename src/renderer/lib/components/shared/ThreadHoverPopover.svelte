@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClock from '@codeinoven/icons/CioClock.svelte'
-  import CioTabGit from '@codeinoven/icons/CioTabGit.svelte'
-  import CioWindow from '@codeinoven/icons/CioWindow.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { feature } from '$lib/feature-registry'

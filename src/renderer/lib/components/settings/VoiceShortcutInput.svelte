@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioUndo from '@codeinoven/icons/CioUndo.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import {
     DEFAULT_VOICE_RECORDING_SHORTCUT,
     MODIFIER_KEY_CODES,

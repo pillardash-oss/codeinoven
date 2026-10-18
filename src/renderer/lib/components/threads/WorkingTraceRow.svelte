@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioArchive from '@codeinoven/icons/CioArchive.svelte'
-  import CioFileText from '@codeinoven/icons/CioFileText.svelte'
-  import CioForward from '@codeinoven/icons/CioForward.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { isImageMime } from '$lib/mime'

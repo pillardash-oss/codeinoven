@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBrowser from '@codeinoven/icons/CioBrowser.svelte'
-  import CioEye from '@codeinoven/icons/CioEye.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
-  import CioVolume from '@codeinoven/icons/CioVolume.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'

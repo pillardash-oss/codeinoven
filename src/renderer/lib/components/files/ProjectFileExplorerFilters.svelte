@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioDiff from '@codeinoven/icons/CioDiff.svelte'
-  import CioMerge from '@codeinoven/icons/CioMerge.svelte'
-  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Switch from '../ui/Switch.svelte'
 

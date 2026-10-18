@@ -1,7 +1,7 @@
-import CioBan from '@codeinoven/icons/CioBan.svelte'
-import CioCheck from '@codeinoven/icons/CioCheck.svelte'
-import CioClose from '@codeinoven/icons/CioClose.svelte'
-import CioDot from '@codeinoven/icons/CioDot.svelte'
+import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
 import type {
   PrAuthorAssociation,
   PrCommentKind,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioBoard from '@codeinoven/icons/CioBoard.svelte'
+  import CioBoard from '@pillardash-oss/cio-icon/CioBoard.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
 

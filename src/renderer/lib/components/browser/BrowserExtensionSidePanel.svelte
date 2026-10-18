@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioTabExtensions from '@codeinoven/icons/CioTabExtensions.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
   import { onMount } from 'svelte'
 
   import type { BrowserViewBounds } from '$shared/ipc-contract'

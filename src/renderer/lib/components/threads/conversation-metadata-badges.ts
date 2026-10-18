@@ -1,6 +1,6 @@
-import CioDisplay from '@codeinoven/icons/CioDisplay.svelte'
-import CioMemory from '@codeinoven/icons/CioMemory.svelte'
-import CioPerson from '@codeinoven/icons/CioPerson.svelte'
+import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
+import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
 /** Shared icons and quiet styling for attribution badges on the conversation screen. */
 export const CONVERSATION_METADATA_ICONS = {
   account: CioPerson,

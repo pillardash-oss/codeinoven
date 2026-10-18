@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioBan from '@codeinoven/icons/CioBan.svelte'
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioEnter from '@codeinoven/icons/CioEnter.svelte'
-  import CioLink from '@codeinoven/icons/CioLink.svelte'
-  import CioListTree from '@codeinoven/icons/CioListTree.svelte'
-  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEnter from '@pillardash-oss/cio-icon/CioEnter.svelte'
+  import CioLink from '@pillardash-oss/cio-icon/CioLink.svelte'
+  import CioListTree from '@pillardash-oss/cio-icon/CioListTree.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import { issueStateIcon } from './issue-view'
   import type {
     IssueRelationshipItem,

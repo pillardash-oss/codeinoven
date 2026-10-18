@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioClose from '@codeinoven/icons/CioClose.svelte'
-  import CioKey from '@codeinoven/icons/CioKey.svelte'
-  import CioPlug from '@codeinoven/icons/CioPlug.svelte'
-  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
-  import CioServer from '@codeinoven/icons/CioServer.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioPlug from '@pillardash-oss/cio-icon/CioPlug.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { OfferedProvider, ProviderConnectionInfo } from '$shared/types'
   import type { AddTab, ConnectStep } from './add-provider-modal-helpers'
 

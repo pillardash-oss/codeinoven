@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioFilter from '@codeinoven/icons/CioFilter.svelte'
-  import CioForward from '@codeinoven/icons/CioForward.svelte'
-  import CioLayers from '@codeinoven/icons/CioLayers.svelte'
+  import CioFilter from '@pillardash-oss/cio-icon/CioFilter.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
   import { Popover } from 'bits-ui'
 
   import { keymapState } from '$lib/keymap/keymap-state.svelte'

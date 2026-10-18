@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTemporaryChat from '@codeinoven/icons/CioTemporaryChat.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
   import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
   /**
    * The two context actions a human-decision card carries: explain it, or open a

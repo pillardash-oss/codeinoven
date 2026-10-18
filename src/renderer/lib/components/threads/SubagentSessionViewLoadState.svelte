@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   interface Props {
     loading: boolean
     /** True while the child session is still running. */

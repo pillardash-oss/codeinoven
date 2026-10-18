@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
-  import CioForward from '@codeinoven/icons/CioForward.svelte'
-  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { parseJobLogSections, type JobLogLine, type JobLogSection } from '$shared/github-job-log'
   import type { GitHubDeploymentJobLog } from '$shared/types'
 
