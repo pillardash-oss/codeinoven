@@ -7,7 +7,7 @@ const escapeXml = (value) =>
   value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;')
 
 /**
- * The lockup's two faces, cut from the app's own Oven Box build by
+ * The lockup's Oven Box prose and Oven Mono wordmark, cut from the app's own builds by
  * scripts/build-native-splash-fonts.py and distributed under
  * resources/fonts/oven/OFL.txt.
  *
@@ -15,7 +15,7 @@ const escapeXml = (value) =>
  * shipped WOFF2 it draws no text at all, and it renders a variable font at its
  * axis default however light the requested weight is. The faces are therefore
  * static and committed, which also keeps Python out of packaging. The manifest
- * pins them to the Oven Box build they were cut from, so a rebuilt family fails
+ * pins them to both source builds they were cut from, so a rebuilt family fails
  * packaging here instead of quietly leaving a stale lockup on screen.
  */
 const FACE_DIRECTORY = 'resources/fonts/oven/native'
@@ -26,11 +26,13 @@ function splashFaces(repositoryRoot) {
   const directory = join(repositoryRoot, FACE_DIRECTORY)
   const manifest = JSON.parse(readFileSync(join(directory, 'instances.json'), 'utf8'))
   const digest = (path) => createHash('sha256').update(readFileSync(path)).digest('hex')
-  const source = join(repositoryRoot, 'resources/fonts/oven', manifest.source.file)
-  if (digest(source) !== manifest.source.sha256) {
-    throw new Error(
-      `Oven Box changed: recut the native splash faces with \`.cio/tmp/typeface/venv/bin/python ${manifest.generator}\``
-    )
+  for (const [family, source] of Object.entries(manifest.sources)) {
+    const path = join(repositoryRoot, 'resources/fonts/oven', source.file)
+    if (digest(path) !== source.sha256) {
+      throw new Error(
+        `${family} changed: recut the native splash faces with \`.cio/tmp/typeface/venv/bin/python ${manifest.generator}\``
+      )
+    }
   }
   return manifest.faces.map((face) => {
     const path = join(directory, face.file)
@@ -63,8 +65,10 @@ export function renderNativeSplash(repositoryRoot, version) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="420" height="320" viewBox="0 0 420 320">
     <rect width="420" height="320" fill="${background}"/>
     <g color="${foreground}"><svg x="54" y="104" width="104" height="104" viewBox="0 0 96 96">${mark}</svg></g>
-    <g font-family="Oven Box" fill="${foreground}">
+    <g font-family="Oven Mono" fill="${foreground}">
       <text x="176" y="145" font-size="30" font-weight="${WORDMARK_WEIGHT}" letter-spacing="-2.85">CodeInOven</text>
+    </g>
+    <g font-family="Oven Box" fill="${foreground}">
       <g fill="${muted}" font-size="10" font-weight="${PROSE_WEIGHT}">
         <text x="176" y="168">A workstation for coordinated</text>
         <text x="176" y="184">engineering agents</text>

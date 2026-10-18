@@ -7,6 +7,15 @@ These full-coverage variable WOFF2 files include the same glyphs as the app.
 <link rel="stylesheet" href="/fonts/oven/fonts.css" />
 ```
 
+Use the official wordmark style for the product name:
+
+```html
+<h1 class="cio-wordmark">CodeInOven</h1>
+```
+
+The class sets Oven Mono at weight 800. Keep Oven Box for the app's interface
+font and choose a family explicitly for each website surface.
+
 ```css
 body {
   font-family: 'Oven Box', ui-monospace, monospace;
@@ -16,7 +25,7 @@ code,
 pre {
   font-family: inherit;
 }
-/* Alternate face: font-family: 'Oven Mono', ui-monospace, monospace; */
+/* The other available face is Oven Mono. */
 ```
 
 Oven Box supports weights 200–800; Oven Mono supports 300–800. Both currently

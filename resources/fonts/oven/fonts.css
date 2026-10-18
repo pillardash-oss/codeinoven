@@ -13,3 +13,11 @@
   font-display: swap;
   src: url('./oven-mono.woff2') format('woff2');
 }
+
+/* Official CodeInOven wordmark. Keep this on the product name, not body copy. */
+.cio-wordmark {
+  font-family: 'Oven Mono', ui-monospace, monospace;
+  font-weight: 800;
+  font-synthesis: none;
+  letter-spacing: -0.095em;
+}
