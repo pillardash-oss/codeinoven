@@ -29,15 +29,17 @@
   {...rest}
 >
   <g
-    transform="translate(-5.589 -5.589) scale(1.4658)"
-    stroke-width={cioStrokeWidth(weight, 1.4658)}
+    transform="translate(-5.564 -5.564) scale(1.4637)"
+    stroke-width={cioStrokeWidth(weight, 1.4637)}
   >
-    <circle cx="12" cy="6.4" r="1.9" fill="currentColor" stroke="none" /><circle
-      cx="12"
-      cy="12"
-      r="1.9"
+    <rect x="10.1" y="4.5" width="3.8" height="3.8" rx="0" fill="currentColor" stroke="none" /><rect
+      x="10.1"
+      y="10.1"
+      width="3.8"
+      height="3.8"
+      rx="0"
       fill="currentColor"
       stroke="none"
-    /><circle cx="12" cy="17.6" r="1.9" fill="currentColor" stroke="none" />
+    /><rect x="10.1" y="15.7" width="3.8" height="3.8" rx="0" fill="currentColor" stroke="none" />
   </g>
 </svg>

@@ -32,8 +32,8 @@
     transform="translate(-2.876 -3.608) scale(1.2494)"
     stroke-width={cioStrokeWidth(weight, 1.2494)}
   >
-    <path d="M17.4 14.4v4a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h4" /><path
-      d="M13.6 4.6h5.8v5.8"
-    /><path d="M19.4 4.6 11.4 12.6" />
+    <path d="M17.4 14.4v6H4.4v-13h6" /><path d="M13.6 4.6h5.8v5.8" /><path
+      d="M19.4 4.6 11.4 12.6"
+    />
   </g>
 </svg>

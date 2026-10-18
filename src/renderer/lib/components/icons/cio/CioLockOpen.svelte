@@ -29,17 +29,17 @@
   {...rest}
 >
   <g
-    transform="translate(-2.802 -2.802) scale(1.2335)"
-    stroke-width={cioStrokeWidth(weight, 1.2335)}
+    transform="translate(-2.731 -2.673) scale(1.2276)"
+    stroke-width={cioStrokeWidth(weight, 1.2276)}
   >
-    <rect x="4.6" y="10.4" width="14.8" height="9.6" rx="2" /><rect
+    <rect x="4.6" y="10.4" width="14.8" height="9.6" rx="0" /><rect
       x="10.9"
       y="13.4"
       width="2.2"
       height="3.4"
-      rx="1.1"
+      rx="0"
       fill="currentColor"
       stroke="none"
-    /><path d="M8.4 10.4V7.6a3.6 3.6 0 0 1 7.2 0" />
+    /><path d="M8.4 10.4V7.6a3.6 3.6 0 0 1 6.2-2.5" /><path d="M14.6 5.1 16.4 3.9" />
   </g>
 </svg>

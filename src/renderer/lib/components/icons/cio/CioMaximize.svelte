@@ -29,13 +29,11 @@
   {...rest}
 >
   <g
-    transform="translate(-3.888 -3.888) scale(1.3240)"
+    transform="translate(-3.888 -2.957) scale(1.3240)"
     stroke-width={cioStrokeWidth(weight, 1.324)}
   >
-    <path d="M9.4 4.6H6a1.4 1.4 0 0 0-1.4 1.4v3.4" /><path
-      d="M14.6 4.6H18a1.4 1.4 0 0 1 1.4 1.4v3.4"
-    /><path d="M19.4 14.6v3.4a1.4 1.4 0 0 1-1.4 1.4h-3.4" /><path
-      d="M4.6 14.6v3.4a1.4 1.4 0 0 0 1.4 1.4h3.4"
+    <path d="M9.4 4.6H6v4.8" /><path d="M14.6 4.6H18v4.8" /><path d="M19.4 14.6v3.4H14.6" /><path
+      d="M4.6 14.6V18h4.8"
     />
   </g>
 </svg>

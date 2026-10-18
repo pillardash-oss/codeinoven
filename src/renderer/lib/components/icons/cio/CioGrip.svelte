@@ -32,24 +32,38 @@
     transform="translate(-8.924 -8.924) scale(1.7437)"
     stroke-width={cioStrokeWidth(weight, 1.7437)}
   >
-    <circle cx="9.4" cy="7" r="1.3" fill="currentColor" stroke="none" /><circle
-      cx="14.6"
-      cy="7"
-      r="1.3"
+    <rect x="8.1" y="5.7" width="2.6" height="2.6" rx="0" fill="currentColor" stroke="none" /><rect
+      x="13.3"
+      y="5.7"
+      width="2.6"
+      height="2.6"
+      rx="0"
       fill="currentColor"
       stroke="none"
-    /><circle cx="9.4" cy="12" r="1.3" fill="currentColor" stroke="none" /><circle
-      cx="14.6"
-      cy="12"
-      r="1.3"
+    /><rect
+      x="8.1"
+      y="10.7"
+      width="2.6"
+      height="2.6"
+      rx="0"
       fill="currentColor"
       stroke="none"
-    /><circle cx="9.4" cy="17" r="1.3" fill="currentColor" stroke="none" /><circle
-      cx="14.6"
-      cy="17"
-      r="1.3"
+    /><rect
+      x="13.3"
+      y="10.7"
+      width="2.6"
+      height="2.6"
+      rx="0"
       fill="currentColor"
       stroke="none"
-    />
+    /><rect
+      x="8.1"
+      y="15.7"
+      width="2.6"
+      height="2.6"
+      rx="0"
+      fill="currentColor"
+      stroke="none"
+    /><rect x="13.3" y="15.7" width="2.6" height="2.6" rx="0" fill="currentColor" stroke="none" />
   </g>
 </svg>

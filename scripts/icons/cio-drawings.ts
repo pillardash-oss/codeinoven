@@ -295,7 +295,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Copied: the same clipboard with a check where the lines were, so the two read as one object in two states.',
-      shapes: `<path d="M8.6 4.8H6.4a1.8 1.8 0 0 0-1.8 1.8v12a1.8 1.8 0 0 0 1.8 1.8h11.2a1.8 1.8 0 0 0 1.8-1.8v-12a1.8 1.8 0 0 0-1.8-1.8h-2.2" />${solid(9.2, 3.4, 5.6, 3, 1.3)}<path d="M9.4 13.4 11.6 15.6 15.4 11.4" />`
+      shapes: `<path d="M8.6 4.8H6.4v15.6h11.2V4.8h-2.2" />${solid(9.2, 3.4, 5.6, 3, 0)}<path d="M9.4 13.4 11.6 15.6 15.4 11.4" />`
     }
   },
   {
@@ -304,7 +304,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Paste: a clipboard whose clip is solid, with two lines under it. The clip is the anchor that makes the frame a clipboard.',
-      shapes: `<path d="M8.6 4.8H6.4a1.8 1.8 0 0 0-1.8 1.8v12a1.8 1.8 0 0 0 1.8 1.8h11.2a1.8 1.8 0 0 0 1.8-1.8v-12a1.8 1.8 0 0 0-1.8-1.8h-2.2" />${solid(9.2, 3.4, 5.6, 3, 1.3)}<path d="M9.4 12.6h5.2" /><path d="M9.4 15.8h3.2" />`
+      shapes: `<path d="M8.6 4.8H6.4v15.6h11.2V4.8h-2.2" />${solid(9.2, 3.4, 5.6, 3, 0)}<path d="M9.4 12.6h5.2" /><path d="M9.4 15.8h3.2" />`
     }
   },
   {
@@ -349,7 +349,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Commit: a stem with a solid node on it. The node is the commit and the stem is what puts it on a line of history.',
-      shapes: `<path d="M3.6 12h4.2" /><path d="M16.2 12h4.2" />${dot(12, 12, 3)}`
+      shapes: `<path d="M3.6 12h4.2" /><path d="M16.2 12h4.2" />${solid(9, 9, 6, 6, 0)}`
     }
   },
   {
@@ -385,7 +385,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Debugger: a beetle with two legs a side and one solid band. Lucide bug has nine strokes and turns to a cluster at 16px; this keeps four legs, so the legs read as legs.',
-      shapes: `<rect x="6" y="7.4" width="12" height="12" rx="6" /><path d="M6 10.6H3.6" /><path d="M6 16.4H3.6" /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" />${solid(8.6, 12.2, 6.8, 2.6, 1.3)}`
+      shapes: `<rect x="6" y="7.4" width="12" height="12" rx="0" /><path d="M6 10.6H3.6" /><path d="M6 16.4H3.6" /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" />${solid(8.6, 12.2, 6.8, 2.6, 0)}`
     }
   },
   {
@@ -439,7 +439,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Download: a solid shaft into a tray. The shaft carries the mass, which lets the tray stay one thin rule.',
-      shapes: `${solid(10.9, 3.6, 2.2, 7.6, 1.1)}<path d="M7.4 10.6 12 15.2l4.6-4.6" /><path d="M4.4 18.4v.8a1.4 1.4 0 0 0 1.4 1.4h12.4a1.4 1.4 0 0 0 1.4-1.4v-.8" />`
+      shapes: `${solid(10.9, 3.6, 2.2, 7.6, 0)}<path d="M7.4 10.6 12 15.2l4.6-4.6" /><path d="M4.4 18.4v2.2h15.2v-2.2" />`
     }
   },
   {
@@ -448,7 +448,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'More: three solid dots on one level. No outline at all: at 12px an outlined dot is a smudge.',
-      shapes: `${dot(6.4, 12, 1.9)}${dot(12, 12, 1.9)}${dot(17.6, 12, 1.9)}`
+      shapes: `${solid(4.5, 10.1, 3.8, 3.8, 0)}${solid(10.1, 10.1, 3.8, 3.8, 0)}${solid(15.7, 10.1, 3.8, 3.8, 0)}`
     }
   },
   {
@@ -467,7 +467,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Open elsewhere: a frame with its top right corner escaped and running out of the box, which is the whole idea in three strokes.',
-      shapes: `<path d="M17.4 14.4v4a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h4" /><path d="M13.6 4.6h5.8v5.8" /><path d="M19.4 4.6 11.4 12.6" />`
+      shapes: `<path d="M17.4 14.4v6H4.4v-13h6" /><path d="M13.6 4.6h5.8v5.8" /><path d="M19.4 4.6 11.4 12.6" />`
     }
   },
   {
@@ -566,7 +566,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Open folder: the same folder as the closed mark, tab inked and all, with the front panel swung forward and wider than the back. The first drawing carried a band floating across the open front, which is the fault the closed folder was cured of, and its back panel was a stray hook rather than the folder it belongs to.',
-      shapes: `<path d="M3.6 13.6V7.2a1.8 1.8 0 0 1 1.8-1.8h3.5l2.2 2.8h8.5a1.8 1.8 0 0 1 1.8 1.8v1.6" />${solid(3.4, 5.3, 8.4, 2.6, 1.7)}<path d="M3.4 18.4 6 11.8h14.4l-2.6 6.6Z" />`
+      shapes: `<path d="M3.6 12V7.2h5.3l2.2 2.8h8.5v1.6" /><path d="M3.4 18.4 6 11.8h14.4l-2.6 6.6Z" />`
     }
   },
   {
@@ -584,7 +584,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Fork: one solid node above two, joined by short stems. Three solid nodes read as a fork at 12px where outlines do not.',
-      shapes: `${dot(12, 6.4, 2.6)}${dot(6.6, 18.4, 2.6)}${dot(17.4, 18.4, 2.6)}<path d="M12 9v1.4a3.4 3.4 0 0 1-3.4 3.4h-.4" /><path d="M12 10.4a3.4 3.4 0 0 0 3.4 3.4h.4" />`
+      shapes: `<g transform="rotate(180 12 12)">${solid(10.7, 5.1, 2.6, 2.6, 0)}${solid(5.3, 17.1, 2.6, 2.6, 0)}${solid(16.1, 17.1, 2.6, 2.6, 0)}<path d="M12 9v1.4a3.4 3.4 0 0 1-3.4 3.4h-.4" /><path d="M12 10.4a3.4 3.4 0 0 0 3.4 3.4h.4" /></g>`
     }
   },
   {
@@ -603,7 +603,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Reorder: six solid dots in two columns. Nothing else reads as a handle at 12px.',
-      shapes: `${dot(9.4, 7, 1.3)}${dot(14.6, 7, 1.3)}${dot(9.4, 12, 1.3)}${dot(14.6, 12, 1.3)}${dot(9.4, 17, 1.3)}${dot(14.6, 17, 1.3)}`
+      shapes: `${solid(8.1, 5.7, 2.6, 2.6, 0)}${solid(13.3, 5.7, 2.6, 2.6, 0)}${solid(8.1, 10.7, 2.6, 2.6, 0)}${solid(13.3, 10.7, 2.6, 2.6, 0)}${solid(8.1, 15.7, 2.6, 2.6, 0)}${solid(13.3, 15.7, 2.6, 2.6, 0)}`
     }
   },
   {
@@ -702,7 +702,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Unlocked: the same body and keyhole with the shackle swung open, so the two read as one lock in two states.',
-      shapes: `<rect x="4.6" y="10.4" width="14.8" height="9.6" rx="2" />${solid(10.9, 13.4, 2.2, 3.4, 1.1)}<path d="M8.4 10.4V7.6a3.6 3.6 0 0 1 7.2 0" />`
+      shapes: `<rect x="4.6" y="10.4" width="14.8" height="9.6" rx="0" />${solid(10.9, 13.4, 2.2, 3.4, 0)}<path d="M8.4 10.4V7.6a3.6 3.6 0 0 1 6.2-2.5" /><path d="M14.6 5.1 16.4 3.9" />`
     }
   },
   {
@@ -711,7 +711,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Maximise: four corners opening outward, drawn as corners rather than arrows so it never reads as a drag handle.',
-      shapes: `<path d="M9.4 4.6H6a1.4 1.4 0 0 0-1.4 1.4v3.4" /><path d="M14.6 4.6H18a1.4 1.4 0 0 1 1.4 1.4v3.4" /><path d="M19.4 14.6v3.4a1.4 1.4 0 0 1-1.4 1.4h-3.4" /><path d="M4.6 14.6v3.4a1.4 1.4 0 0 0 1.4 1.4h3.4" />`
+      shapes: `<path d="M9.4 4.6H6v4.8" /><path d="M14.6 4.6H18v4.8" /><path d="M19.4 14.6v3.4H14.6" /><path d="M4.6 14.6V18h4.8" />`
     }
   },
   {
@@ -1554,7 +1554,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Question list: the clipboard with its solid clip and three lines, which is a set of things to answer.',
-      shapes: `<path d="M8.6 4.8H6.4a1.8 1.8 0 0 0-1.8 1.8v12a1.8 1.8 0 0 0 1.8 1.8h11.2a1.8 1.8 0 0 0 1.8-1.8v-12a1.8 1.8 0 0 0-1.8-1.8h-2.2" /><rect x="9.2" y="3.4" width="5.6" height="3" rx="1.3" fill="currentColor" stroke="none" /><rect x="7.8" y="11" width="8.4" height="2" rx="1" fill="currentColor" stroke="none" /><rect x="7.8" y="14.6" width="5.6" height="2" rx="1" fill="currentColor" stroke="none" /><rect x="7.8" y="18.2" width="7" height="2" rx="1" fill="currentColor" stroke="none" />`
+      shapes: `<path d="M8.6 4.8H6.4v15.6h11.2V4.8h-2.2" />${solid(9.2, 3.4, 5.6, 3, 0)}${solid(7.8, 11, 8.4, 2, 0)}${solid(7.8, 14.6, 5.6, 2, 0)}${solid(7.8, 18.2, 7, 2, 0)}`
     }
   },
   {
@@ -2211,7 +2211,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Debug off: the debugger mark struck through, which is the debugger turned off rather than a debugger that is not there. Reusing the plain mark said the opposite of what the control does.',
-      shapes: `<rect x="6" y="7.4" width="12" height="12" rx="6" /><path d="M6 10.6H3.6" /><path d="M6 16.4H3.6" /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" /><rect x="8.6" y="12.2" width="6.8" height="2.6" rx="1.3" fill="currentColor" stroke="none" /><path d="M4.4 19.6 19.6 4.4" />`
+      shapes: `<rect x="6" y="7.4" width="12" height="12" rx="0" /><path d="M6 10.6H3.6" /><path d="M6 16.4H3.6" /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" /><rect x="8.6" y="12.2" width="6.8" height="2.6" rx="0" fill="currentColor" stroke="none" /><path d="M4.4 19.6 19.6 4.4" />`
     }
   },
   {
@@ -2229,7 +2229,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'More, upright: the same three dots stood up, for a toolbar that stacks its controls rather than laying them out.',
-      shapes: `<circle cx="12" cy="6.4" r="1.9" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none" /><circle cx="12" cy="17.6" r="1.9" fill="currentColor" stroke="none" />`
+      shapes: `${solid(10.1, 4.5, 3.8, 3.8, 0)}${solid(10.1, 10.1, 3.8, 3.8, 0)}${solid(10.1, 15.7, 3.8, 3.8, 0)}`
     }
   }
 ]

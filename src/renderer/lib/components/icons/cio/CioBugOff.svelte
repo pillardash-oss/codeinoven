@@ -33,14 +33,14 @@
     transform="translate(-2.169 -2.169) scale(1.1807)"
     stroke-width={cioStrokeWidth(weight, 1.1807)}
   >
-    <rect x="6" y="7.4" width="12" height="12" rx="6" /><path d="M6 10.6H3.6" /><path
+    <rect x="6" y="7.4" width="12" height="12" rx="0" /><path d="M6 10.6H3.6" /><path
       d="M6 16.4H3.6"
     /><path d="M18 10.6h2.4" /><path d="M18 16.4h2.4" /><rect
       x="8.6"
       y="12.2"
       width="6.8"
       height="2.6"
-      rx="1.3"
+      rx="0"
       fill="currentColor"
       stroke="none"
     /><path d="M4.4 19.6 19.6 4.4" />

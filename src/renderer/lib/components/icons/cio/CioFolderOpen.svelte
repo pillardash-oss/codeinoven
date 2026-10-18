@@ -32,17 +32,9 @@
   {...rest}
 >
   <g
-    transform="translate(-1.755 -1.209) scale(1.1094)"
-    stroke-width={cioStrokeWidth(weight, 1.1094)}
+    transform="translate(-1.904 -2.959) scale(1.1690)"
+    stroke-width={cioStrokeWidth(weight, 1.169)}
   >
-    <path d="M3.6 13.6V7.2a1.8 1.8 0 0 1 1.8-1.8h3.5l2.2 2.8h8.5a1.8 1.8 0 0 1 1.8 1.8v1.6" /><rect
-      x="3.4"
-      y="5.3"
-      width="8.4"
-      height="2.6"
-      rx="1.7"
-      fill="currentColor"
-      stroke="none"
-    /><path d="M3.4 18.4 6 11.8h14.4l-2.6 6.6Z" />
+    <path d="M3.6 12V7.2h5.3l2.2 2.8h8.5v1.6" /><path d="M3.4 18.4 6 11.8h14.4l-2.6 6.6Z" />
   </g>
 </svg>

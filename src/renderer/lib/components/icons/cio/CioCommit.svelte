@@ -32,10 +32,12 @@
     transform="translate(-2.169 -2.169) scale(1.1807)"
     stroke-width={cioStrokeWidth(weight, 1.1807)}
   >
-    <path d="M3.6 12h4.2" /><path d="M16.2 12h4.2" /><circle
-      cx="12"
-      cy="12"
-      r="3"
+    <path d="M3.6 12h4.2" /><path d="M16.2 12h4.2" /><rect
+      x="9"
+      y="9"
+      width="6"
+      height="6"
+      rx="0"
       fill="currentColor"
       stroke="none"
     />
