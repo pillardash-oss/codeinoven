@@ -1119,12 +1119,14 @@ export class UtilityOrchestrationService {
     const imageDescriptorEligible = eligible.some(
       ({ utility }) => utility.kind === 'image_descriptor'
     )
-    // MCP servers are always `on_demand` and always reached through the gateway, so
-    // they never appear in the native `always` overlay. Keep the kind check even though
-    // the registry normalizes the activation: a legacy entry read straight from disk
-    // must not sneak into a harness launch. See normalizeActivation in the registry.
+    // Neither an MCP server nor a skill is ever launched natively into a harness:
+    // both are `on_demand` and reached through the gateway. Keep the kind check even
+    // though the registry normalizes the activation: a legacy entry read straight
+    // from disk must not sneak into a harness launch. See normalizeActivation in the
+    // registry.
     const always = eligible.filter(
-      ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
+      ({ utility }) =>
+        utility.activation === 'always' && utility.kind !== 'mcp' && utility.kind !== 'skill'
     )
     // A design session was opened by the user, so the design capability is active
     // from the first token: the playbook travels with the turn and the preview

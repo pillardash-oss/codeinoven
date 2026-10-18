@@ -252,13 +252,15 @@ export function buildScope(draft: UtilityDraft): UtilityScope {
 }
 
 /**
- * An MCP server always loads on demand: the app starts it inside the turn the
- * agent activates it, behind the utility gateway, and never writes a native MCP
- * entry into a harness or project config. The editor fixes the value, and this
- * guards the save path against a stale draft.
+ * App-owned activation invariant, mirrored from the registry: an MCP server
+ * loads on demand because the app starts it inside the turn the agent activates
+ * it, and a skill loads on demand because whether it applies is a property of
+ * the task, not of the utility. Neither writes a native entry into a harness or
+ * project config, so the editor has no activation to choose for either kind.
+ * This guards the save path against a stale draft.
  */
 export function effectiveActivation(draft: UtilityDraft): UtilityActivation {
-  return draft.kind === 'mcp' ? 'on_demand' : draft.activation
+  return draft.kind === 'mcp' || draft.kind === 'skill' ? 'on_demand' : draft.activation
 }
 
 export function buildConfig(draft: UtilityDraft): UtilityConfigMap[UtilityKind] {

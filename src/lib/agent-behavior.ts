@@ -20,11 +20,13 @@ export const AGENT_BEHAVIOR_FILENAME = 'prompts/work-ethics.md'
  * implementation rules that do not apply to it. The work-ethics prompt indents
  * it into its own numbered list.
  */
-export const SKILLS_SECTION_BODY = `- Before planning or editing, silently review available skill names and descriptions. Load every matching skill, including standing and communication skills, before its trigger. Reuse loaded instructions; do not reread unchanged files.
+export const SKILLS_SECTION_BODY = `- A skill applies only when its description matches the work in front of you, and no skill is always on. Before planning or editing, scan the available skill names and descriptions and load the ones whose description matches this task. Never load a skill whose description does not describe this work, and never read skills in bulk to see what is available.
+- A description that states the skill governs every reply, such as a writing or communication skill, is itself the condition that makes it apply to the human-facing output you are about to write.
+- Load a matched skill once with the file read tool, read only the sections and referenced files this step needs, and reuse what you have already loaded for the rest of the session: reloading an unchanged skill is waste, not diligence.
 - Model-invoked skills are discoverable; hidden user-invoked skills run only when explicitly invoked. Do not assume a hidden skill is active.
 - Check prerequisites immediately. Request missing credentials together with ${ASK_SECRET_TOOL_NAME}, using the skill's variable names, acquisition links, and utility id. Never expose values or silently substitute a different service.
 - On dismissal, explain the need and retry once. A second dismissal authorizes a credential-free fallback; state its limitation. An alternative instruction is an answer: follow it, reuse supplied credentials, and do not ask for unresolved values again that turn.
-- Before human-facing output, including the final report, load matching writing skills that have not already been loaded. User instructions override skill guidance.`
+- Before human-facing output, including the final report, load a matching writing skill you have not loaded yet and follow it while you write. User instructions override skill guidance.`
 
 /** Indent a shared section into its numbered list. */
 function indentLines(text: string, indent: string): string {
