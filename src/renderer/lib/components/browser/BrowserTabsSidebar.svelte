@@ -69,12 +69,6 @@
    * an uninterrupted page.
    */
 
-  /** The search field's own element, captured as an attachment. Revealing the
-   *  field is what opens the search, so taking the caret on mount is the whole
-   *  focus story and needs no `bind:this`. */
-  const attachSearchInput: Attachment<HTMLInputElement> = (element) => {
-    element.focus()
-  }
   /** The group whose editor is open; `undefined` means closed and null means
    *  "create a new group", so the two states can never be confused. */
   let editorGroupId = $state<string | null | undefined>(undefined)
@@ -178,7 +172,6 @@
   const totalTabs = $derived(globalBrowser.tabs.length)
   const query = $derived(globalBrowser.tabSearchQuery)
   const searchGroupId = $derived(globalBrowser.tabSearchGroupId)
-  const scopedGroup = $derived(searchGroupId ? globalBrowser.groupById(searchGroupId) : null)
 
   function matches(tab: GlobalBrowserTab): boolean {
     const needle = query.trim().toLowerCase()
@@ -753,45 +746,6 @@
       </div>
     </div>
   </div>
-
-  {#if globalBrowser.tabSearchOpen}
-    <!-- Keyed on the open request so opening the search (from the header, or from
-         a group's own control while it is already up) remounts the field and the
-         attachment takes the caret, with no focus effect. -->
-    {#key globalBrowser.tabSearchFocusRequest}
-      <div class="shrink-0 px-3 py-2">
-        <div class="flex items-center gap-1.5 bg-elevated px-2.5">
-          <CioSearch size={13} class="shrink-0 text-dimmed" />
-          <input
-            {@attach attachSearchInput}
-            type="text"
-            class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none"
-            placeholder={scopedGroup ? `Search in ${scopedGroup.name}` : 'Search tabs'}
-            aria-label={scopedGroup ? `Search tabs in ${scopedGroup.name}` : 'Search browser tabs'}
-            value={query}
-            oninput={(event: Event) => {
-              if (event.currentTarget instanceof HTMLInputElement)
-                globalBrowser.setTabSearchQuery(event.currentTarget.value)
-            }}
-            onkeydown={(event: KeyboardEvent) => {
-              if (event.key === 'Escape') globalBrowser.closeTabSearch()
-            }}
-          />
-          {#if query !== '' || searchGroupId !== null}
-            <button
-              type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-              aria-label="Clear tab search"
-              title="Clear search"
-              onclick={() => globalBrowser.clearTabSearch()}
-            >
-              <CioClose size={13} />
-            </button>
-          {/if}
-        </div>
-      </div>
-    {/key}
-  {/if}
 {/snippet}
 
 {#if totalTabs > 0}

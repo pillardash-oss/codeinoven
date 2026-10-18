@@ -55,7 +55,7 @@
 </script>
 
 <Popover.Root {open} {onOpenChange}>
-  <Popover.Trigger class={triggerClass} aria-label={ariaLabel} {title}>
+  <Popover.Trigger class={`titlebar-no-drag ${triggerClass}`} aria-label={ariaLabel} {title}>
     <CioSearch size={size === 'md' ? 15 : 12} strokeWidth={size === 'md' ? 1.8 : undefined} />
   </Popover.Trigger>
 
@@ -65,8 +65,9 @@
       align="start"
       sideOffset={8}
       collisionPadding={16}
+      onCloseAutoFocus={(event) => event.preventDefault()}
       onInteractOutside={(e) => e.preventDefault()}
-      class="z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
+      class="titlebar-no-drag z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
       aria-label={ariaLabel}
     >
       <div class="flex items-center gap-1.5">

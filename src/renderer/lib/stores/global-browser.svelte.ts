@@ -987,6 +987,7 @@ export class GlobalBrowserState {
    */
   switchTo(tabId: string): void {
     this.activate(tabId)
+    this.closeTabSearch()
     const tab = this.activeTab
     if (!tab || tab.id !== tabId) return
     if (isBlankBrowserAddress(tab.url)) {
@@ -1393,17 +1394,13 @@ export class GlobalBrowserState {
     this.addressSpotlightOpen = true
   }
 
-  /** Reveal the tab search, optionally scoped to one group.
-   *
-   *  The field filters the strip, so opening the search also reveals the sidebar:
-   *  a hidden strip has nothing for the search to filter and no field to type in. */
+  /** Open the shared search panel and reveal the sidebar containing its results. */
   openTabSearch(groupId: string | null = null): void {
     this.tabSearchGroupId = groupId
     this.tabSearchQuery = ''
     this.tabSearchOpen = true
     this.tabSearchFocusRequest += 1
-    // The field lives in the left sidebar, so revealing the search also docks
-    // that sidebar: a folded strip has no field for the search to sit in.
+    // Keep the filtered tab results visible while searching.
     sidebarState.redock()
   }
 

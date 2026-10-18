@@ -141,7 +141,7 @@
   }}
 >
   <Popover.Trigger
-    class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={title}
     {title}
   >
@@ -153,7 +153,7 @@
       sideOffset={8}
       collisionPadding={16}
       align="end"
-      class="z-50 w-80 overflow-hidden border bg-surface shadow-lg"
+      class="titlebar-no-drag z-50 w-80 overflow-hidden border bg-surface shadow-lg"
       aria-label="Search {contextLabel}"
       onCloseAutoFocus={(e) => e.preventDefault()}
     >
