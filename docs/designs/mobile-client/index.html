@@ -3,124 +3,130 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>CodeInOven Mobile, design</title>
+    <title>CodeInOven Mobile, interactive prototype</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="cover">
-      <div class="cover-top">
-        <svg class="brand-mark" viewBox="0 0 96 96" aria-hidden="true">
-          <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter" />
-          <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
-          <rect x="58" y="45" width="29" height="6" fill="currentColor" />
-          <circle cx="84" cy="48" r="5" fill="#d4af37" />
-        </svg>
-        <div class="wordmark">
-          <strong>CodeInOven</strong>
-          <span class="eyebrow">Mobile client, design study</span>
+    <div class="stage">
+      <aside class="notes" aria-label="How to review this prototype">
+        <div class="notes-brand">
+          <svg viewBox="0 0 96 96" aria-hidden="true">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" stroke-linejoin="miter" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <div>
+            <b>CodeInOven</b>
+            <span>Mobile client</span>
+          </div>
         </div>
-        <span class="spacer"></span>
-        <a class="eyebrow cover-link" href="./canvas.html">All screens, canvas</a>
-      </div>
 
-      <div class="stack">
-        <h1>
-          Your agents, in your pocket.<br />
-          <span class="h1-quiet">Same instrument, one hand.</span>
-        </h1>
-        <p class="lede">
-          A standalone client, not a remote control for a desktop window: it starts its own threads,
-          picks its own project, stage and model, and runs engineering work from a phone. Obsidian
-          surfaces, ivory ink, and gold reserved for exactly one thing on each screen, the control
-          that moves the work forward.
+        <h1>Send “hi” and the turn starts itself.</h1>
+        <p>
+          One phone, one page. The agent on the other side is scripted: it answers, then asks you
+          a question, requests a permission, wants a secret, and runs a five stage Auto Pilot.
+          Every card is real UI: it folds, counts down while you are idle, pauses the clock while
+          you read, and settles when you answer.
         </p>
-      </div>
 
-      <div class="cover-grid">
-        <div class="cover-col">
-          <h2>What it does</h2>
-          <ul class="stack-tight">
-            <li>Threads, grouped by what they need: attention, working, pinned, recent.</li>
-            <li>Full turns read on the phone, with tool calls and changed files inline.</li>
-            <li>Every approval the desktop asks for: permission, secret, question, gate.</li>
-            <li>Engineering stages from Brainstorm to Achievement, Auto Pilot included.</li>
-            <li>Usage, quota and model choice, in the same units the desktop reports.</li>
-          </ul>
-        </div>
-        <div class="cover-col">
-          <h2>What it deliberately leaves out</h2>
-          <ul class="stack-tight">
-            <li>The terminal, the file editor, the embedded browser and the design board.</li>
-            <li>Process management, updater, login items: the phone is not a workstation.</li>
-            <li>Nothing is faked to fill the gap. Omitted surfaces are absent, not greyed.</li>
-          </ul>
-        </div>
-        <div class="cover-col">
-          <h2>Rules this study holds itself to</h2>
-          <ul class="stack-tight">
-            <li>Tokens from src/renderer/app.css, dark values only, no invented palette.</li>
-            <li>Oven Box for the interface, Oven Mono for every measured value.</li>
-            <li>4px spacing unit, 2px corners, hairline rules instead of shadows.</li>
-            <li>Falsy left, truthy right on every card footer and every dialog.</li>
-            <li>44px minimum touch targets, visible focus, no motion without meaning.</li>
-          </ul>
-        </div>
-      </div>
+        <p class="notes-compact">
+          Send <b>hi</b>, then answer the question, the permission and the secret prompt. The run
+          follows on its own.
+        </p>
 
-      <div class="stack-tight">
-        <h2 class="eyebrow">Screens</h2>
-        <nav class="screens-index" aria-label="Screens">
-          <a href="./threads.html">
-            <span class="n">01</span>
-            <span>
-              <span class="t">Inbox</span>
-              <span class="d">Threads grouped by state, one accent rule for the row that needs you.</span>
-            </span>
-            <span class="go">open</span>
-          </a>
-          <a href="./conversation.html">
-            <span class="n">02</span>
-            <span>
-              <span class="t">Conversation</span>
-              <span class="d">A running turn, its tool calls, and the composer's state machine.</span>
-            </span>
-            <span class="go">open</span>
-          </a>
-          <a href="./approvals.html">
-            <span class="n">03</span>
-            <span>
-              <span class="t">Approvals</span>
-              <span class="d">Permission, secret, question and a decided card, each with its own clock.</span>
-            </span>
-            <span class="go">open</span>
-          </a>
-          <a href="./engineering.html">
-            <span class="n">04</span>
-            <span>
-              <span class="t">Auto Pilot</span>
-              <span class="d">Five stages, lifecycle artifacts, an uncommitted diff, a blocked gate.</span>
-            </span>
-            <span class="go">open</span>
-          </a>
-          <a href="./usage.html">
-            <span class="n">05</span>
-            <span>
-              <span class="t">Usage and model</span>
-              <span class="d">Context, spend, quota and the picker that changes the next turn.</span>
-            </span>
-            <span class="go">open</span>
-          </a>
-          <a href="./compose.html">
-            <span class="n">06</span>
-            <span>
-              <span class="t">New thread</span>
-              <span class="d">Project, stage, Auto Pilot, model, worktree, first message.</span>
-            </span>
-            <span class="go">open</span>
-          </a>
+        <div class="notes-list">
+          <button type="button" data-demo="send-hi">Jump to the thread with “hi” typed <b>1</b></button>
+          <button type="button" data-demo="usage">Open the usage and model sheet <b>2</b></button>
+          <button type="button" data-demo="reset">Reset the whole demo <b>R</b></button>
+        </div>
+
+        <p class="notes-foot">
+          Try: stop a running turn by emptying the field and pressing stop twice. Queue a message
+          while it works. Fold a card. Expand a file in the diff. Pick a cheaper model and watch
+          the thread header follow. Reload returns the demo to the start.
+        </p>
+      </aside>
+
+      <div class="device" id="device">
+        <div class="statusbar">
+          <span>9:41</span>
+          <span class="sb-right">
+            <svg viewBox="0 0 16 12" aria-hidden="true"><rect x="0" y="8" width="2" height="4" fill="currentColor" /><rect x="4" y="5" width="2" height="7" fill="currentColor" /><rect x="8" y="2" width="2" height="10" fill="currentColor" /><rect x="12" y="0" width="2" height="12" fill="currentColor" opacity="0.4" /></svg>
+            <svg viewBox="0 0 16 12" aria-hidden="true"><rect x="0" y="2" width="13" height="8" rx="1" fill="currentColor" opacity="0.35" /><rect x="1.5" y="3.5" width="7" height="5" fill="currentColor" /><rect x="14" y="4.5" width="2" height="3" fill="currentColor" /></svg>
+          </span>
+        </div>
+
+        <header class="appbar" id="appbar" aria-live="polite"></header>
+
+        <main class="view" id="view" tabindex="-1"></main>
+
+        <form class="composer" id="composer" autocomplete="off" hidden>
+          <textarea
+            class="field"
+            id="field"
+            rows="1"
+            placeholder="Message the agent"
+            aria-label="Message the agent"
+            spellcheck="false"
+          ></textarea>
+          <div class="shoe">
+            <button class="seg" type="button" data-action="sheet-run" title="Engineering stage and Auto Pilot" aria-label="Engineering stage and Auto Pilot">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="miter" aria-hidden="true"><path d="M10 2l4 4-8 8H2v-4z" /></svg>
+              <b id="stage-label">Auto Pilot</b>
+            </button>
+            <button class="seg" type="button" data-action="perm" title="Permission level: full access" aria-label="Permission level: full access">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="miter" aria-hidden="true"><path d="M8 2l5 2v5c0 3-2.2 4.6-5 5-2.8-.4-5-2-5-5V4z" /></svg>
+              <b>Full access</b>
+            </button>
+            <button class="seg grow" type="button" data-action="sheet-usage" title="Model and usage" aria-label="Model and usage">
+              <b id="model-label">opus 4.6</b>
+              <svg class="chev" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="square" aria-hidden="true"><path d="M4.5 6.5 8 10l3.5-3.5" /></svg>
+            </button>
+            <button class="seg" type="button" data-action="sheet-usage" title="Context use: 62 percent" aria-label="Context use: 62 percent">
+              <b>62%</b>
+            </button>
+          </div>
+          <div class="composer-actions">
+            <button class="icon-btn" type="button" data-action="toast" data-message="Attachments are read from the desktop" title="Attach a file" aria-label="Attach a file">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>
+            </button>
+            <button class="icon-btn" type="button" data-action="toast" data-message="Voice input starts from the phone's own mic" title="Voice input" aria-label="Voice input">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><rect x="7.5" y="2.5" width="5" height="9" /><path d="M5 9.5a5 5 0 0 0 10 0M10 14.5V18" /></svg>
+            </button>
+            <span class="spacer"></span>
+            <button class="send" id="send" type="submit" data-mode="idle" title="Write something to send" aria-label="Write something to send" disabled></button>
+          </div>
+        </form>
+
+        <nav class="dock" id="dock" aria-label="Primary">
+          <button class="tab" type="button" data-tab="threads" aria-selected="true" title="Threads" aria-label="Threads">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h9" /></svg>
+            <span>Threads</span>
+          </button>
+          <button class="tab" type="button" data-tab="projects" aria-selected="false" title="Projects" aria-label="Projects">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" stroke-linejoin="miter" aria-hidden="true"><path d="M3 6h6l2 3h10v11H3z" /></svg>
+            <span>Projects</span>
+          </button>
+          <button class="tab" type="button" data-tab="chats" aria-selected="false" title="Chats" aria-label="Chats">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="miter" aria-hidden="true"><path d="M4 4h16v12H9l-5 4z" /></svg>
+            <span>Chats</span>
+          </button>
+          <button class="tab" type="button" data-tab="assistant" aria-selected="false" title="Assistant" aria-label="Assistant">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="miter" aria-hidden="true"><path d="M12 3l2 5.5L19.5 10 14 12l-2 5.5L10 12 4.5 10 10 8.5z" /></svg>
+            <span>Assistant</span>
+          </button>
         </nav>
+
+        <div class="home-bar" aria-hidden="true"><i></i></div>
+
+        <div class="scrim" id="scrim" data-open="false"></div>
+        <div class="sheet" id="sheet" data-open="false" role="dialog" aria-modal="true" aria-label="Sheet"></div>
+        <div class="toast" id="toast" role="status" aria-live="polite" data-open="false"></div>
       </div>
     </div>
+
+    <script src="./app.js"></script>
   </body>
 </html>
