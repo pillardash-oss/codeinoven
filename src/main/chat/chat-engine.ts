@@ -7055,7 +7055,11 @@ export class ChatEngine {
     // A pawn's transcript lives on the pawn's own thread, so the load follows
     // the resolved owner rather than the thread whose card opened the view. For
     // a nested sub-agent the owner is that same thread, so nothing changes.
-    const cached = await this.threadManager.loadSubagentMessages(projectId, owner.threadId, sessionId)
+    const cached = await this.threadManager.loadSubagentMessages(
+      projectId,
+      owner.threadId,
+      sessionId
+    )
     if (cached.length > 0) {
       // The DB mirror is the store of truth for a settled sub-agent: reopen
       // must be a single DB read, not a harness probe. Only a still-running
@@ -18158,7 +18162,10 @@ export class ChatEngine {
           projectId,
           threadId,
           context.sessionId,
-          pawnActivity(result.ok ? 'completed' : 'error', result.ok ? { output: report } : { error: report })
+          pawnActivity(
+            result.ok ? 'completed' : 'error',
+            result.ok ? { output: report } : { error: report }
+          )
         )
         await this.reportPawnCompletion(projectId, spawnerSettings, pawn, purpose, report)
       })
