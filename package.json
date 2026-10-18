@@ -82,7 +82,8 @@
     "msix:build": "bun scripts/msix.ts",
     "prebuild": "bun run --filter @pillardash-oss/cio-icon build",
     "prebuild:production": "bun run --filter @pillardash-oss/cio-icon build",
-    "precheck": "bun run --filter @pillardash-oss/cio-icon build"
+    "precheck": "bun run --filter @pillardash-oss/cio-icon build",
+    "pretest": "bun run --filter @pillardash-oss/cio-icon build"
   },
   "dependencies": {
     "@pillardash-oss/cio-icon": "workspace:*",
