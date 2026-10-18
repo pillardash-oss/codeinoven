@@ -1,5 +1,6 @@
 @import 'tailwindcss';
 @import '@fontsource-variable/jetbrains-mono';
+@import '../../resources/fonts/oven/fonts.css';
 /* The toast cards. They are drawn by the app's toaster and, while a browser page
    covers the corner the toaster sits in, by the native toast overlay in a window
    of its own. The overlay loads this same stylesheet, so the cards are identical
@@ -102,17 +103,10 @@
   --color-terminal-bright-cyan: #87d7d7;
   --color-terminal-bright-white: #f5f4f0;
 
-  /* Font — the whole app renders in JetBrains Mono (bundled, Ghostty's
-     default family) for a uniform dev-workspace feel with unambiguous
-     code glyphs like backticks. --font-app is overridden at runtime by
-     the Appearance settings (app-config store). */
-  --font-app:
-    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
-    Menlo, monospace;
+  /* Bundled Oven Box is the default; Appearance overrides the active family. */
+  --font-app: 'Oven Box', 'JetBrains Mono Variable', ui-monospace, monospace;
   --font-sans: var(--font-app);
-  --font-mono:
-    'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular',
-    Menlo, Monaco, 'Cascadia Code', monospace;
+  --font-mono: var(--font-app);
 }
 
 /* ─── Dark Mode ──────────────────────────────────────────────────────────── */

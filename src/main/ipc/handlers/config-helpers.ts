@@ -1,3 +1,4 @@
+import { APP_FONT_OPTIONS } from '../../../lib/app-fonts'
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../../lib/agent-behavior'
 import {
@@ -605,15 +606,7 @@ export function validateRankingJudge(value: unknown): RankingJudgeConfig {
   return { kind: 'model', ...validateAgentModelSelection(selection, 'Ranking judge') }
 }
 
-const FONT_FAMILIES = new Set([
-  'jetbrains-mono',
-  'satoshi',
-  'system',
-  'sf-mono',
-  'menlo',
-  'monaco',
-  'fira-code'
-])
+const FONT_FAMILIES = new Set(APP_FONT_OPTIONS.map((font) => font.id))
 
 /** Validate a user-authored search engine list, rejecting the whole patch on
  *  the first bad entry so a half-applied list can never reach the config. */

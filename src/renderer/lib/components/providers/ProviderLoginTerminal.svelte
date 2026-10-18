@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadTerminalFontFamily } from '$lib/app-typography'
   import type { ITheme, Terminal } from 'ghostty-web'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
@@ -79,13 +80,14 @@
       if (destroyed || cancelled) return
       await patchSelectionCopy()
       if (destroyed || cancelled) return
+      const fontFamily = await loadTerminalFontFamily()
+      if (destroyed || cancelled) return
       const terminal = new ghosttyWeb.Terminal({
         ghostty,
         cursorBlink: true,
         cursorStyle: 'bar',
         fontSize: 13,
-        fontFamily:
-          "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', 'Ubuntu Mono', monospace",
+        fontFamily,
         scrollback: 5000,
         smoothScrollDuration: 80,
         theme: terminalTheme()

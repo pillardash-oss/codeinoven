@@ -1,0 +1,15 @@
+/* Copy this directory to your website and import fonts.css. */
+@font-face {
+  font-family: 'Oven Box';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('./oven-box.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Oven Mono';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('./oven-mono.woff2') format('woff2');
+}

@@ -12,21 +12,11 @@
 
 import { DEFAULT_CONTRAST_LEVEL, type ContrastLevel } from '$shared/types'
 
-/** Font stacks for the family ids offered in Appearance settings. Keep in
- *  sync with FONT_FAMILIES in src/main/ipc/ipc-handlers.ts. */
-export const FONT_STACKS: Record<string, string> = {
-  'jetbrains-mono':
-    "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace",
-  satoshi: "'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  'sf-mono': "'SF Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace",
-  menlo: 'Menlo, ui-monospace, monospace',
-  monaco: 'Monaco, ui-monospace, monospace',
-  'fira-code': "'Fira Code', 'JetBrains Mono Variable', ui-monospace, monospace"
-}
+import { DEFAULT_APP_FONT_FAMILY, FONT_STACKS, normalizeAppFontFamily } from '$shared/app-fonts'
+import { syncTerminalFonts } from './terminal/host-registry'
+export { DEFAULT_APP_FONT_FAMILY, FONT_STACKS } from '$shared/app-fonts'
 
-/** Fallbacks for a document that is drawn before any config has reached it. */
-export const DEFAULT_APP_FONT_FAMILY = 'jetbrains-mono'
+/** Fallbacks for documents drawn before config arrives. */
 export const DEFAULT_APP_FONT_SIZE = 15
 export const DEFAULT_APP_FONT_WEIGHT = 200
 
@@ -43,8 +33,11 @@ export interface AppTypography {
  * from it), and the base weight.
  */
 export function applyAppTypography(root: HTMLElement, typography: AppTypography): void {
-  const family = typography.fontFamily ?? DEFAULT_APP_FONT_FAMILY
+  const family = normalizeAppFontFamily(typography.fontFamily)
   root.style.setProperty('--font-app', FONT_STACKS[family] ?? FONT_STACKS[DEFAULT_APP_FONT_FAMILY])
+  const mono = family === 'system' ? FONT_STACKS[DEFAULT_APP_FONT_FAMILY] : FONT_STACKS[family]
+  root.style.setProperty('--font-mono', mono)
+  syncTerminalFonts(mono)
   root.style.fontSize = `${typography.appFontSize ?? DEFAULT_APP_FONT_SIZE}px`
   root.style.setProperty(
     '--font-weight-base',
@@ -68,4 +61,14 @@ export function applyAppTypography(root: HTMLElement, typography: AppTypography)
  */
 export function applyContrastLevel(root: HTMLElement, level: ContrastLevel | undefined): void {
   root.dataset.contrast = level ?? DEFAULT_CONTRAST_LEVEL
+}
+
+/** Load the selected face before a canvas terminal measures and caches its glyphs. */
+export async function loadTerminalFontFamily(): Promise<string> {
+  const currentStack = (): string =>
+    getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() ||
+    FONT_STACKS[DEFAULT_APP_FONT_FAMILY]
+  const stack = currentStack()
+  await document.fonts.load(`13px ${stack.split(',')[0]}`).catch(() => [])
+  return currentStack() === stack ? stack : loadTerminalFontFamily()
 }

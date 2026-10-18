@@ -1,3 +1,4 @@
+import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
 import { join } from 'path'
 import { randomInt } from 'crypto'
 import { readFile, appendFile, unlink, open, stat, rename, type FileHandle } from 'fs/promises'
@@ -79,7 +80,7 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
-  fontFamily: 'jetbrains-mono',
+  fontFamily: DEFAULT_APP_FONT_FAMILY,
   appFontSize: 15,
   fontWeight: 200,
   contrastLevel: DEFAULT_CONTRAST_LEVEL,
@@ -226,6 +227,7 @@ export class StorageEngine {
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
+      fontFamily: normalizeAppFontFamily(config?.fontFamily),
       // Analytics is on by default: only an explicit opt-out in the stored
       // config turns it off, and a missing field keeps the default.
       shareAnonymousUsage: config?.shareAnonymousUsage !== false,

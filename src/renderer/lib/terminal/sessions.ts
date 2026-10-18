@@ -1,3 +1,4 @@
+import { loadTerminalFontFamily } from '$lib/app-typography'
 import type { FitAddon, Ghostty, ITheme, Terminal } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
 import { TerminalCursorController } from './cursor-visibility'
@@ -356,8 +357,7 @@ class TerminalSessionManager {
       cursorBlink: true,
       cursorStyle: 'bar',
       fontSize: 13,
-      fontFamily:
-        "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', 'Ubuntu Mono', monospace",
+      fontFamily: await loadTerminalFontFamily(),
       scrollback: 5000,
       smoothScrollDuration: 80,
       theme: terminalTheme()

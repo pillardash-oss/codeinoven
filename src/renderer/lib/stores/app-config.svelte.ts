@@ -1,3 +1,4 @@
+import { APP_FONT_OPTIONS } from '$shared/app-fonts'
 import {
   DEFAULT_CONTRAST_LEVEL,
   DEFAULT_BROWSER_HIBERNATION_MINUTES,
@@ -221,15 +222,7 @@ export const appConfigState = {
 }
 
 /** Options for the Appearance font-family picker. */
-export const FONT_FAMILY_OPTIONS: Array<{ id: string; label: string }> = [
-  { id: 'jetbrains-mono', label: 'JetBrains Mono (default)' },
-  { id: 'satoshi', label: 'Satoshi' },
-  { id: 'system', label: 'System default' },
-  { id: 'sf-mono', label: 'SF Mono' },
-  { id: 'menlo', label: 'Menlo' },
-  { id: 'monaco', label: 'Monaco' },
-  { id: 'fira-code', label: 'Fira Code' }
-]
+export const FONT_FAMILY_OPTIONS = APP_FONT_OPTIONS
 
 /** Font weights offered in Appearance settings. */
 export const FONT_WEIGHT_OPTIONS: Array<{ id: number; label: string }> = [

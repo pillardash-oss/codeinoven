@@ -1,3 +1,4 @@
+import { DEFAULT_APP_FONT_FAMILY } from '$shared/app-fonts'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
 import { DEFAULT_BROWSER_SEARCH_ENGINE_ID } from '$shared/browser-search-engines'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
@@ -18,7 +19,7 @@ import {
 /** Baseline configuration used until the main process returns the persisted one. */
 export const defaultConfig: AppConfig = {
   theme: 'system',
-  fontFamily: 'jetbrains-mono',
+  fontFamily: DEFAULT_APP_FONT_FAMILY,
   appFontSize: 15,
   fontWeight: 200,
   contrastLevel: DEFAULT_CONTRAST_LEVEL,

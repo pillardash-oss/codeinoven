@@ -708,8 +708,7 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
         outline: 'none'
       },
       '.cm-scroller': {
-        fontFamily:
-          "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+        fontFamily: 'var(--font-mono)',
         lineHeight: 1.667,
         // Top spacing lives here, NOT on .cm-content padding-top: a content
         // top padding desyncs CodeMirror's gutter spacer/height-map from the
