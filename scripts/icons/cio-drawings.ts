@@ -19,8 +19,8 @@
  * Nothing here is Lucide geometry. A drawing is written in a local box of roughly
  * 3.4 to 20.6 and fitted to the 22-unit box by `build-icons.ts`, so proportions
  * are the drawing's job and size is the generator's. A glyph carried from pass F
- * or from a settled round arrives already fitted and is kept verbatim, so running
- * the generator again cannot drift it.
+ * or from a settled round arrives already fitted; the generator applies the same
+ * reviewed cap, join, corner and anchor rules before fitting it into the current set.
  *
  * Run `bun run icons:build` after a change here. It writes the glyph components,
  * the registry and the contact sheet the set is reviewed on.
@@ -36,7 +36,7 @@ export interface DrawnGlyph {
   indicator?: boolean
 }
 
-/** A glyph that arrived already fitted, kept as the group it shipped as. */
+/** A glyph carried from an earlier round and re-fitted by the generator. */
 export interface CarriedGlyph {
   kind: 'carried'
   note: string
@@ -44,7 +44,7 @@ export interface CarriedGlyph {
   transform: string
   /** The scale inside that transform, which the weight math needs. */
   scale: number
-  /** The drawing, already in the fitted box. */
+  /** The drawing as it arrived from the earlier round. */
   body: string
 }
 
@@ -801,7 +801,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Thread note: a quill. The vane runs both sides of the shaft and tapers to a point at each end, the shaft carries on past the vane to the nib, and one solid band crosses the middle. The mark it replaces hung a card off a bar on the left, which made it narrower than every mark beside it, and the pass after that was a single-sided blade, which read as the bowl of a spoon.',
-      shapes: `<path d="M21.6 2.4Q7.06 5.06 4.4 19.6Q18.94 16.94 21.6 2.4Z" /><path d="M21.6 2.4 1.4 22.6" /><g transform="rotate(-45 12 12)">${solid(8.6, 11.1, 6.8, 1.7, 0.85)}</g>`
+      shapes: `<path d="M4.4 19.6Q5.3 8.9 19.6 4.4Q15.1 18.7 4.4 19.6Z" /><path d="M19.6 4.4 3.6 20.4" />${dot(3.6, 20.4, 1.9)}`
     }
   },
   {
@@ -1275,7 +1275,7 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Tools: a socket spanner. This is the spec studio toggle, so it has to read as engineering work rather than as an office. The case Lucide draws is a box with a handle on it, which is what luggage looks like.',
-      shapes: `<path d="M20.2 5.6 17.9 9.6H13.3L11 5.6l2.3-4h4.6Z" />${dot(15.6, 5.6, 1.9)}<path d="M10.7 7.1 13.1 9.5 5.7 16.9 3.3 14.5Z" fill="currentColor" stroke="none" />`
+      shapes: `<path d="M20.04 4.41 18.85 8.85 14.41 10.04 11.16 6.79 12.35 2.35 16.79 1.16Z" />${dot(15.6, 5.6, 1.9)}<path d="M14.41 10.04 11.16 6.79 4.37 13.58 7.62 16.83Z" fill="currentColor" stroke="none" />`
     }
   },
   {

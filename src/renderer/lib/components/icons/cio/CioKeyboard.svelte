@@ -22,8 +22,8 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
@@ -32,38 +32,41 @@
     transform="translate(-0.804 -0.804) scale(1.0670)"
     stroke-width={cioStrokeWidth(weight, 1.067)}
   >
-    <rect x="2.6" y="6.2" width="18.8" height="11.6" rx="2.2" /><rect
+    <rect x="2.6" y="6.2" width="18.8" height="11.6" rx="0" /><rect
       x="4"
       y="9.2"
       width="2.8"
       height="2.4"
-      rx="1"
-      fill="currentColor"
       stroke="none"
+      style="fill: var(--icon-anchor, currentColor)"
     /><rect
       x="8.4"
       y="9.2"
       width="2.8"
       height="2.4"
-      rx="1"
-      fill="currentColor"
       stroke="none"
+      style="fill: var(--icon-anchor, currentColor)"
     /><rect
       x="12.8"
       y="9.2"
       width="2.8"
       height="2.4"
-      rx="1"
-      fill="currentColor"
       stroke="none"
+      style="fill: var(--icon-anchor, currentColor)"
     /><rect
       x="17.2"
       y="9.2"
       width="2.8"
       height="2.4"
-      rx="1"
-      fill="currentColor"
       stroke="none"
-    /><rect x="7.4" y="13.8" width="9.2" height="2.2" rx="1.1" fill="currentColor" stroke="none" />
+      style="fill: var(--icon-anchor, currentColor)"
+    /><rect
+      x="7.4"
+      y="13.8"
+      width="9.2"
+      height="2.2"
+      stroke="none"
+      style="fill: var(--icon-anchor, currentColor)"
+    />
   </g>
 </svg>

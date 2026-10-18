@@ -22,15 +22,15 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
   <g
-    transform="translate(-3.882 -3.882) scale(1.3235)"
-    stroke-width={cioStrokeWidth(weight, 1.3235)}
+    transform="translate(-3.552 -3.780) scale(1.2960)"
+    stroke-width={cioStrokeWidth(weight, 1.296)}
   >
     <path d="M12 4.6v14.8" /><path d="M5.8 13.2 12 19.4l6.2-6.2" />
   </g>

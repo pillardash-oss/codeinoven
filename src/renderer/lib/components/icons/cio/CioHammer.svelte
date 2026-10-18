@@ -23,25 +23,24 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
   <g
-    transform="translate(-2.909 -2.909) scale(1.3143)"
-    stroke-width={cioStrokeWidth(weight, 1.3143)}
+    transform="translate(-1.351 -1.351) scale(1.2120)"
+    stroke-width={cioStrokeWidth(weight, 1.212)}
   >
     <g transform="rotate(-45 8.6 8.6)"
-      ><rect x="3.4" y="6.2" width="10.4" height="4.8" rx="1.6" /><rect
+      ><rect x="3.4" y="6.2" width="10.4" height="4.8" rx="0" /><rect
         x="6.6"
         y="6.2"
         width="4.4"
         height="4.8"
-        rx="1.6"
-        fill="currentColor"
         stroke="none"
+        style="fill: var(--icon-anchor, currentColor)"
       /></g
     ><path d="M10.2 10.2 18.8 18.8" />
   </g>

@@ -21,13 +21,13 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
-  <g transform="translate(1.887 1.887) scale(0.8427)" stroke-width={cioStrokeWidth(weight, 0.8427)}>
+  <g transform="translate(2.230 2.094) scale(0.8255)" stroke-width={cioStrokeWidth(weight, 0.8255)}>
     <path d="M19.4 12H4.6" /><path d="M10.4 5.8 4.6 12l5.8 6.2" />
   </g>
 </svg>

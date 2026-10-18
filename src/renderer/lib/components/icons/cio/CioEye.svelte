@@ -22,22 +22,22 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
 >
   <g
-    transform="translate(-0.804 -0.804) scale(1.0670)"
-    stroke-width={cioStrokeWidth(weight, 1.067)}
+    transform="translate(-0.646 -0.646) scale(1.0539)"
+    stroke-width={cioStrokeWidth(weight, 1.0539)}
   >
     <path d="M2.6 12s3.6-6.6 9.4-6.6S21.4 12 21.4 12s-3.6 6.6-9.4 6.6S2.6 12 2.6 12Z" /><circle
       cx="12"
       cy="12"
       r="2.6"
-      fill="currentColor"
       stroke="none"
+      style="fill: var(--icon-anchor, currentColor)"
     />
   </g>
 </svg>

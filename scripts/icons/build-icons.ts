@@ -7,7 +7,7 @@
  *
  *   drawn      fitted to the icon box here, about its own ink centre, with the
  *              stroke compensated for the scale the fit applies
- *   carried    drawn in an earlier round, re-fitted to the box here
+ *   carried    drawn in an earlier round, re-fitted and refined here
  *   solid      ink with no stroke at all, written straight into the box
  *
  * The fit is solved rather than computed: a glyph whose topmost ink is a stroked
@@ -48,18 +48,30 @@ const pascal = (id: string) =>
     .map((p) => p[0].toUpperCase() + p.slice(1))
     .join('')
 
-const render = (inner: string, px: number, stroke: number) =>
+const render = (
+  inner: string,
+  px: number,
+  stroke: number,
+  linecap: 'round' | 'square' = 'square',
+  linejoin: 'round' | 'miter' = 'miter'
+) =>
   sharp(
     Buffer.from(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round" color="#ffffff">${inner}</svg>`
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="${linecap}" stroke-linejoin="${linejoin}" color="#ffffff">${inner}</svg>`
     )
   )
     .resize(px, px, { fit: 'fill', kernel: 'lanczos3' })
     .raw()
     .toBuffer({ resolveWithObject: true })
 
-async function inkBox(inner: string, stroke: number, px = 1024) {
-  const { data, info } = await render(inner, px, stroke)
+async function inkBox(
+  inner: string,
+  stroke: number,
+  px = 1024,
+  linecap: 'round' | 'square' = 'square',
+  linejoin: 'round' | 'miter' = 'miter'
+) {
+  const { data, info } = await render(inner, px, stroke, linecap, linejoin)
   const ch = info.channels
   let x0 = 1e9
   let x1 = -1e9
@@ -90,7 +102,9 @@ async function inkBox(inner: string, stroke: number, px = 1024) {
 /** Fit a drawing to its box about its own centre, correcting until it lands. */
 async function fit(id: string, shapes: string, indicator: boolean) {
   const box = indicator ? INDICATOR_BOX : BOX
-  const source = await inkBox(shapes, STROKE)
+  const linecap = id === 'rocket' ? 'round' : 'square'
+  const linejoin = id === 'rocket' ? 'round' : 'miter'
+  const source = await inkBox(shapes, STROKE, 1024, linecap, linejoin)
   const cx = (source.x0 + source.x1) / 2
   const cy = (source.y0 + source.y1) / 2
   let k = (box - STROKE) / (Math.max(source.w, source.h) - STROKE)
@@ -103,7 +117,10 @@ async function fit(id: string, shapes: string, indicator: boolean) {
     ty = C - k * cy
     measured = await inkBox(
       `<g transform="translate(${tx.toFixed(3)} ${ty.toFixed(3)}) scale(${k.toFixed(4)})">${shapes}</g>`,
-      STROKE
+      STROKE,
+      1024,
+      linecap,
+      linejoin
     )
     const extent = Math.max(measured.w, measured.h)
     if (Math.abs(extent - box) < 0.03) break
@@ -211,7 +228,15 @@ ${wrap(note)}
 `
 
 /** A stroked glyph: the group carries the fit and the weight math. */
-const stroked = (title: string, note: string, transform: string, scale: string, body: string) =>
+const stroked = (
+  title: string,
+  note: string,
+  transform: string,
+  scale: string,
+  body: string,
+  linecap: 'round' | 'square' = 'square',
+  linejoin: 'round' | 'miter' = 'miter'
+) =>
   `${TEMPLATE_HEAD(title, note)}<svg
   viewBox="0 0 24 24"
   width={size}
@@ -219,8 +244,8 @@ const stroked = (title: string, note: string, transform: string, scale: string, 
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="${linecap}"
+  stroke-linejoin="${linejoin}"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
@@ -271,10 +296,46 @@ interface Built {
 
 const built: Built[] = []
 
+/**
+ * Apply the approved construction pass before fitting and writing each glyph.
+ * This is the production counterpart of the reviewed full-set wall.
+ */
+function refineDrawing(id: string, body: string): string {
+  if (id === 'browser' || id === 'rocket') return body
+
+  return body.replace(/<(?:rect|path|circle|ellipse|line|polyline|polygon)\b[^>]*>/g, (tag) => {
+    let refined = tag
+    const isRect = /^<rect\b/.test(refined)
+    const isSolid = /\bfill="currentColor"/.test(refined)
+
+    if (isSolid) {
+      refined = refined.replace(/\s+fill="currentColor"/, '')
+      refined = /\/>$/.test(refined)
+        ? refined.replace(/\s*\/>$/, ' style="fill: var(--icon-anchor, currentColor)" />')
+        : refined.replace(/\s*>$/, ' style="fill: var(--icon-anchor, currentColor)">')
+    }
+
+    if (isRect) {
+      const rx = refined.match(/\brx="([^"]*)"/)
+      if (rx && isSolid) refined = refined.replace(/\s+rx="[^"]*"/, '')
+      else if (rx && Number(rx[1]) !== 6) refined = refined.replace(/\brx="[^"]*"/, 'rx="0"')
+    }
+    return refined
+  })
+}
+
+/** The task-panel fit was corrected on the reviewed wall and stays exact here. */
+const FIT_OVERRIDES: Record<string, { tx: number; ty: number; scale: number }> = {
+  'tab-tasks': { tx: -1.744, ty: -0.846, scale: 1.17 }
+}
+
 for (const entry of CIO_GLYPHS) {
   const file = `${pascal(entry.id)}.svelte`
   if (entry.glyph.kind === 'drawn') {
-    const fitted = await fit(entry.id, entry.glyph.shapes, !!entry.glyph.indicator)
+    const shapes = refineDrawing(entry.id, entry.glyph.shapes)
+    const fitted = await fit(entry.id, shapes, !!entry.glyph.indicator)
+    const fitOverride = FIT_OVERRIDES[entry.id]
+    if (fitOverride) Object.assign(fitted, fitOverride)
     const at16 = (n: number) => ((n / 24) * 16).toFixed(1)
     built.push({
       id: entry.id,
@@ -291,14 +352,19 @@ for (const entry of CIO_GLYPHS) {
         entry.glyph.note,
         `translate(${fitted.tx.toFixed(3)} ${fitted.ty.toFixed(3)}) scale(${fitted.scale.toFixed(4)})`,
         fitted.scale.toFixed(4),
-        entry.glyph.shapes
+        shapes,
+        entry.id === 'rocket' ? 'round' : 'square',
+        entry.id === 'rocket' ? 'round' : 'miter'
       )
     )
   } else if (entry.glyph.kind === 'carried') {
     // A carried drawing arrives fitted to the box of the round that measured it, so
     // it is re-fitted here to the box the set uses now. The drawing itself is kept
     // verbatim: only the transform around it belongs to this run.
-    const fitted = await fit(entry.id, entry.glyph.body, false)
+    const body = refineDrawing(entry.id, entry.glyph.body)
+    const fitted = await fit(entry.id, body, false)
+    const fitOverride = FIT_OVERRIDES[entry.id]
+    if (fitOverride) Object.assign(fitted, fitOverride)
     built.push({
       id: entry.id,
       title: entry.title,
@@ -314,11 +380,14 @@ for (const entry of CIO_GLYPHS) {
         entry.glyph.note,
         `translate(${fitted.tx.toFixed(3)} ${fitted.ty.toFixed(3)}) scale(${fitted.scale.toFixed(4)})`,
         fitted.scale.toFixed(4),
-        entry.glyph.body
+        body,
+        entry.id === 'rocket' ? 'round' : 'square',
+        entry.id === 'rocket' ? 'round' : 'miter'
       )
     )
   } else {
-    const measured = await inkBox(entry.glyph.body, 0)
+    const body = refineDrawing(entry.id, entry.glyph.body)
+    const measured = await inkBox(body, 0)
     built.push({
       id: entry.id,
       title: entry.title,
@@ -327,7 +396,7 @@ for (const entry of CIO_GLYPHS) {
       scale: 1,
       ink: `${measured.w.toFixed(1)} x ${measured.h.toFixed(1)}`
     })
-    await Bun.write(join(OUT, file), solidGlyph(entry.title, entry.glyph.note, entry.glyph.body))
+    await Bun.write(join(OUT, file), solidGlyph(entry.title, entry.glyph.note, body))
   }
 }
 

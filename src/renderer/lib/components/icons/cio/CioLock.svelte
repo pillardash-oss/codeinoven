@@ -21,8 +21,8 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
@@ -31,14 +31,13 @@
     transform="translate(-2.802 -2.802) scale(1.2335)"
     stroke-width={cioStrokeWidth(weight, 1.2335)}
   >
-    <rect x="4.6" y="10.4" width="14.8" height="9.6" rx="2" /><rect
+    <rect x="4.6" y="10.4" width="14.8" height="9.6" rx="0" /><rect
       x="10.9"
       y="13.4"
       width="2.2"
       height="3.4"
-      rx="1.1"
-      fill="currentColor"
       stroke="none"
+      style="fill: var(--icon-anchor, currentColor)"
     /><path d="M8.4 10.4V7.6a3.6 3.6 0 0 1 7.2 0v2.8" />
   </g>
 </svg>

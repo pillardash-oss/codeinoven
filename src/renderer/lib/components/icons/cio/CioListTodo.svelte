@@ -23,8 +23,8 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
@@ -33,7 +33,7 @@
     transform="translate(-5.433 -3.994) scale(1.4276)"
     stroke-width={cioStrokeWidth(weight, 1.4276)}
   >
-    <path d="M5.4 7.4v10.2" /><rect x="8.6" y="4.8" width="4.4" height="4.4" rx="1.3" /><path
+    <path d="M5.4 7.4v10.2" /><rect x="8.6" y="4.8" width="4.4" height="4.4" rx="0" /><path
       d="M8.6 12.4h10.4"
     /><path d="M8.6 16.8h7" />
   </g>

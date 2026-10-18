@@ -22,8 +22,8 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
@@ -38,25 +38,22 @@
         y="5.1"
         width="2.6"
         height="2.6"
-        rx="0"
-        fill="currentColor"
         stroke="none"
+        style="fill: var(--icon-anchor, currentColor)"
       /><rect
         x="5.3"
         y="17.1"
         width="2.6"
         height="2.6"
-        rx="0"
-        fill="currentColor"
         stroke="none"
+        style="fill: var(--icon-anchor, currentColor)"
       /><rect
         x="16.1"
         y="17.1"
         width="2.6"
         height="2.6"
-        rx="0"
-        fill="currentColor"
         stroke="none"
+        style="fill: var(--icon-anchor, currentColor)"
       /><path d="M12 9v1.4a3.4 3.4 0 0 1-3.4 3.4h-.4" /><path
         d="M12 10.4a3.4 3.4 0 0 0 3.4 3.4h.4"
       /></g

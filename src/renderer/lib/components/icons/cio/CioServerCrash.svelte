@@ -23,8 +23,8 @@
   fill="none"
   stroke="currentColor"
   stroke-width={weight}
-  stroke-linecap="round"
-  stroke-linejoin="round"
+  stroke-linecap="square"
+  stroke-linejoin="miter"
   class={className}
   aria-hidden={named ? undefined : 'true'}
   {...rest}
@@ -33,27 +33,26 @@
     transform="translate(-1.870 -1.870) scale(1.1559)"
     stroke-width={cioStrokeWidth(weight, 1.1559)}
   >
-    <rect x="3.4" y="4.4" width="17.2" height="6.4" rx="2" /><circle
+    <rect x="3.4" y="4.4" width="17.2" height="6.4" rx="0" /><circle
       cx="7.4"
       cy="7.6"
       r="1.4"
-      fill="currentColor"
       stroke="none"
-    /><rect x="3.4" y="13.2" width="17.2" height="6.4" rx="2" /><circle
+      style="fill: var(--icon-anchor, currentColor)"
+    /><rect x="3.4" y="13.2" width="17.2" height="6.4" rx="0" /><circle
       cx="7.4"
       cy="16.4"
       r="1.4"
-      fill="currentColor"
       stroke="none"
+      style="fill: var(--icon-anchor, currentColor)"
     /><g transform="rotate(45 17.4 16.4)"
       ><rect
         x="14.9"
         y="15.3"
         width="5"
         height="2.2"
-        rx="1.1"
-        fill="currentColor"
         stroke="none"
+        style="fill: var(--icon-anchor, currentColor)"
       /></g
     ><g transform="rotate(-45 17.4 16.4)"
       ><rect
@@ -61,9 +60,8 @@
         y="15.3"
         width="5"
         height="2.2"
-        rx="1.1"
-        fill="currentColor"
         stroke="none"
+        style="fill: var(--icon-anchor, currentColor)"
       /></g
     >
   </g>
