@@ -35,6 +35,28 @@ export interface SweepResult {
   pending: number
 }
 
+/**
+ * How one thread's windows are embedded. Shared by the corpus sweep and the
+ * targeted pass a settled run triggers, so both describe a window identically.
+ */
+export interface ThreadIndexOptions {
+  modelSignature: string
+  /** Document prompt the model expects in front of its input. */
+  documentPrefix: string
+  windowChars: number
+  maxWindows: number
+  expectedDimensions: number
+  signal: AbortSignal
+  onOversized?: (thread: SearchSummaryThread) => void
+  onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
+}
+
+/** A corpus sweep adds whole-corpus progress and per-thread failure reporting. */
+export interface SweepOptions extends ThreadIndexOptions {
+  onProgress?: (result: SweepResult) => void
+  onError?: (thread: SearchSummaryThread, error: unknown) => void
+}
+
 /** Whether a record still owes windows for the revision it was read from. */
 function needsWindows(record: ThreadEmbeddingRecord): boolean {
   // `planned: 0` is a record written before windows existed (one head vector and
@@ -152,18 +174,7 @@ export class ThreadEmbeddingIndex {
    */
   async sweep(
     embed: (texts: readonly string[]) => Promise<Float32Array[]>,
-    options: {
-      modelSignature: string
-      documentPrefix: string
-      windowChars: number
-      maxWindows: number
-      expectedDimensions: number
-      signal: AbortSignal
-      onOversized?: (thread: SearchSummaryThread) => void
-      onProgress?: (result: SweepResult) => void
-      onError?: (thread: SearchSummaryThread, error: unknown) => void
-      onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
-    }
+    options: SweepOptions
   ): Promise<SweepResult> {
     const candidates = [...this.candidates.values()]
     if (candidates.length === 0) {
@@ -213,6 +224,35 @@ export class ThreadEmbeddingIndex {
       return { total, indexed, pending: pending - indexed }
     } finally {
       // Preserve completed threads even if a later provider request fails.
+      await this.persist()
+    }
+  }
+
+  /**
+   * Index one thread now, reusing every window whose text did not change, and
+   * persist the result.
+   *
+   * A run that just settled is the thread its user is most likely to search next,
+   * so it goes into the index ahead of the sweep rather than behind it: a first
+   * full pass over a large corpus can run for hours, and the periodic pass adds up
+   * to five more minutes on top. The targeted pass runs beside a sweep the way the
+   * runtime serializes its own embedding queue, so a fresh conversation is
+   * searchable as soon as its windows are embedded.
+   *
+   * Returns whether a record was written. A thread no longer in the corpus is
+   * `false` without doing any work.
+   */
+  async indexNow(
+    threadId: string,
+    embed: (texts: readonly string[]) => Promise<Float32Array[]>,
+    options: ThreadIndexOptions
+  ): Promise<boolean> {
+    const candidate = this.candidates.get(threadId)
+    if (!candidate) return false
+    try {
+      await this.indexThread(candidate, embed, options)
+      return true
+    } finally {
       await this.persist()
     }
   }
@@ -267,16 +307,7 @@ export class ThreadEmbeddingIndex {
   private async indexThread(
     candidate: CandidateThread,
     embed: (texts: readonly string[]) => Promise<Float32Array[]>,
-    options: {
-      modelSignature: string
-      documentPrefix: string
-      windowChars: number
-      maxWindows: number
-      expectedDimensions: number
-      signal: AbortSignal
-      onOversized?: (thread: SearchSummaryThread) => void
-      onThreadProgress?: (thread: SearchSummaryThread, stage: 'embedding', windows: number) => void
-    }
+    options: ThreadIndexOptions
   ): Promise<boolean> {
     const plan = await this.summaries.plan(candidate, options.signal)
     const count = threadWindowCount(plan.total, options.windowChars, options.maxWindows)
