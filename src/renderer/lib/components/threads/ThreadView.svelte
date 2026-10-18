@@ -349,7 +349,6 @@
   } from '$lib/generation-details'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
-  import * as CheckpointMatching from '../../threads/checkpoint-matching'
   import {
     auditReportForTurn,
     buildTranscriptIndex,
@@ -8057,14 +8056,6 @@
     pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
   }
 
-  /** True when `messageIndex` is the final assistant message of `checkpoint`'s
-   *  turn   the single place its file card should render. Keeps a card from
-   *  being drawn multiple times when mid-turn question-answer user messages
-   *  split the visual turn into several `isTurnEnd` boundaries. */
-  function isCheckpointTurnEnd(messageIndex: number, checkpoint: TurnCheckpointSummary): boolean {
-    return CheckpointMatching.isCheckpointTurnEnd(messages, checkpoint, messageIndex)
-  }
-
   async function openCheckpointFile(checkpointId: string, path: string): Promise<void> {
     await projectFilesWorkspace.loadDirectory(thread.projectId, '')
     contextSidebarState.openFiles(thread.projectId, thread.id)
@@ -13771,7 +13762,7 @@
                         </div>
                       {/if}
 
-                      {#if !chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
+                      {#if !chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && (transcriptIndex.checkpointCard[absIndex] ?? false)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}

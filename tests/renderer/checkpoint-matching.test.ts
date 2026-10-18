@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { checkpointForTurn, isCheckpointTurnEnd } from '$lib/threads/checkpoint-matching'
+import { checkpointForTurn } from '$lib/threads/checkpoint-matching'
+import { buildTranscriptIndex } from '$lib/components/threads/thread-turn-parts'
 import type { AgentMessage, TurnCheckpointSummary } from '$shared/types'
 
 function msg(
@@ -19,7 +20,11 @@ function checkpoint(
   id: string,
   createdAt: number,
   completedAt: number,
-  options: { status?: TurnCheckpointSummary['status']; changes?: number } = {}
+  options: {
+    status?: TurnCheckpointSummary['status']
+    changes?: number
+    sourceMessageId?: string
+  } = {}
 ): TurnCheckpointSummary {
   return {
     id,
@@ -27,6 +32,7 @@ function checkpoint(
     threadId: 't',
     label: id,
     status: options.status ?? 'committed',
+    ...(options.sourceMessageId ? { sourceMessageId: options.sourceMessageId } : {}),
     createdAt,
     completedAt,
     changes: Array.from({ length: options.changes ?? 0 }, (_, i) => ({
@@ -34,6 +40,12 @@ function checkpoint(
       path: `file-${i}.ts`
     }))
   } as TurnCheckpointSummary
+}
+
+/** Indices where the resolved index says the changes card renders. */
+function cardIndices(messages: AgentMessage[], checkpoints: TurnCheckpointSummary[]): number[] {
+  const index = buildTranscriptIndex(messages, checkpoints)
+  return index.checkpointCard.flatMap((value, position) => (value ? [position] : []))
 }
 
 describe('checkpointForTurn', () => {
@@ -90,8 +102,8 @@ describe('checkpointForTurn', () => {
   })
 })
 
-describe('isCheckpointTurnEnd', () => {
-  it('is true for the last assistant inside the checkpoint window', () => {
+describe('checkpoint card placement', () => {
+  it('renders at the last assistant inside the checkpoint window (fallback)', () => {
     const messages = [
       msg('user', 100),
       msg('assistant', 110),
@@ -99,13 +111,70 @@ describe('isCheckpointTurnEnd', () => {
       msg('user', 130)
     ]
     const cp = checkpoint('cp-1', 105, 125)
-    expect(isCheckpointTurnEnd(messages, cp, 1)).toBe(false)
-    expect(isCheckpointTurnEnd(messages, cp, 2)).toBe(true)
+    expect(cardIndices(messages, [cp])).toEqual([2])
   })
 
-  it('ignores later assistants that fall outside the window', () => {
+  it('does not place a card for an assistant before the window', () => {
     const messages = [msg('assistant', 110), msg('user', 120), msg('assistant', 140)]
     const cp = checkpoint('cp-1', 105, 115)
-    expect(isCheckpointTurnEnd(messages, cp, 0)).toBe(true)
+    expect(cardIndices(messages, [cp])).toEqual([0])
+  })
+
+  // Regression: a harness can flush its final assistant message after the
+  // checkpoint was completed, so the completedAt window cut the turn short and
+  // the card had no turn end to attach to. Timestamps below are the real ones
+  // from the reported thread (checkpoint completed 1792362116786, final
+  // assistant created 1792362141730).
+  it('anchors the card to the turn by sourceMessageId, past a late final assistant', () => {
+    const promptId = 'msg_150f33b96001c1K0WBTsJAss9c'
+    const messages = [
+      msg('user', 1792359480260, promptId),
+      msg('assistant', 1792359482541),
+      msg('assistant', 1792362115784),
+      msg('assistant', 1792362141730)
+    ]
+    const cp = checkpoint('cp-1', 1792359481953, 1792362116786, {
+      changes: 2,
+      sourceMessageId: promptId
+    })
+    const index = buildTranscriptIndex(messages, [cp])
+    expect(index.checkpoint[1]?.id).toBe('cp-1')
+    expect(index.checkpoint[3]?.id).toBe('cp-1')
+    expect(cardIndices(messages, [cp])).toEqual([3])
+  })
+
+  it('keeps one card per turn across mid-turn question answers', () => {
+    const promptId = 'prompt-1'
+    const messages = [
+      msg('user', 100, promptId),
+      msg('assistant', 110),
+      msg('user', 115, 'question-answer-1'),
+      msg('assistant', 120),
+      msg('assistant', 130)
+    ]
+    const cp = checkpoint('cp-1', 105, 118, { changes: 1, sourceMessageId: promptId })
+    expect(cardIndices(messages, [cp])).toEqual([4])
+  })
+
+  it('lets the newest checkpoint own a retried turn', () => {
+    const promptId = 'prompt-1'
+    const messages = [msg('user', 100, promptId), msg('assistant', 150)]
+    const checkpoints = [
+      checkpoint('cp-1', 110, 160, { changes: 1, sourceMessageId: promptId }),
+      checkpoint('cp-2', 130, 160, { changes: 2, sourceMessageId: promptId })
+    ]
+    const index = buildTranscriptIndex(messages, checkpoints)
+    expect(index.checkpoint[1]?.id).toBe('cp-2')
+    expect(cardIndices(messages, checkpoints)).toEqual([1])
+  })
+
+  it('ignores active checkpoints', () => {
+    const messages = [msg('user', 100, 'prompt-1'), msg('assistant', 150)]
+    const cp = checkpoint('cp-1', 110, 160, {
+      status: 'active',
+      changes: 1,
+      sourceMessageId: 'prompt-1'
+    })
+    expect(cardIndices(messages, [cp])).toEqual([])
   })
 })
