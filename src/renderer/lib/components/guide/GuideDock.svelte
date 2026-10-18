@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioArrowRight from '$lib/components/icons/cio/CioArrowRight.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioArrowLeft from '@codeinoven/icons/CioArrowLeft.svelte'
+  import CioArrowRight from '@codeinoven/icons/CioArrowRight.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
   import { onMount } from 'svelte'
 
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'

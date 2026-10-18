@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioSubagent from '@codeinoven/icons/CioSubagent.svelte'
   import PrAgentReportCard from './PrAgentReportCard.svelte'
   import type { PrAgentReport, PullRequestSummary } from '$shared/types'
 

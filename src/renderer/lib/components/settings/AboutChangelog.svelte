@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioBook from '@codeinoven/icons/CioBook.svelte'
+  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'

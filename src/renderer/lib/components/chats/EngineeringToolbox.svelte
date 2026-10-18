@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
+  import CioTools from '@codeinoven/icons/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { roomAbove } from '$lib/popover-room'

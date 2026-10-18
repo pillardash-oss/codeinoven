@@ -1,5 +1,5 @@
-import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+import CioDownload from '@codeinoven/icons/CioDownload.svelte'
+import CioProjects from '@codeinoven/icons/CioProjects.svelte'
 import { createSubscriber } from 'svelte/reactivity'
 import type { Component } from 'svelte'
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'

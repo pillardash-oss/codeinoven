@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMinimize from '$lib/components/icons/cio/CioMinimize.svelte'
+  import CioMinimize from '@codeinoven/icons/CioMinimize.svelte'
   import type { Snippet } from 'svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import PanelTabStrip from './PanelTabStrip.svelte'

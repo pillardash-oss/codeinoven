@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioWrapText from '$lib/components/icons/cio/CioWrapText.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioCopy from '@codeinoven/icons/CioCopy.svelte'
+  import CioWrapText from '@codeinoven/icons/CioWrapText.svelte'
   import { onMount } from 'svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
   /**
    * The close control a card head carries at its top right, before the fold.
    *

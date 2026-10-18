@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
+  import CioBrowser from '@codeinoven/icons/CioBrowser.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
   import { BrowserAssistantChatController } from './BrowserAssistantChatController.svelte'
   import { threadReveal } from '$lib/components/layout/page-reveal'

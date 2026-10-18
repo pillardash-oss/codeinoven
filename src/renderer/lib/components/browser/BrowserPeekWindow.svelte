@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioMaximize from '$lib/components/icons/cio/CioMaximize.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioCopy from '@codeinoven/icons/CioCopy.svelte'
+  import CioMaximize from '@codeinoven/icons/CioMaximize.svelte'
   import { Portal } from 'bits-ui'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'

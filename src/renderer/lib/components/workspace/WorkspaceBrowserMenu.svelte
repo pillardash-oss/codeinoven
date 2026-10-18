@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCookie from '$lib/components/icons/cio/CioCookie.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
+  import CioCookie from '@codeinoven/icons/CioCookie.svelte'
+  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {

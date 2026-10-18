@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSmilePlus from '$lib/components/icons/cio/CioSmilePlus.svelte'
+  import CioSmilePlus from '@codeinoven/icons/CioSmilePlus.svelte'
   /**
    * The "add a reaction" control for one comment: GitHub's own eight reactions,
    * with the ones the reader already used lit up.

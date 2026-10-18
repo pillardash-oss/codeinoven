@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioExternalLink from '@codeinoven/icons/CioExternalLink.svelte'
+  import CioSubagent from '@codeinoven/icons/CioSubagent.svelte'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import {

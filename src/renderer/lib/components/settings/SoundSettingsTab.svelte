@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
+  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
   import { onMount } from 'svelte'
 
   import type { AppConfigPatch } from '$shared/types'

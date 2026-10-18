@@ -1,7 +1,7 @@
-import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-import CioDot from '$lib/components/icons/cio/CioDot.svelte'
-import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
+import CioCheckCircle from '@codeinoven/icons/CioCheckCircle.svelte'
+import CioCrossCircle from '@codeinoven/icons/CioCrossCircle.svelte'
+import CioDot from '@codeinoven/icons/CioDot.svelte'
+import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
 /**
  * How a deployment or workflow run state reads at a glance.
  *

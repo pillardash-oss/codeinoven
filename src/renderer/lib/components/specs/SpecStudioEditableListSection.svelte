@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioMessagePlus from '@codeinoven/icons/CioMessagePlus.svelte'
+  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
   import type { SpecAnnotation, SpecSectionId } from '$shared/types'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import SpecStudioAnnotationBubbles from './SpecStudioAnnotationBubbles.svelte'

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioSubagent from '@codeinoven/icons/CioSubagent.svelte'
   interface Props {
     head: string
     headIsCurrent: boolean

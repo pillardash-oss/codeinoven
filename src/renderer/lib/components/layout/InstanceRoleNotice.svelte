@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSwap from '$lib/components/icons/cio/CioSwap.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioSwap from '@codeinoven/icons/CioSwap.svelte'
+  import CioTabInfo from '@codeinoven/icons/CioTabInfo.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 

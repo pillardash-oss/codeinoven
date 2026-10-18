@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
+  import CioWindow from '@codeinoven/icons/CioWindow.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'

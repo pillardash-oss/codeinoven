@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioEnter from '$lib/components/icons/cio/CioEnter.svelte'
-  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
+  import CioEnter from '@codeinoven/icons/CioEnter.svelte'
+  import CioLayers from '@codeinoven/icons/CioLayers.svelte'
   import { subagentModeLabel, subagentModeTitle } from '$lib/subagent-presentation'
 
   interface Props {

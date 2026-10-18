@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioBook from '@codeinoven/icons/CioBook.svelte'
+  import CioPencil from '@codeinoven/icons/CioPencil.svelte'
+  import CioServer from '@codeinoven/icons/CioServer.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
   import type { AgentCapabilityEntry } from '$shared/types'
   import { originLabel } from './sources-panel-helpers'
 

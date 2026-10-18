@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioGrip from '$lib/components/icons/cio/CioGrip.svelte'
+  import CioGrip from '@codeinoven/icons/CioGrip.svelte'
   interface Props {
     title: string
   }

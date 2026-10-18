@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFilter from '$lib/components/icons/cio/CioFilter.svelte'
-  import CioInbox from '$lib/components/icons/cio/CioInbox.svelte'
+  import CioFilter from '@codeinoven/icons/CioFilter.svelte'
+  import CioInbox from '@codeinoven/icons/CioInbox.svelte'
   import { ContextMenu } from 'bits-ui'
   import {
     THREAD_GROUP_ICONS,

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioEllipsis from '$lib/components/icons/cio/CioEllipsis.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
+  import CioEllipsis from '@codeinoven/icons/CioEllipsis.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   /**
    * One comment in a pull request conversation: who wrote it, when, what it says,
    * and everything that can be done to it.

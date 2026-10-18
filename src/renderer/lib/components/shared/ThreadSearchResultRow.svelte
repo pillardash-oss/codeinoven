@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioTabGit from '@codeinoven/icons/CioTabGit.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { Portal } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
+  import CioClock from '@codeinoven/icons/CioClock.svelte'
   import { browserLibraryHost, type BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { formatCompactAge } from '$shared/date-time-format'
 

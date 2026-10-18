@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
+  import CioTools from '@codeinoven/icons/CioTools.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label: string

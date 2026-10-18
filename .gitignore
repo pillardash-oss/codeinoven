@@ -1,6 +1,8 @@
 node_modules/
 out/
 dist/
+!/packages/cio-icons/dist/
+!/packages/cio-icons/dist/**
 /resources/speech/runtime/
 /resources/harnesses/pi/
 *.log

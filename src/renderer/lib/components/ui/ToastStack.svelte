@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioCheckCircle from '@codeinoven/icons/CioCheckCircle.svelte'
+  import CioCrossCircle from '@codeinoven/icons/CioCrossCircle.svelte'
+  import CioTabInfo from '@codeinoven/icons/CioTabInfo.svelte'
   import { Toaster as Sonner } from 'svelte-sonner'
 
   /**

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
+  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'

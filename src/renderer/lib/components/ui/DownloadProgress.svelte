@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioPause from '@codeinoven/icons/CioPause.svelte'
+  import CioPlay from '@codeinoven/icons/CioPlay.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   interface Props {
     /** 0-100 when determinate, undefined for indeterminate installing */
     percent?: number

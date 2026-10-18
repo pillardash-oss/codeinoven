@@ -9,15 +9,15 @@
 </script>
 
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
-  import CioThreads from '$lib/components/icons/cio/CioThreads.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
+  import CioCopy from '@codeinoven/icons/CioCopy.svelte'
+  import CioForward from '@codeinoven/icons/CioForward.svelte'
+  import CioMessage from '@codeinoven/icons/CioMessage.svelte'
+  import CioSparkles from '@codeinoven/icons/CioSparkles.svelte'
+  import CioTerminal from '@codeinoven/icons/CioTerminal.svelte'
+  import CioThreads from '@codeinoven/icons/CioThreads.svelte'
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
   import { copyText } from '$lib/copy-text'
   interface Props {

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioArrowLeft from '@codeinoven/icons/CioArrowLeft.svelte'
+  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import type { BrowserLoadError } from '$shared/ipc-contract'
   import {
     browserLoadErrorCopy,

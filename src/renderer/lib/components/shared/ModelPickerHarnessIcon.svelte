@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioTerminal from '@codeinoven/icons/CioTerminal.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
 
   interface Props {

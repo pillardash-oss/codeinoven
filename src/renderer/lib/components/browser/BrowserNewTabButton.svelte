@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
+  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'

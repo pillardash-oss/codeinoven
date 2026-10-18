@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { Dialog } from 'bits-ui'
   import type { Snippet } from 'svelte'

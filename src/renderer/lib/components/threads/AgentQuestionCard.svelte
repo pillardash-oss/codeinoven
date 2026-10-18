@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClipboardList from '$lib/components/icons/cio/CioClipboardList.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPaperclip from '$lib/components/icons/cio/CioPaperclip.svelte'
-  import CioSend from '$lib/components/icons/cio/CioSend.svelte'
+  import CioClipboardList from '@codeinoven/icons/CioClipboardList.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioPaperclip from '@codeinoven/icons/CioPaperclip.svelte'
+  import CioSend from '@codeinoven/icons/CioSend.svelte'
   import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
   import { fly, slide } from 'svelte/transition'
   import { onDestroy } from 'svelte'

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioRedo from '$lib/components/icons/cio/CioRedo.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
+  import CioPencil from '@codeinoven/icons/CioPencil.svelte'
+  import CioRedo from '@codeinoven/icons/CioRedo.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
+  import CioUndo from '@codeinoven/icons/CioUndo.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioClock from '@codeinoven/icons/CioClock.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
   import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {

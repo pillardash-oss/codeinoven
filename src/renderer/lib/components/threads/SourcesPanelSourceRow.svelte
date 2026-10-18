@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import CioImage from '$lib/components/icons/cio/CioImage.svelte'
-  import CioTag from '$lib/components/icons/cio/CioTag.svelte'
+  import CioBrowser from '@codeinoven/icons/CioBrowser.svelte'
+  import CioFileText from '@codeinoven/icons/CioFileText.svelte'
+  import CioImage from '@codeinoven/icons/CioImage.svelte'
+  import CioTag from '@codeinoven/icons/CioTag.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type {
     AgentSource,

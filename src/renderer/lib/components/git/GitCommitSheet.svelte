@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioCommit from '@codeinoven/icons/CioCommit.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'

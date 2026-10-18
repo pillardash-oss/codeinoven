@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
+  import CioArrowLeft from '@codeinoven/icons/CioArrowLeft.svelte'
   import type { PullRequestChecks, PullRequestDetail, PullRequestSummary } from '$shared/types'
   import {
     prChecksBadgeClass,

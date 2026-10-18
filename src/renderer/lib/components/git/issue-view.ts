@@ -7,10 +7,10 @@
  * not the other is exactly the drift this module prevents.
  */
 
-import CioBan from '$lib/components/icons/cio/CioBan.svelte'
-import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-import CioCrossCircle from '$lib/components/icons/cio/CioCrossCircle.svelte'
-import CioDot from '$lib/components/icons/cio/CioDot.svelte'
+import CioBan from '@codeinoven/icons/CioBan.svelte'
+import CioCheckCircle from '@codeinoven/icons/CioCheckCircle.svelte'
+import CioCrossCircle from '@codeinoven/icons/CioCrossCircle.svelte'
+import CioDot from '@codeinoven/icons/CioDot.svelte'
 import type { PrMetadataMode } from './pr-view'
 import type {
   IssueListFilter,

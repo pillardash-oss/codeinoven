@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
+  import CioChat from '@codeinoven/icons/CioChat.svelte'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
   import { invoke } from '$lib/ipc.svelte'
   import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
+  import CioVolume from '@codeinoven/icons/CioVolume.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label?: string

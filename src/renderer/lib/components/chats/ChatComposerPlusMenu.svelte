@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioDisk from '$lib/components/icons/cio/CioDisk.svelte'
-  import CioPaperclip from '$lib/components/icons/cio/CioPaperclip.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioShieldCheck from '$lib/components/icons/cio/CioShieldCheck.svelte'
+  import CioClock from '@codeinoven/icons/CioClock.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioDisk from '@codeinoven/icons/CioDisk.svelte'
+  import CioPaperclip from '@codeinoven/icons/CioPaperclip.svelte'
+  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
+  import CioShieldCheck from '@codeinoven/icons/CioShieldCheck.svelte'
   import Switch from '../ui/Switch.svelte'
   import type { StartAfterSelection } from './chat-composer-attachments'
 

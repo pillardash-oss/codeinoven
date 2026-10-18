@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioFolderPlus from '$lib/components/icons/cio/CioFolderPlus.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
-  import CioHome from '$lib/components/icons/cio/CioHome.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
+  import CioFolderPlus from '@codeinoven/icons/CioFolderPlus.svelte'
+  import CioForward from '@codeinoven/icons/CioForward.svelte'
+  import CioHome from '@codeinoven/icons/CioHome.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioFolder from '@codeinoven/icons/CioFolder.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenFile } from '$shared/ovens'
 

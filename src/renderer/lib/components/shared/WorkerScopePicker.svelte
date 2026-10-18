@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioFiles from '$lib/components/icons/cio/CioFiles.svelte'
+  import CioFiles from '@codeinoven/icons/CioFiles.svelte'
   /**
    * Assignment review: the trigger and bubble a worker task uses to choose the
    * Git scope it will run in, mirroring the model picker's popover mechanism so

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioKey from '$lib/components/icons/cio/CioKey.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioExternalLink from '@codeinoven/icons/CioExternalLink.svelte'
+  import CioKey from '@codeinoven/icons/CioKey.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
   import { onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke } from '$lib/ipc.svelte'

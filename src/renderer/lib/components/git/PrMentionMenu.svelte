@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioPerson from '$lib/components/icons/cio/CioPerson.svelte'
-  import CioSubagent from '$lib/components/icons/cio/CioSubagent.svelte'
+  import CioPerson from '@codeinoven/icons/CioPerson.svelte'
+  import CioSubagent from '@codeinoven/icons/CioSubagent.svelte'
   import type { RepositoryMentionUser } from '$shared/types'
   import { mentionHandle } from './pr-mentions'
 

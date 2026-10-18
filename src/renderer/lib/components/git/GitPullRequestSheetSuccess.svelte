@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioEye from '$lib/components/icons/cio/CioEye.svelte'
+  import CioCheckCircle from '@codeinoven/icons/CioCheckCircle.svelte'
+  import CioExternalLink from '@codeinoven/icons/CioExternalLink.svelte'
+  import CioEye from '@codeinoven/icons/CioEye.svelte'
   import type { PullRequestReference } from '$shared/types'
 
   interface Props {

@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioPlus from '$lib/components/icons/cio/CioPlus.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioPencil from '@codeinoven/icons/CioPencil.svelte'
+  import CioPlus from '@codeinoven/icons/CioPlus.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
   import { permissionLevelLabel } from '$lib/actions'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import {

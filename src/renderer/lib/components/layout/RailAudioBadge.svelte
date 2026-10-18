@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
+  import CioVolume from '@codeinoven/icons/CioVolume.svelte'
   let { label }: { label: string } = $props()
 </script>
 

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
-  import CioDiff from '$lib/components/icons/cio/CioDiff.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioCommit from '@codeinoven/icons/CioCommit.svelte'
+  import CioDiff from '@codeinoven/icons/CioDiff.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import type { PullRequestCommit, PullRequestFile } from '$shared/types'
   import PrDiffHunk from './PrDiffHunk.svelte'

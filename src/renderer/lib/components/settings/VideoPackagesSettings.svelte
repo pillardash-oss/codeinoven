@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
   import { onDestroy, onMount } from 'svelte'
   import { formatBytes } from '$lib/format/bytes'
   import { videoPackagesStore as packages } from '$lib/stores/video-packages.svelte'

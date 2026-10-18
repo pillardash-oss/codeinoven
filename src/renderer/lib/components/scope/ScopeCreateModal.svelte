@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioTabGit from '@codeinoven/icons/CioTabGit.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ScopeSetupCommandsEditor from './ScopeSetupCommandsEditor.svelte'

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioCheckCircle from '$lib/components/icons/cio/CioCheckCircle.svelte'
-  import CioPlugZap from '$lib/components/icons/cio/CioPlugZap.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioCheckCircle from '@codeinoven/icons/CioCheckCircle.svelte'
+  import CioPlugZap from '@codeinoven/icons/CioPlugZap.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { McpConnectionTestResult, McpProbeTarget } from '$shared/types'
 

@@ -1,4 +1,4 @@
-import CioProjects from '$lib/components/icons/cio/CioProjects.svelte'
+import CioProjects from '@codeinoven/icons/CioProjects.svelte'
 import { SvelteMap } from 'svelte/reactivity'
 
 import type { ActionDefinition, ActionSelection } from '$lib/actions'

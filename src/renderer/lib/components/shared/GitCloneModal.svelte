@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioFolderInput from '$lib/components/icons/cio/CioFolderInput.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioFolderInput from '@codeinoven/icons/CioFolderInput.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioTabGit from '@codeinoven/icons/CioTabGit.svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'

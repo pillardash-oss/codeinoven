@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { APP_NAME } from '$shared/brand'

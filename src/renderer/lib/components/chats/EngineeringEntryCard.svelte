@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import CioLightbulb from '$lib/components/icons/cio/CioLightbulb.svelte'
-  import CioPencil from '$lib/components/icons/cio/CioPencil.svelte'
-  import CioTabGit from '$lib/components/icons/cio/CioTabGit.svelte'
+  import CioFileText from '@codeinoven/icons/CioFileText.svelte'
+  import CioLightbulb from '@codeinoven/icons/CioLightbulb.svelte'
+  import CioPencil from '@codeinoven/icons/CioPencil.svelte'
+  import CioTabGit from '@codeinoven/icons/CioTabGit.svelte'
   import { slide } from 'svelte/transition'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
   import CardButton from '../shared/CardButton.svelte'

@@ -1,4 +1,4 @@
-import CioChat from '$lib/components/icons/cio/CioChat.svelte'
+import CioChat from '@codeinoven/icons/CioChat.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 
 import type { Component } from 'svelte'

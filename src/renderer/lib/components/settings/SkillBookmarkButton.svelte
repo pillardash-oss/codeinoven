@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
+  import CioBookmark from '@codeinoven/icons/CioBookmark.svelte'
   import { skillBookmarkState } from '$lib/stores/skill-bookmarks.svelte'
   import type { SkillMarketEntry } from '$shared/types'
 

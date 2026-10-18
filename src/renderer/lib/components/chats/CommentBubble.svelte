@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import AnnotationCommentForm from './AnnotationCommentForm.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'

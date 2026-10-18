@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
-  import CioMessagePlus from '$lib/components/icons/cio/CioMessagePlus.svelte'
+  import CioMessage from '@codeinoven/icons/CioMessage.svelte'
+  import CioMessagePlus from '@codeinoven/icons/CioMessagePlus.svelte'
   import { onDestroy, onMount } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'

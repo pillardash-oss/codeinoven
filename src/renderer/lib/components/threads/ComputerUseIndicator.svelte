@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioCursor from '$lib/components/icons/cio/CioCursor.svelte'
+  import CioCursor from '@codeinoven/icons/CioCursor.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label: string

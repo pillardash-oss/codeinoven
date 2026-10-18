@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioBrowser from '@codeinoven/icons/CioBrowser.svelte'
+  import CioExternalLink from '@codeinoven/icons/CioExternalLink.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
 
   /**

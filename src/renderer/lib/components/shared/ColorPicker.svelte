@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
   /**
    * A colour picker built only from controls the native dock can carry.
    *

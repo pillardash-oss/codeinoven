@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioBraces from '$lib/components/icons/cio/CioBraces.svelte'
-  import CioFile from '$lib/components/icons/cio/CioFile.svelte'
-  import CioFileCode from '$lib/components/icons/cio/CioFileCode.svelte'
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import CioTag from '$lib/components/icons/cio/CioTag.svelte'
+  import CioBraces from '@codeinoven/icons/CioBraces.svelte'
+  import CioFile from '@codeinoven/icons/CioFile.svelte'
+  import CioFileCode from '@codeinoven/icons/CioFileCode.svelte'
+  import CioFileText from '@codeinoven/icons/CioFileText.svelte'
+  import CioTag from '@codeinoven/icons/CioTag.svelte'
   import { getFileTypeIconDataUri } from './file-type-icons'
 
   interface Props {

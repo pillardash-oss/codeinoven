@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioPlug from '$lib/components/icons/cio/CioPlug.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioPlug from '@codeinoven/icons/CioPlug.svelte'
+  import CioSparkles from '@codeinoven/icons/CioSparkles.svelte'
   import { slide } from 'svelte/transition'
   import { harnessCatalogs, harnessHasProvider } from '$lib/ai-account'
   import { withModelSelection } from '../chats/chat-composer-settings'

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioLayers from '$lib/components/icons/cio/CioLayers.svelte'
-  import CioStar from '$lib/components/icons/cio/CioStar.svelte'
-  import CioTabUtilities from '$lib/components/icons/cio/CioTabUtilities.svelte'
+  import CioLayers from '@codeinoven/icons/CioLayers.svelte'
+  import CioStar from '@codeinoven/icons/CioStar.svelte'
+  import CioTabUtilities from '@codeinoven/icons/CioTabUtilities.svelte'
   import RailHighlight from '../layout/RailHighlight.svelte'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import type { PickerHarnessOption, PickerRailView } from './model-picker-helpers'

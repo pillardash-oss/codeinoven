@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
+  import CioServer from '@codeinoven/icons/CioServer.svelte'
   import type { CloudDeploymentProviderKind } from '$shared/types'
   import CoolifyIcon from './CoolifyIcon.svelte'
   import NetlifyIcon from './NetlifyIcon.svelte'

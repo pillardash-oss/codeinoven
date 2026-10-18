@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
   import { slide } from 'svelte/transition'
   import type { Component, Snippet } from 'svelte'
   import ThreadRow from './ThreadRow.svelte'

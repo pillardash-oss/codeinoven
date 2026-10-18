@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioMic from '$lib/components/icons/cio/CioMic.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioMic from '@codeinoven/icons/CioMic.svelte'
   import { onMount, onDestroy } from 'svelte'
 
   import { toast } from 'svelte-sonner'

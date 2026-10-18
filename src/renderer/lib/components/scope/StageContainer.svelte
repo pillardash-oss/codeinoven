@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
+  import CioForward from '@codeinoven/icons/CioForward.svelte'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { STAGE_COLORS, STAGE_LABELS, type ThreadStage } from '$lib/stores/scope.svelte'
   import type { Thread } from '$shared/types'

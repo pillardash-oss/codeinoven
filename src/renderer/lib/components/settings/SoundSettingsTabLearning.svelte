@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import Switch from '../ui/Switch.svelte'
   import type { PendingDeletion } from './sound-settings-helpers'

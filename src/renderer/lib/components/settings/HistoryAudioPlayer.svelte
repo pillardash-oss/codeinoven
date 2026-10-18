@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
+  import CioPlay from '@codeinoven/icons/CioPlay.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { onDestroy, tick } from 'svelte'
 
   import { toast } from 'svelte-sonner'

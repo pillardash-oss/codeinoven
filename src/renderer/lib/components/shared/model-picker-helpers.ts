@@ -1,5 +1,5 @@
-import CioClock from '$lib/components/icons/cio/CioClock.svelte'
-import CioStar from '$lib/components/icons/cio/CioStar.svelte'
+import CioClock from '@codeinoven/icons/CioClock.svelte'
+import CioStar from '@codeinoven/icons/CioStar.svelte'
 import { getAgentIcon } from '$lib/agent-icons/registry'
 import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'

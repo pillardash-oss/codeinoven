@@ -1,7 +1,7 @@
-import CioCloudOff from '$lib/components/icons/cio/CioCloudOff.svelte'
-import CioSearchX from '$lib/components/icons/cio/CioSearchX.svelte'
-import CioShieldAlert from '$lib/components/icons/cio/CioShieldAlert.svelte'
-import CioWifiOff from '$lib/components/icons/cio/CioWifiOff.svelte'
+import CioCloudOff from '@codeinoven/icons/CioCloudOff.svelte'
+import CioSearchX from '@codeinoven/icons/CioSearchX.svelte'
+import CioShieldAlert from '@codeinoven/icons/CioShieldAlert.svelte'
+import CioWifiOff from '@codeinoven/icons/CioWifiOff.svelte'
 import type { Component } from 'svelte'
 import type { GitRemoteIssueKind } from '$shared/types'
 

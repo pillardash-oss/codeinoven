@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   /**
    * The sync chooser: which end to trade commits with, which way, and how.
    *

@@ -10,6 +10,9 @@
   },
   "main": "out/main/index.js",
   "type": "module",
+  "workspaces": [
+    "packages/cio-icons"
+  ],
   "author": {
     "name": "Pillardash Solutions Limited",
     "email": "hey@pillardash.com"
@@ -79,6 +82,7 @@
     "msix:build": "bun scripts/msix.ts"
   },
   "dependencies": {
+    "@codeinoven/icons": "workspace:*",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
@@ -119,6 +123,7 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@remotion/video-matting": "4.0.535",
     "@resvg/resvg-js": "^2.6.2",
+    "sharp": "0.35.5",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/better-sqlite3": "^9.6.0",

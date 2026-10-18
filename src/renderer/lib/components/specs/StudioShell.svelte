@@ -25,7 +25,7 @@
   lang="ts"
   generics="SectionId extends string, Annotation extends { id: string; quote?: string; body: string }"
 >
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
   import { tick } from 'svelte'
 
   import type { Snippet } from 'svelte'

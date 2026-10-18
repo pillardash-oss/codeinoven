@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'

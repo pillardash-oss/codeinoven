@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioListChecks from '$lib/components/icons/cio/CioListChecks.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioTools from '$lib/components/icons/cio/CioTools.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioListChecks from '@codeinoven/icons/CioListChecks.svelte'
+  import CioPlay from '@codeinoven/icons/CioPlay.svelte'
+  import CioTools from '@codeinoven/icons/CioTools.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

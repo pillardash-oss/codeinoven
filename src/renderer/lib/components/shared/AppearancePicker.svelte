@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioCode from '$lib/components/icons/cio/CioCode.svelte'
-  import CioFolderOpen from '$lib/components/icons/cio/CioFolderOpen.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioCode from '@codeinoven/icons/CioCode.svelte'
+  import CioFolderOpen from '@codeinoven/icons/CioFolderOpen.svelte'
   import type { CustomIcon } from '$shared/types'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {

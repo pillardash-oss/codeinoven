@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFolder from '$lib/components/icons/cio/CioFolder.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioFolder from '@codeinoven/icons/CioFolder.svelte'
+  import CioForward from '@codeinoven/icons/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import type { Project } from '$shared/types'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'

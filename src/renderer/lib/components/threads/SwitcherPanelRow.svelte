@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioBrowser from '$lib/components/icons/cio/CioBrowser.svelte'
-  import CioFile from '$lib/components/icons/cio/CioFile.svelte'
-  import CioTerminal from '$lib/components/icons/cio/CioTerminal.svelte'
+  import CioBrowser from '@codeinoven/icons/CioBrowser.svelte'
+  import CioFile from '@codeinoven/icons/CioFile.svelte'
+  import CioTerminal from '@codeinoven/icons/CioTerminal.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import type { SwitcherPanelTab } from './thread-switcher-entries'
   import type { Component } from 'svelte'

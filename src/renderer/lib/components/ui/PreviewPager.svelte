@@ -15,8 +15,8 @@
 </script>
 
 <script lang="ts">
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioBack from '@codeinoven/icons/CioBack.svelte'
+  import CioForward from '@codeinoven/icons/CioForward.svelte'
   interface Props {
     pager: PreviewPagerState
     class?: string

@@ -15,8 +15,8 @@
 </script>
 
 <script lang="ts" generics="T extends string">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
   /**
    * Single-select enum picker: one value out of a short list, chosen from a
    * dropdown. Composed on the same `bits-ui` dropdown the app's other pickers

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
+  import CioChat from '@codeinoven/icons/CioChat.svelte'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { appPanelSlot } from '$lib/app-panel-portal'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'

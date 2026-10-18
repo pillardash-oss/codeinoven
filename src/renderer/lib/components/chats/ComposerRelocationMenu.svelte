@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioCopy from '@codeinoven/icons/CioCopy.svelte'
+  import CioForward from '@codeinoven/icons/CioForward.svelte'
   import { ContextMenu } from 'bits-ui'
 
   import type { Snippet } from 'svelte'

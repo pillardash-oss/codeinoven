@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioAlertCircle from '$lib/components/icons/cio/CioAlertCircle.svelte'
-  import CioPause from '$lib/components/icons/cio/CioPause.svelte'
-  import CioPlay from '$lib/components/icons/cio/CioPlay.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioVolume from '$lib/components/icons/cio/CioVolume.svelte'
+  import CioAlertCircle from '@codeinoven/icons/CioAlertCircle.svelte'
+  import CioPause from '@codeinoven/icons/CioPause.svelte'
+  import CioPlay from '@codeinoven/icons/CioPlay.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioVolume from '@codeinoven/icons/CioVolume.svelte'
   import { onMount } from 'svelte'
 
   import { slide } from 'svelte/transition'

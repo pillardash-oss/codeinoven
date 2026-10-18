@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import { onMount } from 'svelte'
 
   import { invoke } from '$lib/ipc.svelte'

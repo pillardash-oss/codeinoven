@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioMessage from '@codeinoven/icons/CioMessage.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   interface Props {
     x: number

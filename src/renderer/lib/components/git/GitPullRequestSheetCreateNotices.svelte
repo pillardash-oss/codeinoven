@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioTabInfo from '$lib/components/icons/cio/CioTabInfo.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioTabInfo from '@codeinoven/icons/CioTabInfo.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 

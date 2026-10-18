@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
+  import CioCopy from '@codeinoven/icons/CioCopy.svelte'
+  import CioSparkles from '@codeinoven/icons/CioSparkles.svelte'
   /**
    * Copy control for one recording-history attempt.
    *

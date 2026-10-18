@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioBack from '$lib/components/icons/cio/CioBack.svelte'
-  import CioForward from '$lib/components/icons/cio/CioForward.svelte'
+  import CioBack from '@codeinoven/icons/CioBack.svelte'
+  import CioForward from '@codeinoven/icons/CioForward.svelte'
   import { fly } from 'svelte/transition'
   import { tickArrive } from './card-motion'
 

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFileText from '$lib/components/icons/cio/CioFileText.svelte'
-  import CioWindow from '$lib/components/icons/cio/CioWindow.svelte'
+  import CioFileText from '@codeinoven/icons/CioFileText.svelte'
+  import CioWindow from '@codeinoven/icons/CioWindow.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
 
   type CallbackResult = void | Promise<void>

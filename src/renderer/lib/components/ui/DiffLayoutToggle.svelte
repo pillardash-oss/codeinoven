@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioBoard from '$lib/components/icons/cio/CioBoard.svelte'
-  import CioRows3 from '$lib/components/icons/cio/CioRows3.svelte'
+  import CioBoard from '@codeinoven/icons/CioBoard.svelte'
+  import CioRows3 from '@codeinoven/icons/CioRows3.svelte'
   import { diffLayoutState } from '$lib/stores/diff-layout.svelte'
 
   interface Props {

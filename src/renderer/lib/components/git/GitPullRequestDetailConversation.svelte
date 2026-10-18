@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioChat from '$lib/components/icons/cio/CioChat.svelte'
-  import CioMessage from '$lib/components/icons/cio/CioMessage.svelte'
+  import CioChat from '@codeinoven/icons/CioChat.svelte'
+  import CioMessage from '@codeinoven/icons/CioMessage.svelte'
   /**
    * The pull request conversation, as GitHub organises it.
    *

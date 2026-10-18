@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioUndo from '$lib/components/icons/cio/CioUndo.svelte'
-  import CioZoomIn from '$lib/components/icons/cio/CioZoomIn.svelte'
-  import CioZoomOut from '$lib/components/icons/cio/CioZoomOut.svelte'
+  import CioUndo from '@codeinoven/icons/CioUndo.svelte'
+  import CioZoomIn from '@codeinoven/icons/CioZoomIn.svelte'
+  import CioZoomOut from '@codeinoven/icons/CioZoomOut.svelte'
   import type { PanZoom } from '$lib/pan-zoom.svelte'
 
   interface Props {

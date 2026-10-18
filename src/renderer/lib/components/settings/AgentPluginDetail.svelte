@@ -1,15 +1,15 @@
 <script lang="ts">
-  import CioArrowLeft from '$lib/components/icons/cio/CioArrowLeft.svelte'
-  import CioAttention from '$lib/components/icons/cio/CioAttention.svelte'
-  import CioBook from '$lib/components/icons/cio/CioBook.svelte'
-  import CioBookmark from '$lib/components/icons/cio/CioBookmark.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioExternalLink from '$lib/components/icons/cio/CioExternalLink.svelte'
-  import CioRefresh from '$lib/components/icons/cio/CioRefresh.svelte'
-  import CioServer from '$lib/components/icons/cio/CioServer.svelte'
-  import CioSparkles from '$lib/components/icons/cio/CioSparkles.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTrash from '$lib/components/icons/cio/CioTrash.svelte'
+  import CioArrowLeft from '@codeinoven/icons/CioArrowLeft.svelte'
+  import CioAttention from '@codeinoven/icons/CioAttention.svelte'
+  import CioBook from '@codeinoven/icons/CioBook.svelte'
+  import CioBookmark from '@codeinoven/icons/CioBookmark.svelte'
+  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
+  import CioExternalLink from '@codeinoven/icons/CioExternalLink.svelte'
+  import CioRefresh from '@codeinoven/icons/CioRefresh.svelte'
+  import CioServer from '@codeinoven/icons/CioServer.svelte'
+  import CioSparkles from '@codeinoven/icons/CioSparkles.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioTrash from '@codeinoven/icons/CioTrash.svelte'
   import {
     invalidateAgentPluginMarket,
     loadAgentPluginDetail,

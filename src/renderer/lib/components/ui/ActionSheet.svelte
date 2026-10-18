@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import BottomSheet from './BottomSheet.svelte'
 

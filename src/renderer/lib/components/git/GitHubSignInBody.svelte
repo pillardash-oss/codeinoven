@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioCopy from '$lib/components/icons/cio/CioCopy.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioTimerOff from '$lib/components/icons/cio/CioTimerOff.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioCopy from '@codeinoven/icons/CioCopy.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioTimerOff from '@codeinoven/icons/CioTimerOff.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 

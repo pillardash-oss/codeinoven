@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCommit from '$lib/components/icons/cio/CioCommit.svelte'
-  import CioDownload from '$lib/components/icons/cio/CioDownload.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
-  import CioUpload from '$lib/components/icons/cio/CioUpload.svelte'
+  import CioCommit from '@codeinoven/icons/CioCommit.svelte'
+  import CioDownload from '@codeinoven/icons/CioDownload.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
+  import CioUpload from '@codeinoven/icons/CioUpload.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'

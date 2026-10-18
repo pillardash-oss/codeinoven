@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSearch from '$lib/components/icons/cio/CioSearch.svelte'
+  import CioSearch from '@codeinoven/icons/CioSearch.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
 
   /**

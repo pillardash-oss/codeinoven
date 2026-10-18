@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioChevronDown from '$lib/components/icons/cio/CioChevronDown.svelte'
+  import CioChevronDown from '@codeinoven/icons/CioChevronDown.svelte'
   interface Props {
     /**
      * Whether the card is folded away (its body hidden). Bindable so the owning

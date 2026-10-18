@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '$lib/components/icons/cio/CioCheck.svelte'
-  import CioClose from '$lib/components/icons/cio/CioClose.svelte'
-  import CioPalette from '$lib/components/icons/cio/CioPalette.svelte'
+  import CioCheck from '@codeinoven/icons/CioCheck.svelte'
+  import CioClose from '@codeinoven/icons/CioClose.svelte'
+  import CioPalette from '@codeinoven/icons/CioPalette.svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import Modal from '../ui/Modal.svelte'
   import ColorPicker from './ColorPicker.svelte'

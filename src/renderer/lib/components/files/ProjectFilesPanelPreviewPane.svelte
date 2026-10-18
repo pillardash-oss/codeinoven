@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFileQuestion from '$lib/components/icons/cio/CioFileQuestion.svelte'
-  import CioSpinner from '$lib/components/icons/cio/CioSpinner.svelte'
+  import CioFileQuestion from '@codeinoven/icons/CioFileQuestion.svelte'
+  import CioSpinner from '@codeinoven/icons/CioSpinner.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
