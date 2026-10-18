@@ -620,7 +620,7 @@ export function piCoreToolsSubagentSource(): string {
   /** Built-in worker tools wrapped with the same permission gate as the primary. */
   function gatedWorkerTools(parentCtx, touchedFiles) {
     async function gate(toolName, params) {
-      if (toolName === 'bash' && recordValue(params) && typeof params['command'] === 'string') {
+      if (['bash', 'powershell', 'cmd'].includes(toolName) && recordValue(params) && typeof params['command'] === 'string') {
         const workspaceWide = params['command']
           .split(/&&|;|\\|\\||\\|/u)
           .find(function (segment) { return isWorkspaceWideVerification(segment) })
@@ -655,6 +655,7 @@ export function piCoreToolsSubagentSource(): string {
     const builtins = [
       createReadToolDefinition(parentCtx.cwd),
       createBashToolDefinition(parentCtx.cwd),
+      ...createCioWindowsShellTools(parentCtx.cwd),
       createEditToolDefinition(parentCtx.cwd),
       createWriteToolDefinition(parentCtx.cwd)
     ]
@@ -749,7 +750,7 @@ export function piCoreToolsSubagentSource(): string {
         services: shared,
         sessionManager,
         ...modelOptions,
-        tools: ['read', 'bash', 'edit', 'write'],
+        tools: ['read', 'bash', 'edit', 'write', ...windowsShellTools.map((tool) => tool.name)],
         customTools
       })
       return { session: created.session, shared: true }
@@ -758,7 +759,7 @@ export function piCoreToolsSubagentSource(): string {
       cwd: parentCtx.cwd,
       sessionManager,
       ...modelOptions,
-      tools: ['read', 'bash', 'edit', 'write'],
+      tools: ['read', 'bash', 'edit', 'write', ...windowsShellTools.map((tool) => tool.name)],
       customTools
     })
     return { session: created.session, shared: false }

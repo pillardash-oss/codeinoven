@@ -2,7 +2,7 @@ import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { existsSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { basename, isAbsolute, relative, resolve } from 'path'
+import { basename, isAbsolute, join, relative, resolve } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
 import type { UpdateBlockerTerminal } from '../../lib/ipc-contract'
@@ -175,8 +175,16 @@ function resolveStartingDirectory(baseCwd: string, directory: string): string {
   return real
 }
 
-/** Resolve the user's preferred shell: $SHELL → zsh → bash. */
+/** Use native Windows shells, or the user's preferred Unix login shell. */
 function resolveShell(): string {
+  if (process.platform === 'win32') {
+    const systemRoot = process.env['SystemRoot'] || 'C:\\Windows'
+    const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    if (existsSync(powershell)) return powershell
+    return (
+      process.env['ComSpec'] || process.env['COMSPEC'] || join(systemRoot, 'System32', 'cmd.exe')
+    )
+  }
   const preferred = process.env['SHELL']
   if (preferred && existsSync(preferred)) return preferred
   if (existsSync('/bin/zsh')) return '/bin/zsh'
@@ -187,6 +195,11 @@ function resolveShell(): string {
 /** Match the login-shell behavior users expect from a desktop terminal. */
 function resolveShellArgs(shell: string): string[] {
   switch (basename(shell)) {
+    case 'powershell.exe':
+    case 'pwsh.exe':
+      return ['-NoLogo', '-NoProfile']
+    case 'cmd.exe':
+      return ['/d']
     case 'bash':
     case 'dash':
     case 'fish':
@@ -197,6 +210,17 @@ function resolveShellArgs(shell: string): string[] {
     default:
       return []
   }
+}
+
+function resolveShellCommandArgs(shell: string, script: string): string[] {
+  if (process.platform !== 'win32') return ['-lc', script]
+  if (basename(shell).toLowerCase() === 'cmd.exe') return ['/d', '/s', '/c', script]
+  return [
+    ...resolveShellArgs(shell),
+    '-NonInteractive',
+    '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')
+  ]
 }
 
 /**
@@ -718,7 +742,7 @@ export class PtyService {
 
     const shell = resolveShell()
     const createdAt = Date.now()
-    const proc = pty.spawn(shell, ['-lc', script], {
+    const proc = pty.spawn(shell, resolveShellCommandArgs(shell, script), {
       name: 'xterm-256color',
       cols,
       rows,
