@@ -70,7 +70,7 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
 const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
-app.setName(APP_NAME)
+app.setName(app.isPackaged ? APP_NAME : 'Electron')
 // Use a standard Chrome user agent: app/runtime product tokens cause browser
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.

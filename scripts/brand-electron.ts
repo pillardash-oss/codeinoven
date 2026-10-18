@@ -1,18 +1,12 @@
 /**
- * Brand the dev-mode Electron bundle with the product name (macOS only).
- *
- * `electron-vite dev` launches the raw Electron.app binary from node_modules,
- * so the menu bar and Dock display "Electron" unless the bundle is patched.
- * This script rewrites CFBundleDisplayName / CFBundleName in Info.plist and
- * swaps the bundle icon, then re-signs the modified bundle so the dev
- * experience matches the packaged app.
- * Runs via the `predev` hook; only changes bundle resources when necessary.
+ * Keep the macOS development runtime named Electron, independently of production
+ * branding. Repair bundles prepared by older CodeInOven branding scripts and
+ * re-sign changed resources so native OS integrations keep working.
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { APP_ID, APP_NAME } from '../src/lib/brand'
 import { Logger } from '../src/main/system/logger'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -23,39 +17,39 @@ if (process.platform !== 'darwin') {
 
 const appBundle = join(root, 'node_modules/electron/dist/Electron.app')
 const plistPath = join(appBundle, 'Contents/Info.plist')
-const iconTarget = join(appBundle, 'Contents/Resources/electron.icns')
-const iconSource = join(root, 'src/renderer/static/macos/AppIcon.icns')
+const developmentName = 'Electron'
+const developmentId = 'com.github.Electron'
 
 if (!existsSync(plistPath)) {
   Logger.dev('[brand-electron] Electron.app not found — skipping.')
   process.exit(0)
 }
 
-// Keep Electron's conventional entry path available for packagers, while dev
-// launches use the product executable so macOS attributes capture correctly.
+// Restore the standard launch path even if an earlier preparation selected
+// CodeInOven. Preserve existing executables because a dev instance may use them.
 const executableDirectory = join(appBundle, 'Contents/MacOS')
-const brandedExecutable = join(executableDirectory, APP_NAME)
-const originalExecutable = join(executableDirectory, 'Electron')
+const originalExecutable = join(executableDirectory, developmentName)
 let resourcesChanged = false
-if (!existsSync(brandedExecutable)) {
-  copyFileSync(originalExecutable, brandedExecutable)
+if (!existsSync(originalExecutable)) {
+  copyFileSync(join(executableDirectory, 'CodeInOven'), originalExecutable)
   resourcesChanged = true
 }
-writeFileSync(
-  join(root, 'node_modules/electron/path.txt'),
-  `Electron.app/Contents/MacOS/${APP_NAME}`
-)
+const pathTxt = join(root, 'node_modules/electron/path.txt')
+const developmentPath = 'Electron.app/Contents/MacOS/Electron'
+if (!existsSync(pathTxt) || readFileSync(pathTxt, 'utf8').trim() !== developmentPath) {
+  writeFileSync(pathTxt, developmentPath)
+}
 
 const current = readFileSync(plistPath, 'utf8')
 let plist = current
 for (const [key, value] of [
-  ['CFBundleDisplayName', APP_NAME],
-  ['CFBundleName', APP_NAME],
-  ['CFBundleIdentifier', APP_ID],
-  ['CFBundleExecutable', APP_NAME],
+  ['CFBundleDisplayName', developmentName],
+  ['CFBundleName', developmentName],
+  ['CFBundleIdentifier', developmentId],
+  ['CFBundleExecutable', developmentName],
   [
     'NSMicrophoneUsageDescription',
-    `Record audio for local dictation and transcription in ${APP_NAME}.`
+    `Record audio for local dictation and transcription in ${developmentName}.`
   ]
 ]) {
   const entry = new RegExp(`(<key>${key}</key>\\s*<string>)[^<]*(</string>)`)
@@ -66,18 +60,6 @@ for (const [key, value] of [
 if (plist !== current) {
   writeFileSync(plistPath, plist, 'utf8')
   resourcesChanged = true
-}
-
-// Keep the bundle icon synchronized even when the app identity was branded by
-// an earlier run.
-if (existsSync(iconSource)) {
-  const iconIsCurrent =
-    existsSync(iconTarget) && readFileSync(iconSource).equals(readFileSync(iconTarget))
-
-  if (!iconIsCurrent) {
-    copyFileSync(iconSource, iconTarget)
-    resourcesChanged = true
-  }
 }
 
 // Invalidate the Launch Services cache when branding changes so macOS picks up
@@ -107,4 +89,4 @@ try {
   }
 }
 
-Logger.dev(`[brand-electron] Dev bundle prepared as ${APP_NAME}.`)
+Logger.dev(`[brand-electron] Dev bundle prepared as ${developmentName}.`)
