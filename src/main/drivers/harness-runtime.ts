@@ -694,12 +694,19 @@ export async function prepareHarnessInvocation(
   const env = { ...(options.env ?? buildProcessEnvironment()) }
   if (options.cwd) {
     // Set all runtime conventions before launch so harness children inherit
-    // workspace scratch without changing the desktop process environment.
+    // workspace scratch without changing the desktop process environment. A
+    // workspace whose scratch cannot be created (a path that no longer exists,
+    // or one we may not write to) must not fail the launch: the child then
+    // inherits the ambient temp directory instead of the whole turn dying.
     const directory = resolve(options.cwd, '.cio', 'tmp')
-    await mkdir(directory, { recursive: true })
-    env['TMPDIR'] = directory
-    env['TEMP'] = directory
-    env['TMP'] = directory
+    try {
+      await mkdir(directory, { recursive: true })
+      env['TMPDIR'] = directory
+      env['TEMP'] = directory
+      env['TMP'] = directory
+    } catch {
+      // Leave TMPDIR/TEMP/TMP as inherited.
+    }
   }
   if (process.platform !== 'win32') {
     if (!resolveExecutablePath(command, env)) {
