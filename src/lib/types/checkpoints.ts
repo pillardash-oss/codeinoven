@@ -34,7 +34,25 @@ export type TurnCheckpointStatus = 'active' | 'completed' | 'failed' | 'interrup
  */
 export type TurnCheckpointStopReason = 'app-closed' | 'crash'
 
+/** Recorded tool evidence. Content hashes in the checkpoint independently verify the diff. */
+export interface FileChangeSource {
+  tool: string
+  toolPartId: string
+  messageId: string
+  callId: string
+  status: 'completed' | 'error'
+  command?: string
+  commandTruncated?: boolean
+  commandHash?: string
+  verification: 'tool-target-and-content' | 'shell-window-and-content'
+  window?: { startedAt: number; endedAt: number }
+}
+
 export interface TurnCheckpointChangeSummary {
+  /** Missing on historical checkpoints whose authorship was not recorded. */
+  sources?: FileChangeSource[]
+  beforeHash?: string
+  afterHash?: string
   path: string
   kind: 'created' | 'modified' | 'deleted'
   binary: boolean

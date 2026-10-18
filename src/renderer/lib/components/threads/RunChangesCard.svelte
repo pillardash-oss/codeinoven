@@ -42,8 +42,6 @@
   let showAll = $state(false)
   let undoing = $state(false)
   let redoing = $state(false)
-  /** The card's own box, watched so a fold never slides the transcript. */
-  let cardRoot = $state<HTMLElement | undefined>(undefined)
 
   const additionsTotal = $derived(
     checkpoint.changes.reduce((total, change) => total + (change.additions ?? 0), 0)
@@ -69,7 +67,7 @@
   /** The state the card is honestly in, not a duration it does not track. */
   const chip = $derived(rolledBack ? { text: 'Undone', tone: 'paused' as const } : undefined)
   const title = $derived(
-    `Edited ${checkpoint.changes.length} ${checkpoint.changes.length === 1 ? 'file' : 'files'}`
+    `${checkpoint.changes.every((change) => change.sources?.length) ? 'Edited' : 'Detected'} ${checkpoint.changes.length} ${checkpoint.changes.length === 1 ? 'file' : 'files'}`
   )
 
   function statusLabel(kind: TurnCheckpointChangeSummary['kind']): string {
@@ -125,8 +123,7 @@
    * view must not move the page at all, so the offset is only corrected when the
    * card has been scrolled past the top edge.
    */
-  function holdReadingPosition(delta: number): void {
-    const card = cardRoot
+  function holdReadingPosition(card: HTMLElement, delta: number): void {
     const scroller = card?.closest<HTMLElement>('.conversation-scroll')
     if (!card || !scroller || delta === 0) return
     if (card.getBoundingClientRect().top >= scroller.getBoundingClientRect().top) return
@@ -135,25 +132,23 @@
 
   // Height changes run through the fold transition, one frame at a time, so the
   // correction follows the animation instead of landing after it.
-  $effect(() => {
-    const card = cardRoot
-    if (!card) return
+  function preserveReadingPosition(card: HTMLElement): () => void {
     let lastHeight = card.offsetHeight
     const observer = new ResizeObserver(() => {
       const height = card.offsetHeight
-      holdReadingPosition(height - lastHeight)
+      holdReadingPosition(card, height - lastHeight)
       lastHeight = height
     })
     observer.observe(card)
     return () => observer.disconnect()
-  })
+  }
 </script>
 
 <!-- The turn's checkpoint: what the turn touched, what it cost in lines, and the
 two things a reader does with it. Square, in the same head/body/foot language as
 the composer cards, with both actions quiet in the head: undoing is the frequent
 one and reviewing is optional, so neither is dressed as the card's main call. -->
-<div bind:this={cardRoot} class="min-w-0">
+<div {@attach preserveReadingPosition} class="min-w-0">
   <CardFrame placement="top" label="Edited files">
     <CardHead {title} icon={CioDiff} {chip} foldLabel="changed files" bind:folded>
       {#snippet meta()}
@@ -231,62 +226,116 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
               <!-- A row arrives where it belongs and moves nothing else: the row
                  animates transform and opacity only, so expanding the list never
                  steps on the fold's scroll compensation above. -->
-              <div
-                class="group flex min-h-9 w-full items-center gap-1 border-b border-border px-3 transition-colors last:border-b-0 hover:bg-elevated"
-                in:fly={rowArrive()}
-              >
-                <HoverDiffPopover
-                  {projectId}
-                  {threadId}
-                  checkpointId={checkpoint.id}
-                  path={change.path}
-                  class="min-w-0 flex-1"
-                  maxHeight="18rem"
+              <div class="border-b border-border last:border-b-0">
+                <div
+                  class="group flex min-h-9 w-full items-center gap-1 border-b border-border px-3 transition-colors last:border-b-0 hover:bg-elevated"
+                  in:fly={rowArrive()}
                 >
-                  {#snippet trigger()}
-                    <button
-                      type="button"
-                      class="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-left font-mono text-[0.6875rem] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-                      title={`Reveal ${change.path} on the Changes tab`}
-                      onclick={() => onRevealFile(change.path)}
-                    >
-                      <span
-                        class="w-3 shrink-0 text-center font-semibold text-warning"
-                        class:text-success={change.kind === 'created'}
-                        class:text-danger={change.kind === 'deleted'}
+                  <HoverDiffPopover
+                    {projectId}
+                    {threadId}
+                    checkpointId={checkpoint.id}
+                    path={change.path}
+                    class="min-w-0 flex-1"
+                    maxHeight="18rem"
+                  >
+                    {#snippet trigger()}
+                      <button
+                        type="button"
+                        class="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-left font-mono text-[0.6875rem] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                        title={`Reveal ${change.path} on the Changes tab`}
+                        onclick={() => onRevealFile(change.path)}
                       >
-                        {statusLabel(change.kind)}
-                      </span>
-                      <FileTypeIcon path={change.path} size={14} />
-                      <span
-                        class="min-w-0 flex-1 truncate text-muted"
-                        class:line-through={changeRolledBack}
-                      >
-                        {change.path}
-                      </span>
-                      {#if changeRolledBack}
-                        <span class="shrink-0 font-sans text-[0.5625rem] text-dimmed">restored</span
+                        <span
+                          class="w-3 shrink-0 text-center font-semibold text-warning"
+                          class:text-success={change.kind === 'created'}
+                          class:text-danger={change.kind === 'deleted'}
                         >
-                      {:else if change.binary}
-                        <span class="shrink-0 font-sans text-[0.5625rem] text-dimmed">binary</span>
-                      {:else if added !== null || removed !== null}
-                        <span class="flex shrink-0 gap-1 tabular-nums">
-                          <span class="text-success">+{added ?? 0}</span>
-                          <span class="text-danger">−{removed ?? 0}</span>
+                          {statusLabel(change.kind)}
                         </span>
+                        <FileTypeIcon path={change.path} size={14} />
+                        <span
+                          class="min-w-0 flex-1 truncate text-muted"
+                          class:line-through={changeRolledBack}
+                        >
+                          {change.path}
+                        </span>
+                        {#if changeRolledBack}
+                          <span class="shrink-0 font-sans text-[0.5625rem] text-dimmed"
+                            >restored</span
+                          >
+                        {:else if change.binary}
+                          <span class="shrink-0 font-sans text-[0.5625rem] text-dimmed">binary</span
+                          >
+                        {:else if added !== null || removed !== null}
+                          <span class="flex shrink-0 gap-1 tabular-nums">
+                            <span class="text-success">+{added ?? 0}</span>
+                            <span class="text-danger">−{removed ?? 0}</span>
+                          </span>
+                        {/if}
+                      </button>
+                    {/snippet}
+                  </HoverDiffPopover>
+                  <button
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                    aria-label={`Open ${change.path} in the file viewer`}
+                    title={`Open ${change.path} in the file viewer`}
+                    onclick={() => onOpenFile(change.path)}
+                  >
+                    <CioEye size={13} />
+                  </button>
+                </div>
+                <details class="px-3 pb-2 text-[0.625rem] text-dimmed">
+                  <summary class="cursor-pointer hover:text-foreground">Change source</summary>
+                  {#each change.sources ?? [] as source (source.toolPartId)}
+                    <div class="mt-1 break-words border-l border-border pl-2">
+                      <p>
+                        {source.tool} · {source.status === 'error'
+                          ? 'failed call, possible partial write'
+                          : 'completed call'}
+                      </p>
+                      <p class="font-mono">Call: {source.callId}</p>
+                      <p class="font-mono">Message: {source.messageId}</p>
+                      <p class="font-mono">Tool part: {source.toolPartId}</p>
+                      {#if source.command}
+                        <pre
+                          class="mt-1 whitespace-pre-wrap break-all font-mono">{source.command}</pre>
                       {/if}
-                    </button>
-                  {/snippet}
-                </HoverDiffPopover>
-                <button
-                  type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  aria-label={`Open ${change.path} in the file viewer`}
-                  title={`Open ${change.path} in the file viewer`}
-                  onclick={() => onOpenFile(change.path)}
-                >
-                  <CioEye size={13} />
-                </button>
+                      {#if source.commandTruncated}
+                        <p>
+                          Command preview truncated. The full command is recorded in the tool call
+                          above.
+                        </p>
+                      {/if}
+                      {#if source.commandHash}
+                        <p class="break-all font-mono">Command SHA-256: {source.commandHash}</p>
+                      {/if}
+                      <p>
+                        {source.verification === 'shell-window-and-content'
+                          ? 'Write target matched a shell fingerprint window and a content change.'
+                          : 'Tool write target matched a content change. No shell timing evidence.'}
+                      </p>
+                      {#if source.window}
+                        <p>
+                          Window: {new Date(source.window.startedAt).toISOString()} to {new Date(
+                            source.window.endedAt
+                          ).toISOString()}
+                        </p>
+                      {/if}
+                    </div>
+                  {:else}
+                    <p class="mt-1">
+                      Workspace snapshot only. Author and originating tool were not verified.
+                    </p>
+                  {/each}
+                  {#if change.beforeHash || change.afterHash}
+                    <p class="mt-1 break-all font-mono">
+                      Before SHA-256: {change.beforeHash ?? 'absent'}
+                    </p>
+                    <p class="break-all font-mono">After SHA-256: {change.afterHash ?? 'absent'}</p>
+                  {/if}
+                </details>
               </div>
             {/each}
           </div>

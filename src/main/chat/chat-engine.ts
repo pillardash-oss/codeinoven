@@ -696,8 +696,10 @@ import { readableRelayAttachments } from './chat-engine/continuation-attachments
 import {
   UNBOUNDED_MUTATING_TOOLS,
   changedPathsFromTool,
+  fileChangeSource,
   normalizedToolName,
-  projectRelativePath
+  projectRelativePath,
+  toolWriteTargets
 } from './chat-engine/chat-engine-changes'
 import {
   apiFollowUpTask,
@@ -13995,8 +13997,11 @@ export class ChatEngine {
       info.activeTurnUserMessageId = undefined
       info.changedPaths = undefined
       info.preciseChangedPaths = undefined
+      info.changeSources = undefined
+      info.rejectedChangeSources = undefined
       info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
+      info.unboundedWindowToolIds = undefined
       info.unboundedToolObserved = undefined
       info.unboundedWindowStart = undefined
     }
@@ -23691,15 +23696,18 @@ export class ChatEngine {
           const latePaths = changedPathsFromTool(session.projectPath, part)
           const unboundedLate = UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))
           if (latePaths.length > 0 || unboundedLate) {
-            void this.reopenSettledTurnForLateClaim(session, latePaths, unboundedLate)
+            const owner = session
+            void this.reopenSettledTurnForLateClaim(owner, latePaths, unboundedLate).then(() => {
+              if (owner.activeTurnId) this.recordToolChangeSources(owner, part)
+            })
           }
         }
         if (session?.activeTurnId) {
           if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
             session.unboundedToolObserved = true
-            this.trackUnboundedToolWindow(session, part.id, part.state.status)
+            this.trackUnboundedToolWindow(session, part)
           }
-          const precisePaths = changedPathsFromTool(session.projectPath, part)
+          const precisePaths = this.recordToolChangeSources(session, part)
           if (precisePaths.length > 0) {
             session.changedPaths ??= new Set()
             session.preciseChangedPaths ??= new Map()
@@ -23710,7 +23718,9 @@ export class ChatEngine {
               // when a tool event names the same file.
               if (session.userTouchedPaths?.has(path)) continue
               session.changedPaths.add(path)
-              session.preciseChangedPaths.set(path, claimedAt)
+              if (!UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
+                session.preciseChangedPaths.set(path, claimedAt)
+              }
             }
             // Scanner: at end of each file-related tool call, validate the
             // claimed paths actually changed vs the turn's before snapshot. This
@@ -24009,7 +24019,19 @@ export class ChatEngine {
       session.activeTurnUserMessageId = checkpoint.sourceMessageId
       session.changedPaths = new Set(checkpoint.changes.map((change) => change.path))
       session.preciseChangedPaths = new Map()
+      session.changeSources = new Map(
+        Object.entries(checkpoint.changeSourceRefs ?? {}).map(([path, references]) => [
+          path,
+          references.flatMap((reference) => {
+            const source = checkpoint.toolSources?.[reference.toolPartId]
+            return source
+              ? [{ ...source, verification: reference.verification, window: reference.window }]
+              : []
+          })
+        ])
+      )
       session.openUnboundedTools = undefined
+      session.unboundedWindowToolIds = undefined
       session.unboundedToolObserved = unboundedClaim
       session.unboundedWindowStart = undefined
       session.pendingWindowScans = undefined
@@ -24017,27 +24039,7 @@ export class ChatEngine {
       for (const path of claimedPaths) {
         if (session.userTouchedPaths?.has(path)) continue
         session.changedPaths.add(path)
-        session.preciseChangedPaths.set(path, claimedAt)
-      }
-      if (unboundedClaim) {
-        // A shell-like tool exposes no target paths, so its mutations must be
-        // read off the workspace instead. Diff the current content against the
-        // reopened checkpoint's turn-start snapshot   precisely the files this
-        // turn's late shell commands wrote. Foreign-thread claims are still
-        // excluded later at completion; the user's own edits are excluded here.
-        try {
-          const shellPaths = await this.checkpointManager.changedPathsSince(
-            session.projectId,
-            session.projectPath,
-            checkpoint.before
-          )
-          for (const path of shellPaths) {
-            if (session.userTouchedPaths?.has(path)) continue
-            session.changedPaths.add(path)
-          }
-        } catch (error) {
-          Logger.dev('late-claim shell attribution failed:', error)
-        }
+        if (!unboundedClaim) session.preciseChangedPaths.set(path, claimedAt)
       }
     }
     const pending = (session.pendingReopen ?? Promise.resolve())
@@ -29723,12 +29725,16 @@ export class ChatEngine {
    */
   private trackUnboundedToolWindow(
     session: SessionInfo,
-    toolPartId: string,
-    status: Extract<AgentPart, { type: 'tool' }>['state']['status']
+    part: Extract<AgentPart, { type: 'tool' }>
   ): void {
+    const toolPartId = part.id
+    const status = part.state.status
     const openTools = (session.openUnboundedTools ??= new Set())
     if (status === 'pending' || status === 'running') {
       if (openTools.has(toolPartId)) return
+      // Read commands and opaque scripts have no attributable targets. Do not
+      // scan the project for them or start timers that cannot prove ownership.
+      if (toolWriteTargets(session.projectPath, part).length === 0) return
       if (openTools.size === 0) {
         session.unboundedWindowStart = this.checkpointManager
           .fingerprint(session.projectId, session.projectPath)
@@ -29738,6 +29744,8 @@ export class ChatEngine {
           })
       }
       openTools.add(toolPartId)
+      session.unboundedWindowToolIds ??= new Set()
+      session.unboundedWindowToolIds.add(toolPartId)
       return
     }
     if (!openTools.delete(toolPartId)) return
@@ -29756,6 +29764,8 @@ export class ChatEngine {
 
   private closeUnboundedToolWindow(session: SessionInfo): void {
     const start = session.unboundedWindowStart
+    const toolIds = session.unboundedWindowToolIds ?? new Set<string>()
+    session.unboundedWindowToolIds = undefined
     session.unboundedWindowStart = undefined
     session.openUnboundedTools?.clear()
     if (!start) return
@@ -29803,12 +29813,43 @@ export class ChatEngine {
           }
         }
         session.changedPaths ??= new Set()
-        for (const path of this.checkpointManager.diffFingerprints(
-          session.projectId,
-          before,
-          after
-        )) {
+        const moved = new Set(
+          this.checkpointManager.diffFingerprints(session.projectId, before, after)
+        )
+        for (const [path, sources] of session.changeSources ?? []) {
+          if (moved.has(path) && !userMoved?.has(path)) continue
+          const kept = sources.filter((source) => !toolIds.has(source.toolPartId))
+          for (const source of sources) {
+            if (!toolIds.has(source.toolPartId)) continue
+            session.rejectedChangeSources ??= new Map()
+            const rejected = session.rejectedChangeSources.get(path) ?? new Set<string>()
+            rejected.add(source.toolPartId)
+            session.rejectedChangeSources.set(path, rejected)
+          }
+          if (kept.length) session.changeSources?.set(path, kept)
+          else {
+            session.changeSources?.delete(path)
+            session.changedPaths.delete(path)
+          }
+        }
+        for (const path of moved) {
           if (userMoved?.has(path)) continue
+          // A timing window alone cannot identify the author. Require an
+          // explicit write target from this turn's recorded tool calls too.
+          const sources = session.changeSources?.get(path)
+          if (!sources?.length) continue
+          session.changeSources?.set(
+            path,
+            sources.map((source) =>
+              toolIds.has(source.toolPartId)
+                ? {
+                    ...source,
+                    verification: 'shell-window-and-content',
+                    window: { startedAt: before.capturedAt, endedAt: after.capturedAt }
+                  }
+                : source
+            )
+          )
           session.changedPaths.add(path)
         }
       } catch (error) {
@@ -29874,6 +29915,29 @@ export class ChatEngine {
     return merged
   }
 
+  /** Record bounded provenance from terminal tool calls; the checkpoint validates content. */
+  private recordToolChangeSources(
+    session: SessionInfo,
+    part: Extract<AgentPart, { type: 'tool' }>
+  ): string[] {
+    const source = fileChangeSource(part)
+    if (!source) return []
+    const paths = changedPathsFromTool(session.projectPath, part)
+    session.changeSources ??= new Map()
+    session.changedPaths ??= new Set()
+    for (const path of paths) {
+      if (session.userTouchedPaths?.has(path)) continue
+      if (session.rejectedChangeSources?.get(path)?.has(source.toolPartId)) continue
+      const sources = session.changeSources.get(path) ?? []
+      if (!sources.some((entry) => entry.toolPartId === source.toolPartId)) {
+        // Bound retained evidence per file. Every entry still links to its full transcript call.
+        session.changeSources.set(path, [...sources.slice(-3), source])
+      }
+      session.changedPaths.add(path)
+    }
+    return paths
+  }
+
   /**
    * Re-assert the mutating-tool evidence a settled turn's own transcript
    * proves. Live part events are the normal source, but they can be missed: a
@@ -29886,15 +29950,17 @@ export class ChatEngine {
    * diff, so no change is invented.
    */
   private reassertTurnToolEvidence(session: SessionInfo, messages: readonly AgentMessage[]): void {
-    for (const message of messages) {
+    const anchor = session.activeTurnUserMessageId
+      ? messages.findLastIndex((message) => message.id === session.activeTurnUserMessageId)
+      : -1
+    for (const message of anchor >= 0 ? messages.slice(anchor + 1) : messages) {
       if (message.role !== 'assistant') continue
       for (const part of message.parts) {
         if (part.type !== 'tool') continue
         if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
           session.unboundedToolObserved = true
-          continue
         }
-        const paths = changedPathsFromTool(session.projectPath, part)
+        const paths = this.recordToolChangeSources(session, part)
         if (paths.length === 0) continue
         session.changedPaths ??= new Set()
         session.preciseChangedPaths ??= new Map()
@@ -29904,7 +29970,9 @@ export class ChatEngine {
           // the user's edit, exactly as in the live part handler.
           if (session.userTouchedPaths?.has(path)) continue
           session.changedPaths.add(path)
-          session.preciseChangedPaths.set(path, claimedAt)
+          if (!UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
+            session.preciseChangedPaths.set(path, claimedAt)
+          }
         }
       }
     }
@@ -29934,12 +30002,11 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // Shell commands can hide writes inside Python, JavaScript, subprocesses,
-        // or syntax this parser has never seen. Use the full turn snapshot when
-        // one ran. completeTurn still removes user-owned paths and paths claimed
-        // by foreign threads, while precise parsed paths resolve same-file races.
-        info.unboundedToolObserved ? undefined : (info.changedPaths ?? new Set<string>()),
+        // A shell invocation is not evidence of ownership. Only paths tied to
+        // actual mutating tool calls may survive content-diff verification.
+        new Set([...(info.changedPaths ?? [])].filter((path) => info.changeSources?.has(path))),
         {
+          changeSources: info.changeSources,
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignClaimedPaths: this.liveForeignClaimedPaths(info, ownThreadIds),
           // Worker sub-agent threads dispatched by this thread are part of the
@@ -29953,8 +30020,11 @@ export class ChatEngine {
       info.activeTurnUserMessageId = undefined
       info.changedPaths = undefined
       info.preciseChangedPaths = undefined
+      info.changeSources = undefined
+      info.rejectedChangeSources = undefined
       info.userTouchedPaths = undefined
       info.openUnboundedTools = undefined
+      info.unboundedWindowToolIds = undefined
       info.unboundedToolObserved = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
@@ -30064,7 +30134,10 @@ export class ChatEngine {
     // mirrors completeTurn so a fork never claims a file it didn't touch.
     const MAX_LIVE_PATHS = 200
     const changedPaths = session.changedPaths ?? new Set<string>()
-    const rawPaths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
+    const rawPaths = [...changedPaths]
+      .filter((path) => session.changeSources?.has(path))
+      .sort()
+      .slice(0, MAX_LIVE_PATHS)
     const turnStart = checkpoint.before.createdAt
     const ownThreadIds = await this.selfFamilyThreadIds(projectId, threadId)
     const foreign = await this.checkpointManager.foreignClaimedPathsForLive(
@@ -30137,7 +30210,8 @@ export class ChatEngine {
           } satisfies TurnCheckpointChangeSummary
         })
       )
-      for (const r of results) if (r) changes.push(r)
+      for (const r of results)
+        if (r) changes.push({ ...r, sources: session.changeSources?.get(r.path) })
     }
     if (changes.length === 0) return null
     // Keep deterministic ordering
@@ -30253,8 +30327,11 @@ export class ChatEngine {
       hasReportedTokenUsage: existing?.hasReportedTokenUsage,
       changedPaths: continuesTurn ? existing?.changedPaths : undefined,
       preciseChangedPaths: continuesTurn ? existing?.preciseChangedPaths : new Map(),
+      changeSources: continuesTurn ? existing?.changeSources : new Map(),
+      rejectedChangeSources: continuesTurn ? existing?.rejectedChangeSources : new Map(),
       userTouchedPaths: continuesTurn ? existing?.userTouchedPaths : undefined,
       openUnboundedTools: continuesTurn ? existing?.openUnboundedTools : new Set(),
+      unboundedWindowToolIds: continuesTurn ? existing?.unboundedWindowToolIds : undefined,
       unboundedToolObserved: continuesTurn ? existing?.unboundedToolObserved : false,
       unboundedWindowStart: continuesTurn ? existing?.unboundedWindowStart : undefined,
       pendingWindowScans: continuesTurn ? existing?.pendingWindowScans : new Set(),
