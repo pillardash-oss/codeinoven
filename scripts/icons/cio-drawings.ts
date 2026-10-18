@@ -70,6 +70,8 @@ const solid = (x: number, y: number, w: number, h: number, r: number) =>
 const dot = (cx: number, cy: number, r: number) =>
   `<circle cx="${cx}" cy="${cy}" r="${r}" fill="currentColor" stroke="none" />`
 
+const archiveShell = `<rect x="3.6" y="4.6" width="16.8" height="5" rx="1.6" />${solid(5.8, 6.4, 3.8, 1.4, 0.7)}<path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />`
+
 export const CIO_GLYPHS: GlyphEntry[] = [
   {
     id: 'actions',
@@ -95,7 +97,16 @@ export const CIO_GLYPHS: GlyphEntry[] = [
     glyph: {
       kind: 'drawn',
       note: 'Archive: a lid with a solid tab over a box, which is a stored thing rather than a plain crate.',
-      shapes: `<rect x="3.6" y="4.6" width="16.8" height="5" rx="1.6" />${solid(5.8, 6.4, 3.8, 1.4, 0.7)}<path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" /><path d="M10 13.4h4" />`
+      shapes: `${archiveShell}<path d="M10 13.4h4" />`
+    }
+  },
+  {
+    id: 'compact-send',
+    title: 'Compact and send',
+    glyph: {
+      kind: 'drawn',
+      note: 'Compact and send: the archive lid, tab and box with the send arrow replacing the inner dash. The upright stem and square chevron stay clear of the lid and floor at control size.',
+      shapes: `${archiveShell}<path d="M12 17.6v-5.8" /><path d="m9.6 14.2 2.4-2.4 2.4 2.4" />`
     }
   },
   {

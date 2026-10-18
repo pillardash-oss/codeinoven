@@ -1,7 +1,7 @@
 <script lang="ts">
   import CioArrowUp from '@codeinoven/icons/CioArrowUp.svelte'
   import CioClock from '@codeinoven/icons/CioClock.svelte'
-  import CioArchive from '@codeinoven/icons/CioArchive.svelte'
+  import CioCompactSend from '@codeinoven/icons/CioCompactSend.svelte'
   import CioFlame from '@codeinoven/icons/CioFlame.svelte'
   import CioMaximize from '@codeinoven/icons/CioMaximize.svelte'
   import CioMinimize from '@codeinoven/icons/CioMinimize.svelte'
@@ -2295,10 +2295,7 @@
         </span>
         <span class="control-glyph" class:is-active={sendControlGlyph === 'send'}>
           {#if compactBeforeSend}
-            <span class="absolute inset-0 flex items-center justify-center">
-              <CioArchive size={ICON_SIZE.inline} class="shrink-0" />
-              <CioArrowUp size={ICON_SIZE.inline} class="shrink-0" />
-            </span>
+            <CioCompactSend size={ICON_SIZE.control} />
           {:else}
             <CioArrowUp size={ICON_SIZE.control} />
           {/if}

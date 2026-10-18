@@ -64,6 +64,7 @@ import CioCloud from './CioCloud.svelte'
 import CioCloudOff from './CioCloudOff.svelte'
 import CioCode from './CioCode.svelte'
 import CioCommit from './CioCommit.svelte'
+import CioCompactSend from './CioCompactSend.svelte'
 import CioCookie from './CioCookie.svelte'
 import CioCopy from './CioCopy.svelte'
 import CioCpu from './CioCpu.svelte'
@@ -304,6 +305,7 @@ export const CIO_ICONS = {
   'cloud-off': CioCloudOff,
   code: CioCode,
   commit: CioCommit,
+  'compact-send': CioCompactSend,
   cookie: CioCookie,
   copy: CioCopy,
   cpu: CioCpu,
@@ -548,6 +550,7 @@ export {
   CioCloudOff,
   CioCode,
   CioCommit,
+  CioCompactSend,
   CioCookie,
   CioCopy,
   CioCpu,

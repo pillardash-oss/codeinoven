@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Compact and send</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 2rem;
+        background: var(--color-app);
+        color: var(--color-foreground);
+        font-family: var(--font-app);
+        font-size: 1rem;
+      }
+      main {
+        max-width: 38rem;
+        margin: auto;
+      }
+      h1 {
+        font-size: 1.25rem;
+        font-weight: 500;
+        margin: 0 0 2rem;
+      }
+      section {
+        border-top: 1px solid var(--color-border);
+        padding: 1.5rem 0;
+        display: flex;
+        gap: 2rem;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      figure {
+        margin: 0;
+        display: grid;
+        justify-items: center;
+        gap: 1rem;
+      }
+      figcaption {
+        font-size: 0.75rem;
+        color: var(--color-muted);
+      }
+      button {
+        width: 2rem;
+        height: 2rem;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        display: grid;
+        place-items: center;
+      }
+      svg {
+        display: block;
+      }
+      button:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 0.25rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Compact and send</h1>
+      <section>
+        <figure>
+          <svg
+            viewBox="0 0 24 24"
+            width="4rem"
+            height="4rem"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+            class=""
+            aria-hidden="true"
+          >
+            <g transform="translate(-2.169 -2.515) scale(1.1807)" stroke-width="1.5245193529262302">
+              <rect x="3.6" y="4.6" width="16.8" height="5" rx="0" />
+              <rect
+                x="5.8"
+                y="6.4"
+                width="3.8"
+                height="1.4"
+                stroke="none"
+                style="fill: var(--icon-anchor, currentColor)"
+              />
+              <path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />
+              <path d="M12 17.6v-5.8" />
+              <path d="m9.6 14.2 2.4-2.4 2.4 2.4" />
+            </g>
+          </svg>
+          <figcaption>Combined mark</figcaption>
+        </figure>
+        <figure>
+          <svg
+            viewBox="0 0 24 24"
+            width="1.0625rem"
+            height="1.0625rem"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+            class=""
+            aria-hidden="true"
+          >
+            <g transform="translate(-2.169 -2.515) scale(1.1807)" stroke-width="1.5245193529262302">
+              <rect x="3.6" y="4.6" width="16.8" height="5" rx="0" />
+              <rect
+                x="5.8"
+                y="6.4"
+                width="3.8"
+                height="1.4"
+                stroke="none"
+                style="fill: var(--icon-anchor, currentColor)"
+              />
+              <path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />
+              <path d="M10 13.4h4" />
+            </g>
+          </svg>
+          <figcaption>Compact</figcaption>
+        </figure>
+        <figure>
+          <svg
+            viewBox="0 0 24 24"
+            width="1.0625rem"
+            height="1.0625rem"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+            class=""
+            aria-hidden="true"
+          >
+            <g transform="translate(2.346 2.497) scale(0.8045)" stroke-width="2.237414543194531">
+              <path d="M12 19.6V4.4" />
+              <path d="M5.8 10.6 12 4.4l6.2 6.2" />
+            </g>
+          </svg>
+          <figcaption>Send</figcaption>
+        </figure>
+        <figure>
+          <button
+            title="Compact context and send message"
+            aria-label="Compact context and send message"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="1.0625rem"
+              height="1.0625rem"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+              class=""
+              aria-hidden="true"
+            >
+              <g
+                transform="translate(-2.169 -2.515) scale(1.1807)"
+                stroke-width="1.5245193529262302"
+              >
+                <rect x="3.6" y="4.6" width="16.8" height="5" rx="0" />
+                <rect
+                  x="5.8"
+                  y="6.4"
+                  width="3.8"
+                  height="1.4"
+                  stroke="none"
+                  style="fill: var(--icon-anchor, currentColor)"
+                />
+                <path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />
+                <path d="M12 17.6v-5.8" />
+                <path d="m9.6 14.2 2.4-2.4 2.4 2.4" />
+              </g>
+            </svg>
+          </button>
+          <figcaption>Composer button</figcaption>
+        </figure>
+      </section>
+      <section>
+        <figure>
+          <svg
+            viewBox="0 0 24 24"
+            width=".8125rem"
+            height=".8125rem"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+            class=""
+            aria-hidden="true"
+          >
+            <g transform="translate(-2.169 -2.515) scale(1.1807)" stroke-width="1.5245193529262302">
+              <rect x="3.6" y="4.6" width="16.8" height="5" rx="0" />
+              <rect
+                x="5.8"
+                y="6.4"
+                width="3.8"
+                height="1.4"
+                stroke="none"
+                style="fill: var(--icon-anchor, currentColor)"
+              />
+              <path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />
+              <path d="M12 17.6v-5.8" />
+              <path d="m9.6 14.2 2.4-2.4 2.4 2.4" />
+            </g>
+          </svg>
+          <figcaption>Inline</figcaption>
+        </figure>
+        <figure>
+          <svg
+            viewBox="0 0 24 24"
+            width="1.0625rem"
+            height="1.0625rem"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+            class=""
+            aria-hidden="true"
+          >
+            <g transform="translate(-2.169 -2.515) scale(1.1807)" stroke-width="1.5245193529262302">
+              <rect x="3.6" y="4.6" width="16.8" height="5" rx="0" />
+              <rect
+                x="5.8"
+                y="6.4"
+                width="3.8"
+                height="1.4"
+                stroke="none"
+                style="fill: var(--icon-anchor, currentColor)"
+              />
+              <path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />
+              <path d="M12 17.6v-5.8" />
+              <path d="m9.6 14.2 2.4-2.4 2.4 2.4" />
+            </g>
+          </svg>
+          <figcaption>Control</figcaption>
+        </figure>
+        <figure>
+          <svg
+            viewBox="0 0 24 24"
+            width="1.375rem"
+            height="1.375rem"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+            class=""
+            aria-hidden="true"
+          >
+            <g transform="translate(-2.169 -2.515) scale(1.1807)" stroke-width="1.5245193529262302">
+              <rect x="3.6" y="4.6" width="16.8" height="5" rx="0" />
+              <rect
+                x="5.8"
+                y="6.4"
+                width="3.8"
+                height="1.4"
+                stroke="none"
+                style="fill: var(--icon-anchor, currentColor)"
+              />
+              <path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />
+              <path d="M12 17.6v-5.8" />
+              <path d="m9.6 14.2 2.4-2.4 2.4 2.4" />
+            </g>
+          </svg>
+          <figcaption>Feature</figcaption>
+        </figure>
+      </section>
+      <section
+        class="dark"
+        style="background: var(--color-app); color: var(--color-foreground); padding: 1.5rem"
+      >
+        <figure>
+          <button
+            title="Compact context and send message"
+            aria-label="Compact context and send message"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="1.0625rem"
+              height="1.0625rem"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="square"
+              stroke-linejoin="miter"
+              class=""
+              aria-hidden="true"
+            >
+              <g
+                transform="translate(-2.169 -2.515) scale(1.1807)"
+                stroke-width="1.5245193529262302"
+              >
+                <rect x="3.6" y="4.6" width="16.8" height="5" rx="0" />
+                <rect
+                  x="5.8"
+                  y="6.4"
+                  width="3.8"
+                  height="1.4"
+                  stroke="none"
+                  style="fill: var(--icon-anchor, currentColor)"
+                />
+                <path d="M5.4 9.6v8.8a1.6 1.6 0 0 0 1.6 1.6h10a1.6 1.6 0 0 0 1.6-1.6V9.6" />
+                <path d="M12 17.6v-5.8" />
+                <path d="m9.6 14.2 2.4-2.4 2.4 2.4" />
+              </g>
+            </svg>
+          </button>
+          <figcaption>Dark composer button</figcaption>
+        </figure>
+      </section>
+    </main>
+  </body>
+</html>
