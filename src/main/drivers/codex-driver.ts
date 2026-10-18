@@ -18,6 +18,7 @@ import type {
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
+import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
 import {
@@ -458,7 +459,7 @@ export class CodexDriver extends PersistentCliDriver {
             ? {}
             : {
                 model_context_window: contextWindow,
-                model_auto_compact_token_limit: Math.floor(contextWindow * 0.9)
+                model_auto_compact_token_limit: Math.floor(contextWindow * COMPACT_LINE_SHARE)
               })
         }
       }
@@ -484,8 +485,9 @@ export class CodexDriver extends PersistentCliDriver {
         const currentMessageId = options.userMessageId ?? session.messages.at(-1)?.id
         return formatHistoryRecap(
           session.messages.filter((message) => message.id !== currentMessageId),
-          // Apply the transport cap below, keeping the recent end of history.
-          // The formatter's default budget retains the oldest prefix instead.
+          // Apply the transport cap below, keeping the recent end of history,
+          // so the formatter is given no budget of its own here: the cap that
+          // follows is the one that trims the oldest end when it must.
           { maxInputTokens: Number.MAX_SAFE_INTEGER }
         )
       }
@@ -2556,7 +2558,7 @@ export class CodexDriver extends PersistentCliDriver {
         '-c',
         `model_context_window=${contextWindow}`,
         '-c',
-        `model_auto_compact_token_limit=${Math.floor(contextWindow * 0.9)}`
+        `model_auto_compact_token_limit=${Math.floor(contextWindow * COMPACT_LINE_SHARE)}`
       )
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()

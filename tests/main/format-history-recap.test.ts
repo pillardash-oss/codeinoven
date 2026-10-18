@@ -38,11 +38,26 @@ describe('formatHistoryRecap', () => {
 
   it('keeps the default 50k-token budget when no budget is given', () => {
     // 30k chars (~7.5k tokens) sits well under the 50k-token default, so the
-    // whole message is preserved rather than tail-sliced to 24k characters.
+    // whole message is preserved rather than sliced to 24k characters.
     const messages = [message('user', 'x'.repeat(30_000)), message('assistant', 'ok')]
     const recap = formatHistoryRecap(messages, {})
     expect(recap).toContain('Transcript restored from history:')
     expect(recap).toContain('x'.repeat(30_000))
+    expect(recap).not.toContain('Older history was omitted')
+  })
+
+  it('keeps the newest end of the transcript when the budget cuts it', () => {
+    const messages = [
+      message('user', `START_MARKER${'o'.repeat(5_000)}`),
+      message('assistant', `${'a'.repeat(5_000)}END_MARKER`)
+    ]
+    const recap = formatHistoryRecap(messages, { maxInputTokens: 300 })
+    // The resumed session continues from the newest turn: the recent end
+    // survives, the opening is the part that is dropped.
+    expect(recap).toContain('END_MARKER')
+    expect(recap).not.toContain('START_MARKER')
+    expect(recap).toContain('Older history was omitted')
+    expect(recap).toContain("End of restored history. The user's actual request follows.")
   })
 
   it('truncates past the default 50k-token budget when exceeded', () => {
