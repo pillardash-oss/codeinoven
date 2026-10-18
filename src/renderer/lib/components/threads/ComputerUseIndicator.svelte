@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioCursor from '@pillardash-oss/cio-icon/CioCursor.svelte'
+  import CioCursor from '@codeio/icon/CioCursor.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label: string

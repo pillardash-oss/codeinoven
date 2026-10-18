@@ -1,9 +1,9 @@
 import type { Component } from 'svelte'
-import CioNote from '@pillardash-oss/cio-icon/CioNote.svelte'
-import CioNotes from '@pillardash-oss/cio-icon/CioNotes.svelte'
-import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
-import CioTabTasks from '@pillardash-oss/cio-icon/CioTabTasks.svelte'
-import CioPackage from '@pillardash-oss/cio-icon/CioPackage.svelte'
+import CioNote from '@codeio/icon/CioNote.svelte'
+import CioNotes from '@codeio/icon/CioNotes.svelte'
+import CioTabSettings from '@codeio/icon/CioTabSettings.svelte'
+import CioTabTasks from '@codeio/icon/CioTabTasks.svelte'
+import CioPackage from '@codeio/icon/CioPackage.svelte'
 
 /**
  * Every feature's canonical name and mark live here, once.

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
+  import CioForward from '@codeio/icon/CioForward.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
   import type { ProjectFileEntry } from '$shared/types'
   import type { ProjectFilesState } from '$lib/stores/project-files.svelte'
   import type { WorkRoots } from '$shared/design/work-roots'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSwap from '@pillardash-oss/cio-icon/CioSwap.svelte'
-  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioSwap from '@codeio/icon/CioSwap.svelte'
+  import CioTabInfo from '@codeio/icon/CioTabInfo.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 

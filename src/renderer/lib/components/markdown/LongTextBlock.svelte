@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
-  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
+  import CioChevronUp from '@codeio/icon/CioChevronUp.svelte'
+  import CioCopy from '@codeio/icon/CioCopy.svelte'
   import { copyText } from '$lib/copy-text'
 
   interface Props {

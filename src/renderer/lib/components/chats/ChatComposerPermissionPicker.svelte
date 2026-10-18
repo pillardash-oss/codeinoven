@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioShield from '@pillardash-oss/cio-icon/CioShield.svelte'
-  import CioShieldAlert from '@pillardash-oss/cio-icon/CioShieldAlert.svelte'
-  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioShield from '@codeio/icon/CioShield.svelte'
+  import CioShieldAlert from '@codeio/icon/CioShieldAlert.svelte'
+  import CioShieldCheck from '@codeio/icon/CioShieldCheck.svelte'
   import { PERMISSION_LEVELS, permissionLevelLabel } from '$lib/actions'
   import type { PermissionLevel } from '$shared/types'
 

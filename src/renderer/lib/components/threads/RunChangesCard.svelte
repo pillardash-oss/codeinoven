@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
-  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import CioDiff from '@codeio/icon/CioDiff.svelte'
+  import CioEye from '@codeio/icon/CioEye.svelte'
+  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioUndo from '@codeio/icon/CioUndo.svelte'
   import { fly, slide } from 'svelte/transition'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import HoverDiffPopover from '../files/HoverDiffPopover.svelte'

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
-  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
+  import CioKey from '@codeio/icon/CioKey.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioTrash from '@codeio/icon/CioTrash.svelte'
   import { onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke } from '$lib/ipc.svelte'

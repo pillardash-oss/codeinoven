@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioWindow from '@codeio/icon/CioWindow.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   import type { EditorId } from '$shared/types'

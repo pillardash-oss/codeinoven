@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioTrash from '@codeio/icon/CioTrash.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { plainTextEditorTarget } from '../../speech/editor-target'

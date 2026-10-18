@@ -1,6 +1,6 @@
 <script lang="ts" generics="Filter extends string, Sort extends string">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioFilter from '@pillardash-oss/cio-icon/CioFilter.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioFilter from '@codeio/icon/CioFilter.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   /**

@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
-  import CioPaperclip from '@pillardash-oss/cio-icon/CioPaperclip.svelte'
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
-  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
+  import CioFileText from '@codeio/icon/CioFileText.svelte'
+  import CioMessage from '@codeio/icon/CioMessage.svelte'
+  import CioPaperclip from '@codeio/icon/CioPaperclip.svelte'
+  import CioPlus from '@codeio/icon/CioPlus.svelte'
+  import CioSearch from '@codeio/icon/CioSearch.svelte'
+  import CioShieldCheck from '@codeio/icon/CioShieldCheck.svelte'
+  import CioUpload from '@codeio/icon/CioUpload.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   import type {

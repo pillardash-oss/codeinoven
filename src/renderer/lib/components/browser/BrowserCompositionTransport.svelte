@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
-  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
-  import CioPause from '@pillardash-oss/cio-icon/CioPause.svelte'
-  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSquare from '@pillardash-oss/cio-icon/CioSquare.svelte'
+  import CioBack from '@codeio/icon/CioBack.svelte'
+  import CioForward from '@codeio/icon/CioForward.svelte'
+  import CioPause from '@codeio/icon/CioPause.svelte'
+  import CioPlay from '@codeio/icon/CioPlay.svelte'
+  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioSquare from '@codeio/icon/CioSquare.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     BrowserCompositionPlayback,

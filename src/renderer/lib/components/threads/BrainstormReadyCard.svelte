@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioLightbulb from '@pillardash-oss/cio-icon/CioLightbulb.svelte'
+  import CioLightbulb from '@codeio/icon/CioLightbulb.svelte'
   import { slide } from 'svelte/transition'
   import type { BrainstormPrototype, ProviderCatalog, ThreadSettings } from '$shared/types'
   import BrainstormNextStepMenu from '../shared/BrainstormNextStepMenu.svelte'

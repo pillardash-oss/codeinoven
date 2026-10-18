@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
+  import CioMessagePlus from '@codeio/icon/CioMessagePlus.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'

@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioBraces from '@pillardash-oss/cio-icon/CioBraces.svelte'
-  import CioFile from '@pillardash-oss/cio-icon/CioFile.svelte'
-  import CioFileCode from '@pillardash-oss/cio-icon/CioFileCode.svelte'
-  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
-  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
+  import CioBraces from '@codeio/icon/CioBraces.svelte'
+  import CioFile from '@codeio/icon/CioFile.svelte'
+  import CioFileCode from '@codeio/icon/CioFileCode.svelte'
+  import CioFileText from '@codeio/icon/CioFileText.svelte'
+  import CioTag from '@codeio/icon/CioTag.svelte'
   import { getFileTypeIconDataUri } from './file-type-icons'
 
   interface Props {

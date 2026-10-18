@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioTrash from '@codeio/icon/CioTrash.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech, type SpeechRetryStatus } from '$lib/stores/speech.svelte'
   import { formatDateTime } from '$shared/date-time-format'

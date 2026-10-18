@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
+  import CioEye from '@codeio/icon/CioEye.svelte'
   import { slide } from 'svelte/transition'
   import CardHead from '../shared/CardHead.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

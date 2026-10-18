@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
-  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioAlertCircle from '@codeio/icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
+  import CioClock from '@codeio/icon/CioClock.svelte'
+  import CioDownload from '@codeio/icon/CioDownload.svelte'
+  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioTabInfo from '@codeio/icon/CioTabInfo.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     preloadSettingsChunk,

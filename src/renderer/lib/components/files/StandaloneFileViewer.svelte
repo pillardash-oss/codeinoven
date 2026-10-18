@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioMinimize from '@pillardash-oss/cio-icon/CioMinimize.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
+  import CioMinimize from '@codeio/icon/CioMinimize.svelte'
   import Modal from '../ui/Modal.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioKeyboard from '@pillardash-oss/cio-icon/CioKeyboard.svelte'
+  import CioKeyboard from '@codeio/icon/CioKeyboard.svelte'
   import { KEYMAP, isMacPlatform, keymapKeyGroups } from '$lib/keymap/keymap'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 

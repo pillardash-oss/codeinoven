@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioCaseSensitive from '@pillardash-oss/cio-icon/CioCaseSensitive.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
-  import CioReplace from '@pillardash-oss/cio-icon/CioReplace.svelte'
-  import CioReplaceAll from '@pillardash-oss/cio-icon/CioReplaceAll.svelte'
+  import CioCaseSensitive from '@codeio/icon/CioCaseSensitive.svelte'
+  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
+  import CioChevronUp from '@codeio/icon/CioChevronUp.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
+  import CioForward from '@codeio/icon/CioForward.svelte'
+  import CioReplace from '@codeio/icon/CioReplace.svelte'
+  import CioReplaceAll from '@codeio/icon/CioReplaceAll.svelte'
   import { onDestroy, tick } from 'svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 

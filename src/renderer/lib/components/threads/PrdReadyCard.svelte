@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
-  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
+  import CioFileText from '@codeio/icon/CioFileText.svelte'
   import { slide } from 'svelte/transition'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
   import CardButton from '../shared/CardButton.svelte'

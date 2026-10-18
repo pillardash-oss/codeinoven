@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
   interface Props {
     src: string | null
     alt: string

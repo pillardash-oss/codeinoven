@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioListChecks from '@pillardash-oss/cio-icon/CioListChecks.svelte'
-  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
-  import CioTools from '@pillardash-oss/cio-icon/CioTools.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
+  import CioListChecks from '@codeio/icon/CioListChecks.svelte'
+  import CioPlay from '@codeio/icon/CioPlay.svelte'
+  import CioTools from '@codeio/icon/CioTools.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

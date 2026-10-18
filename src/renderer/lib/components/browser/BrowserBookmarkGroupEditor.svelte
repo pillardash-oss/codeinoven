@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioTrash from '@codeio/icon/CioTrash.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'

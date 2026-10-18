@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioUnplug from '@pillardash-oss/cio-icon/CioUnplug.svelte'
+  import CioAttention from '@codeio/icon/CioAttention.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
+  import CioUnplug from '@codeio/icon/CioUnplug.svelte'
   import type { Snippet } from 'svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'

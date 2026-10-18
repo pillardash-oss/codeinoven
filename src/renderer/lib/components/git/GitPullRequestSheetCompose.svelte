@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
+  import CioSparkles from '@codeio/icon/CioSparkles.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   import ModelPicker from '../shared/ModelPicker.svelte'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
-  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
+  import CioFileText from '@codeio/icon/CioFileText.svelte'
+  import CioWindow from '@codeio/icon/CioWindow.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
 
   type CallbackResult = void | Promise<void>

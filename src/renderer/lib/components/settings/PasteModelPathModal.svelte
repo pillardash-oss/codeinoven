@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
-  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioAlertCircle from '@codeio/icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioTabInfo from '@codeio/icon/CioTabInfo.svelte'
   import type { ModelPathValidationResult, ParsedModelIdentity } from '../../../../lib/speech/types'
   import {
     buildParsedIdentityForValidation,

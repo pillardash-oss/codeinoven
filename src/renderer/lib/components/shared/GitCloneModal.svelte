@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioFolderInput from '@pillardash-oss/cio-icon/CioFolderInput.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioFolderInput from '@codeio/icon/CioFolderInput.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioTabGit from '@codeio/icon/CioTabGit.svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'

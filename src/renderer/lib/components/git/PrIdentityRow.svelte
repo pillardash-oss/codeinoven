@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioArrowLeft from '@codeio/icon/CioArrowLeft.svelte'
   import type { PullRequestChecks, PullRequestDetail, PullRequestSummary } from '$shared/types'
   import {
     prChecksBadgeClass,

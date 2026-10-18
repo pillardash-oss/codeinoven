@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolume from '@codeio/icon/CioVolume.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label?: string

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
-  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioPerson from '@codeio/icon/CioPerson.svelte'
+  import CioSubagent from '@codeio/icon/CioSubagent.svelte'
   import type { RepositoryMentionUser } from '$shared/types'
   import { mentionHandle } from './pr-mentions'
 

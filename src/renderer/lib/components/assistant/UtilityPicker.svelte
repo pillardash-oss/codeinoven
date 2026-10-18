@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
+  import CioPlus from '@codeio/icon/CioPlus.svelte'
+  import CioSearch from '@codeio/icon/CioSearch.svelte'
   import { Popover } from 'bits-ui'
   import { SvelteMap } from 'svelte/reactivity'
   import { utilityKindIcon, utilityKindLabel } from './utility-kind'

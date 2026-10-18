@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCheck from '@codeio/icon/CioCheck.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { pickAppearanceImage } from '$lib/appearance-image.svelte'

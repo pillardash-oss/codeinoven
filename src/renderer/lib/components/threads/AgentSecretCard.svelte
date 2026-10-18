@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
-  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioKey from '@codeio/icon/CioKey.svelte'
+  import CioShieldCheck from '@codeio/icon/CioShieldCheck.svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { fly, slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'

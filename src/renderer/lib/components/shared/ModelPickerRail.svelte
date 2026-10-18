@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
-  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
-  import CioTabUtilities from '@pillardash-oss/cio-icon/CioTabUtilities.svelte'
+  import CioLayers from '@codeio/icon/CioLayers.svelte'
+  import CioStar from '@codeio/icon/CioStar.svelte'
+  import CioTabUtilities from '@codeio/icon/CioTabUtilities.svelte'
   import RailHighlight from '../layout/RailHighlight.svelte'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import type { PickerHarnessOption, PickerRailView } from './model-picker-helpers'

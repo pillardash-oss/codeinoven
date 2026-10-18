@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
   /**
    * The close control a card head carries at its top right, before the fold.
    *

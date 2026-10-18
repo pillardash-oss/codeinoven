@@ -1,7 +1,7 @@
-import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
-import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
-import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
+import CioCrossCircle from '@codeio/icon/CioCrossCircle.svelte'
+import CioDot from '@codeio/icon/CioDot.svelte'
+import CioRefresh from '@codeio/icon/CioRefresh.svelte'
 /**
  * How a deployment or workflow run state reads at a glance.
  *

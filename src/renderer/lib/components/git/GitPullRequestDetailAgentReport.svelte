@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioSubagent from '@codeio/icon/CioSubagent.svelte'
   import PrAgentReportCard from './PrAgentReportCard.svelte'
   import type { PrAgentReport, PullRequestSummary } from '$shared/types'
 

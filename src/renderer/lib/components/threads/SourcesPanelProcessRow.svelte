@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioBrowser from '@codeio/icon/CioBrowser.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioTerminal from '@codeio/icon/CioTerminal.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type { AgentRunningProcess } from '$shared/types'
   import { processName, processStartedAt } from './sources-panel-helpers'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioArrowUpCircle from '@pillardash-oss/cio-icon/CioArrowUpCircle.svelte'
-  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioArrowUpCircle from '@codeio/icon/CioArrowUpCircle.svelte'
+  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   interface HarnessOption {
     id: string

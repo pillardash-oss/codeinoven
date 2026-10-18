@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioMaximize from '@codeio/icon/CioMaximize.svelte'
   import type { Snippet } from 'svelte'
 
   /**

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBatteryCharging from '@pillardash-oss/cio-icon/CioBatteryCharging.svelte'
-  import CioLogIn from '@pillardash-oss/cio-icon/CioLogIn.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioBatteryCharging from '@codeio/icon/CioBatteryCharging.svelte'
+  import CioLogIn from '@codeio/icon/CioLogIn.svelte'
+  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioMessage from '@codeio/icon/CioMessage.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   interface Props {
     x: number

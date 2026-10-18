@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTabGit from '@codeio/icon/CioTabGit.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { Portal } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'

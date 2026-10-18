@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioMemory from '@codeio/icon/CioMemory.svelte'
   import type { MemoryEntry } from '$shared/types'
   import { memoryScopeLabel } from './sources-panel-helpers'
 

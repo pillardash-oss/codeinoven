@@ -1,4 +1,4 @@
-import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
+import CioChat from '@codeio/icon/CioChat.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 
 import type { Component } from 'svelte'

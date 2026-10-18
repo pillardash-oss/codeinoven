@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioChevronsDown from '@pillardash-oss/cio-icon/CioChevronsDown.svelte'
-  import CioChevronsUp from '@pillardash-oss/cio-icon/CioChevronsUp.svelte'
-  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
+  import CioChevronsDown from '@codeio/icon/CioChevronsDown.svelte'
+  import CioChevronsUp from '@codeio/icon/CioChevronsUp.svelte'
+  import CioFolderOpen from '@codeio/icon/CioFolderOpen.svelte'
+  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioSearch from '@codeio/icon/CioSearch.svelte'
+  import CioTarget from '@codeio/icon/CioTarget.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {

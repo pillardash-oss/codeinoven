@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioTrash from '@codeio/icon/CioTrash.svelte'
   import { toast } from 'svelte-sonner'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
   import { openInGlobalBrowserTabOnScreen } from '$lib/open-in-browser'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioClose from '@codeio/icon/CioClose.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
 
   /**

@@ -1,5 +1,5 @@
 {
-  "name": "@pillardash-oss/cio-icon",
+  "name": "@codeio/icon",
   "version": "0.1.0",
   "description": "The handcrafted CIO icon set as reusable Svelte components.",
   "license": "MIT",
