@@ -87,6 +87,8 @@ Write one composition per folder under \`${videoRoot}/<name>/\`:
 
 ${workRootGuidance(videoRoot)} Do not write into \`.cio/specs/<feature>/prototypes/\`, which belongs to the engineering prototype phase.
 
+That folder is the composition's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a composition written there is one the user cannot find, because the board lists the folders under \`${videoRoot}\` and nothing else. A composition belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a composition is neither.
+
 ## Start from a shipped film
 
 \`scaffold\` copies a film this app ships into a project folder and installs the runtime beside it, so the first frame of the work is already a composition that plays and already exports:

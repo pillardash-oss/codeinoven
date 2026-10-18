@@ -77,6 +77,33 @@ export function workRootGuidance(root: string): string {
     : `\`${root}\` is inside the project's own tree, so it is version-controlled like the rest of the source.`
 }
 
+/**
+ * A warning that a previewed folder is not one the board lists.
+ *
+ * Authored work lives one folder under its kind's root, and the coordinator board
+ * lists exactly those folders. Work written anywhere else is work the user cannot
+ * find: the capability was used, the preview served, the tab opened, and the
+ * design missing from every list. The folder models reach for instead is their own
+ * scratch notes folder under `.cio/work`, which every prompt in the app names for
+ * non-source output, so this is a mistake the app can predict rather than a rare
+ * slip. The preview is the first moment the app sees where the work landed, so it
+ * says so in the note the model reads, and names the folder to use instead.
+ *
+ * Empty for a folder the board does list, which is the normal case. Free of
+ * `node:` imports like the rest of this module, because the renderer reads it.
+ */
+export function workFolderNote(
+  kind: AuthoredWorkKind,
+  directory: string,
+  roots: readonly string[],
+  root: string
+): string {
+  const slash = directory.lastIndexOf('/')
+  const parent = slash === -1 ? '' : directory.slice(0, slash)
+  if (parent !== '' && roots.includes(parent)) return ''
+  return `${kind === 'video' ? 'compositions' : 'designs'} live one folder under \`${root}\`, as \`${root}/<name>/\`, and the board lists those folders only: this folder is not one of them, so the user will not find the work here. Move it under \`${root}\` and preview it again.`
+}
+
 /** A root may not be this folder, whatever its spelling: work written into Git's
  *  own directory is not version control, it is damage. */
 const FORBIDDEN_ROOT_SEGMENT = '.git'
