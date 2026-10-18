@@ -47,6 +47,7 @@
     stagePathsAction: (paths: string[], staged: boolean) => void
     requestStashFor: (paths: string[]) => void
     openInEditor: (path: string) => void
+    openDirectory: (path: string) => void
     ignorePathsAction: (paths: string[]) => void
     requestDiscard: (paths: string[]) => void
     routeConflictResolution: (initial?: string) => void
@@ -86,6 +87,7 @@
     stagePathsAction,
     requestStashFor,
     openInEditor,
+    openDirectory,
     ignorePathsAction,
     requestDiscard,
     routeConflictResolution,
