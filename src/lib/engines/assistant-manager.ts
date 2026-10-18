@@ -8,7 +8,7 @@ import {
   isAssistantSetupThread,
   isAssistantRunThread
 } from '../types'
-import { pickColorForSeed } from '../project-colors'
+import { pickRandomColor } from '../project-colors'
 import { sortAssistants } from '../assistant-order'
 import { assistantOwnedDirectories } from '../thread-storage-paths'
 import { Logger } from '../../main/system/logger'
@@ -113,7 +113,10 @@ export class AssistantManager {
       // A schedule's name only exists while there is a schedule to name, so an
       // unscheduled assistant never keeps one behind its flag.
       scheduleName: scheduled ? input.scheduleName?.trim() || undefined : undefined,
-      color: input.color ?? pickColorForSeed(input.name),
+      // The accent is chosen once, here, and never derived from the name: an
+      // assistant built by talking has no name yet, and the one it is given later
+      // must not repaint a colour it has already been wearing.
+      color: input.color ?? pickRandomColor(),
       iconType: input.iconType,
       schedule: scheduled ? (input.schedule ?? null) : null,
       scheduleUpdatedAt: scheduled && input.schedule ? now : undefined,

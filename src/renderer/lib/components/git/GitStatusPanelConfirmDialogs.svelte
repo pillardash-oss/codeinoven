@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ExternalLink } from '@lucide/svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitCommitInfo, GitConflictSide, GitStashEntry } from '$shared/types'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -221,7 +221,7 @@
               data-external-url={commitInfoUrl}
               onclick={() => onOpenCommitInBrowser(commitInfoUrl)}
             >
-              <ExternalLink size={10} />
+              <CioExternalLink size={10} />
               Open in browser
             </button>
           {/if}

@@ -1,8 +1,11 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
-  import { Check, Palette, Pencil } from '@lucide/svelte'
+
   import Modal from '../ui/Modal.svelte'
   import ColorSwatches from '../shared/ColorSwatches.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
@@ -417,7 +420,7 @@
     aria-label="Annotation pen: colour and stroke width"
     onclick={() => (penOpen = true)}
   >
-    <Palette size={13} />
+    <CioPalette size={13} />
     <span
       class="absolute -right-0.5 -bottom-0.5 h-3 w-3 border border-white"
       style:background-color={annotationTool.color}
@@ -436,9 +439,9 @@
     onclick={toggleArmed}
   >
     {#if armed}
-      <Check size={13} />
+      <CioCheck size={13} />
     {:else}
-      <Pencil size={13} />
+      <CioPencil size={13} />
     {/if}
   </button>
 </div>
@@ -454,7 +457,6 @@
     initialComment={editingMark.comment ?? ''}
     targetId={`mark-comment-${threadId}-${editingMark.id}`}
     scope={{ kind: 'project', projectId }}
-    allowEmptyRemove
     onDraftChange={(comment) => draftComment(editingMark.id, comment)}
     onDone={(comment) => saveComment(editingMark.id, comment)}
     onRemove={() => removeMark(editingMark.id)}

@@ -263,6 +263,7 @@ export function normalizeAppServerItem(
     fileChange: 'file_change',
     mcpToolCall: 'mcp_tool_call',
     dynamicToolCall: 'function_call',
+    customToolCall: 'custom_tool_call',
     collabToolCall: 'collab_tool_call',
     planUpdate: 'plan_update',
     todoList: 'todo_list'

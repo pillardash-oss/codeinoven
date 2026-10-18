@@ -1,9 +1,11 @@
 <script lang="ts">
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioShieldAlert from '@pillardash-oss/cio-icon/CioShieldAlert.svelte'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { ExternalLink, ShieldAlert } from '@lucide/svelte'
+
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { applyAppTypography } from '$lib/app-typography'
+  import { applyAppTypography, applyContrastLevel } from '$lib/app-typography'
   import { TOAST_CARD_WIDTH } from '$shared/browser-overlay'
   import { sitePermissionRequestSummary } from '$shared/browser/site-permissions'
   import {
@@ -116,6 +118,7 @@
         (config.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
       document.documentElement.classList.toggle('dark', dark)
       applyAppTypography(document.documentElement, config)
+      applyContrastLevel(document.documentElement, config.contrastLevel)
     } catch {
       // The first-paint theme stays.
     }
@@ -157,9 +160,9 @@
         aria-hidden="true"
       >
         {#if external}
-          <ExternalLink size={15} stroke-width={2.25} />
+          <CioExternalLink size={15} stroke-width={2.25} />
         {:else}
-          <ShieldAlert size={15} stroke-width={2.25} />
+          <CioShieldAlert size={15} stroke-width={2.25} />
         {/if}
       </span>
       <p

@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    Archive,
-    BatteryCharging,
-    Brain,
-    ChevronDown,
-    ChevronRight,
-    Loader2
-  } from '@lucide/svelte'
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioBatteryCharging from '@pillardash-oss/cio-icon/CioBatteryCharging.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -24,6 +22,8 @@
 
   interface Props {
     usage?: AgentContextUsage
+    /** Destination window selected in the composer, for a pre-send preview. */
+    previewContextWindow?: number
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
@@ -43,6 +43,7 @@
 
   let {
     usage,
+    previewContextWindow,
     efficiencyKpis,
     harnessUsage = [],
     canCompact = false,
@@ -65,10 +66,20 @@
   const RING_RADIUS = 10
   const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
 
+  const displayedContextWindow = $derived(previewContextWindow ?? usage?.contextWindow)
+  const displayedContextPercent = $derived(
+    usage?.contextUsed !== undefined &&
+      displayedContextWindow !== undefined &&
+      displayedContextWindow > 0
+      ? (usage.contextUsed / displayedContextWindow) * 100
+      : previewContextWindow === undefined
+        ? usage?.contextPercent
+        : undefined
+  )
   const boundedPercent = $derived(
-    usage?.contextPercent === undefined
+    displayedContextPercent === undefined
       ? undefined
-      : Math.max(0, Math.min(100, usage.contextPercent))
+      : Math.max(0, Math.min(100, displayedContextPercent))
   )
   /**
    * A zero total only goes unreported when something on the thread was never
@@ -148,7 +159,7 @@
 {#snippet bankedResetRow(resets: AgentBankedResets)}
   <div transition:slide={{ duration: 250 }} class="border border-border bg-app/40 p-2.5">
     <div class="flex items-center gap-2">
-      <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
+      <CioBatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
       <span class="text-base leading-none font-semibold tabular-nums text-foreground">
         {resets.availableCount}
       </span>
@@ -172,7 +183,7 @@
       disabled={!onActivateBankedReset}
       onclick={onActivateBankedReset}
     >
-      <BatteryCharging size={11} aria-hidden="true" />
+      <CioBatteryCharging size={11} aria-hidden="true" />
       Reset usage
     </button>
   </div>
@@ -201,7 +212,7 @@
               title={`Thinking level: ${model.thinkingLevel}`}
               aria-label={`Thinking level: ${model.thinkingLevel}`}
             >
-              <Brain size={9} />
+              <CioMemory size={9} />
               {model.thinkingLevel}
             </span>
           {/if}
@@ -230,9 +241,9 @@
       onclick={() => toggleHarness(key)}
     >
       {#if collapsed}
-        <ChevronRight size={13} class="shrink-0 text-dimmed" />
+        <CioForward size={13} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronDown size={13} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={13} class="shrink-0 text-dimmed" />
       {/if}
       <AgentIcon agentId={entry.harnessId} size={16} />
       <span class="min-w-0 truncate text-[0.625rem] font-medium text-foreground">{name}</span>
@@ -365,8 +376,8 @@
         {usage?.contextUsed !== undefined
           ? `${usage.contextEstimated ? '≈' : ''}${compactCount(usage.contextUsed)}`
           : 'Unavailable'}
-        {#if usage?.contextWindow}
-          / {compactCount(usage.contextWindow)}
+        {#if displayedContextWindow}
+          / {compactCount(displayedContextWindow)}
         {/if}
       </span>
     </div>
@@ -383,16 +394,19 @@
         style={`width: ${boundedPercent ?? 0}%`}
       ></div>
     </div>
-    {#if usage?.contextWindow && usage.contextUsed !== undefined}
+    {#if displayedContextWindow && usage?.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">
         <span>Used {compactCount(usage.contextUsed)}</span>
-        <span>Available {compactCount(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
-        <span>Window {compactCount(usage.contextWindow)}</span>
+        <span
+          >Available {compactCount(Math.max(0, displayedContextWindow - usage.contextUsed))}</span
+        >
+        <span>Window {compactCount(displayedContextWindow)}</span>
       </div>
     {/if}
     {#if usage?.contextEstimated}
       <p class="mt-1.5 text-[0.5625rem] text-dimmed">
-        Estimated from the composed request because this harness does not report context telemetry.
+        Approximate context usage. The selected harness may adjust it when preparing the next
+        request.
       </p>
     {/if}
     <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.5625rem] text-dimmed">
@@ -417,10 +431,10 @@
       onclick={onCompact}
     >
       {#if compacting}
-        <Loader2 size={12} class="animate-spin" />
+        <CioSpinner size={12} class="animate-spin" />
         Compacting…
       {:else}
-        <Archive size={12} />
+        <CioArchive size={12} />
         Compact Work
       {/if}
     </button>

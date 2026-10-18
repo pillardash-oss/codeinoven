@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { tick } from 'svelte'
-  import { X } from '@lucide/svelte'
+
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
@@ -93,6 +94,6 @@
     title="Close go to line (Escape)"
     onclick={close}
   >
-    <X size={13} aria-hidden="true" />
+    <CioClose size={13} aria-hidden="true" />
   </button>
 </div>

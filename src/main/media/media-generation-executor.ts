@@ -142,7 +142,7 @@ export function createMediaGenerationExecutor(
     const directory = resolveServedFolder(
       project.path,
       input['directory'],
-      currentWorkRoot(sessionKind)
+      currentWorkRoot(sessionKind, context.projectId)
     )
 
     const result = await options.service.generate(kind, ref, assigned.model, {

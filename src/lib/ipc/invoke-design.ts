@@ -1,5 +1,7 @@
 import type {
   AuthoredWorkKind,
+  UpdateWorkDetails,
+  UpdateWorkDetailsResult,
   DesignHistoryRestoreFileResult,
   DesignHistoryState,
   DesignOpenResult,
@@ -9,9 +11,9 @@ import type {
   DesignThumbnail,
   ProjectWorkState,
   ScreenCanvasState,
-  ThreadDesignState,
-  WorkRootState
+  ThreadDesignState
 } from './design'
+import type { WorkRoots } from '../design/work-roots'
 import type { Contract } from './contract-helpers'
 import type { DesignExportFormat, DesignExportResult } from '../design/design-export'
 import type { DesignModelRanking } from '../design/design-review'
@@ -36,6 +38,15 @@ export const invokeDesignContract = {
   'video:jobs': {} as Contract<[projectId: string, threadId: string], VideoJob[]>,
   'video:cancel': {} as Contract<[projectId: string, threadId: string, jobId: string], void>,
   'video:export': {} as Contract<[projectId: string, threadId: string, directory: string], unknown>,
+  /**
+   * The export one composition already has, as a project-relative path, or null
+   * when it has never been exported.
+   *
+   * Read rather than remembered: the board asks this for the folder in front, so
+   * an export made in another thread of the same project, or before a restart,
+   * still answers for the composition that produced it.
+   */
+  'video:latestExport': {} as Contract<[projectId: string, directory: string], string | null>,
   /**
    * A waveform picture for one audio source's used range, as a data URL.
    *
@@ -135,11 +146,19 @@ export const invokeDesignContract = {
     ScreenCanvasState | null
   >,
   /**
-   * The folders designs and videos are written into, and what the last change
-   * moved. Read straight after a save, because both surfaces that change a root
-   * have to report what the move did with the work already on disk.
+   * The folders designs and videos are written into for this project.
+   *
+   * Read straight after a save, because the board that changed one has to name
+   * the folder the next design will land in. It is the project's own record, or
+   * the app default when the project never changed it: there is no app-wide value
+   * behind it.
    */
-  'design:workRootState': {} as Contract<[], WorkRootState>,
+  'design:workRoots': {} as Contract<[projectId?: string], WorkRoots>,
+  'design:removeMissing': {} as Contract<[projectId: string, directory: string], void>,
+  'design:updateDetails': {} as Contract<
+    [projectId: string, details: UpdateWorkDetails],
+    UpdateWorkDetailsResult
+  >,
   /**
    * One design or composition folder's history, captured up to the present.
    *

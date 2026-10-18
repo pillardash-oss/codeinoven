@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Plus, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import type { Snippet } from 'svelte'
   import { browserTabIndicatorSlotClass } from '$lib/stores/browser-tab-status'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
@@ -156,7 +157,7 @@
               title={`Close ${tab.title}`}
               onclick={() => onCloseTab(tab.id)}
             >
-              <X size={10} />
+              <CioClose size={10} />
             </button>
           {/if}
           {#if indicatorCount > 0 && tabIndicator}
@@ -189,7 +190,7 @@
       title={newLabel}
       onclick={() => onNew?.()}
     >
-      <Plus size={14} />
+      <CioPlus size={14} />
     </button>
   {/if}
 

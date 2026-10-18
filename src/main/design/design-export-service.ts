@@ -18,12 +18,13 @@ export async function exportDesign(
   directory: unknown,
   entry: unknown,
   format: DesignExportFormat,
-  previews: DirectoryPreviewService
+  previews: DirectoryPreviewService,
+  defaultRoot: string
 ): Promise<DesignExportResult> {
   if (exporting) throw new Error('Another design export is running. Try again when it finishes.')
   exporting = true
   try {
-    const folder = resolveServedFolder(projectRoot, directory, '.cio/designs')
+    const folder = resolveServedFolder(projectRoot, directory, defaultRoot)
     const canonicalRoot = await realpath(projectRoot)
     const canonicalFolder = await realpath(folder.absolute)
     const inside = relative(canonicalRoot, canonicalFolder)

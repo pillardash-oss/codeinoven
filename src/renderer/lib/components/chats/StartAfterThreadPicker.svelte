@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Clock, MessagesSquare } from '@lucide/svelte'
+  import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
   import type { Thread } from '$shared/types'
   import { isOrchestrationChildThread } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
@@ -88,7 +89,7 @@
           label: 'This project',
           kind: 'app'
         },
-        icon: liveWorking ? MessagesSquare : Clock,
+        icon: liveWorking ? CioChat : CioClock,
         ...(status ? { status } : {}),
         keywords: [stageLabel(thread), 'working', 'attention', 'start after'],
         disabledReason: selectedIds.includes(thread.id) ? 'Already selected' : undefined
@@ -115,7 +116,7 @@
       title="Start after threads"
       placeholder="Search working or attention threads…"
       emptyLabel={loading ? 'Loading active threads…' : 'No working or attention threads'}
-      headerIcon={Clock}
+      headerIcon={CioClock}
       headerIconBadge
       headerIconBadgeClass="border-info/25 bg-info/10 text-info"
       closeOnSelect={false}

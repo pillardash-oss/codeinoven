@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { ArrowRight, CircleCheck, CircleSlash, Eye, Loader2, TriangleAlert } from '@lucide/svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { PullRequestCompare, PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -64,7 +69,7 @@
         {/each}
       </select>
     </div>
-    <ArrowRight size={14} class="mb-2.5 shrink-0 text-primary" />
+    <CioArrowRight size={14} class="mb-2.5 shrink-0 text-primary" />
     <div class="min-w-0 flex-1">
       <label
         class="mb-1 block text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
@@ -87,24 +92,24 @@
   </div>
   <div class="mt-2 flex min-h-4 items-center gap-1.5 text-[0.625rem]">
     {#if sameBranch}
-      <CircleSlash size={12} class="shrink-0 text-dimmed" />
+      <CioBan size={12} class="shrink-0 text-dimmed" />
       <span class="text-dimmed">The head and base are the same branch pick a different head.</span>
     {:else if comparing}
-      <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
+      <CioSpinner size={12} class="shrink-0 animate-spin text-dimmed" />
       <span class="text-dimmed">Comparing {head} into {base}</span>
     {:else if compareError}
-      <TriangleAlert size={12} class="shrink-0 text-warning" />
+      <CioAttention size={12} class="shrink-0 text-warning" />
       <span class="text-warning">{compareError}</span>
     {:else if compare && !compare.hasChanges}
       {#if willCreateCommit}
-        <CircleCheck size={12} class="shrink-0 text-success" />
+        <CioCheckCircle size={12} class="shrink-0 text-success" />
         <span class="text-success">The staged changes will be committed and pushed.</span>
       {:else}
-        <CircleSlash size={12} class="shrink-0 text-dimmed" />
+        <CioBan size={12} class="shrink-0 text-dimmed" />
         <span class="text-dimmed">There isn't anything to compare.</span>
       {/if}
     {:else if compare}
-      <CircleCheck size={12} class="shrink-0 text-success" />
+      <CioCheckCircle size={12} class="shrink-0 text-success" />
       <span class="text-success">
         {compare.source === 'local' ? 'Local commits will be pushed' : 'Able to merge'}
         {compare.aheadBy} ahead · {compare.behindBy} behind ·
@@ -136,7 +141,7 @@
   {#if existingPr}
     <div class="mt-2 border border-warning/30 bg-warning/10 px-3 py-2">
       <div class="flex items-start gap-2">
-        <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
+        <CioAttention size={13} class="mt-0.5 shrink-0 text-warning" />
         <div class="min-w-0 flex-1">
           <p class="text-[0.625rem] font-medium text-warning">
             A pull request already exists for {head} into {base}
@@ -152,7 +157,7 @@
             title="Open the existing pull request in the Git panel"
             onclick={onViewExistingPr}
           >
-            <Eye size={11} />
+            <CioEye size={11} />
             View PR #{existingPr.number}
           </button>
         </div>

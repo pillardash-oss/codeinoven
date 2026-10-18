@@ -2,12 +2,14 @@ import { readFile, writeFile, rename, rm } from 'node:fs/promises'
 import type { Database } from '../database/database'
 import { Logger } from '../system/logger'
 import { paceIndexing } from './indexing-pacing'
-import { GLOBAL_BROWSER_PROJECT_ID, type Thread } from '../../lib/types'
+import { GLOBAL_BROWSER_PROJECT_ID, type Thread, type ThreadStatus } from '../../lib/types'
 import { SEARCH_MODEL_CATALOG, searchModelsForRuntime } from '../../lib/search/model-catalog'
 import {
   clampSearchContextTokens,
   DEFAULT_SEARCH_SETTINGS,
+  SEARCH_MAX_WINDOWS_PER_THREAD,
   SEARCH_MIN_RUNTIME_BUILD,
+  SEARCH_WINDOW_CHARS,
   type IntentThreadMatch,
   type InstalledSearchModel,
   type SearchArchitecture,
@@ -25,6 +27,7 @@ import type { EmbeddingRuntime } from './llama-embedding-runtime'
 import { LlamaEmbeddingRuntime, embeddingWorkingContext } from './llama-embedding-runtime'
 import { SearchModelImporter, type ImportProbe } from './search-model-importer'
 import { ThreadEmbeddingIndex, composeDocument } from './thread-embedding-index'
+import type { ThreadIndexOptions } from './thread-embedding-index'
 import { SearchStorage } from './search-storage'
 import {
   ThreadSearchSummaries,
@@ -34,6 +37,29 @@ import {
 
 /** Interval between light staleness sweeps while intent search is enabled. */
 const PERIODIC_SWEEP_MS = 5 * 60 * 1000
+
+/**
+ * How long after a run settles its thread is indexed.
+ *
+ * The transcript is already persisted when the settle status is written, so this
+ * is only insurance for the writes a settle sets in motion around it (an
+ * auto-title, the turn's checkpoint row). Long enough for those to land, short
+ * enough to read as immediate to the user who just finished the run.
+ */
+const SETTLED_INDEX_DELAY_MS = 2_000
+
+/**
+ * Statuses that mean a run stopped producing content, so the conversation a user
+ * can search is stable. `awaiting_approval` is deliberately absent: it is the
+ * mid-turn gate for a permission, question, or secret card, and the run resumes
+ * into more content after it, so indexing there is churn rather than freshness.
+ */
+const SETTLED_THREAD_STATUSES: ReadonlySet<ThreadStatus> = new Set([
+  'completed',
+  'failed',
+  'interrupted',
+  'spec'
+])
 
 interface PersistedModelIndex {
   version: 1
@@ -78,13 +104,20 @@ export class SearchService {
   private catalog: SearchModelArtifact[] = []
   private runtime: EmbeddingRuntime | null = null
   private runtimeModelId: string | null = null
+  /** A warm-up boot is in flight; a second one would only duplicate it. */
+  private warming = false
   private sweep: Promise<void> | null = null
   private sweepTotals: { total: number | null; pending: number } = { total: null, pending: 0 }
   private indexing = false
-  /** Loaded or partially built records are unusable until a full sweep succeeds. */
-  private intentReady = false
   private periodicTimer: ReturnType<typeof setInterval> | null = null
   private corpusTimer: ReturnType<typeof setTimeout> | null = null
+  /** Threads whose run just settled, awaiting an immediate targeted index pass. */
+  private readonly settledIndexQueue = new Set<string>()
+  private settledIndexTimer: ReturnType<typeof setTimeout> | null = null
+  private settledIndexWorker: Promise<void> | null = null
+  private settledIndexController: AbortController | null = null
+  /** Last status seen per thread, so a settle is read as a transition. */
+  private readonly threadStatuses = new Map<string, ThreadStatus>()
   private unsubscribeCorpus: (() => void) | null = null
   private disposed = false
   private sweepController: AbortController | null = null
@@ -95,7 +128,6 @@ export class SearchService {
     string,
     {
       thread: SearchSummaryThread
-      contentHash: string
       model: InstalledSearchModel
       generation: number
     }
@@ -176,6 +208,8 @@ export class SearchService {
   }
 
   private updateCorpusThread(thread: Thread): void {
+    const previousStatus = this.threadStatuses.get(thread.id)
+    this.threadStatuses.set(thread.id, thread.status)
     if (thread.drafting || thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       this.removeCorpusThread(thread.id)
       return
@@ -189,6 +223,16 @@ export class SearchService {
     })
     this.emitStatus()
     if (isNew) this.requestCorpusSweep()
+    // A run that just stopped producing content is indexed now: its user can be
+    // searching the conversation they just finished, and the next sweep is
+    // minutes away (and hours away when a first backfill is still running).
+    if (
+      previousStatus !== undefined &&
+      !SETTLED_THREAD_STATUSES.has(previousStatus) &&
+      SETTLED_THREAD_STATUSES.has(thread.status)
+    ) {
+      this.queueSettledIndex(thread.id)
+    }
   }
 
   private requestCorpusSweep(): void {
@@ -202,7 +246,97 @@ export class SearchService {
     this.corpusTimer.unref()
   }
 
+  /**
+   * Queue the thread a finished run belongs to for an immediate index pass.
+   *
+   * Debounced so a settle that lands while its last writes are still in flight is
+   * indexed once, against the complete conversation rather than a partial one.
+   */
+  private queueSettledIndex(threadId: string): void {
+    if (this.disposed) return
+    this.settledIndexQueue.add(threadId)
+    if (this.settledIndexTimer) return
+    this.settledIndexTimer = setTimeout(() => {
+      this.settledIndexTimer = null
+      void this.drainSettledIndex()
+    }, SETTLED_INDEX_DELAY_MS)
+    this.settledIndexTimer.unref()
+  }
+
+  /**
+   * Index every settled thread waiting in the queue, then hand the optional
+   * summaries they asked for to the summary worker.
+   *
+   * This runs beside the corpus sweep rather than behind it on purpose: a first
+   * full pass can take hours on a large corpus, and a thread the user just
+   * finished must not stay invisible to meaning-based search for that whole time.
+   * One worker serializes the passes, the embedding runtime serializes its own
+   * requests, and a failure is logged and left to the next sweep.
+   */
+  private async drainSettledIndex(): Promise<void> {
+    if (this.settledIndexWorker) return
+    this.settledIndexWorker = (async () => {
+      while (!this.disposed && this.settledIndexQueue.size > 0) {
+        const model = this.activeModel()
+        if (!this.settings.enabled || !model || !this.canEmbed()) {
+          this.settledIndexQueue.clear()
+          return
+        }
+        const ids = [...this.settledIndexQueue]
+        this.settledIndexQueue.clear()
+        await this.indexSettledThreads(ids, model)
+      }
+    })().finally(() => {
+      this.settledIndexWorker = null
+    })
+    await this.settledIndexWorker
+  }
+
+  private async indexSettledThreads(
+    ids: readonly string[],
+    model: InstalledSearchModel
+  ): Promise<void> {
+    const controller = new AbortController()
+    this.settledIndexController = controller
+    try {
+      const runtime = await this.ensureRuntime(model)
+      const options: ThreadIndexOptions = {
+        modelSignature: modelSignatureOf(
+          model,
+          embeddingWorkingContext(this.settings.contextTokens)
+        ),
+        documentPrefix: model.documentPrefix,
+        windowChars: SEARCH_WINDOW_CHARS,
+        maxWindows: SEARCH_MAX_WINDOWS_PER_THREAD,
+        expectedDimensions: model.dimensions,
+        signal: controller.signal,
+        onOversized: (thread) => {
+          this.summaryJobs.set(thread.id, { thread, model, generation: this.generation })
+        }
+      }
+      for (const id of ids) {
+        if (this.disposed) return
+        if (!this.settings.enabled || this.settings.activeModelId !== model.id) return
+        const startedAt = performance.now()
+        await this.index.indexNow(
+          id,
+          (texts) => this.embedWith(runtime, texts, controller.signal),
+          options
+        )
+        await paceIndexing(startedAt, controller.signal)
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) Logger.error('Immediate thread indexing failed:', error)
+    } finally {
+      if (this.settledIndexController === controller) this.settledIndexController = null
+      this.emitStatus()
+      this.startSummaries()
+    }
+  }
+
   private removeCorpusThread(id: string): void {
+    this.threadStatuses.delete(id)
+    this.settledIndexQueue.delete(id)
     this.index.removeThread(id)
     this.summaryJobs.delete(id)
     this.emitStatus()
@@ -297,10 +431,11 @@ export class SearchService {
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
-    this.intentReady = false
     this.settings.enabled = enabled
     if (!enabled) {
       this.sweepController?.abort()
+      this.settledIndexController?.abort()
+      this.settledIndexQueue.clear()
       this.cancelSummaries()
     }
     await this.saveSettings()
@@ -322,7 +457,6 @@ export class SearchService {
     }
     const previous = this.settings.activeModelId
     if (previous === modelId) return
-    this.intentReady = false
     await this.stopSweep()
     this.settings.activeModelId = modelId
     await this.saveSettings()
@@ -344,7 +478,6 @@ export class SearchService {
   async setContextTokens(tokens: number): Promise<void> {
     const next = clampSearchContextTokens(tokens)
     if (this.settings.contextTokens === next) return
-    this.intentReady = false
     await this.stopSweep()
     this.settings.contextTokens = next
     await this.saveSettings()
@@ -358,7 +491,6 @@ export class SearchService {
   }
 
   async rebuildIndex(): Promise<void> {
-    this.intentReady = false
     await this.stopSweep()
     await this.index.reset()
     this.sweepTotals = { total: null, pending: 0 }
@@ -369,33 +501,37 @@ export class SearchService {
   }
 
   /**
-   * Semantic matches for a query. Returns an empty list whenever intent search
-   * is off, no model is ready, or the embedding fails, so the hybrid search
-   * simply falls back to keyword results.
+   * Semantic matches for a query, ranked from whatever the index holds right now.
+   *
+   * A background sweep never suppresses an answer: every thread already indexed
+   * carries complete vectors for the revision it was embedded from, so partial
+   * coverage only means fewer candidates, never a wrong one. Gating on the sweep
+   * instead made search silently keyword-only for as long as indexing ran, which
+   * with one thread every few seconds of work is most of a working day.
+   *
+   * Returns an empty list when intent search is off, no model is ready, nothing is
+   * indexed yet, or the embedding fails, so the hybrid search falls back to
+   * keyword results.
+   *
+   * A cold runtime is booted here, so this can take tens of seconds on the first
+   * call of a session. That is deliberate: the only caller that awaits it is the
+   * spotlight's deferred enrichment, whose keyword rows are already on screen.
+   * Warm-ups at boot and on Cmd+K are what keep the wait rare.
    */
   async searchIntent(query: string, limit: number): Promise<IntentThreadMatch[]> {
     const model = this.activeModel()
     if (!this.settings.enabled || !model) return []
-    if (!this.intentReady || this.indexing) return []
+    if (this.index.size === 0) return []
     if (!this.canEmbed()) return []
     const trimmed = query.trim()
     if (trimmed.length === 0) return []
+    const document = `${model.queryPrefix}${trimmed}`
     const controller = new AbortController()
     try {
       const runtime = await this.ensureRuntime(model)
-      const vector = await this.embedOne(
-        runtime,
-        `${model.queryPrefix}${trimmed}`,
-        controller.signal
-      )
+      const vector = await this.embedOne(runtime, document, controller.signal)
       // A rebuild, disable, or model change may have started during embedding.
-      if (
-        !this.intentReady ||
-        this.indexing ||
-        !this.settings.enabled ||
-        this.settings.activeModelId !== model.id
-      )
-        return []
+      if (!this.settings.enabled || this.settings.activeModelId !== model.id) return []
       return this.index.search(vector, Math.max(1, limit))
     } catch (error) {
       Logger.dev('Intent search failed; falling back to keyword results.', error)
@@ -407,6 +543,10 @@ export class SearchService {
     this.disposed = true
     if (this.corpusTimer) clearTimeout(this.corpusTimer)
     this.corpusTimer = null
+    if (this.settledIndexTimer) clearTimeout(this.settledIndexTimer)
+    this.settledIndexTimer = null
+    this.settledIndexQueue.clear()
+    this.settledIndexController?.abort()
     this.unsubscribeCorpus?.()
     this.unsubscribeCorpus = null
     this.sweepController?.abort()
@@ -433,18 +573,16 @@ export class SearchService {
     // legitimately have no version string, and the model load itself still
     // fails loudly if it cannot handle the architecture.
     const runtimeSupported = runtimeBuild === null || runtimeBuild >= SEARCH_MIN_RUNTIME_BUILD
+    const modelReady = Boolean(model) && runtimeAvailable && runtimeSupported
     return {
-      active:
-        this.settings.enabled &&
-        this.intentReady &&
-        !this.indexing &&
-        Boolean(model) &&
-        runtimeAvailable &&
-        runtimeSupported,
+      // Active means "a query right now would return semantic matches": enabled,
+      // a runtime that can embed, and at least one thread already indexed. It no
+      // longer flickers off whenever the background sweep is running.
+      active: this.settings.enabled && modelReady && this.index.size > 0,
       runtimeAvailable,
       runtimeSupported,
       runtimeBuild,
-      modelReady: Boolean(model) && runtimeAvailable && runtimeSupported,
+      modelReady,
       activeModelId: model?.id ?? null,
       indexedThreads: this.index.size,
       pendingThreads: this.index.pending,
@@ -572,10 +710,57 @@ export class SearchService {
     text: string,
     signal: AbortSignal
   ): Promise<Float32Array> {
-    const [vector] = await runtime.embed([text], signal)
+    const [vector] = await this.embedWith(runtime, [text], signal)
     if (!vector) throw new Error('The embedding model returned no vector.')
-    normalizeInPlace(vector)
     return vector
+  }
+
+  /** Embed a batch through the runtime, normalizing every vector in place. */
+  private async embedWith(
+    runtime: EmbeddingRuntime,
+    texts: readonly string[],
+    signal: AbortSignal
+  ): Promise<Float32Array[]> {
+    const vectors = await runtime.embed(texts, signal)
+    for (const vector of vectors) normalizeInPlace(vector)
+    return vectors
+  }
+
+  /**
+   * Boot the embedding model in the background, off every interactive path.
+   *
+   * Called once the workspace is interactive (main's `workspace:ready`) and
+   * again whenever the spotlight opens, so a Cmd+K thread search finds a
+   * resident model instead of paying a cold load inside its semantic step. A
+   * no-op unless intent search is enabled with a model the local runtime can
+   * load, and idempotent while a boot is already in flight.
+   *
+   * The embed is not about the text: it is what re-arms the runtime's idle timer
+   * (five minutes), so a warm-up nobody follows up on is retired again instead of
+   * holding the model for the rest of the session.
+   */
+  warm(): void {
+    const model = this.activeModel()
+    if (!this.settings.enabled || !model || !this.canEmbed()) return
+    if (this.runtimeResident() || this.warming) return
+    this.warming = true
+    void this.warmRuntime(model, `${model.queryPrefix}warm`).finally(() => {
+      this.warming = false
+    })
+  }
+
+  private async warmRuntime(model: InstalledSearchModel, text: string): Promise<void> {
+    try {
+      const runtime = await this.ensureRuntime(model)
+      await this.embedOne(runtime, text, new AbortController().signal)
+    } catch (error) {
+      Logger.dev('Embedding runtime warm-up failed.', error)
+    }
+  }
+
+  /** Whether the model is loaded, so an embed would not pay a boot first. */
+  private runtimeResident(): boolean {
+    return this.runtime?.isResident() ?? false
   }
 
   /**
@@ -601,16 +786,15 @@ export class SearchService {
   private async stopSweep(): Promise<void> {
     this.cancelSummaries()
     this.sweepController?.abort()
+    this.settledIndexController?.abort()
     await this.sweep
   }
 
   private async performSweep(reason: string): Promise<void> {
-    this.intentReady = false
     const model = this.activeModel()
     if (!model) return
     if (!this.canEmbed()) return
     if (this.index.pending === 0) {
-      this.intentReady = true
       this.emitStatus()
       return
     }
@@ -621,27 +805,23 @@ export class SearchService {
     this.sweepController = controller
     try {
       const runtime = await this.ensureRuntime(model)
-      const documentChars = Math.min(
-        262_144,
-        (embeddingWorkingContext(this.settings.contextTokens) - 1) * 8
-      )
+      // The runtime's physical window sizes one embedding; a thread's windows are
+      // spread across its whole conversation at a fixed, measured character width
+      // so every thread is sampled on the same scale.
+      const effectiveTokens = embeddingWorkingContext(this.settings.contextTokens)
+      const modelSignature = modelSignatureOf(model, effectiveTokens)
       const result = await this.index.sweep(
-        async (texts) => {
-          const vectors = await runtime.embed(texts, controller.signal)
-          for (const vector of vectors) normalizeInPlace(vector)
-          return vectors
-        },
+        (texts) => this.embedWith(runtime, texts, controller.signal),
         {
-          modelSignature: `raw-v3:${model.id}:${model.dimensions}:${this.settings.contextTokens}`,
+          modelSignature,
           documentPrefix: model.documentPrefix,
+          windowChars: SEARCH_WINDOW_CHARS,
+          maxWindows: SEARCH_MAX_WINDOWS_PER_THREAD,
           expectedDimensions: model.dimensions,
           signal: controller.signal,
-          fitsContext: (text) => runtime.fitsContext(text, controller.signal),
-          documentChars,
-          onOversized: (thread, contentHash) => {
+          onOversized: (thread) => {
             this.summaryJobs.set(thread.id, {
               thread,
-              contentHash,
               model,
               generation: this.generation
             })
@@ -659,16 +839,14 @@ export class SearchService {
             })
             this.emitStatus()
           },
-          onThreadProgress: (thread, stage, chunks) => {
+          onThreadProgress: (thread, stage, windows) => {
             const title = thread.title.slice(0, 100) || 'Untitled thread'
-            this.indexingDetail = { threadTitle: title, stage, completedChunks: chunks }
+            this.indexingDetail = { threadTitle: title, stage, completedChunks: windows }
             this.emitStatus()
           }
         }
       )
       this.sweepTotals = { total: result.total, pending: result.pending }
-      this.intentReady =
-        !controller.signal.aborted && this.index.pending === 0 && this.indexingError === null
       Logger.dev(`Thread embedding index swept (${reason})`, result)
     } catch (error) {
       if (controller.signal.aborted) return
@@ -741,14 +919,13 @@ export class SearchService {
         if (signal.aborted || job.generation !== this.generation) continue
         await this.index.applySummary(
           job.thread,
-          job.contentHash,
           vector,
           summary,
-          `raw-v3:${job.model.id}:${job.model.dimensions}:${this.settings.contextTokens}`
+          modelSignatureOf(job.model, embeddingWorkingContext(this.settings.contextTokens))
         )
       } catch (error) {
         if (!signal.aborted)
-          Logger.dev('Optional search summary failed; keeping the truncated embedding.', {
+          Logger.dev('Optional search summary failed; keeping the window embeddings.', {
             threadId: id,
             error: error instanceof Error ? error.message : String(error)
           })
@@ -801,6 +978,16 @@ export class SearchService {
     const payload: PersistedModelIndex = { version: 1, models: this.models }
     await writeJsonAtomic(this.storage.modelIndexPath, payload)
   }
+}
+
+/**
+ * Identity of the vectors one model produces. It is part of every window
+ * fingerprint, so changing the model - or the physical window, which decides how
+ * much of a window is actually read - retires the vectors built under the
+ * previous pair instead of mixing incomparable spaces in one index.
+ */
+function modelSignatureOf(model: InstalledSearchModel, effectiveTokens: number): string {
+  return `windows-v4:${model.id}:${model.dimensions}:${effectiveTokens}:${SEARCH_WINDOW_CHARS}`
 }
 
 function isInstalledSearchModel(value: unknown): value is InstalledSearchModel {

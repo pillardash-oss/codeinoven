@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
   /**
    * The pull request conversation, as GitHub organises it.
    *
@@ -14,7 +16,7 @@
    * reply endpoint, while a conversation comment can only be answered by a new
    * comment that quotes it. The reply box says which one it is doing.
    */
-  import { MessageSquareReply, MessagesSquare } from '@lucide/svelte'
+
   import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { gitState } from '$lib/stores/git.svelte'
@@ -209,7 +211,7 @@
       title="Reply to @{githubDisplayLogin(entry.author)}"
       onclick={() => (replyEntry = entry)}
     >
-      <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+      <CioMessage size={12} class="shrink-0 text-dimmed" />
       Reply
     </button>
     {#if reaction}
@@ -327,7 +329,7 @@
     -->
     <TimelineRailItem {first} {last}>
       {#snippet gutter()}
-        <MessagesSquare size={13} class="shrink-0 text-muted" aria-hidden="true" />
+        <CioChat size={13} class="shrink-0 text-muted" aria-hidden="true" />
       {/snippet}
       {@render reviewThreads(node.threads)}
     </TimelineRailItem>
@@ -336,7 +338,7 @@
 
 {#if nodes.length === 0}
   <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-    <MessagesSquare size={18} class="text-dimmed" />
+    <CioChat size={18} class="text-dimmed" />
     <p class="text-[0.6875rem] leading-relaxed text-dimmed">Nothing has been said yet.</p>
   </div>
 {:else}

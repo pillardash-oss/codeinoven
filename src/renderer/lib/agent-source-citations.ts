@@ -57,8 +57,16 @@ const PROSE_SPOKEN_LINE = new RegExp(
   `(?<![\\w./~])((?:[\\w./-]+\\/)[\\w./-]+\\.${FILE_EXT_PATTERN})[ \\t]+lines?[ \\t]+(\\d+)(?:[ \\t]*(?:to|-|through)[ \\t]*(\\d+))?(?=$|[\\s.,;:!?)"'*_])`,
   'giu'
 )
+// Bare prose paths must be discovered as well as rendered, so asynchronous
+// existence checks can resolve them. Require a directory and a known extension.
+const PLAIN_FILE_PATH = new RegExp(
+  `(?<![\\w./~:@%\\\\-])((?:[\\w.-]+\\/|\\/)[\\w./-]+\\.${FILE_EXT_PATTERN})(?=$|[\\s.,;!?)"'*_\\]])`,
+  'giu'
+)
+
 const URL_PATTERN = /https?:\/\/[^\s<>"'`)\]}]+/gu
 const MARKDOWN_LINK_PATTERN = /(?<!!)\[([^\]]+)\]\((?:<([^>\n]+)>|([^) \t\n]+))\)/gu
+const MARKDOWN_LINK_OR_IMAGE_PATTERN = /!?\[([^\]]+)\]\((?:<([^>\n]+)>|([^) \t\n]+))\)/gu
 const MARKDOWN_WEB_LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu
 
 // Codex CLI / ChatGPT agent file citations, e.g.
@@ -369,6 +377,20 @@ export function extractCitations(text: string): SourceCitation[] {
     add({ kind: 'file', ...parsed, raw: match[0] })
   }
 
+  scanMarkdownLines(normalizedText, (line, inFence) => {
+    if (inFence) return
+    for (const segment of splitOutsideMarkdownLinks(line)) {
+      if (segment.link) continue
+      const prose = splitAroundInlineCode(segment.text)
+      for (let index = 0; index < prose.length; index += 2) {
+        for (const match of (prose[index] ?? '').matchAll(PLAIN_FILE_PATH)) {
+          const parsed = parseFileCitation(match[1] ?? '')
+          if (parsed) add({ kind: 'file', ...parsed, raw: match[0] })
+        }
+      }
+    }
+  })
+
   // Codex file citations are skipped inside fenced code blocks and inline code.
   scanMarkdownLines(normalizedText, (line, inFence) => {
     if (inFence) return
@@ -482,8 +504,45 @@ function isInlineCodeLinkLabel(segments: string[], index: number): boolean {
   return before.endsWith('[') && after.startsWith('](')
 }
 
-/** Linkify the parts of a line that sit outside inline code. */
+/** Preserve complete links, including their destinations, during prose passes. */
+function splitOutsideMarkdownLinks(text: string): { text: string; link: boolean }[] {
+  const segments: { text: string; link: boolean }[] = []
+  let offset = 0
+  for (const match of text.matchAll(MARKDOWN_LINK_OR_IMAGE_PATTERN)) {
+    segments.push({ text: text.slice(offset, match.index), link: false })
+    segments.push({ text: match[0], link: true })
+    offset = match.index + match[0].length
+  }
+  segments.push({ text: text.slice(offset), link: false })
+  return segments
+}
+
 function linkifyProseSegment(segment: string, isClickable: (path: string) => boolean): string {
+  return splitOutsideMarkdownLinks(segment)
+    .map((part) => {
+      if (part.link) return part.text
+      const located = linkifyLocatedProseSegment(part.text, isClickable)
+      return splitOutsideMarkdownLinks(located)
+        .map((candidate) =>
+          candidate.link
+            ? candidate.text
+            : candidate.text.replace(PLAIN_FILE_PATH, (match, path: string) => {
+                const parsed = parseFileCitation(path)
+                return parsed && isClickable(parsed.path)
+                  ? `[${match}](${citationHref(parsed)})`
+                  : match
+              })
+        )
+        .join('')
+    })
+    .join('')
+}
+
+/** Linkify the parts of a line that sit outside inline code. */
+function linkifyLocatedProseSegment(
+  segment: string,
+  isClickable: (path: string) => boolean
+): string {
   const withColonLocation = segment.replace(
     PLAIN_WITH_LINE,
     (match, path: string, ranges: string, offset: number, whole: string) => {

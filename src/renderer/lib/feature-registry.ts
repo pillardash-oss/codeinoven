@@ -1,4 +1,9 @@
-import { CpuIcon, Feather, Settings, StickyNotes, ToolCase, type LucideIcon } from '@lucide/svelte'
+import type { Component } from 'svelte'
+import CioNote from '@pillardash-oss/cio-icon/CioNote.svelte'
+import CioNotes from '@pillardash-oss/cio-icon/CioNotes.svelte'
+import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+import CioTabTasks from '@pillardash-oss/cio-icon/CioTabTasks.svelte'
+import CioPackage from '@pillardash-oss/cio-icon/CioPackage.svelte'
 
 /**
  * Every feature's canonical name and mark live here, once.
@@ -14,17 +19,19 @@ export interface FeatureDefinition {
   id: FeatureId
   /** Canonical human name, used wherever the feature labels itself. */
   name: string
-  /** Canonical Lucide mark, used wherever the feature is shown. */
-  icon: LucideIcon
+  /** Canonical mark, used wherever the feature is shown. Every one of these is a
+   *  CIO drawing, so a feature reads the same on the rail, in its tab and in the
+   *  settings section that owns it. */
+  icon: Component
 }
 
 export const FEATURES: Record<FeatureId, FeatureDefinition> = {
-  utilities: { id: 'utilities', name: 'Utilities', icon: ToolCase },
-  'thread-note': { id: 'thread-note', name: 'Thread note', icon: Feather },
-  'tab-note': { id: 'tab-note', name: 'Tab note', icon: Feather },
-  'sticky-notes': { id: 'sticky-notes', name: 'Sticky notes', icon: StickyNotes },
-  'task-manager': { id: 'task-manager', name: 'Task manager', icon: CpuIcon },
-  settings: { id: 'settings', name: 'Settings', icon: Settings }
+  utilities: { id: 'utilities', name: 'Utilities', icon: CioPackage },
+  'thread-note': { id: 'thread-note', name: 'Thread note', icon: CioNote },
+  'tab-note': { id: 'tab-note', name: 'Tab note', icon: CioNote },
+  'sticky-notes': { id: 'sticky-notes', name: 'Sticky notes', icon: CioNotes },
+  'task-manager': { id: 'task-manager', name: 'Task manager', icon: CioTabTasks },
+  settings: { id: 'settings', name: 'Settings', icon: CioTabSettings }
 }
 
 /** The definition for one feature. */

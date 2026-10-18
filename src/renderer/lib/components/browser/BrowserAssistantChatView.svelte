@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { Globe } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
   import { BrowserAssistantChatController } from './BrowserAssistantChatController.svelte'
+  import { threadReveal } from '$lib/components/layout/page-reveal'
+  import { fly } from 'svelte/transition'
   import { browserAssistant, type BrowserAssistantChat } from '$lib/stores/browser-assistant.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -90,7 +92,7 @@
             class="size-5 shrink-0 object-contain"
           />
         {:else}
-          <Globe size={18} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioBrowser size={18} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="min-w-0 truncate">{pageLabel}</span>
         <span class="text-dimmed" aria-hidden="true">?</span>
@@ -102,7 +104,10 @@
   <p class="mt-1 text-[0.875rem] text-muted">The agent reads this page as it answers.</p>
 {/snippet}
 
-<div class="browser-assistant-chat bg-app flex h-full min-h-0 w-full flex-col overflow-hidden">
+<div
+  class="browser-assistant-chat bg-app flex h-full min-h-0 w-full flex-col overflow-hidden"
+  in:fly={threadReveal()}
+>
   {#if thread && controller}
     <ThreadView
       {thread}

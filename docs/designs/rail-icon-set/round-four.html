@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · round four</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .variants {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        margin-top: 1.25rem;
+      }
+
+      .variant {
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        display: flex;
+        flex-direction: column;
+      }
+
+      .variant > header {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        padding: 0.625rem 0.875rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-overlay);
+      }
+
+      .variant > header svg {
+        width: 1rem;
+        height: 1rem;
+        display: block;
+        color: var(--color-foreground);
+        flex: none;
+      }
+
+      .variant > header b {
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+
+      .variant > header .tag {
+        margin-left: auto;
+        font-size: 0.5625rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+      }
+
+      .variant .stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        padding: 1.5rem 1rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-app);
+      }
+
+      .variant .stage .pair {
+        display: flex;
+        align-items: flex-end;
+        gap: 1.5rem;
+      }
+
+      .variant .stage .pair figure {
+        margin: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .variant .stage svg {
+        display: block;
+        color: var(--color-foreground);
+      }
+
+      .variant .stage figcaption {
+        font-size: 0.5625rem;
+        color: var(--color-dimmed);
+      }
+
+      .variant .measure {
+        font-size: 0.5625rem;
+        color: var(--color-muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .variant .why {
+        padding: 0.875rem;
+        font-size: 0.6875rem;
+        line-height: 1.6;
+        color: var(--color-muted);
+        margin: 0;
+      }
+
+      .variant .why b {
+        color: var(--color-foreground);
+        font-weight: 500;
+      }
+
+      .rail-pair {
+        display: flex;
+        gap: 1.25rem;
+        margin-top: 1.25rem;
+        flex-wrap: wrap;
+      }
+
+      .scale-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1.25rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        font-size: 0.75rem;
+      }
+
+      .scale-table th,
+      .scale-table td {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .scale-table thead th {
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+        background: var(--color-overlay);
+      }
+
+      .scale-table tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .scale-table .name {
+        color: var(--color-foreground);
+        font-weight: 500;
+      }
+
+      .scale-table .before {
+        color: var(--color-dimmed);
+      }
+
+      .scale-table .after {
+        color: var(--color-accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">CodeInOven · brand work · round four</div>
+          <h1>Right-sized, and <em>three browsers</em></h1>
+          <p class="lede">
+            You were right about the size, and it was not only the globe. Every
+            glyph in the set was drawn inside a smaller footprint than Lucide
+            uses, which is why our globe looked smaller than Lucide's globe at
+            the same 16px. Pass F fixes that with a measurement rather than an
+            eye: each glyph is scaled about its own centre until its ink spans
+            the same footprint Lucide spans, plus the extra you asked for. The
+            drawing, the weight and every optical placement you already approved
+            are untouched. Then three browser candidates, since that one is still
+            a real question.
+          </p>
+        </div>
+        <div class="lockup">
+          <svg viewBox="0 0 96 96" aria-label="CodeInOven mark">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <div>
+            <b>CodeInOven</b>
+            <span>measured, not guessed</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ══ The size finding ═════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>1 · The size finding</h2>
+          <span class="note">ink footprint, in the 24-unit design grid</span>
+        </div>
+        <p class="lede">
+          Lucide draws inside a 20-unit square with a 2-unit stroke, so its icons
+          carry 22 units of ink. Pass E was drawn inside 17 to 19 units, and the
+          globe was 18.5. That is the whole of the size problem, and it explains
+          why it felt like a family mismatch rather than a drawing fault: our
+          glyphs were correct in shape and wrong in scale.
+        </p>
+
+        <table class="scale-table">
+          <thead>
+            <tr>
+              <th style="width: 14rem">Glyph</th>
+              <th style="width: 9rem">E · as reviewed</th>
+              <th style="width: 9rem">F · right-sized</th>
+              <th style="width: 9rem">Lucide</th>
+              <th>Scale applied</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name">Browser (globe)</td>
+              <td class="before">18.5</td>
+              <td class="after">22.6</td>
+              <td>22.0</td>
+              <td>x1.247</td>
+            </tr>
+            <tr>
+              <td class="name">Projects (folder)</td>
+              <td class="before">19.0</td>
+              <td class="after">22.6</td>
+              <td>22.0</td>
+              <td>x1.211</td>
+            </tr>
+            <tr>
+              <td class="name">Threads</td>
+              <td class="before">16.0</td>
+              <td class="after">22.6</td>
+              <td>22.0</td>
+              <td>x1.468</td>
+            </tr>
+            <tr>
+              <td class="name">Board</td>
+              <td class="before">17.5</td>
+              <td class="after">22.6</td>
+              <td>22.0</td>
+              <td>x1.327</td>
+            </tr>
+            <tr>
+              <td class="name">Settings</td>
+              <td class="before">19.0</td>
+              <td class="after">22.6</td>
+              <td>22.0</td>
+              <td>x1.211</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p class="footnote">
+          <b>On the exact number you asked for.</b> You said larger than Lucide by
+          .05. I read that as five percent, which puts the target at 23.1 units,
+          and 23.1 is not available: at that size the round glyphs (Scoped, Tasks,
+          the globe) reach the edge of the 24-unit box and the stroke gets trimmed
+          where it meets the boundary. I found this by testing targets from 22.0
+          to 23.1 and detecting solid ink on the outermost pixel row. 22.6 is the
+          largest that does not clip, which is Lucide plus 2.7 percent rather than
+          five. If you want the full five percent, the fix is to draw the set on a
+          26-unit grid instead of 24, and I will do that rather than ship a
+          clipped glyph.
+        </p>
+      </section>
+
+      <!-- ══ Browser variants ═════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>2 · Browser, three candidates</h2>
+          <span class="note">all at the corrected F scale</span>
+        </div>
+        <p class="lede">
+          Yes, it can be custom, and it should be, because it is the one rail
+          meaning that competes with the most recognisable icon in the world. All
+          three are shown at 16px, the size the rail actually draws, then at 64px
+          so the drawing can be judged. The constraint they all obey: no framed
+          rectangle with a horizontal band, because you already taught me that is
+          a bank card.
+        </p>
+
+        <div class="variants">
+          <div class="variant">
+            <header>
+              <svg viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-globe" /></svg>
+              <b>The globe</b>
+              <span class="tag">what you saw</span>
+            </header>
+            <div class="stage">
+              <div class="pair">
+                <figure>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-globe" /></svg>
+                  <figcaption>16px</figcaption>
+                </figure>
+                <figure>
+                  <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-globe" /></svg>
+                  <figcaption>64px</figcaption>
+                </figure>
+                <figure>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-dimmed)"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></svg>
+                  <figcaption>Lucide 16px</figcaption>
+                </figure>
+              </div>
+              <span class="measure">now 22.6 x 22.6, Lucide is 22.0 x 22.0</span>
+            </div>
+            <p class="why">
+              <b>Carries no risk and no ownership.</b> It is instantly understood
+              and it is now correctly sized, so the size complaint is fully
+              answered. The cost is that a wire globe is not a brand, and this
+              glyph will look like every other app's globe in a screenshot.
+            </p>
+          </div>
+
+          <div class="variant">
+            <header>
+              <svg viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-tab" /></svg>
+              <b>The tab</b>
+              <span class="tag">unique</span>
+            </header>
+            <div class="stage">
+              <div class="pair">
+                <figure>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-tab" /></svg>
+                  <figcaption>16px</figcaption>
+                </figure>
+                <figure>
+                  <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-tab" /></svg>
+                  <figcaption>64px</figcaption>
+                </figure>
+              </div>
+              <span class="measure">22.5 x 21.5</span>
+            </div>
+            <p class="why">
+              <b>Names what the view actually is.</b> The rail's Browser is a set
+              of tabs above a page, so the mark is a page with a tab rising out of
+              its own top edge. No other icon in the set and no Lucide icon leaves
+              its bounding box like this, because the shape is drawn as one
+              continuous line rather than a stack of boxes. The lit line inside is
+              the page it holds. This is the most honest of the three and the most
+              clearly ours.
+            </p>
+          </div>
+
+          <div class="variant">
+            <header>
+              <svg viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-rose" /></svg>
+              <b>The compass rose</b>
+              <span class="tag">unique</span>
+            </header>
+            <div class="stage">
+              <div class="pair">
+                <figure>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-rose" /></svg>
+                  <figcaption>16px</figcaption>
+                </figure>
+                <figure>
+                  <svg width="64" height="64" viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-rose" /></svg>
+                  <figcaption>64px</figcaption>
+                </figure>
+              </div>
+              <span class="measure">22.5 x 22.5</span>
+            </div>
+            <p class="why">
+              <b>The world as a thing you navigate.</b> A compass rose inscribed
+              in a sphere, with the equator across it. Everyone reads it as the
+              web immediately, and it is ours in a way a plain globe is not,
+              because a circle with a meridian is every app's globe while a circle
+              with a rose is a direction. The risk is that at 16px the four points
+              sit close to the equator line and it is the busiest of the three.
+            </p>
+          </div>
+        </div>
+
+        <p class="lede" style="margin-top: 1.5rem">
+          In the rail, at the real size, with Project current:
+        </p>
+        <div class="rail-pair">
+          <div class="window">
+            <nav class="rail" aria-label="Rail with the tab browser">
+              <div class="group">
+                <span class="item" data-current title="Project"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-tab" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-tasks" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-utilities" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ F, whole set ═════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>3 · F · the whole set, right-sized</h2>
+          <span class="note">identical drawings to E, at Lucide's footprint plus a little</span>
+        </div>
+        <p class="lede">
+          Nothing was redrawn. Each glyph was scaled about its own centre with the
+          stroke width divided by the same factor, so the rendered weight stays at
+          1.9 units and only the footprint changes. Pass E is on the right for
+          comparison, at the same sizes, so the difference is visible rather than
+          asserted.
+        </p>
+
+        <div class="size-test">
+          <div class="size-test-head">
+            <span></span>
+            <span>Project</span>
+            <span>Thread</span>
+            <span>Scoped</span>
+            <span>Board</span>
+            <span>Chat</span>
+            <span>Assistant</span>
+            <span>Browser</span>
+            <span>Update</span>
+            <span>Tasks</span>
+            <span>Utilities</span>
+            <span>Settings</span>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>F · right-sized</b>the real 16px</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-projects" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-threads" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-scoped" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-board" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-chats" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-tab" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-info" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-tasks" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-utilities" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-settings" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>E · as reviewed</b>the real 16px, for comparison</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-projects" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-threads" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-scoped" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-board" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-chats" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-browser" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-info" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-tasks" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-utilities" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-settings" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>Today</b>Lucide, the real 16px</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" /><path d="M8 10v4" /><path d="M12 10v2" /><path d="M16 10v6" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h10" /><path d="M6 12h10" /><path d="M4 18h10" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8" /><path d="M3 22h18" /><path d="M14 22a7 7 0 1 0 0-14h-1" /><path d="M9 14h2" /><path d="M9 12a2 2 0 0 1-2-2V6h6v4a2 2 0 0 1-2 2Z" /><path d="M12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v11" /><path d="M12 5v6" /><path d="M18 5v14" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.95 10.05a7 7 0 011.412 7.872 1 1 0 00-.058.787l.675 2.089a1 1 0 01-1.236 1.168l-2.155-.631a1 1 0 00-.745.06 7 7 0 01-7.793-1.445" /><path d="M2.696 12.708a1 1 0 00-.058-.785 7 7 0 113.518 3.473 1 1 0 00-.744-.061l-2.155.63a1 1 0 01-1.236-1.167z" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M15 2v2" /><path d="M15 20v2" /><path d="M2 15h2" /><path d="M2 9h2" /><path d="M20 15h2" /><path d="M20 9h2" /><path d="M9 2v2" /><path d="M9 20v2" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15h4" /><path d="m14.817 10.995-.971-1.45 1.034-1.232a2 2 0 0 0-2.025-3.238l-1.82.364L9.91 3.885a2 2 0 0 0-3.625.748L6.141 6.55l-1.725.426a2 2 0 0 0-.19 3.756l.657.27" /><path d="m18.822 10.995 2.26-5.38a1 1 0 0 0-.557-1.318L16.954 2.9a1 1 0 0 0-1.281.533l-.924 2.122" /><path d="M4 12.006A1 1 0 0 1 4.994 11H19a1 1 0 0 1 1 1v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>F · at 4x</b>the drawing itself</div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-projects" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-threads" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-scoped" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-board" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-chats" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./browser-variants-fitted.svg#f-g-browser-tab" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-info" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-tasks" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-utilities" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-f.svg#f-settings" /></svg></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Still open ═══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>4 · Still open</h2>
+          <span class="note">what I have not decided for you</span>
+        </div>
+        <p class="lede">
+          Two things, both unchanged from last round. The update button, one
+          control cycling six state glyphs, is still undecided and still waiting
+          on a decision about what that control is rather than how it is drawn.
+          And the "+.05" reading: I took it as five percent and hit a hard ceiling
+          at 22.6 units before the round glyphs clip, so if you want the full five
+          percent the set moves to a 26-unit grid. Say which and I will do it.
+        </p>
+        <p class="footnote">
+          Earlier rounds: <a href="./index.html">round one</a>,
+          <a href="./round-two.html">round two</a>,
+          <a href="./round-three.html">round three</a>. Reproduce any number here
+          with <code>.cio/tmp/fit-sprite.ts</code> (fitting),
+          <code>.cio/tmp/rail-stroke-measure.ts</code> (weight) and
+          <code>.cio/tmp/rail-icon-check.ts</code> (footprint and clipping).
+        </p>
+      </section>
+    </div>
+  </body>
+</html>

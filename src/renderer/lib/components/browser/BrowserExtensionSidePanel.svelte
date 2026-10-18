@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
   import { onMount } from 'svelte'
-  import { Puzzle, X } from '@lucide/svelte'
+
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { browserExtensionSidePanels } from '$lib/stores/browser-extension-side-panels.svelte'
 
@@ -128,7 +130,7 @@
 
 <div class="flex h-full min-h-0 flex-col bg-app" data-region="browser-extension-side-panel">
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-    <Puzzle size={13} class="shrink-0 text-muted" />
+    <CioTabExtensions size={13} class="shrink-0 text-muted" />
     <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
       {panel?.extensionName ?? 'Extension panel'}
     </span>
@@ -139,7 +141,7 @@
       title="Close extension panel"
       onclick={() => browserExtensionSidePanels.close(extensionId)}
     >
-      <X size={12} />
+      <CioClose size={12} />
     </button>
   </div>
   <!-- `.native-rail-gutter` keeps the frame clear of the rail's resize band: the

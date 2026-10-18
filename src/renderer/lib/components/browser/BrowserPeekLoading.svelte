@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { browserTabTitleForUrl } from '$lib/stores/global-browser-types'
 
   /**
@@ -27,7 +27,7 @@
   data-region="browser-peek-loading"
 >
   <div class="flex flex-col items-center gap-2.5">
-    <Loader2 size={18} class="animate-spin text-muted motion-reduce:animate-none" />
+    <CioSpinner size={18} class="animate-spin text-muted motion-reduce:animate-none" />
     <p class="text-sm text-muted">Loading {host}…</p>
   </div>
 </div>

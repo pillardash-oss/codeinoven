@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { GripVertical } from '@lucide/svelte'
-
+  import CioGrip from '@pillardash-oss/cio-icon/CioGrip.svelte'
   interface Props {
     title: string
   }
@@ -15,5 +14,5 @@
   {title}
   aria-label={`${title}. Use arrow keys for precise movement.`}
 >
-  <GripVertical size={13} aria-hidden="true" />
+  <CioGrip size={13} aria-hidden="true" />
 </button>

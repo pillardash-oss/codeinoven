@@ -1,5 +1,6 @@
 <script lang="ts" generics="Filter extends string, Sort extends string">
-  import { Check, ListFilter } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioFilter from '@pillardash-oss/cio-icon/CioFilter.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   /**
@@ -80,7 +81,7 @@
       filter is on. A narrowing the reader forgot about is how a list starts
       looking empty for no reason.
     -->
-    <ListFilter size={11} class="shrink-0" />
+    <CioFilter size={11} class="shrink-0" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
@@ -96,7 +97,7 @@
           {#each filterOptions as option (option.id)}
             <DropdownMenu.RadioItem value={option.id} class={itemClass} title={option.hint}>
               <span class="min-w-0 flex-1 truncate">{option.label}</span>
-              <Check
+              <CioCheck
                 size={12}
                 class={['shrink-0', option.id === filter ? 'text-primary' : 'invisible']}
                 aria-hidden="true"
@@ -111,7 +112,7 @@
         {#each sortOptions as option (option.id)}
           <DropdownMenu.RadioItem value={option.id} class={itemClass}>
             <span class="min-w-0 flex-1 truncate">{option.label}</span>
-            <Check
+            <CioCheck
               size={12}
               class={['shrink-0', option.id === sort ? 'text-primary' : 'invisible']}
               aria-hidden="true"

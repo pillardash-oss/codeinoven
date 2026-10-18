@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { KeyRound, Loader2, Plug, Search, Server, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioPlug from '@pillardash-oss/cio-icon/CioPlug.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { OfferedProvider, ProviderConnectionInfo } from '$shared/types'
   import type { AddTab, ConnectStep } from './add-provider-modal-helpers'
 
@@ -82,7 +87,7 @@
         type="button"
         onclick={onOpenCustom}
       >
-        <Server size={13} /> Open custom provider form
+        <CioServer size={13} /> Open custom provider form
       </button>
     {:else if step === 'labeling'}
       <button
@@ -91,7 +96,7 @@
         disabled={finalizingAccount}
         onclick={onSaveAccount}
       >
-        {#if finalizingAccount}<Loader2 size={13} class="animate-spin" />{/if}
+        {#if finalizingAccount}<CioSpinner size={13} class="animate-spin" />{/if}
         Save account
       </button>
     {:else if step === 'running'}
@@ -100,7 +105,7 @@
         type="button"
         onclick={onCancelConnection}
       >
-        <X size={13} /> Cancel connection
+        <CioClose size={13} /> Cancel connection
       </button>
     {:else if canSignIn}
       {#if apiKeyEntry}
@@ -116,11 +121,11 @@
           onclick={() => (step === 'idle' ? onOpenPicker() : onConnectWithKey())}
         >
           {#if storingKey}
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
           {:else if step === 'idle'}
-            <Search size={13} /> Search providers
+            <CioSearch size={13} /> Search providers
           {:else}
-            <KeyRound size={13} /> Connect provider
+            <CioKey size={13} /> Connect provider
           {/if}
         </button>
       {:else}
@@ -138,11 +143,11 @@
                   : null}
         >
           {#if !pickerLogin && step === 'picking' && selectedProvider}
-            <Plug size={13} /> Connect with {selectedProvider.name}
+            <CioPlug size={13} /> Connect with {selectedProvider.name}
           {:else if !pickerLogin && step === 'picking'}
-            <Search size={13} /> Search providers
+            <CioSearch size={13} /> Search providers
           {:else}
-            <KeyRound size={13} /> Connect provider
+            <CioKey size={13} /> Connect provider
           {/if}
         </button>
       {/if}
@@ -153,7 +158,7 @@
         disabled
         title="This harness does not expose a login flow CodeInOven can run"
       >
-        <KeyRound size={13} /> Connect provider
+        <CioKey size={13} /> Connect provider
       </button>
     {/if}
   </div>

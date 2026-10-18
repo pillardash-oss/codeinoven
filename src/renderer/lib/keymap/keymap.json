@@ -727,6 +727,14 @@
           "scenario": "File tree inline input."
         },
         {
+          "id": "files-delete",
+          "keys": ["mod", "backspace"],
+          "platformKeys": { "other": ["delete"] },
+          "label": "Delete selected files",
+          "description": "Opens the Trash confirmation for the selected files and folders. Cmd+Delete on macOS, Delete on Windows and Linux.",
+          "scenario": "File tree focused, outside an inline input."
+        },
+        {
           "id": "files-deployment-find",
           "keys": ["mod", "f"],
           "label": "Search deployment logs",
@@ -904,6 +912,33 @@
           "label": "Close media preview",
           "description": "Closes the attachment or media preview.",
           "scenario": "A media preview is open."
+        }
+      ]
+    },
+    {
+      "id": "guides",
+      "label": "View Guides",
+      "shortcuts": [
+        {
+          "id": "guide-next",
+          "keys": [],
+          "label": "Next guide stop",
+          "description": "Advances the running view guide to its next stop. Unbound by default so the arrow keys keep working in the composer the guide may be pointing at; bind a chord here if you want one.",
+          "scenario": "A view guide is running."
+        },
+        {
+          "id": "guide-back",
+          "keys": [],
+          "label": "Previous guide stop",
+          "description": "Steps the running view guide back one stop. Unbound by default for the same reason as the next-stop action.",
+          "scenario": "A view guide is running."
+        },
+        {
+          "id": "guide-close",
+          "keys": [],
+          "label": "Close the view guide",
+          "description": "Leaves the running view guide without finishing it, so it stays unseen and can be walked again later. Escape already closes a guide, so this entry is for a second chord of your own.",
+          "scenario": "A view guide is running."
         }
       ]
     },

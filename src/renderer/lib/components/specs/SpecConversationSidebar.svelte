@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageSquareText } from '@lucide/svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -12,7 +12,7 @@
         <span
           class="flex min-w-0 items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
         >
-          <MessageSquareText size={12} class="shrink-0 text-accent" />
+          <CioMessage size={12} class="shrink-0 text-accent" />
           Agent
         </span>
         <MessageTimestamp
@@ -24,7 +24,7 @@
     </article>
   {:else}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 px-3 py-10 text-center">
-      <MessageSquareText size={20} class="text-dimmed" />
+      <CioMessage size={20} class="text-dimmed" />
       <p class="text-xs font-medium text-muted">No agent response yet</p>
       <p class="text-[0.6875rem] leading-relaxed text-dimmed">
         The planning conversation will appear here as the spec develops.

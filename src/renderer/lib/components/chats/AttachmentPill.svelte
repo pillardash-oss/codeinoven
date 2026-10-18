@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { AudioLines, FileText, Image as ImageIcon, Video, X } from '@lucide/svelte'
+  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
   import { attachmentPreviewKind } from '$lib/mime'
   import type { PromptAttachment } from '$shared/types'
 
@@ -35,14 +39,14 @@
       {#if previewUrl}
         <img src={previewUrl} alt={name} class="h-5 w-5 shrink-0 object-cover" />
       {:else}
-        <ImageIcon size={11} class="shrink-0" />
+        <CioImage size={11} class="shrink-0" />
       {/if}
     {:else if previewKind === 'video'}
-      <Video size={11} class="shrink-0" />
+      <CioClapper size={11} class="shrink-0" />
     {:else if previewKind === 'audio'}
-      <AudioLines size={11} class="shrink-0" />
+      <CioAudioLines size={11} class="shrink-0" />
     {:else}
-      <FileText size={11} class="shrink-0" />
+      <CioFileText size={11} class="shrink-0" />
     {/if}
     <span class="max-w-32 truncate">{name}</span>
   {/snippet}
@@ -69,7 +73,7 @@
       aria-label={`Remove ${name}`}
       onclick={onRemove}
     >
-      <X size={11} />
+      <CioClose size={11} />
     </button>
   {/if}
 </div>

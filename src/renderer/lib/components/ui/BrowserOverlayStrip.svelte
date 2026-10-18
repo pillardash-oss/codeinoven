@@ -1,21 +1,19 @@
 <script lang="ts">
-  import {
-    ArrowLeft,
-    ArrowRight,
-    Check,
-    Globe,
-    Loader2,
-    Lock,
-    LockOpen,
-    Moon,
-    Pin,
-    Puzzle,
-    RotateCw,
-    Star,
-    Volume2,
-    VolumeX,
-    X
-  } from '@lucide/svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioLock from '@pillardash-oss/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pillardash-oss/cio-icon/CioLockOpen.svelte'
+  import CioMoon from '@pillardash-oss/cio-icon/CioMoon.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pillardash-oss/cio-icon/CioVolumeX.svelte'
   import type {
     BrowserStripOverlayAction,
     BrowserStripOverlayRequest
@@ -41,7 +39,7 @@
    * It is the hover reveal the collapsed sidebar gives, at the same width and in
    * the same place: the address row and its controls above, then the tabs the way
    * the docked strip lists them. Only what the docked panel needs a second mount
-   * for   group headers, the search field, per-tab menus and drag reordering  
+   * for   group headers, the search field, per-tab menus and drag reordering
    * is left in the docked panel; the rows and the controls a user reaches for
    * while the page is live are all here.
    *
@@ -82,7 +80,7 @@
           title="Go back"
           onclick={(event: MouseEvent) => actionAt('back', event)}
         >
-          <ArrowLeft size={15} />
+          <CioArrowLeft size={15} />
         </button>
       {/if}
       {#if chrome.canGoForward}
@@ -93,7 +91,7 @@
           title="Go forward"
           onclick={(event: MouseEvent) => actionAt('forward', event)}
         >
-          <ArrowRight size={15} />
+          <CioArrowRight size={15} />
         </button>
       {/if}
       {#if chrome.loading || chrome.url !== ''}
@@ -105,9 +103,9 @@
           onclick={(event: MouseEvent) => actionAt(chrome.loading ? 'stop' : 'reload', event)}
         >
           {#if chrome.loading}
-            <X size={15} />
+            <CioClose size={15} />
           {:else}
-            <RotateCw size={14} />
+            <CioRefresh size={14} />
           {/if}
         </button>
       {/if}
@@ -125,13 +123,13 @@
             onclick={(event: MouseEvent) => actionAt('open-site-menu', event)}
           >
             {#if chrome.secure}
-              <Lock size={12} />
+              <CioLock size={12} />
             {:else}
-              <LockOpen size={12} />
+              <CioLockOpen size={12} />
             {/if}
           </button>
         {:else}
-          <Globe size={12} class="shrink-0 text-dimmed" />
+          <CioBrowser size={12} class="shrink-0 text-dimmed" />
         {/if}
         <button
           type="button"
@@ -158,11 +156,11 @@
             onclick={(event: MouseEvent) => actionAt('act-on-store-offer', event)}
           >
             {#if chrome.storeOffer.installing && !chrome.storeOffer.installed}
-              <Loader2 size={12} class="animate-spin" />
+              <CioSpinner size={12} class="animate-spin" />
             {:else if chrome.storeOffer.installed}
-              <Check size={12} />
+              <CioCheck size={12} />
             {:else}
-              <Puzzle size={12} />
+              <CioTabExtensions size={12} />
             {/if}
           </button>
         {/if}
@@ -178,7 +176,7 @@
           title={chrome.bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
           onclick={(event: MouseEvent) => actionAt('toggle-bookmark', event)}
         >
-          <Star size={12} class={chrome.bookmarked ? 'fill-current' : ''} />
+          <CioStar size={12} class={chrome.bookmarked ? 'fill-current' : ''} />
         </button>
       </div>
     </div>
@@ -186,11 +184,7 @@
 
   <ul class="min-h-0 flex-1 overflow-y-auto px-2 py-2" role="list">
     {#each strip.tabs as tab (tab.id)}
-      <li
-        class="group flex items-center {tab.active
-          ? 'bg-elevated'
-          : 'hover:bg-elevated'}"
-      >
+      <li class="group flex items-center {tab.active ? 'bg-elevated' : 'hover:bg-elevated'}">
         <button
           type="button"
           class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
@@ -205,11 +199,11 @@
         >
           <span class="flex h-4 w-4 shrink-0 items-center justify-center">
             {#if tab.loading}
-              <Loader2 size={13} class="animate-spin text-muted" />
+              <CioSpinner size={13} class="animate-spin text-muted" />
             {:else if tab.icon}
               <img src={tab.icon} alt="" class="h-4 w-4 object-contain" />
             {:else}
-              <Globe size={12} class="text-dimmed" />
+              <CioBrowser size={12} class="text-dimmed" />
             {/if}
           </span>
           <span
@@ -220,20 +214,20 @@
           >
           {#if tab.pinned}
             <span class="shrink-0 text-accent" role="img" title="Pinned tab">
-              <Pin size={12} />
+              <CioPin size={12} />
             </span>
           {/if}
           {#if tab.muted}
             <span class="shrink-0 text-accent" role="img" title="Tab is muted">
-              <VolumeX size={12} />
+              <CioVolumeX size={12} />
             </span>
           {:else if tab.audible}
             <span class="shrink-0 text-accent" role="img" title="Tab is playing audio">
-              <Volume2 size={12} />
+              <CioVolume size={12} />
             </span>
           {:else if tab.hibernated}
             <span class="shrink-0 text-dimmed" role="img" title="Hibernated to save memory">
-              <Moon size={12} />
+              <CioMoon size={12} />
             </span>
           {/if}
         </button>
@@ -244,7 +238,7 @@
           title={`Close ${tab.label}`}
           onclick={() => onClose(tab.id)}
         >
-          <X size={12} />
+          <CioClose size={12} />
         </button>
       </li>
     {/each}

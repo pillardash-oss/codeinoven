@@ -1,6 +1,10 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { AppWindow, Check, ChevronDown, Loader2 } from '@lucide/svelte'
+
   import type { EditorId } from '$shared/types'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -45,20 +49,19 @@
 <div class="flex h-7 items-stretch overflow-hidden border border-border bg-elevated">
   <button
     type="button"
-    class="flex min-w-0 items-center gap-1.5 px-2 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
+    class="flex w-7 items-center justify-center text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
     aria-label={`Open file in ${preferredName}`}
     title={`Open in ${preferredName}`}
     disabled={disabled || opening}
     onclick={() => void open()}
   >
     {#if opening}
-      <Loader2 size={12} class="shrink-0 animate-spin" />
+      <CioSpinner size={12} class="shrink-0 animate-spin" />
     {:else if preferredIcon}
       <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
     {:else}
-      <AppWindow size={13} class="shrink-0" />
+      <CioWindow size={13} class="shrink-0" />
     {/if}
-    <span>Open</span>
   </button>
 
   <DropdownMenu.Root>
@@ -68,7 +71,7 @@
       title="Select editor"
       disabled={disabled || opening}
     >
-      <ChevronDown size={11} />
+      <CioChevronDown size={11} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -91,11 +94,11 @@
             {#if editor.iconDataUrl}
               <img src={editor.iconDataUrl} alt="" class="h-4 w-4 shrink-0" />
             {:else}
-              <AppWindow size={14} class="shrink-0 text-muted" />
+              <CioWindow size={14} class="shrink-0 text-muted" />
             {/if}
             <span class="min-w-0 flex-1 truncate">{editor.name}</span>
             {#if editorPreference.preferredEditor === editor.id}
-              <Check size={13} class="shrink-0 text-primary" />
+              <CioCheck size={13} class="shrink-0 text-primary" />
             {/if}
           </DropdownMenu.Item>
         {/each}

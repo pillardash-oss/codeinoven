@@ -1,6 +1,7 @@
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { join } from 'path'
 import { Logger } from '../../system/logger'
+import { sendToRenderer } from '../renderer-delivery'
 import { settleThreadBranch } from '../../chat/thread-branch-service'
 import { threadScratchDirectory } from '../../../lib/thread-storage-paths'
 import {
@@ -152,13 +153,15 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
     })
     return projectId ? threads.filter((thread) => thread.projectId === projectId) : threads
   })
-  ipcMain.handle('threads:search', (_, query: unknown, options?: unknown) => {
+  ipcMain.handle('threads:search', (event, query: unknown, options?: unknown) => {
     const safeQuery = requireString(query, 'Search query')
     const safeOptions: {
       projectId?: string
       limit?: number
       family?: 'projects' | 'chats' | 'assistant'
       assistantId?: string
+      semantic?: boolean
+      requestId?: number
     } = {}
     if (options !== undefined) {
       if (!isRecord(options)) throw new TypeError('Search options must be an object')
@@ -181,8 +184,31 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
       if (options.assistantId !== undefined) {
         safeOptions.assistantId = validateEntityId(options.assistantId, 'Assistant ID')
       }
+      if (options.semantic !== undefined) {
+        if (typeof options.semantic !== 'boolean') {
+          throw new TypeError('Search semantic flag must be a boolean')
+        }
+        safeOptions.semantic = options.semantic
+      }
+      if (options.requestId !== undefined) {
+        safeOptions.requestId = validateBoundedInteger(
+          options.requestId,
+          'Search request id',
+          0,
+          2_147_483_647
+        )
+      }
     }
-    return threadManager.searchThreads(safeQuery, safeOptions)
+    const { semantic = false, requestId = 0, ...searchOptions } = safeOptions
+    // The spotlight's thread search is the only semantic consumer. Its keyword
+    // answer resolves now; the merged hybrid ranking is pushed to the window that
+    // asked once the local model has answered, so no interactive surface waits on
+    // a model load to show rows.
+    if (!semantic) return threadManager.searchThreads(safeQuery, searchOptions)
+    const sender = event.sender
+    return threadManager.searchThreadsWithDeferredIntent(safeQuery, searchOptions, (results) => {
+      sendToRenderer(sender, 'threads:searchIntent', { query: safeQuery, requestId, results })
+    })
   })
   if (!options.hydrationHandlersRegistered) {
     // Mirror-only transcript reads   fast disk access, never touches a harness

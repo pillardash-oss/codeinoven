@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import { Toaster as Sonner } from 'svelte-sonner'
-  import { CheckCircle2, AlertTriangle, XCircle, Info } from '@lucide/svelte'
 
   /**
    * The app's toaster, configured once.
@@ -21,19 +24,19 @@
 </script>
 
 {#snippet successIcon()}
-  <CheckCircle2 size={15} stroke-width={2.25} />
+  <CioCheckCircle size={15} stroke-width={2.25} />
 {/snippet}
 
 {#snippet warningIcon()}
-  <AlertTriangle size={15} stroke-width={2.25} />
+  <CioAttention size={15} stroke-width={2.25} />
 {/snippet}
 
 {#snippet errorIcon()}
-  <XCircle size={15} stroke-width={2.25} />
+  <CioCrossCircle size={15} stroke-width={2.25} />
 {/snippet}
 
 {#snippet infoIcon()}
-  <Info size={15} stroke-width={2.25} />
+  <CioTabInfo size={15} stroke-width={2.25} />
 {/snippet}
 
 <Sonner

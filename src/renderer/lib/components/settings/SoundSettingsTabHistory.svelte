@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, RefreshCw, Trash2 } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech, type SpeechRetryStatus } from '$lib/stores/speech.svelte'
   import { formatDateTime } from '$shared/date-time-format'
@@ -57,7 +59,9 @@
 <section id="settings-block-sound-history" class="border bg-surface p-4">
   <div class="mb-3 flex items-center justify-between gap-3 border-b border-border pb-2">
     <div>
-      <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Recording history</h2>
+      <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+        Recording history
+      </h2>
       <p class="mt-1 text-[0.6875rem] text-dimmed">
         Every success and failure counts toward retention. Audio, raw transcript, and cleaned
         transcript are kept per attempt. Oldest attempts are evicted first at the limit.
@@ -122,15 +126,15 @@
                   : 'Retry transcription'}
               disabled={!asr || retryState !== undefined}
               onclick={() => asr && void speech.retry(attempt.id, asr.runtime, asr.id)}
-              >{#if retryState === 'running'}<RefreshCw
+              >{#if retryState === 'running'}<CioRefresh
                   size={13}
                   class="animate-spin"
                   aria-hidden="true"
-                />{:else if retryState === 'done'}<Check
+                />{:else if retryState === 'done'}<CioCheck
                   size={13}
                   class="text-success"
                   aria-hidden="true"
-                />{:else}<RefreshCw size={13} aria-hidden="true" />{/if}</button
+                />{:else}<CioRefresh size={13} aria-hidden="true" />{/if}</button
             >
           {/if}
           <HistoryTranscriptCopyMenu {attempt} highlighted={retryStatusOf(attempt.id) === 'done'} />
@@ -144,7 +148,7 @@
                 action: 'history-item',
                 targetId: attempt.id,
                 label: formatDateTime(attempt.createdAt)
-              })}><Trash2 size={13} aria-hidden="true" /></button
+              })}><CioTrash size={13} aria-hidden="true" /></button
           >
         </div>
         {#if attempt.audioAvailable}

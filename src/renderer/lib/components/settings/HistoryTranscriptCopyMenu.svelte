@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
   /**
    * Copy control for one recording-history attempt.
    *
@@ -9,7 +13,7 @@
    * when cleanup actually produced different text, so the menu never shows two
    * rows that copy the same string.
    */
-  import { Check, ChevronDown, ClipboardCopy, Sparkles } from '@lucide/svelte'
+
   import { DropdownMenu } from 'bits-ui'
   import { copyText } from '$lib/copy-text'
   import type { SpeechRecordingAttempt } from '../../../../lib/speech/types'
@@ -95,11 +99,11 @@
     disabled={!plainText && !cleanedText}
   >
     {#if copied}
-      <Check size={13} class="text-success" aria-hidden="true" />
+      <CioCheck size={13} class="text-success" aria-hidden="true" />
     {:else}
-      <ClipboardCopy size={13} aria-hidden="true" />
+      <CioCopy size={13} aria-hidden="true" />
     {/if}
-    <ChevronDown size={10} aria-hidden="true" />
+    <CioChevronDown size={10} aria-hidden="true" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
@@ -111,7 +115,7 @@
     >
       {#if plainText}
         <DropdownMenu.Item class={itemClass} onSelect={() => void copy(plainText)}>
-          <ClipboardCopy size={12} class="shrink-0 text-dimmed" />
+          <CioCopy size={12} class="shrink-0 text-dimmed" />
           Copy transcript
           <span class="ml-auto pl-3 text-[0.5625rem] text-dimmed tabular-nums"
             >{plainText.length} chars</span
@@ -120,7 +124,7 @@
       {/if}
       {#if hasCleanedVariant}
         <DropdownMenu.Item class={itemClass} onSelect={() => void copy(cleanedText)}>
-          <Sparkles size={12} class="shrink-0 text-dimmed" />
+          <CioSparkles size={12} class="shrink-0 text-dimmed" />
           Copy with cleanup
           <span class="ml-auto pl-3 text-[0.5625rem] text-dimmed tabular-nums"
             >{cleanedText.length} chars</span

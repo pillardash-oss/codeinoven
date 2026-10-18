@@ -2,10 +2,12 @@ import { validateModelRuntimeSettings } from '../../../lib/model-runtime-setting
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { validateEntityId } from '../ipc-validation'
 import { requireString } from './shared'
-import { ASSISTANT_NEXT_STEPS_PROMPT } from '../../../lib/assistant-next-steps'
+import { assistantNextStepsPrompt } from '../../../lib/assistant-next-steps'
 import {
   ASSISTANT_CHAT_SETUP_ACTION,
-  ASSISTANT_CHAT_SETUP_PROMPT
+  ASSISTANT_CHAT_SETUP_PROMPT,
+  ASSISTANT_MANUAL_SETUP_ACTION,
+  assistantManualSetupPrompt
 } from '../../../lib/assistant-chat-setup'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { LOCAL_OVEN_ID } from '../../../lib/ovens'
@@ -14,7 +16,7 @@ import {
   ASSISTANT_IMPACT_IDS,
   ASSISTANT_TIMELINESS_IDS
 } from '../../../lib/assistant-reporting'
-import { assistantFirstKnowledgeSave } from '../../../lib/types'
+import { assistantFirstKnowledgeSave, assistantIsScheduled } from '../../../lib/types'
 import {
   broadcastAutoAnswersChanged,
   broadcastBackgroundRunsChanged,
@@ -37,6 +39,11 @@ import type {
   AssistantTimeliness,
   UpdateAssistantInput
 } from '../../../lib/types'
+import {
+  ASSISTANT_NAME_LIMIT,
+  ASSISTANT_PERSONALITY_LIMIT,
+  ASSISTANT_SCHEDULE_NAME_LIMIT
+} from '../../../lib/types'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import { validateCustomIconImage } from '../../../lib/custom-icon'
 
@@ -44,10 +51,10 @@ const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ASSISTANT_DELIVERY_CHANNEL_IDS)
 const TIMELINESS_BRACKETS = new Set<string>(ASSISTANT_TIMELINESS_IDS)
 const IMPACT_BRACKETS = new Set<string>(ASSISTANT_IMPACT_IDS)
-const MAX_ASSISTANT_NAME = 200
+const MAX_ASSISTANT_NAME = ASSISTANT_NAME_LIMIT
 const MAX_ASSISTANT_DESCRIPTION = 2000
-const MAX_ASSISTANT_PERSONALITY = 4_000
-const MAX_ASSISTANT_SCHEDULE_NAME = 120
+const MAX_ASSISTANT_PERSONALITY = ASSISTANT_PERSONALITY_LIMIT
+const MAX_ASSISTANT_SCHEDULE_NAME = ASSISTANT_SCHEDULE_NAME_LIMIT
 const MAX_KNOWLEDGE = 100_000
 const MAX_CONNECTIONS = 64
 const MAX_CONNECTION_SETUP = 4_000
@@ -592,7 +599,7 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
       thread.projectId,
       thread.id,
       settings,
-      ASSISTANT_NEXT_STEPS_PROMPT,
+      assistantNextStepsPrompt(assistantIsScheduled(assistant)),
       [],
       undefined,
       undefined,
@@ -604,24 +611,22 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   })
 
   /**
-   * Open a new assistant's first conversation when the user chose to build it by
-   * talking rather than through the form. The assistant already exists and knows
-   * nothing, so this posts the app-owned opening turn: the user reads one line
-   * saying a new assistant is being created, and the model receives the setup
-   * instruction, which is never shown.
+   * Send one app-owned opening turn into an assistant's Getting started thread.
    *
-   * The turn carries the `user` origin even though the user did not write it. That
-   * is what attaches the authoring contract to it: the contract rides the system
-   * prompt of a user turn on an assistant with no knowledge yet, and it is the part
-   * that carries the setup order and the mechanics. An internal turn would reach
-   * the model with the opening line alone and no contract to follow. An assistant
-   * with no Getting started thread, a hidden one, or one with no bound settings
-   * makes this a no-op.
+   * Both openings use the `user` origin even though the user did not type them:
+   * that origin is what attaches the authoring contract, which rides the system
+   * prompt of a user turn on an assistant whose knowledge is still missing. The
+   * presentation line stands in for the prompt, so the user reads what is
+   * happening instead of the instruction. An assistant with no Getting started
+   * thread, a hidden one, or a thread with no bound settings makes this a no-op.
    */
-  ipcMain.handle('assistant:startChatSetup', async (_, assistantId: unknown) => {
-    const id = validateEntityId(assistantId, 'Assistant ID')
-    const assistant = assistantManager.getAssistant(id)
-    const thread = assistantManager.knowledgeThread(id)
+  const postAssistantOpeningTurn = async (
+    assistantId: string,
+    text: string,
+    action: string
+  ): Promise<void> => {
+    const assistant = assistantManager.getAssistant(assistantId)
+    const thread = assistantManager.knowledgeThread(assistantId)
     const chatEngine = ctx.chatEngine
     if (!assistant || !thread || thread.archived || !thread.settings || !chatEngine) return
     const primary = assistantPrimaryModel(assistant.agents)
@@ -632,7 +637,7 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
       thread.projectId,
       thread.id,
       settings,
-      ASSISTANT_CHAT_SETUP_PROMPT,
+      text,
       [],
       undefined,
       undefined,
@@ -640,7 +645,35 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
       undefined,
       undefined,
       'user',
-      { action: ASSISTANT_CHAT_SETUP_ACTION }
+      { action }
+    )
+  }
+
+  /**
+   * Open a new assistant's first conversation when the user chose to build it by
+   * talking rather than through the form. The assistant already exists and knows
+   * nothing, so this posts the app-owned opening turn: the user reads one line
+   * saying a new assistant is being created, and the model receives the setup
+   * instruction, which is never shown.
+   */
+  ipcMain.handle('assistant:startChatSetup', async (_, assistantId: unknown) => {
+    const id = validateEntityId(assistantId, 'Assistant ID')
+    await postAssistantOpeningTurn(id, ASSISTANT_CHAT_SETUP_PROMPT, ASSISTANT_CHAT_SETUP_ACTION)
+  })
+
+  /**
+   * Open a form-created assistant's first conversation. The name and the
+   * personality are already the user's own words, so the assistant opens by using
+   * them, asks only what to call the user, and says where a task goes.
+   */
+  ipcMain.handle('assistant:startManualSetup', async (_, assistantId: unknown) => {
+    const id = validateEntityId(assistantId, 'Assistant ID')
+    const assistant = assistantManager.getAssistant(id)
+    if (!assistant) return
+    await postAssistantOpeningTurn(
+      id,
+      assistantManualSetupPrompt(assistant),
+      ASSISTANT_MANUAL_SETUP_ACTION
     )
   })
 

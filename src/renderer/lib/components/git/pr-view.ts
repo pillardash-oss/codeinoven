@@ -4,16 +4,15 @@
  * state pills, the check pill and the view switcher in its own rows now, so
  * neither the badge classes nor the view list can live inside the reader.
  */
-import {
-  Bot,
-  CircleCheck,
-  CircleX,
-  FileDiff,
-  GitCommitHorizontal,
-  Loader2,
-  MessagesSquare,
-  ShieldCheck
-} from '@lucide/svelte'
+
+import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
+import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
 import type {
   PrListFilter,
   PrListSort,
@@ -35,13 +34,13 @@ export type PrDetailTabId = 'conversation' | 'commits' | 'files' | 'checks' | 'a
 export const PR_DETAIL_VIEWS: Array<{
   id: PrDetailTabId
   label: string
-  icon: typeof Bot
+  icon: typeof CioSubagent
 }> = [
-  { id: 'conversation', label: 'Conversation', icon: MessagesSquare },
-  { id: 'commits', label: 'Commits', icon: GitCommitHorizontal },
-  { id: 'files', label: 'Files', icon: FileDiff },
-  { id: 'checks', label: 'Checks', icon: ShieldCheck },
-  { id: 'agent', label: 'Agent', icon: Bot }
+  { id: 'conversation', label: 'Conversation', icon: CioChat },
+  { id: 'commits', label: 'Commits', icon: CioCommit },
+  { id: 'files', label: 'Files', icon: CioDiff },
+  { id: 'checks', label: 'Checks', icon: CioShieldCheck },
+  { id: 'agent', label: 'Agent', icon: CioSubagent }
 ]
 
 /**
@@ -160,11 +159,11 @@ export function prChecksStateLabel(state: string): string {
  * header draw the same pill, and a state that renders as a tick in one surface
  * must not render as a cross in the other.
  */
-export function prChecksStateIcon(state: PullRequestChecks['state']): typeof ShieldCheck {
-  if (state === 'success') return CircleCheck
-  if (state === 'failure') return CircleX
-  if (state === 'pending') return Loader2
-  return ShieldCheck
+export function prChecksStateIcon(state: PullRequestChecks['state']): typeof CioShieldCheck {
+  if (state === 'success') return CioCheckCircle
+  if (state === 'failure') return CioCrossCircle
+  if (state === 'pending') return CioSpinner
+  return CioShieldCheck
 }
 
 /** Whether that glyph only reads as "running" while it turns. */

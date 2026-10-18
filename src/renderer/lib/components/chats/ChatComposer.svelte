@@ -1,9 +1,17 @@
 <script lang="ts">
+  import CioArrowUp from '@pillardash-oss/cio-icon/CioArrowUp.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioCompactSend from '@pillardash-oss/cio-icon/CioCompactSend.svelte'
+  import CioFlame from '@pillardash-oss/cio-icon/CioFlame.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioMinimize from '@pillardash-oss/cio-icon/CioMinimize.svelte'
+  import CioStop from '@pillardash-oss/cio-icon/CioStop.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { fade } from 'svelte/transition'
-  import { ArrowUp, Clock, Flame, Maximize2, Minimize2, Square } from '@lucide/svelte'
+  import { scale } from 'svelte/transition'
+
   import { motionDuration } from '$lib/motion'
   import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
@@ -30,6 +38,7 @@
   import ExpertCard from './ExpertCard.svelte'
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
+  import type { ComposerRelocationRequest } from './composer-relocation'
   import { installComposerDropListeners, type ComposerDropRegion } from './chat-composer-drop'
   import { readComposerDrop } from './chat-composer-drop-source'
   import { handleComposerKeydown, type ComposerKeydownContext } from './chat-composer-keydown'
@@ -107,6 +116,7 @@
     EngineeringLifecycleState,
     HarnessAccount
   } from '$shared/types'
+  import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 
   const codeInOvenIconSvg = getVendorIconSvg(APP_NAME)
 
@@ -188,6 +198,12 @@
     onRemoveAllReferences?: () => void
     /** Jump to a reference's highlight and open its comment editor. */
     onEditReference?: (id: string) => void
+    /**
+     * Carry a composer attachment, doc comment or inspector comment to another
+     * chat of the same project. Absent on a surface that has no project to move
+     * into: chats, assistant tasks, browser conversations and read-only views.
+     */
+    onRelocateItem?: ComposerRelocationRequest
     /** False on the Chats tab   plain chats never surface the engineer toggle. */
     showEngineeringMode?: boolean
     engineeringLifecycle?: EngineeringLifecycleState | null
@@ -234,6 +250,8 @@
     onModelUsed?: (modelKey: string) => void
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
+    generationRate?: number | null
+    generationDetails?: import('$lib/generation-details').GenerationDetails
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
@@ -317,6 +335,7 @@
     onRemoveReference,
     onRemoveAllReferences,
     onEditReference,
+    onRelocateItem,
     showEngineeringMode = true,
     engineeringLifecycle = null,
     engineeringActive,
@@ -336,6 +355,8 @@
     recentModels = [],
     onModelUsed,
     contextUsage,
+    generationRate,
+    generationDetails,
     efficiencyKpis,
     harnessUsage = [],
     onRevealUsage,
@@ -423,7 +444,11 @@
   // the same file twice, which the keyed attachment chips cannot render, so the
   // restored list is collapsed here before it ever reaches the markup.
   // svelte-ignore state_referenced_locally
-  let attachments = $state<PromptAttachment[]>(uniqueAttachments(initialAttachments))
+  let attachments = $state<PromptAttachment[]>(
+    // A restored draft or a hand-off can carry more than a message takes, so the
+    // composer is bounded on the way in too.
+    uniqueAttachments(initialAttachments).slice(0, MAX_PROMPT_ATTACHMENTS)
+  )
   // svelte-ignore state_referenced_locally
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
@@ -664,18 +689,6 @@
    * battery is how the user checks what a model choice will cost before sending
    * the first message of a thread, and hovering it is what fetches live quota.
    */
-  let usageReading = $derived<ComposerUsage>({
-    usage: contextUsage,
-    efficiencyKpis,
-    harnessUsage,
-    canCompact,
-    compacting,
-    onCompact,
-    onActivateBankedReset,
-    onReveal: onRevealUsage,
-    onHide: onHideUsage,
-    refreshing: usageRefreshing
-  })
   /** The shared model picker, so the `/profile` action can open its profiles panel. */
   let modelPicker: ModelPicker | undefined = $state(undefined)
   /** The scope picker is live on the shoe (project mode, new thread)   gates
@@ -695,6 +708,14 @@
   // pointer travels from the chip across any gap to the popover itself.
   let selectionPopoverOpen = $state(false)
   let selectionPopoverTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Whether a reference row's relocation menu is up.
+   *
+   * The menu is portaled outside the popover, so the pointer crosses out of the
+   * popover to reach it. Plain book-keeping: it is only read while deciding
+   * whether a hover-out may close the list, never rendered.
+   */
+  let referenceMenuOpen = false
   let startAfterPopoverOpen = $state(false)
   let startAfterPopoverTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -705,9 +726,17 @@
 
   function scheduleSelectionPopoverClose(): void {
     clearTimeout(selectionPopoverTimer)
+    // A menu opened from a row outranks the pointer leaving: the list it was
+    // opened from must still be there when the user comes back to it.
+    if (referenceMenuOpen) return
     selectionPopoverTimer = setTimeout(() => {
       selectionPopoverOpen = false
     }, 220)
+  }
+
+  function handleReferenceMenuOpenChange(open: boolean): void {
+    referenceMenuOpen = open
+    if (!open) scheduleSelectionPopoverClose()
   }
 
   function toggleSelectionPopover(): void {
@@ -933,6 +962,25 @@
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
   )
+  let usageReading = $derived<ComposerUsage>({
+    usage: contextUsage,
+    previewContextWindow:
+      resolved.contextWindow !== undefined &&
+      selectedModel?.contextWindows?.includes(resolved.contextWindow)
+        ? resolved.contextWindow
+        : selectedModel?.contextWindow,
+    generationRate,
+    generationDetails,
+    efficiencyKpis,
+    harnessUsage,
+    canCompact,
+    compacting,
+    onCompact,
+    onActivateBankedReset,
+    onReveal: onRevealUsage,
+    onHide: onHideUsage,
+    refreshing: usageRefreshing
+  })
 
   /**
    * True when this composer has nothing to run a turn with. Sending such a turn
@@ -1158,6 +1206,19 @@
 
   /** The mic stays mounted; only the send/stop control follows composer state. */
   let showSendControl = $derived(!disabled && (working || hasSendableContent))
+
+  /** Which glyph the send control carries. The three stay mounted in one box and
+   *  crossfade, so sending reads as the arrow morphing into the stop square
+   *  rather than as one icon being swapped for another. */
+  let sendControlGlyph = $derived<'stop' | 'queue' | 'send'>(
+    canStop ? 'stop' : working ? 'queue' : 'send'
+  )
+  let compactBeforeSend = $derived(
+    !working &&
+      contextUsage?.contextUsed !== undefined &&
+      usageReading.previewContextWindow !== undefined &&
+      contextUsage.contextUsed >= Math.round(usageReading.previewContextWindow * 0.8)
+  )
 
   /** The maximize control is only useful once there is something to expand for,
    *  and it stays while maximized so clearing the text cannot strand the composer
@@ -1634,6 +1695,31 @@
     )
   }
 
+  /** Say what did not fit, so a drop past the file ceiling is never a silence. */
+  function noticeOverflowAttachments(overflow: readonly PromptAttachment[]): void {
+    if (overflow.length === 0) return
+    showToastWarning(
+      overflow.length === 1
+        ? `${overflow[0]?.filename ?? 'That file'} was not attached: a message carries at most ${MAX_PROMPT_ATTACHMENTS} files.`
+        : `${overflow.length} of those files were not attached: a message carries at most ${MAX_PROMPT_ATTACHMENTS} files.`
+    )
+  }
+
+  /** Attach files that arrived through a path the composer has already built
+   *  them on, applying the same duplicate guard and file ceiling as a drop. */
+  function adoptAttachments(candidates: readonly PromptAttachment[]): PromptAttachment[] {
+    if (candidates.length === 0) return []
+    // Dropping the same file twice must leave one chip: a repeated `file://` URL
+    // is a duplicate key in the keyed attachment list and throws at render time.
+    const { added, duplicates, overflow } = partitionNewAttachments(attachments, candidates)
+    if (duplicates.length > 0) noticeDuplicateAttachments(duplicates)
+    noticeOverflowAttachments(overflow)
+    if (added.length === 0) return []
+    attachments = [...attachments, ...added]
+    onAttachmentsChange?.([...attachments])
+    return added
+  }
+
   async function addFileAttachments(
     selections: ReadonlyArray<{ path: string; file?: File }>
   ): Promise<void> {
@@ -1649,14 +1735,7 @@
     })
     if (candidates.length === 0) return
 
-    // Dropping the same file twice must leave one chip: a repeated `file://` URL
-    // is a duplicate key in the keyed attachment list and throws at render time.
-    const { added, duplicates } = partitionNewAttachments(attachments, candidates)
-    if (duplicates.length > 0) noticeDuplicateAttachments(duplicates)
-    if (added.length === 0) return
-
-    attachments = [...attachments, ...added]
-    onAttachmentsChange?.([...attachments])
+    const added = adoptAttachments(candidates)
     await Promise.all(added.map((attachment) => preview.load(attachment)))
   }
 
@@ -1672,9 +1751,9 @@
       url: pathToFileUrl(path),
       filename: 'Pasted text.txt'
     }
-    attachments = [...attachments, attachment]
-    preview.setText(attachment.url, text)
-    onAttachmentsChange?.([...attachments])
+    const [added] = adoptAttachments([attachment])
+    if (!added) return
+    preview.setText(added.url, text)
   }
 
   async function savePastedTextAttachment(
@@ -1878,6 +1957,7 @@
     ? 'border-t border-dashed border-border-strong'
     : ''} {expansion.maximized ? 'composer-maximized' : ''}"
   data-onboarding="composer"
+  data-guide="composer"
   data-voice-trigger-root
   {@attach captureComposerRoot}
 >
@@ -1958,6 +2038,8 @@
     {onEditReference}
     {onRemoveReference}
     {onRemoveAllReferences}
+    {onRelocateItem}
+    onReferenceMenuOpenChange={handleReferenceMenuOpenChange}
   />
 
   <div class="relative" style="--editor-gutter: 2.25rem">
@@ -1982,12 +2064,13 @@
     {/if}
     <!-- Maximize   floats at the top right of the typing surface so the control
          is out of the writing line; the editor reserves its corner with `pr-10`.
-         It fades in with the first character typed (see `showExpandControl`). -->
+         It scales in with the first character typed (see `showExpandControl`) and
+         scales out again when the field empties, so it never blinks on. -->
     {#if showExpandControl}
       <button
         type="button"
         class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        transition:fade={{ duration: motionDuration(140) }}
+        transition:scale={{ duration: motionDuration(150), start: 0.85 }}
         aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
         aria-pressed={expansion.maximized}
         title={expansion.maximized
@@ -1995,11 +2078,14 @@
           : 'Expand the composer for a taller, wider typing area'}
         onclick={toggleComposerExpansion}
       >
-        {#if expansion.maximized}
-          <Minimize2 size={13} />
-        {:else}
-          <Maximize2 size={13} />
-        {/if}
+        <span class="control-glyphs" aria-hidden="true">
+          <span class="control-glyph" class:is-active={expansion.maximized}>
+            <CioMinimize size={ICON_SIZE.control} />
+          </span>
+          <span class="control-glyph" class:is-active={!expansion.maximized}>
+            <CioMaximize size={ICON_SIZE.control} />
+          </span>
+        </span>
       </button>
     {/if}
 
@@ -2144,7 +2230,7 @@
         title="Switch this session to pay-as-you-go API usage credits"
         onclick={runUsageCredits}
       >
-        <Flame size={13} />
+        <CioFlame size={ICON_SIZE.control} />
       </button>
     {/if}
 
@@ -2159,52 +2245,66 @@
       {disabled}
     />
 
-    {#if showSendControl}
-      <!-- Send / Queue / Stop button.
+    <!-- Send / Queue / Stop button. It never unmounts: it widens out of the row
+         and fades when the composer has nothing to send or stop, and widens back
+         when it does, so the mic beside it slides instead of the row snapping.
+         Its glyphs share one box, so a send morphs into the stop square.
            - Agent idle:       ArrowUp (send)   primary, disabled when empty
-           - Agent working, user typing:  Clock (queue)   primary, always clickable
-           - Agent working, no text:      Square (stop)   danger tint
+           - Agent working, user typing:  AlarmClock (queue)   primary, always clickable
+           - Agent working, no text:      Square (stop)   quiet at rest, danger tint on hover
            - Stop confirmation pending:   "Stop?" danger label -->
-      <button
-        type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors {pendingStop
-          ? 'bg-danger text-on-danger hover:bg-danger-hover'
-          : canStop
-            ? 'bg-danger/10 text-danger hover:bg-danger/20'
-            : 'bg-accent text-on-accent hover:bg-accent-hover'}"
-        aria-label={pendingStop
-          ? 'Confirm stop'
-          : canStop
-            ? 'Stop agent'
-            : working
-              ? 'Queue message'
+    <button
+      type="button"
+      class="composer-send-control relative flex h-8 shrink-0 items-center justify-center {pendingStop
+        ? 'bg-danger text-on-danger hover:bg-danger-hover'
+        : canStop
+          ? 'text-muted hover:bg-danger/10 hover:text-danger'
+          : 'bg-accent text-on-accent hover:bg-accent-hover'}"
+      class:is-present={showSendControl}
+      class:is-armed={pendingStop}
+      inert={!showSendControl || undefined}
+      aria-label={pendingStop
+        ? 'Confirm stop'
+        : canStop
+          ? 'Stop agent'
+          : working
+            ? 'Queue message'
+            : compactBeforeSend
+              ? 'Compact context and send message'
               : 'Send message'}
-        title={pendingStop
-          ? 'Click again to stop'
-          : canStop
-            ? 'Stop the running agent'
-            : working
-              ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
+      title={pendingStop
+        ? 'Click again to stop'
+        : canStop
+          ? 'Stop the running agent'
+          : working
+            ? `Queue   ${sendModifierLabel}Enter · Steer   ${sendModifierLabel}⇧Enter`
+            : compactBeforeSend
+              ? `Compact context, then send   ${sendModifierLabel}Enter`
               : `Send   ${sendModifierLabel}Enter`}
-        disabled={disabled ||
-          (canStop ? false : ovenModelUnavailable) ||
-          (!working && !hasSendableContent)}
-        onclick={() => submit()}
-      >
-        {#if pendingStop}
-          <span class="pending-stop-label text-[0.5625rem] font-semibold">Stop?</span>
-          <span class="pending-stop-icon">
-            <Square size={14} />
-          </span>
-        {:else if canStop}
-          <Square size={14} />
-        {:else if working}
-          <Clock size={15} />
-        {:else}
-          <ArrowUp size={16} />
-        {/if}
-      </button>
-    {/if}
+      disabled={disabled ||
+        (canStop ? false : ovenModelUnavailable) ||
+        (!working && !hasSendableContent)}
+      onclick={() => submit()}
+    >
+      <span class="control-glyphs" aria-hidden="true">
+        <span class="control-glyph" class:is-active={sendControlGlyph === 'stop'}>
+          <CioStop size={ICON_SIZE.control} />
+        </span>
+        <span class="control-glyph" class:is-active={sendControlGlyph === 'queue'}>
+          <CioClock size={ICON_SIZE.control} />
+        </span>
+        <span class="control-glyph" class:is-active={sendControlGlyph === 'send'}>
+          {#if compactBeforeSend}
+            <CioCompactSend size={ICON_SIZE.control} />
+          {:else}
+            <CioArrowUp size={ICON_SIZE.control} />
+          {/if}
+        </span>
+      </span>
+      <span class="pending-stop-label text-[0.5625rem] font-semibold" class:is-active={pendingStop}>
+        Stop?
+      </span>
+    </button>
   </div>
 </div>
 
@@ -2331,13 +2431,96 @@
 
   @media (prefers-reduced-motion: reduce) {
     :global(.chat-composer),
-    :global(.composer-editor) {
+    :global(.composer-editor),
+    .composer-send-control,
+    .control-glyphs,
+    .control-glyph,
+    .pending-stop-label {
       transition: none;
     }
   }
 
-  .pending-stop-icon {
-    display: none;
+  /* Send / Queue / Stop   one control that never unmounts. It widens out of the
+     row and fades when the composer has nothing to send or stop, and widens back
+     in when it does, so the mic beside it slides instead of the row snapping.
+     While collapsed the negative start margin cancels the toolbar's `gap-1`, so
+     the row's right edge is what moves and nothing shifts once the motion ends.
+     Colour rides the same transition, so the gold send and the quiet stop tint
+     into each other. */
+  .composer-send-control {
+    width: 0;
+    /* A flex item's automatic minimum size would otherwise floor the used width
+       at the control's own content, so the collapsed box has to say it may
+       reach zero. */
+    min-width: 0;
+    margin-inline-start: -0.25rem;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      width 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+      margin-inline-start 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+      opacity 150ms ease,
+      background-color 160ms ease,
+      color 160ms ease;
+  }
+
+  .composer-send-control.is-present {
+    width: 2rem;
+    margin-inline-start: 0;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* A control's glyphs share one box, all of them mounted: the active one
+     crossfades and settles into place, so a state change reads as one mark
+     becoming another rather than as a swap. Opacity and transform only, so the
+     change never touches layout. */
+  .control-glyphs {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 1.0625rem;
+    height: 1.0625rem;
+    transition: opacity 150ms ease;
+  }
+
+  .control-glyph {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    opacity: 0;
+    transform: scale(0.55) rotate(-32deg);
+    transition:
+      opacity 130ms ease,
+      transform 210ms cubic-bezier(0.215, 0.61, 0.355, 1);
+  }
+
+  .control-glyph.is-active {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* While the word is on screen the square behind it stays off; the narrow tier
+     has no room for the word, so the square carries the armed state there (see
+     the container query below). */
+  .composer-send-control.is-armed .control-glyphs {
+    opacity: 0;
+  }
+
+  .pending-stop-label {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 130ms ease;
+  }
+
+  .pending-stop-label.is-active {
+    opacity: 1;
   }
 
   /* Control labels ellipsize as the composer tightens   they never wrap to a
@@ -2349,12 +2532,12 @@
       padding-inline: 0.5rem;
     }
 
-    .pending-stop-label {
-      display: none;
+    .composer-send-control.is-armed .control-glyphs {
+      opacity: 1;
     }
 
-    .pending-stop-icon {
-      display: block;
+    .pending-stop-label.is-active {
+      opacity: 0;
     }
   }
 

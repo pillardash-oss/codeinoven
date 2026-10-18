@@ -1,6 +1,8 @@
 import { SvelteMap } from 'svelte/reactivity'
-import { invoke } from '$lib/ipc.svelte'
+import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { AuthoredWorkKind, ProjectWorkState } from '$shared/ipc-contract'
+import { DEFAULT_WORK_ROOTS, type WorkRoots } from '$shared/design/work-roots'
+import { APP_SLUG } from '$shared/brand'
 
 /**
  * The designs and videos a project holds, read without a thread.
@@ -15,10 +17,37 @@ import type { AuthoredWorkKind, ProjectWorkState } from '$shared/ipc-contract'
  * they paint, and neither should be able to stack a second question on the first.
  */
 class ProjectWorkStore {
+  constructor() {
+    if (typeof window !== 'undefined') {
+      subscribe('design:relocated', (projectId, moves) => {
+        const relocated = new Map(moves.map(({ from, to }) => [from, to]))
+        for (const [key, directory] of this.#selected) {
+          const destination = relocated.get(directory)
+          if (key.startsWith(`${projectId}:`) && destination) this.#selected.set(key, destination)
+        }
+        for (const kind of ['design', 'video'] as const) {
+          const destination = relocated.get(this.focusedDirectory(projectId, kind))
+          if (destination) this.focusDirectory(projectId, kind, destination)
+        }
+        if (this.#states.has(projectId)) void this.refresh(projectId)
+      })
+    }
+  }
   /** Last answer per project, so the rail can draw before its own read settles. */
   #states = new SvelteMap<string, ProjectWorkState>()
   /** Projects whose read is in flight, so callers share one request. */
   #pending = new Map<string, Promise<void>>()
+  /**
+   * The folder each project writes new work into.
+   *
+   * A project's own record, so it is read per project rather than kept as one
+   * app-wide value, and cached because the file tree asks about every row it draws.
+   * The app default answers until the read lands, which is what a project that
+   * never changed its folder would be told anyway.
+   */
+  #roots = new SvelteMap<string, WorkRoots>()
+  /** Projects whose roots are being read, so an explorer asks once per project. */
+  #rootsPending = new Map<string, Promise<void>>()
 
   /** The last answer for a project, or null before the first one arrives. */
   stateFor(projectId: string): ProjectWorkState | null {
@@ -28,6 +57,90 @@ class ProjectWorkStore {
   /** The folders of one kind a project holds, or an empty list before the read. */
   itemsFor(projectId: string, kind: AuthoredWorkKind): ProjectWorkState[AuthoredWorkKind] {
     return this.#states.get(projectId)?.[kind] ?? []
+  }
+
+  /** The folders a project writes new work into, or the app default before the read. */
+  rootsFor(projectId: string): WorkRoots {
+    return this.#roots.get(projectId) ?? { ...DEFAULT_WORK_ROOTS }
+  }
+
+  /** Read a project's folders once, unless a read is already in flight. */
+  ensureRoots(projectId: string): Promise<void> {
+    return this.#roots.has(projectId) ? Promise.resolve() : this.refreshRoots(projectId)
+  }
+
+  /** Read a project's folders again, which a save-path change asks for. */
+  refreshRoots(projectId: string): Promise<void> {
+    const pending = this.#rootsPending.get(projectId)
+    if (pending) return pending
+    const task = invoke('design:workRoots', projectId)
+      .then((roots) => {
+        this.#roots.set(projectId, roots)
+      })
+      .catch(() => {
+        // A project whose folders cannot be read keeps the answer it has, which
+        // at worst names the app default.
+      })
+      .finally(() => {
+        this.#rootsPending.delete(projectId)
+      })
+    this.#rootsPending.set(projectId, task)
+    return task
+  }
+
+  /** Last folder focused for each project and work kind, shared across threads. */
+  #focused = new SvelteMap<string, string>()
+  /** Explicit per-thread choices last for this renderer session only. */
+  #selected = new SvelteMap<string, string>()
+
+  selectedDirectory(projectId: string, kind: AuthoredWorkKind, threadId: string): string {
+    return this.#selected.get(`${projectId}:${kind}:${threadId}`) ?? ''
+  }
+
+  hasSelection(projectId: string, threadId: string): boolean {
+    return (['design', 'video'] as const).some((kind) =>
+      this.#selected.has(`${projectId}:${kind}:${threadId}`)
+    )
+  }
+
+  selectDirectory(
+    projectId: string,
+    kind: AuthoredWorkKind,
+    threadId: string,
+    directory: string
+  ): void {
+    const key = `${projectId}:${kind}:${threadId}`
+    if (directory) this.#selected.set(key, directory)
+    else this.#selected.delete(key)
+    this.focusDirectory(projectId, kind, directory)
+  }
+
+  focusedDirectory(projectId: string, kind: AuthoredWorkKind): string {
+    const key = `${projectId}:${kind}`
+    const focused = this.#focused.get(key)
+    if (focused !== undefined) return focused
+    try {
+      return typeof window === 'undefined'
+        ? ''
+        : (window.localStorage.getItem(`${APP_SLUG}.work-focus.${key}`) ?? '')
+    } catch {
+      return ''
+    }
+  }
+
+  focusDirectory(projectId: string, kind: AuthoredWorkKind, directory: string): void {
+    this.#focused.set(`${projectId}:${kind}`, directory)
+    try {
+      if (typeof window !== 'undefined')
+        window.localStorage.setItem(`${APP_SLUG}.work-focus.${projectId}:${kind}`, directory)
+    } catch {
+      // A disabled storage area still leaves session choices available.
+    }
+  }
+
+  /** Opening a panel discards its cached listing before checking recorded folders. */
+  invalidate(projectId: string): void {
+    this.#states.delete(projectId)
   }
 
   /** Read a project's work once, unless a read is already in flight. */
@@ -56,8 +169,23 @@ class ProjectWorkStore {
 
   /** Drop a project's cached answer, e.g. when it is removed. */
   forget(projectId: string): void {
+    for (const key of this.#selected.keys()) {
+      if (key.startsWith(`${projectId}:`)) this.#selected.delete(key)
+    }
+    for (const kind of ['design', 'video'] as const) {
+      try {
+        if (typeof window !== 'undefined')
+          window.localStorage.removeItem(`${APP_SLUG}.work-focus.${projectId}:${kind}`)
+      } catch {
+        /* Storage can be unavailable. */
+      }
+    }
+    this.#focused.delete(`${projectId}:design`)
+    this.#focused.delete(`${projectId}:video`)
     this.#states.delete(projectId)
     this.#pending.delete(projectId)
+    this.#roots.delete(projectId)
+    this.#rootsPending.delete(projectId)
   }
 }
 

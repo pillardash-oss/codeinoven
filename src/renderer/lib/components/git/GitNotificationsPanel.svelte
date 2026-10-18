@@ -1,16 +1,13 @@
 <script lang="ts">
-  import {
-    Archive,
-    ArchiveRestore,
-    Bell,
-    BellOff,
-    Bookmark,
-    BookmarkCheck,
-    ExternalLink,
-    Inbox,
-    Loader2,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBellOff from '@pillardash-oss/cio-icon/CioBellOff.svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioBookmarkCheck from '@pillardash-oss/cio-icon/CioBookmarkCheck.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioInbox from '@pillardash-oss/cio-icon/CioInbox.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { onMount } from 'svelte'
@@ -226,14 +223,14 @@
     <div
       class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
     >
-      <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+      <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
       <p class="text-[0.625rem] leading-relaxed text-dimmed">{githubNotifications.error}</p>
     </div>
   {/if}
 
   {#if !githubConnected}
     <EmptyState
-      icon={Bell}
+      icon={CioNotifications}
       title="Sign in to GitHub"
       description="Notifications belong to your GitHub account, so sign in to read and act on them here."
     >
@@ -269,12 +266,12 @@
     </div>
   {:else if githubNotifications.loading && githubNotifications.items.length === 0}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.625rem] text-muted">
-      <Loader2 size={14} class="animate-spin" aria-hidden="true" />
+      <CioSpinner size={14} class="animate-spin" aria-hidden="true" />
       Loading notifications
     </div>
   {:else if githubNotifications.items.length === 0}
     <EmptyState
-      icon={Inbox}
+      icon={CioInbox}
       title={githubNotifications.tab === 'saved'
         ? 'Nothing saved'
         : githubNotifications.tab === 'done'
@@ -360,9 +357,9 @@
                     onclick={() => void githubNotifications.setDone(item.id, !item.done)}
                   >
                     {#if item.done}
-                      <ArchiveRestore size={13} aria-hidden="true" />
+                      <CioArchive size={13} aria-hidden="true" />
                     {:else}
-                      <Archive size={13} aria-hidden="true" />
+                      <CioArchive size={13} aria-hidden="true" />
                     {/if}
                   </button>
                   <button
@@ -373,7 +370,7 @@
                     disabled={githubNotifications.busyThreadId === item.id}
                     onclick={() => void githubNotifications.unsubscribe(item.id)}
                   >
-                    <BellOff size={13} aria-hidden="true" />
+                    <CioBellOff size={13} aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -384,9 +381,9 @@
                     onclick={() => void githubNotifications.setSaved(item.id, !item.saved)}
                   >
                     {#if item.saved}
-                      <BookmarkCheck size={13} class="text-primary" aria-hidden="true" />
+                      <CioBookmarkCheck size={13} class="text-primary" aria-hidden="true" />
                     {:else}
-                      <Bookmark size={13} aria-hidden="true" />
+                      <CioBookmark size={13} aria-hidden="true" />
                     {/if}
                   </button>
                   <button
@@ -397,7 +394,7 @@
                     data-external-url={item.url ?? ''}
                     onclick={() => openOnGitHub(item)}
                   >
-                    <ExternalLink size={13} aria-hidden="true" />
+                    <CioExternalLink size={13} aria-hidden="true" />
                   </button>
                 </span>
               </span>

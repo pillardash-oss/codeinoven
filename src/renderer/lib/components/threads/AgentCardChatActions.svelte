@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { HelpCircle, MessageSquareDashed } from '@lucide/svelte'
-
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
   /**
    * The two context actions a human-decision card carries: explain it, or open a
    * quick chat about it.
@@ -40,7 +40,7 @@
         title={explainTitle}
         aria-label={explainTitle}
       >
-        <HelpCircle size={14} class="shrink-0" />
+        <TriangleQuestionMark size={14} class="shrink-0" />
       </button>
     {/if}
     {#if onQuickChat}
@@ -52,7 +52,7 @@
         title={quickChatTitle}
         aria-label={quickChatTitle}
       >
-        <MessageSquareDashed size={14} class="shrink-0" />
+        <CioTemporaryChat size={14} class="shrink-0" />
       </button>
     {/if}
   </div>

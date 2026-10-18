@@ -23,8 +23,7 @@
 </script>
 
 <script lang="ts">
-  import { Clock } from '@lucide/svelte'
-
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
   type Props = CardChipData
 
   let { text, tone = 'default', title, label }: Props = $props()
@@ -47,6 +46,6 @@ alarm to flash. -->
   {title}
   aria-label={label ?? text}
 >
-  <Clock size={11} class="shrink-0" />
+  <CioClock size={11} class="shrink-0" />
   {text}
 </span>

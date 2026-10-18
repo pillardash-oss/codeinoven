@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { ClipboardCheck } from '@lucide/svelte'
-
+  import CioClipboardCheck from '@pillardash-oss/cio-icon/CioClipboardCheck.svelte'
   /**
    * The copy confirmation's card icon, as svelte-sonner draws it.
    *
@@ -11,4 +10,4 @@
    */
 </script>
 
-<ClipboardCheck size={18} />
+<CioClipboardCheck size={18} />

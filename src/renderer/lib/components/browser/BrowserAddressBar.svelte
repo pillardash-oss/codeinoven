@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Lock, LockOpen, LoaderCircle } from '@lucide/svelte'
+  import CioLock from '@pillardash-oss/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pillardash-oss/cio-icon/CioLockOpen.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { Attachment } from 'svelte/attachments'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { BrowserHistoryEntry } from '$shared/browser/browser-library'
@@ -137,7 +139,10 @@
     if (!element) return
     element.focus()
     const fallback =
-      offset ?? (tabId && url === '' ? (browserBlankDraft.get(tabId)?.caret ?? element.value.length) : element.value.length)
+      offset ??
+      (tabId && url === ''
+        ? (browserBlankDraft.get(tabId)?.caret ?? element.value.length)
+        : element.value.length)
     try {
       element.setSelectionRange(fallback, fallback)
     } catch {
@@ -258,9 +263,9 @@
       onclick={onOpenSiteMenu}
     >
       {#if secure}
-        <Lock size={13} />
+        <CioLock size={13} />
       {:else}
-        <LockOpen size={13} />
+        <CioLockOpen size={13} />
       {/if}
     </button>
   {/if}
@@ -302,7 +307,7 @@
       title="Loading page"
       aria-label="Loading page"
     >
-      <LoaderCircle size={13} class="animate-spin text-primary" />
+      <CioSpinner size={13} class="animate-spin text-primary" />
     </span>
   {/if}
   {#if drawerVisible}

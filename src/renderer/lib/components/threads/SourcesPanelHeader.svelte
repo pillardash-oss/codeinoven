@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    Brain,
-    Image as ImageIcon,
-    Loader2,
-    RefreshCw,
-    Search,
-    SquareTerminal
-  } from '@lucide/svelte'
+  import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
   import type {
     ContextSection,
     OriginFilter,
@@ -156,7 +154,7 @@
       title="View generated image artifacts"
       onclick={() => (section = 'artifacts')}
     >
-      <ImageIcon size={12} />
+      <CioImage size={12} />
       Artifacts
       {#if artifactCount > 0}<span class="text-[0.625rem] tabular-nums">{artifactCount}</span>{/if}
     </button>
@@ -174,7 +172,7 @@
         if (contextSection === 'memory') onMemoryRequested()
       }}
     >
-      <Brain size={12} />
+      <CioMemory size={12} />
       Contexts
       {#if contextSection === 'memory' && memoryCount > 0}
         <span class="text-[0.625rem] tabular-nums">{memoryCount}</span>
@@ -288,7 +286,7 @@
       </button>
     </div>
     <label class="relative mt-3 block">
-      <Search
+      <CioSearch
         size={13}
         class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
       />
@@ -393,9 +391,9 @@
         onclick={onRefreshProcesses}
       >
         {#if processesRefreshing}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <RefreshCw size={13} />
+          <CioRefresh size={13} />
         {/if}
         <span aria-live="polite">{processesRefreshing ? 'Refreshing…' : 'Refresh'}</span>
       </button>
@@ -408,9 +406,9 @@
           onclick={onStopAllProcesses}
         >
           {#if stoppingAll}
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
           {:else}
-            <SquareTerminal size={13} />
+            <CioTerminal size={13} />
           {/if}
           Stop all
         </button>

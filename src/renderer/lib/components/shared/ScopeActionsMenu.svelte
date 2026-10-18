@@ -1,27 +1,24 @@
 <script lang="ts">
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioFolderInput from '@pillardash-oss/cio-icon/CioFolderInput.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioGitCompare from '@pillardash-oss/cio-icon/CioGitCompare.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioPanelsLeftBottom from '@pillardash-oss/cio-icon/CioPanelsLeftBottom.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioPinOff from '@pillardash-oss/cio-icon/CioPinOff.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioWrench from '@pillardash-oss/cio-icon/CioWrench.svelte'
   import { osFileManagerLabel } from '$lib/os-file-manager'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { isScopeWorktreeHealthRepairable } from '$shared/scope-worktree-health'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
-  import {
-    Archive,
-    ArchiveRestore,
-    Ellipsis,
-    FolderInput,
-    FolderOpen,
-    GitBranch,
-    GitCompare,
-    GitMerge,
-    PanelsLeftBottom,
-    Pencil,
-    Pin,
-    PinOff,
-    RefreshCw,
-    Trash2,
-    Wrench
-  } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component, Snippet } from 'svelte'
   import type { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -123,31 +120,31 @@
       if (!alreadyDocked) {
         list.push({
           label: 'Dock',
-          icon: PanelsLeftBottom,
+          icon: CioPanelsLeftBottom,
           run: () => actions.dock(bucket)
         })
       }
       list.push({
         label: 'Edit',
-        icon: Pencil,
+        icon: CioPencil,
         run: () => actions.askEdit(bucket)
       })
       if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: bucket.pinned ? 'Unpin scope' : 'Pin scope',
-          icon: bucket.pinned ? PinOff : Pin,
+          icon: bucket.pinned ? CioPinOff : CioPin,
           run: () => void actions.togglePinned(bucket)
         })
         if (isArchived) {
           list.push({
             label: 'Restore',
-            icon: ArchiveRestore,
+            icon: CioArchive,
             run: () => void actions.setArchived(bucket, false)
           })
         } else {
           list.push({
             label: 'Archive',
-            icon: Archive,
+            icon: CioArchive,
             run: () => void actions.setArchived(bucket, true)
           })
         }
@@ -155,13 +152,13 @@
       if (!isManaged && bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: 'Create Git worktree',
-          icon: GitBranch,
+          icon: CioTabGit,
           run: () => actions.askCreateWorktree(bucket),
           ...(scopeHasLiveSession ? { disabledReason: liveSessionReason } : {})
         })
         list.push({
           label: 'Adopt Git worktree…',
-          icon: FolderInput,
+          icon: CioFolderInput,
           run: () => actions.askAdoptWorktree(bucket),
           ...(scopeHasLiveSession ? { disabledReason: liveSessionReason } : {})
         })
@@ -170,7 +167,7 @@
         if (repairable) {
           list.push({
             label: 'Repair worktree',
-            icon: Wrench,
+            icon: CioWrench,
             run: () => void actions.repairWorktree(bucket)
           })
         }
@@ -179,36 +176,36 @@
         // through the same reveal contract the file surfaces use.
         list.push({
           label: osFileManagerLabel(),
-          icon: FolderOpen,
+          icon: CioFolderOpen,
           run: () => void actions.revealWorktree(bucket)
         })
         list.push({
           label: 'Merge into project…',
-          icon: GitMerge,
+          icon: CioMerge,
           run: () => actions.askMerge(bucket)
         })
         list.push({
           label: 'Sync Worktree',
-          icon: GitCompare,
+          icon: CioGitCompare,
           run: () => actions.askSyncFrom(bucket)
         })
         if (setupFailed || setupStale) {
           list.push({
             label: setupStale ? 'Re-run setup' : 'Retry setup',
-            icon: RefreshCw,
+            icon: CioRefresh,
             run: () => void actions.retrySetup(bucket)
           })
         }
         list.push({
           label: 'Detach worktree',
-          icon: GitBranch,
+          icon: CioTabGit,
           run: () => actions.openLifecycle(bucket, 'detach')
         })
       }
       if (bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: 'Delete scope',
-          icon: Trash2,
+          icon: CioTrash,
           run: () => actions.askDelete(bucket)
         })
       }
@@ -240,7 +237,7 @@
     {#if trigger}
       {@render trigger()}
     {:else}
-      <Ellipsis size={14} />
+      <CioEllipsis size={14} />
     {/if}
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>

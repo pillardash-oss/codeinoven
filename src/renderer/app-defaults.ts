@@ -1,6 +1,6 @@
+import { DEFAULT_APP_FONT_FAMILY } from '$shared/app-fonts'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
 import { DEFAULT_BROWSER_SEARCH_ENGINE_ID } from '$shared/browser-search-engines'
-import { DEFAULT_WORK_ROOTS } from '$shared/design/work-roots'
 import { DEFAULT_PROTOTYPE_CDN_ENABLED } from '$shared/prototypes/prototype-cdn'
 import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
 import {
@@ -12,19 +12,24 @@ import {
   DEFAULT_MAX_BACKGROUND_WAKE_HOLD_MS,
   DEFAULT_MAX_CONFLICT_FILE_BYTES,
   DEFAULT_IN_APP_NOTIFICATION_SOUND,
+  DEFAULT_CONTRAST_LEVEL,
   type AppConfig
 } from '$shared/types'
 
 /** Baseline configuration used until the main process returns the persisted one. */
 export const defaultConfig: AppConfig = {
   theme: 'system',
-  fontFamily: 'jetbrains-mono',
+  fontFamily: DEFAULT_APP_FONT_FAMILY,
   appFontSize: 15,
   fontWeight: 200,
+  contrastLevel: DEFAULT_CONTRAST_LEVEL,
   zoomLevel: 1,
   onboardingCompleted: false,
   shareAnonymousUsage: true,
   threadLimit: 70,
+  switcherTerminalTabs: true,
+  switcherFileTabs: true,
+  switcherThreadBrowserTabs: true,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
@@ -35,7 +40,6 @@ export const defaultConfig: AppConfig = {
   auxiliaryAgents: {},
   design: { assignments: [] },
   modelProfiles: [],
-  workRoots: { ...DEFAULT_WORK_ROOTS },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BrainCircuit } from '@lucide/svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
   import { openMemoryProposal } from '$lib/stores/memory-proposal-open'
   interface Props {
     message: string
@@ -30,7 +30,7 @@
 
 <div class="flex items-start gap-3 border bg-surface p-3 text-foreground shadow-xl">
   <div class="mt-0.5 shrink-0 text-primary">
-    <BrainCircuit size={18} />
+    <CioMemory size={18} />
   </div>
   <div class="min-w-0 flex-1">
     <p class="text-sm leading-relaxed text-foreground">{message}</p>
@@ -39,7 +39,7 @@
       type="button"
       onclick={view}
     >
-      <BrainCircuit size={12} />
+      <CioMemory size={12} />
       Review Memory
     </button>
   </div>

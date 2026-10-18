@@ -1,6 +1,11 @@
 <script lang="ts">
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEnter from '@pillardash-oss/cio-icon/CioEnter.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import { Command } from 'bits-ui'
-  import { ArrowLeft, CornerDownLeft, FolderTree, GitBranch, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
@@ -86,7 +91,7 @@
     closeOnSelect = true,
     shortcutLabel,
     onQueryChange,
-    headerIcon = Zap,
+    headerIcon = CioZap,
     headerIconBadge = false,
     headerIconBadgeClass = '',
     serverFiltered = false,
@@ -235,7 +240,7 @@
             inputElement?.focus()
           }}
         >
-          <X size={14} aria-hidden="true" />
+          <CioClose size={14} aria-hidden="true" />
         </button>
       {/if}
       {#if mode === 'dialog'}
@@ -356,7 +361,7 @@
                       aria-label="Managed Git worktree scope on {scope.root.branch}"
                       title="Managed Git worktree scope on {scope.root.branch}"
                     >
-                      <FolderTree size={11} class="text-warning" />
+                      <CioFiles size={11} class="text-warning" />
                     </span>
                   {/if}
                   <ScopeBadge bucket={scope} size="xs" />
@@ -391,7 +396,7 @@
                     class="flex shrink-0 items-center gap-1 text-[0.6875rem] text-dimmed"
                     title={`Branch: ${action.threadMeta.branch}`}
                   >
-                    <GitBranch size={11} class="shrink-0" aria-hidden="true" />
+                    <CioTabGit size={11} class="shrink-0" aria-hidden="true" />
                     <span class="font-mono">{threadBranchRowLabel(action.threadMeta.branch)}</span>
                   </span>
                 {/if}
@@ -444,7 +449,7 @@
               {/each}
             </span>
           {:else if selectedActionId === action.id && !action.disabledReason}
-            <CornerDownLeft size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+            <CioEnter size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
           {/if}
         </Command.Item>
       {:else}
@@ -466,7 +471,7 @@
             title="Back to actions"
             onclick={onBack}
           >
-            <ArrowLeft size={12} aria-hidden="true" />
+            <CioArrowLeft size={12} aria-hidden="true" />
             Back
           </button>
         {/if}

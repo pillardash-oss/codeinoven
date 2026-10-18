@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Minus, X, GripVertical } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioGrip from '@pillardash-oss/cio-icon/CioGrip.svelte'
+  import CioMinus from '@pillardash-oss/cio-icon/CioMinus.svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { Snippet } from 'svelte'
   import { BitsConfig } from 'bits-ui'
@@ -29,7 +31,7 @@
      */
     minimized: boolean
     /**
-     * Whether the close (X) affordance is available. When false the header shows
+     * Whether the close (CioClose) affordance is available. When false the header shows
      * only the minimize button, Escape minimizes, and there is no backdrop to
      * dismiss   the panel floats and the app stays usable behind it.
      */
@@ -468,7 +470,7 @@
         onpointerup={onHeaderPointerUp}
       >
         <span class="flex min-w-0 items-center gap-2">
-          <GripVertical size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioGrip size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
           {#if headerPrefix}
             <span class="flex min-w-0 items-center gap-1.5">{@render headerPrefix()}</span>
           {/if}
@@ -485,7 +487,7 @@
             title="Minimize"
             onclick={onMinimize}
           >
-            <Minus size={14} />
+            <CioMinus size={14} />
           </button>
           {#if closable}
             <button
@@ -495,7 +497,7 @@
               title="Close"
               onclick={onClose}
             >
-              <X size={14} />
+              <CioClose size={14} />
             </button>
           {/if}
         </span>

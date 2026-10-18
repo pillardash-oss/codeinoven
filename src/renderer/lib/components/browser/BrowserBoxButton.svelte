@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Boxes, ChevronDown, Globe } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
@@ -120,14 +122,14 @@
   {#if current && currentIcon}
     <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
   {:else if usesProfileDefault}
-    <Globe size={13} />
+    <CioBrowser size={13} />
   {:else if current}
     <span class="h-2.5 w-2.5 shrink-0" style="background-color: {currentAccent}"></span>
   {:else}
-    <Boxes size={13} />
+    <CioTabBoxes size={13} />
   {/if}
   {#if labelled}
     <span class="max-w-32 truncate">{currentName}</span>
-    <ChevronDown size={12} />
+    <CioChevronDown size={12} />
   {/if}
 </button>

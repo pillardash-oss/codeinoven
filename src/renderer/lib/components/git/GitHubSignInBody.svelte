@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, Copy, Loader2, TimerOff } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTimerOff from '@pillardash-oss/cio-icon/CioTimerOff.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
@@ -20,7 +23,7 @@
 
 {#if githubSignIn.phase === 'starting'}
   <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-    <Loader2 size={14} class="animate-spin" aria-hidden="true" />
+    <CioSpinner size={14} class="animate-spin" aria-hidden="true" />
     Starting sign-in…
   </div>
 {:else if githubSignIn.phase === 'waiting' && githubSignIn.device}
@@ -41,9 +44,9 @@
         {githubSignIn.device.userCode}
       </span>
       {#if githubSignIn.copied}
-        <Check size={16} class="text-success" />
+        <CioCheck size={16} class="text-success" />
       {:else}
-        <Copy size={16} class="text-dimmed" />
+        <CioCopy size={16} class="text-dimmed" />
       {/if}
     </button>
 
@@ -60,7 +63,7 @@
       class="flex items-center justify-center gap-1.5 text-[0.625rem] text-dimmed"
       aria-live="polite"
     >
-      <Loader2 size={11} class="animate-spin" />
+      <CioSpinner size={11} class="animate-spin" />
       {#if githubSignIn.remaining > 0}
         Waiting for you to authorize… code expires in {githubSignIn.countdown}
       {:else}
@@ -71,7 +74,7 @@
 {:else if githubSignIn.phase === 'authorized'}
   <div class="flex flex-col items-center justify-center py-8 text-center">
     <div class="mb-2 flex h-10 w-10 items-center justify-center bg-success/10">
-      <Check size={18} class="text-success" />
+      <CioCheck size={18} class="text-success" />
     </div>
     <p class="text-xs font-medium text-foreground">Signed in to GitHub</p>
     <p class="mt-1 text-[0.625rem] text-dimmed">
@@ -81,7 +84,7 @@
 {:else if githubSignIn.phase === 'expired'}
   <div class="flex flex-col items-center justify-center py-8 text-center">
     <div class="mb-2 flex h-10 w-10 items-center justify-center bg-warning/10">
-      <TimerOff size={18} class="text-warning" />
+      <CioTimerOff size={18} class="text-warning" />
     </div>
     <p class="text-xs font-medium text-foreground">Code expired</p>
     <p class="mt-1 max-w-[30ch] text-[0.625rem] leading-relaxed text-dimmed">

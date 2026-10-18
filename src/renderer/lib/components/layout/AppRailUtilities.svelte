@@ -1,4 +1,11 @@
 <script lang="ts">
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     preloadSettingsChunk,
@@ -9,15 +16,7 @@
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
-  import {
-    AlertCircle,
-    CheckCircle2,
-    Clock,
-    Download,
-    Info,
-    Loader2,
-    RefreshCw
-  } from '@lucide/svelte'
+
   import type { Component } from 'svelte'
   import AppRailButton from './AppRailButton.svelte'
 
@@ -49,7 +48,7 @@
     const status = updaterState.status
     if (!status.canAutoUpdate) {
       return {
-        icon: Info,
+        icon: CioTabInfo,
         label: 'Application and update information',
         tone: 'default',
         disabled: false,
@@ -59,7 +58,7 @@
     switch (status.state) {
       case 'checking':
         return {
-          icon: Loader2,
+          icon: CioSpinner,
           label: 'Checking for updates',
           tone: 'default',
           disabled: true,
@@ -67,7 +66,7 @@
         }
       case 'available':
         return {
-          icon: Download,
+          icon: CioDownload,
           label: `Update ${status.availableVersion} available. Download`,
           tone: 'primary',
           disabled: false,
@@ -78,7 +77,7 @@
           ? Math.min(100, Math.max(0, Math.round(status.downloadProgress ?? 0)))
           : 0
         return {
-          icon: Loader2,
+          icon: CioSpinner,
           label: `Downloading update. ${progress}%`,
           tone: 'default',
           disabled: true,
@@ -88,7 +87,7 @@
       }
       case 'downloaded':
         return {
-          icon: RefreshCw,
+          icon: CioRefresh,
           label: 'Update ready. Restart and install',
           tone: 'primary',
           disabled: false,
@@ -96,7 +95,7 @@
         }
       case 'waiting':
         return {
-          icon: Clock,
+          icon: CioClock,
           // Enabled, not disabled: waiting is not a dead end. The click opens
           // the modal that names the work and offers the force install, which is
           // the only escape when a session is stuck reporting itself as working.
@@ -109,7 +108,7 @@
         }
       case 'error':
         return {
-          icon: AlertCircle,
+          icon: CioAlertCircle,
           label: `Update error: ${status.errorMessage}`,
           tone: 'danger',
           disabled: false,
@@ -117,7 +116,7 @@
         }
       default:
         return {
-          icon: CheckCircle2,
+          icon: CioCheckCircle,
           label: 'Application is up to date',
           tone: 'default',
           disabled: false,
@@ -225,14 +224,16 @@
     onSelect={() => navigate('settings-utilities')}
   />
 
-  <AppRailButton
-    label={feature('settings').name}
-    icon={feature('settings').icon}
-    active={isSettingsView(activeView)}
-    shortcut={settingsShortcut}
-    onHover={preloadSettingsChunk}
-    onSelect={() => navigate('settings')}
-  />
+  <div data-guide="rail-settings">
+    <AppRailButton
+      label={feature('settings').name}
+      icon={feature('settings').icon}
+      active={isSettingsView(activeView)}
+      shortcut={settingsShortcut}
+      onHover={preloadSettingsChunk}
+      onSelect={() => navigate('settings')}
+    />
+  </div>
 </div>
 
 <!-- The process list is a secondary surface behind one rail button, so its

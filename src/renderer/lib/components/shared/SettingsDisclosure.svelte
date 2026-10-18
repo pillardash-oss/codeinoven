@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
   let { expanded, title, onclick }: { expanded: boolean; title: string; onclick: () => void } =
     $props()
 </script>
@@ -12,5 +12,5 @@
   aria-label={title}
   {onclick}
 >
-  <ChevronDown size={14} class="shrink-0 transition-transform {expanded ? 'rotate-180' : ''}" />
+  <CioChevronDown size={14} class="shrink-0 transition-transform {expanded ? 'rotate-180' : ''}" />
 </button>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { BrowserExtensionProgress } from '$shared/ipc-contract'
   import type { BrowserExtensionInstall } from '$lib/stores/browser-extensions.svelte'
 
@@ -47,7 +47,7 @@
 <div class="border bg-elevated/50 px-3 py-2.5">
   <div class="flex items-center gap-2">
     {#if working}
-      <Loader2 size={13} class="shrink-0 animate-spin text-dimmed" />
+      <CioSpinner size={13} class="shrink-0 animate-spin text-dimmed" />
     {/if}
     <p class="min-w-0 truncate text-xs font-medium text-foreground" {title}>{title}</p>
     {#if install.totalBytes > 0}

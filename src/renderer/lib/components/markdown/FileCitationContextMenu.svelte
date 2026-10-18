@@ -1,8 +1,13 @@
 <script lang="ts">
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { ContextMenu } from 'bits-ui'
-  import { ChevronRight, Copy, ExternalLink, FileText, FolderOpen } from '@lucide/svelte'
+
   import { invoke } from '$lib/ipc.svelte'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -22,7 +27,7 @@
     /** Project whose root the citations resolve against. Defaults to the active project. */
     projectId?: string
     /**
-     * Force the whole wrapped content to act as this citation on right-click  
+     * Force the whole wrapped content to act as this citation on right-click
      * for elements that are not citation anchors (e.g. agent file chips).
      */
     citation?: CitationTarget
@@ -296,7 +301,7 @@
     >
       {#if pendingTarget}
         <ContextMenu.Item class={itemClass} onSelect={openInApp}>
-          <FileText size={13} class="text-muted" />
+          <CioFileText size={13} class="text-muted" />
           Open file
         </ContextMenu.Item>
         {#if resolved?.mount}
@@ -308,9 +313,9 @@
             }}
           >
             <ContextMenu.SubTrigger class={itemClass}>
-              <FolderOpen size={13} class="text-muted" />
+              <CioFolderOpen size={13} class="text-muted" />
               Open with
-              <ChevronRight size={13} class="ml-auto text-muted" />
+              <CioForward size={13} class="ml-auto text-muted" />
             </ContextMenu.SubTrigger>
             <ContextMenu.Portal>
               <ContextMenu.SubContent
@@ -333,7 +338,7 @@
                           class="h-3.5 w-3.5 shrink-0 object-contain"
                         />
                       {:else}
-                        <ExternalLink size={13} class="text-muted" />
+                        <CioExternalLink size={13} class="text-muted" />
                       {/if}
                       <span class="truncate">{editor.name}</span>
                     </ContextMenu.Item>
@@ -350,7 +355,7 @@
           title={resolved ? undefined : 'This file could not be located on disk'}
           onSelect={copyPath}
         >
-          <Copy size={13} class="text-muted" />
+          <CioCopy size={13} class="text-muted" />
           Copy path
         </ContextMenu.Item>
         <ContextMenu.Item
@@ -358,7 +363,7 @@
           disabled={!resolved}
           onSelect={revealInFileManager}
         >
-          <FolderOpen size={13} />
+          <CioFolderOpen size={13} />
           {osFileManagerLabel()}
         </ContextMenu.Item>
       {/if}

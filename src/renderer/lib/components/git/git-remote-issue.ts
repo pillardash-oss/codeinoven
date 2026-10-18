@@ -1,4 +1,7 @@
-import { CloudOff, SearchX, ShieldAlert, WifiOff } from '@lucide/svelte'
+import CioCloudOff from '@pillardash-oss/cio-icon/CioCloudOff.svelte'
+import CioSearchX from '@pillardash-oss/cio-icon/CioSearchX.svelte'
+import CioShieldAlert from '@pillardash-oss/cio-icon/CioShieldAlert.svelte'
+import CioWifiOff from '@pillardash-oss/cio-icon/CioWifiOff.svelte'
 import type { Component } from 'svelte'
 import type { GitRemoteIssueKind } from '$shared/types'
 
@@ -11,10 +14,10 @@ import type { GitRemoteIssueKind } from '$shared/types'
 
 /** The shape of the failure, readable at a glance before the sentence is read. */
 export const REMOTE_ISSUE_ICONS: Readonly<Record<GitRemoteIssueKind, Component>> = {
-  offline: WifiOff,
-  denied: ShieldAlert,
-  missing: SearchX,
-  unknown: CloudOff
+  offline: CioWifiOff,
+  denied: CioShieldAlert,
+  missing: CioSearchX,
+  unknown: CioCloudOff
 }
 
 /** The notice's heading: what happened, in as few words as the panel has room for. */

@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { AlertTriangle, Check, Eye, Settings2, X } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
   import type { AssistantConnection } from '$shared/types'
   import type { ConnectionStatus, ConnectionView } from './assistant-view'
   import { utilityKindIcon, utilityKindLabel } from './utility-kind'
@@ -51,10 +55,10 @@
         title={view.detail}
       >
         {#if view.status === 'ready'}
-          <Check size={11} strokeWidth={2.2} />
+          <CioCheck size={11} strokeWidth={2.2} />
           Ready
         {:else}
-          <AlertTriangle size={11} strokeWidth={2} />
+          <CioAttention size={11} strokeWidth={2} />
           {view.status === 'needs-setup'
             ? 'Needs setup'
             : view.status === 'disabled'
@@ -77,7 +81,7 @@
         aria-label="View {view.connection.label} details"
         onclick={() => onView(view)}
       >
-        <Eye size={12} strokeWidth={1.8} />
+        <CioEye size={12} strokeWidth={1.8} />
       </button>
     {/if}
     {#if needsSetup || view.status === 'disabled'}
@@ -88,7 +92,7 @@
         aria-label="Set up {view.connection.label}"
         onclick={() => onSetup(view)}
       >
-        <Settings2 size={12} strokeWidth={1.8} />
+        <CioTabSettings size={12} strokeWidth={1.8} />
       </button>
     {/if}
     <button
@@ -98,7 +102,7 @@
       aria-label="Remove {view.connection.label} from this assistant"
       onclick={() => onRemove(view.connection)}
     >
-      <X size={12} strokeWidth={1.8} />
+      <CioClose size={12} strokeWidth={1.8} />
     </button>
   </div>
 </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { FileDown, Loader2 } from '@lucide/svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -54,9 +55,9 @@
     <p
       class="flex items-start gap-1.5 border border-border bg-elevated px-3 py-2 text-[0.6875rem] leading-snug text-muted"
     >
-      <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-accent" />
-      The transcript is exported in the background on a worker thread   the app stays fully responsive
-      and you can keep working while it runs. You'll get a notification when it's ready.
+      <CioSpinner size={12} class="mt-0.5 shrink-0 animate-spin text-accent" />
+      The transcript is exported in the background on a worker thread the app stays fully responsive and
+      you can keep working while it runs. You'll get a notification when it's ready.
     </p>
   </div>
 
@@ -78,9 +79,9 @@
       onclick={confirm}
     >
       {#if busy}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {:else}
-        <FileDown size={14} />
+        <CioDownload size={14} />
       {/if}
       Export transcript
     </button>

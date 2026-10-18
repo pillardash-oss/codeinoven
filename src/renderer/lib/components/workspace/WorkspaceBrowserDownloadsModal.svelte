@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Download } from '@lucide/svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
   import BrowserDownloadRow from '../browser/BrowserDownloadRow.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -22,7 +22,7 @@
 >
   {#if browser.downloads.length === 0}
     <EmptyState
-      icon={Download}
+      icon={CioDownload}
       title="No downloads for this project yet"
       description="Files this browser downloads appear here with their progress and the location they were saved to."
     />

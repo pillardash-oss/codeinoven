@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Clock, Search, X } from '@lucide/svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
@@ -98,7 +100,7 @@
 <div class="flex h-full min-h-0 flex-col">
   <div class="shrink-0 border-b border-border px-3 py-2">
     <div class="flex items-center gap-1.5 bg-elevated px-2.5">
-      <Search size={13} class="shrink-0 text-dimmed" />
+      <CioSearch size={13} class="shrink-0 text-dimmed" />
       <input
         type="text"
         class="h-7 min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
@@ -117,17 +119,17 @@
           title="Clear search"
           onclick={clearSearch}
         >
-          <X size={13} />
+          <CioClose size={13} />
         </button>
       {/if}
     </div>
   </div>
 
   {#if entries.length === 0}
-    <EmptyState icon={Clock} title="No history yet" description={emptyDescription} />
+    <EmptyState icon={CioClock} title="No history yet" description={emptyDescription} />
   {:else if matching.length === 0}
     <EmptyState
-      icon={Search}
+      icon={CioSearch}
       title="No matching pages"
       description="Nothing in your history matches that search."
     />

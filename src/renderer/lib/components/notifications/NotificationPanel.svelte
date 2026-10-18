@@ -1,16 +1,14 @@
 <script lang="ts">
-  import {
-    Bell,
-    Bot,
-    Bug,
-    Check,
-    ChevronDown,
-    Copy,
-    MessageCircleDashed,
-    MessageSquare,
-    RotateCcw,
-    X
-  } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioDebugger from '@pillardash-oss/cio-icon/CioDebugger.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
@@ -526,7 +524,7 @@
       toggleDetails(key)
     }}
   >
-    <ChevronDown
+    <CioChevronDown
       size={10}
       class={expanded ? 'rotate-180 transition-transform' : 'transition-transform'}
     />
@@ -576,7 +574,7 @@
       {#if !notificationPanelState.isAssistant(n)}
         <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
           {#if n.source === 'chat'}
-            <MessageSquare size={10} class="shrink-0" />
+            <CioMessage size={10} class="shrink-0" />
             <span>Chat</span>
           {:else}
             <span
@@ -590,7 +588,7 @@
               <span class="shrink-0">·</span>
               <!-- The dashed circle marks the side chat; it wears the row's own
                    neutral icon colour, never an identity hue. -->
-              <MessageCircleDashed
+              <CioTemporaryChat
                 size={10}
                 class="shrink-0"
                 title="Temporary chat"
@@ -620,9 +618,9 @@
         }}
       >
         {#if copiedId === n.id}
-          <Check size={11} />
+          <CioCheck size={11} />
         {:else}
-          <Copy size={11} />
+          <CioCopy size={11} />
         {/if}
       </button>
     {/if}
@@ -635,7 +633,7 @@
         dismiss(n)
       }}
     >
-      <X size={11} />
+      <CioClose size={11} />
     </button>
   </div>
 {/snippet}
@@ -677,7 +675,7 @@
         title="Run now"
         onclick={() => void runMissedRunNow(run.id)}
       >
-        <RotateCcw size={11} strokeWidth={1.8} />
+        <CioUndo size={11} strokeWidth={1.8} />
         Run now
       </button>
       <button
@@ -686,7 +684,7 @@
         title="Open task"
         onclick={() => void openMissedRun(run.threadId)}
       >
-        <Bot size={11} />
+        <CioSubagent size={11} />
       </button>
     </div>
   </div>
@@ -743,7 +741,7 @@
         title="Dismiss"
         onclick={() => void dismissBackgroundRun(run.runThreadId)}
       >
-        <X size={11} />
+        <CioClose size={11} />
       </button>
     </div>
   </div>
@@ -783,7 +781,7 @@
           title={showingAppErrors ? 'Dismiss all errors' : 'Dismiss all'}
           onclick={dismissAll}
         >
-          <X size={12} />
+          <CioClose size={12} />
         </button>
       {/if}
     </div>
@@ -829,7 +827,7 @@
     {#if showingAppErrors}
       {#if appErrorState.count === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          <Bug size={20} class="text-dimmed" />
+          <CioDebugger size={20} class="text-dimmed" />
           <p class="text-xs text-muted">No app errors</p>
         </div>
       {:else}
@@ -888,9 +886,9 @@
                   }}
                 >
                   {#if copiedId === e.id}
-                    <Check size={11} />
+                    <CioCheck size={11} />
                   {:else}
-                    <Copy size={11} />
+                    <CioCopy size={11} />
                   {/if}
                 </button>
                 <button
@@ -902,7 +900,7 @@
                     appErrorState.dismiss(e.id)
                   }}
                 >
-                  <X size={11} />
+                  <CioClose size={11} />
                 </button>
               </div>
             </div>
@@ -912,12 +910,12 @@
     {:else if showingAssistants}
       {#if !assistantHasActivity}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          <Bot size={20} class="text-dimmed" />
+          <CioSubagent size={20} class="text-dimmed" />
           <p class="text-xs text-muted">No assistant activity</p>
         </div>
       {:else if assistantFilteredEmpty}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          <Bell size={20} class="text-dimmed" />
+          <CioNotifications size={20} class="text-dimmed" />
           <p class="text-xs text-muted">Nothing matches this filter</p>
           <button
             class="px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -941,7 +939,7 @@
                 title="{collapsed ? 'Expand' : 'Collapse'} {section.label}"
                 onclick={() => toggleAssistantSection(section.key)}
               >
-                <ChevronDown
+                <CioChevronDown
                   size={12}
                   class="shrink-0 text-dimmed transition-transform {collapsed ? '-rotate-90' : ''}"
                 />
@@ -975,7 +973,7 @@
       {/if}
     {:else if notificationPanelState.visible.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-        <Bell size={20} class="text-dimmed" />
+        <CioNotifications size={20} class="text-dimmed" />
         <p class="text-xs text-muted">No notifications</p>
       </div>
     {:else}

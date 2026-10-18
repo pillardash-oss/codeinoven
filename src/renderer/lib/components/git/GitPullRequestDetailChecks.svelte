@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Bot, ChevronRight, ExternalLink, Loader2, Rocket, ShieldCheck } from '@lucide/svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioRocket from '@pillardash-oss/cio-icon/CioRocket.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitHubDeploymentJobLog, PullRequestCheck, PullRequestChecks } from '$shared/types'
@@ -109,7 +114,7 @@
 
 {#if !checks || checks.checks.length === 0}
   <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-    <ShieldCheck size={18} class="text-dimmed" />
+    <CioShieldCheck size={18} class="text-dimmed" />
     <p class="text-[0.6875rem] leading-relaxed text-dimmed">
       No checks have reported on this branch.
     </p>
@@ -131,7 +136,7 @@
           aria-expanded={isOpen}
           onclick={() => void toggleCheckLog(check)}
         >
-          <ChevronRight
+          <CioForward
             size={11}
             class="shrink-0 text-dimmed transition-transform {isOpen ? 'rotate-90' : ''}"
           />
@@ -156,9 +161,9 @@
             onclick={() => void assignCheck(check)}
           >
             {#if assigningCheck === key}
-              <Loader2 size={12} class="animate-spin" />
+              <CioSpinner size={12} class="animate-spin" />
             {:else}
-              <Bot size={12} />
+              <CioSubagent size={12} />
             {/if}
           </button>
         {/if}
@@ -198,7 +203,7 @@
             data-external-url={check.url}
             onclick={() => void openInBrowser(check.url ?? '')}
           >
-            <ExternalLink size={12} />
+            <CioExternalLink size={12} />
           </button>
         {/if}
       </div>
@@ -221,7 +226,7 @@
                 title="Open this workflow run in the Deployments tab to inspect every job and step"
                 onclick={() => onOpenWorkflowRun(runId)}
               >
-                <Rocket size={11} class="shrink-0" />
+                <CioRocket size={11} class="shrink-0" />
                 <span class="min-w-0 truncate">Open the full run in Deployments</span>
               </button>
             </div>

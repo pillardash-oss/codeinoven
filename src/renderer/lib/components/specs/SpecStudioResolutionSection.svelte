@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { MessageSquarePlus, Plus, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import type { SpecAnnotation, SpecPhase } from '$shared/types'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import SpecStudioAnnotationBubbles from './SpecStudioAnnotationBubbles.svelte'
@@ -24,7 +26,7 @@
       onclick={(event: MouseEvent) => onAnnotate('resolution', event)}
     >
       <span class="text-xl font-semibold tracking-tight">Resolution & phases</span>
-      <MessageSquarePlus
+      <CioMessagePlus
         size={14}
         class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
       />
@@ -34,7 +36,7 @@
       title="Add phase"
       onclick={() => edits.addPhase()}
     >
-      <Plus size={11} />
+      <CioPlus size={11} />
       Phase
     </button>
   </div>
@@ -69,7 +71,7 @@
             title={`Remove phase ${phaseIndex + 1}`}
             onclick={() => edits.removePhase(phase.id)}
           >
-            <X size={13} />
+            <CioClose size={13} />
           </button>
         </div>
         <div class="mt-3 grid gap-3 lg:grid-cols-2">

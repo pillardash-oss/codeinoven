@@ -86,6 +86,7 @@ interface AggregateRow {
   one_shot_duration_sum_ms: number
   one_shot_cost_usd: number
   multi_shot_samples: number
+  multi_shot_cost_usd: number
   rubric_version: string
   calc_version: string
 }
@@ -213,9 +214,9 @@ describe('model ranking legacy migration', () => {
 
       db.migrateModelRankingSnapshotClaimToken()
 
-      const columns = (db.all('PRAGMA table_info(model_ranking_snapshots)') as Array<{ name: string }>).map(
-        (column) => column.name
-      )
+      const columns = (
+        db.all('PRAGMA table_info(model_ranking_snapshots)') as Array<{ name: string }>
+      ).map((column) => column.name)
       expect(columns).toContain('claim_token')
       // The pre-existing row survives with a NULL token (unclaimed).
       const row = db.get('SELECT id, claim_token FROM model_ranking_snapshots') as {
@@ -241,4 +242,95 @@ describe('model ranking legacy migration', () => {
       destroyTestDb(db)
     }
   })
+
+  it('discards a cost sum no conversation could have spent, and only that sum', async () => {
+    const db = await createTestDb()
+    try {
+      // Exactly the shipped symptom: pi folded its own cumulative session cost
+      // back into per-response cost and doubled it on every usage refresh, so
+      // one $11.97 conversation landed as 3.4e46 (log2 of the ratio is 150.999)
+      // and took the "spent across ranked conversations" figure with it.
+      seedAggregate(db, {
+        id: 'pi:opencode-go:deepseek-v4.1-flash:high',
+        oneShot: {
+          scoreSum: 48,
+          samples: 6,
+          durationSumMs: 900_000,
+          costUsd: 3.414536402095199e46
+        },
+        multiShot: { scoreSum: 5, samples: 1, durationSumMs: 60_000, costUsd: 0.001261434 }
+      })
+      // A genuinely expensive configuration must survive untouched.
+      seedAggregate(db, {
+        id: 'claude-code:anthropic:default:high',
+        oneShot: { scoreSum: 40, samples: 5, durationSumMs: 600_000, costUsd: 104.19 },
+        multiShot: { scoreSum: 0, samples: 0, durationSumMs: 0, costUsd: 0 }
+      })
+
+      db.migrateModelRankingCostPlausibility()
+
+      const poisoned = aggregate(db, 'pi:opencode-go:deepseek-v4.1-flash:high')
+      expect(poisoned?.one_shot_cost_usd).toBe(0)
+      // Scores, samples, durations, and the priced sibling are the ranking's own
+      // honest numbers and are never touched by a cost repair.
+      expect(poisoned?.one_shot_score_sum).toBe(48)
+      expect(poisoned?.one_shot_samples).toBe(6)
+      expect(poisoned?.one_shot_duration_sum_ms).toBe(900_000)
+      expect(poisoned?.multi_shot_cost_usd).toBeCloseTo(0.001261434, 12)
+
+      const priced = aggregate(db, 'claude-code:anthropic:default:high')
+      expect(priced?.one_shot_cost_usd).toBeCloseTo(104.19, 10)
+
+      // Idempotent: a repaired row is already below the ceiling.
+      db.migrateModelRankingCostPlausibility()
+      expect(aggregate(db, 'pi:opencode-go:deepseek-v4.1-flash:high')?.one_shot_cost_usd).toBe(0)
+      expect(aggregate(db, 'claude-code:anthropic:default:high')?.one_shot_cost_usd).toBeCloseTo(
+        104.19,
+        10
+      )
+    } finally {
+      destroyTestDb(db)
+    }
+  })
 })
+
+/** One shot category's stored sums, as the repair migration sees them. */
+interface ShotSums {
+  scoreSum: number
+  samples: number
+  durationSumMs: number
+  costUsd: number
+}
+
+/** Seed one aggregate row directly, bypassing the increment gate under test. */
+function seedAggregate(
+  db: Database,
+  seed: { id: string; oneShot: ShotSums; multiShot: ShotSums }
+): void {
+  const [harnessId, providerId, modelId, thinkingLevel] = seed.id.split(':')
+  db.run(
+    `INSERT INTO model_rankings(
+       id, harness_id, provider_id, model_id, thinking_level,
+       one_shot_score_sum, one_shot_samples, one_shot_duration_sum_ms, one_shot_cost_usd,
+       multi_shot_score_sum, multi_shot_samples, multi_shot_duration_sum_ms, multi_shot_cost_usd,
+       rubric_version, calc_version, updated_at
+     ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'ranking-0to10-v1','sum-count-v1',1)`,
+    seed.id,
+    harnessId ?? '',
+    providerId ?? '',
+    modelId ?? '',
+    thinkingLevel ?? '',
+    seed.oneShot.scoreSum,
+    seed.oneShot.samples,
+    seed.oneShot.durationSumMs,
+    seed.oneShot.costUsd,
+    seed.multiShot.scoreSum,
+    seed.multiShot.samples,
+    seed.multiShot.durationSumMs,
+    seed.multiShot.costUsd
+  )
+}
+
+function aggregate(db: Database, id: string): AggregateRow | undefined {
+  return db.get('SELECT * FROM model_rankings WHERE id = ?', id) as AggregateRow | undefined
+}

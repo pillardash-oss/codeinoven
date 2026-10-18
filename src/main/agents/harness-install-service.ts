@@ -10,7 +10,10 @@ import type {
 import { canUninstallHarness } from '../../lib/harness-actions'
 import { findHarness } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
-import { prepareWslTerminalHandoff } from '../drivers/harness-runtime'
+import {
+  prepareTerminalCommandHandoff,
+  prepareWslTerminalHandoff
+} from '../drivers/harness-runtime'
 import { resolveExecutablePath } from '../drivers/cli-environment'
 import { powershellLiteral, windowsEncodedCommand } from '../ovens/oven-remote-shell'
 
@@ -471,10 +474,11 @@ export class HarnessInstallService {
       }
     }
 
+    const prepared = prepareTerminalCommandHandoff(resolved.command, resolved.args)
     return {
       kind: 'terminal',
-      command: resolved.command,
-      args: resolved.args,
+      command: prepared.command,
+      args: prepared.args,
       title: `Install ${definition.name}`,
       method
     }
@@ -585,10 +589,11 @@ export class HarnessInstallService {
       }
     }
 
+    const prepared = prepareTerminalCommandHandoff(command.command, expandHome(command.args))
     return {
       kind: 'terminal',
-      command: command.command,
-      args: expandHome(command.args),
+      command: prepared.command,
+      args: prepared.args,
       title: `Uninstall ${definition.name}`,
       method
     }

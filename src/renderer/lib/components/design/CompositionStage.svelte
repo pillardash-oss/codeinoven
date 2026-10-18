@@ -30,15 +30,45 @@
    */
   interface Props {
     tab: VideoCompositionTab
+    active?: boolean
+    /**
+     * Whether one of the board's own menus is open over this pane.
+     *
+     * A menu cannot be raised above a native view, so the page has to step aside
+     * for it. Only the pane is published, because the store's answer is per
+     * surface: there is nothing finer to hide than the whole page.
+     */
+    covered?: boolean
   }
 
-  let { tab }: Props = $props()
+  let { tab, active = true, covered = false }: Props = $props()
 
   const surface = 'panel' as const
   // The tab identity is snapshotted at construction: the key is this stage's entry
   // in the store's frame list, and a re-keyed tab builds a new stage.
   // svelte-ignore state_referenced_locally
   const nativeFrameKey = `native-panel-${tab.tabId}`
+  /** This pane's entry in the store's list of floating overlays, for as long as
+   *  one of the board's menus is over it. Snapshotted with the frame key above. */
+  // svelte-ignore state_referenced_locally
+  const occlusionKey = `composition-pane-${tab.tabId}`
+
+  /**
+   * The tab this pane places: the live one while it is there, and the one this
+   * stage was built for once the board's answer goes null.
+   *
+   * The board hands the stage `liveTab`, which turns null the moment the folder in
+   * front stops being the one its view plays. A child's props are getters that
+   * re-read their source for as long as the child is mounted, so every read below
+   *   the observers' placements, the effect cleanups, the unmount   has to answer
+   * on that frame too. Reading a null there threw out of the board's own cleanup
+   * and aborted the render behind it, which is what left the pane blank. Keeping
+   * the tab the stage was built for as the floor of every read leaves the live one
+   * in charge while it is there, so a state report still reaches the transport.
+   */
+  // svelte-ignore state_referenced_locally
+  const mountedTab = tab
+  let placedTab = $derived(tab ?? mountedTab)
 
   let host = $state<HTMLDivElement>()
   /** The pane's on-screen rectangle, which is the area the frame is fitted into. */
@@ -54,8 +84,8 @@
    */
   function fittedBounds(pane: BrowserViewBounds | null): BrowserViewBounds | null {
     if (!pane) return null
-    const declaredWidth = tab.width > 0 ? tab.width : 16
-    const declaredHeight = tab.height > 0 ? tab.height : 9
+    const declaredWidth = placedTab.width > 0 ? placedTab.width : 16
+    const declaredHeight = placedTab.height > 0 ? placedTab.height : 9
     const ratio = declaredWidth / declaredHeight
     const paneRatio = pane.width / pane.height
     const fittedWidth = ratio > paneRatio ? pane.width : Math.round(pane.height * ratio)
@@ -71,7 +101,7 @@
   /** The frame the page occupies, derived from the pane it is fitted into. */
   let pageRect = $derived(fittedBounds(paneRect))
 
-  let placed = $derived(browserVisibility.isVisible(tab.tabId, pageRect))
+  let placed = $derived(browserVisibility.isVisible(placedTab.tabId, pageRect))
 
   function measurePane(): BrowserViewBounds | null {
     if (!host) return null
@@ -111,24 +141,24 @@
     // Ask the store directly instead of reading `placed`: this also runs from
     // observers and continuations, after the effect that owns a derived may have
     // been torn down.
-    if (!browserVisibility.isVisible(tab.tabId, frame)) return
+    if (!browserVisibility.isVisible(placedTab.tabId, frame)) return
     try {
       await invoke(
         'browser:show',
-        tab.tabId,
-        tab.projectId,
-        tab.threadId,
-        tab.url,
+        placedTab.tabId,
+        placedTab.projectId,
+        placedTab.threadId,
+        placedTab.url,
         frame,
-        tab.boxId
+        placedTab.boxId
       )
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, or an overlay may appear. Only one native
       // view can exist at a time, so a stale attach would leave the page over
       // the surface that now owns it.
       const current = fittedBounds(measurePane())
-      if (!current || !browserVisibility.isVisible(tab.tabId, current)) {
-        void invoke('browser:hide', tab.tabId).catch(() => {})
+      if (!current || !browserVisibility.isVisible(placedTab.tabId, current)) {
+        void invoke('browser:hide', placedTab.tabId).catch(() => {})
       }
     } catch {
       // The tab can be destroyed between the visibility check and the call.
@@ -138,7 +168,7 @@
   /** The single native rectangle this stage owns while it is really on screen. */
   $effect(() => {
     const frame = pageRect
-    if (frame) browserVisibility.publishPageFrame(nativeFrameKey, tab.tabId, frame)
+    if (frame) browserVisibility.publishPageFrame(nativeFrameKey, placedTab.tabId, frame)
     else browserVisibility.clearPageFrame(nativeFrameKey)
     return () => browserVisibility.clearPageFrame(nativeFrameKey)
   })
@@ -151,6 +181,37 @@
     }
     browserVisibility.publishNativeFrame(nativeFrameKey, frame)
     return () => browserVisibility.clearNativeFrame(nativeFrameKey)
+  })
+
+  /**
+   * Put the page back on this frame when this surface owns the view again, and
+   * take it off screen when it does not.
+   *
+   * Placing is not enough on its own. A native view composites above every DOM
+   * node, so a page left attached draws over whatever covered it: a board menu, a
+   * modal, or the full screen surface. Hiding it here is also what makes the pane
+   * recover, because the same effect places it again the moment the store hands
+   * the view back rather than waiting for a resize that may never come.
+   */
+  $effect(() => {
+    if (!placed) {
+      void invoke('browser:hide', placedTab.tabId).catch(() => {})
+      return
+    }
+    void showAtCurrentBounds().catch(() => {})
+  })
+
+  /**
+   * Publish this pane as covered while one of the board's menus is open.
+   *
+   * The rectangle is only what the store measures with: its answer is whether the
+   * surface may show its page at all, so any overlap takes the whole pane off
+   * screen, which is what makes the menu readable.
+   */
+  $effect(() => {
+    if (!covered || !paneRect) return
+    browserVisibility.publishOcclusion(occlusionKey, paneRect)
+    return () => browserVisibility.clearOcclusion(occlusionKey)
   })
 
   /**
@@ -181,23 +242,27 @@
       intersection.disconnect()
       window.removeEventListener('resize', place)
       if (host === element) host = undefined
-      void invoke('browser:hide', tab.tabId).catch(() => {})
+      void invoke('browser:hide', placedTab.tabId).catch(() => {})
     }
   }
 
   onMount(() => {
     // Claim the native view for this tab while the stage is mounted. The claim is
     // released with the component, so a torn-down board can never keep the view.
-    return browserVisibility.claimTab(tab.tabId, surface)
+    return browserVisibility.claimTab(placedTab.tabId, surface)
   })
 </script>
 
 <div class="flex h-full min-h-0 flex-col overflow-hidden border border-border bg-surface">
-  <BrowserCompositionTransport tabId={tab.tabId} composition={tab} active={placed} />
+  <BrowserCompositionTransport
+    tabId={placedTab.tabId}
+    composition={placedTab}
+    active={active && placed}
+  />
   <div
     {@attach attachHost}
     data-native-composition-stage
     class="min-h-0 flex-1 bg-app"
-    aria-label={`Live composition ${tab.directory}`}
+    aria-label={`Live composition ${placedTab.directory}`}
   ></div>
 </div>

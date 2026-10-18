@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { ChevronDown } from '@lucide/svelte'
-
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
   interface Props {
     /**
      * Whether the card is folded away (its body hidden). Bindable so the owning
@@ -27,5 +26,5 @@ sideways, so it never reads as a "next" affordance. -->
   title="{folded ? 'Expand' : 'Fold'} {label}"
   onclick={() => (folded = !folded)}
 >
-  <ChevronDown size={14} class="shrink-0 transition-transform {folded ? 'rotate-180' : ''}" />
+  <CioChevronDown size={14} class="shrink-0 transition-transform {folded ? 'rotate-180' : ''}" />
 </button>

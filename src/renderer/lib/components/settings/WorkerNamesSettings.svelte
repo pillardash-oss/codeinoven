@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { Check, ChevronDown, Loader2, Pencil, RotateCcw, Save, X } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { WorkerNameSettings } from '$shared/assignment/worker-names'
@@ -97,7 +103,7 @@
         disabled={!settingsReady || loading}
         onclick={startEditing}
       >
-        <Pencil size={13} />
+        <CioPencil size={13} />
         Edit names
       </button>
     {/if}
@@ -105,7 +111,7 @@
 
   {#if loading}
     <div class="flex items-center gap-2 border-t px-4 py-3 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading worker names…
+      <CioSpinner size={14} class="animate-spin" /> Loading worker names…
     </div>
   {:else}
     <details class="border-t group">
@@ -115,7 +121,7 @@
         <span
           ><strong class="text-foreground">{settings.defaults.length}</strong> default names</span
         >
-        <ChevronDown size={14} class="transition-transform group-open:rotate-180" />
+        <CioChevronDown size={14} class="transition-transform group-open:rotate-180" />
       </summary>
       <div
         class="grid grid-cols-2 gap-x-4 gap-y-1 border-t px-4 py-3 text-xs text-muted sm:grid-cols-3"
@@ -152,7 +158,7 @@
       <div class="mt-3 flex items-center justify-between gap-3">
         <div class="min-h-5 text-xs" aria-live="polite">
           {#if error}<span class="text-danger">{error}</span>{:else if saved}<span
-              class="flex items-center gap-1 text-primary"><Check size={13} /> Saved</span
+              class="flex items-center gap-1 text-primary"><CioCheck size={13} /> Saved</span
             >{/if}
         </div>
         <div class="flex gap-2">
@@ -162,7 +168,7 @@
             title="Cancel editing worker names"
             aria-label="Cancel editing worker names"
             onclick={cancelEditing}
-            disabled={saving}><X size={13} /> Cancel</button
+            disabled={saving}><CioClose size={13} /> Cancel</button
           >
           <button
             type="button"
@@ -170,7 +176,7 @@
             title="Reset custom JSON to the defaults"
             aria-label="Reset custom JSON to the defaults"
             onclick={() => (draft = JSON.stringify(settings.defaults, null, 2))}
-            disabled={saving}><RotateCcw size={13} /> Reset</button
+            disabled={saving}><CioUndo size={13} /> Reset</button
           >
           <button
             type="button"
@@ -178,7 +184,7 @@
             title="Save custom worker names"
             aria-label="Save custom worker names"
             onclick={() => void save()}
-            disabled={saving}><Save size={13} /> Save</button
+            disabled={saving}><CioSave size={13} /> Save</button
           >
         </div>
       </div>

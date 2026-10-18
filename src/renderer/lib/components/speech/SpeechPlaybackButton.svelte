@@ -1,6 +1,11 @@
 <script lang="ts">
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioPause from '@pillardash-oss/cio-icon/CioPause.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
   import { onMount } from 'svelte'
-  import { CircleAlert, LoaderCircle, Pause, Play, Volume2 } from '@lucide/svelte'
+
   import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -12,9 +17,19 @@
     disabled?: boolean
     /** Lets thread rows show the "Speaking" indicator for this playback. */
     scope?: SpeechScope
+    /** What this playback speaks aloud. The tooltip names it, so a surface that
+     *  reads something other than a response   a document, for instance   does
+     *  not call it one. */
+    spokenSubject?: 'response' | 'document'
   }
 
-  let { messageId, markdown, disabled = false, scope = undefined }: Props = $props()
+  let {
+    messageId,
+    markdown,
+    disabled = false,
+    scope = undefined,
+    spokenSubject = 'response'
+  }: Props = $props()
   const playbackState = $derived(speechController.playback)
   const ownsSession = $derived(
     'messageId' in playbackState && playbackState.messageId === messageId
@@ -36,12 +51,13 @@
   let scrubbing = $state(false)
   let scrubValue = $state(0)
   const title = $derived.by(() => {
-    if (!ownsSession) return 'Read response aloud'
-    if (playbackState.state === 'preparing') return 'Preparing spoken response'
-    if (playbackState.state === 'playing') return 'Pause spoken response'
-    if (playbackState.state === 'paused') return 'Resume spoken response'
-    if (playbackState.state === 'failed') return 'Retry spoken response'
-    return 'Read response aloud'
+    const subject = spokenSubject
+    if (!ownsSession) return `Read ${subject} aloud`
+    if (playbackState.state === 'preparing') return `Preparing spoken ${subject}`
+    if (playbackState.state === 'playing') return `Pause spoken ${subject}`
+    if (playbackState.state === 'paused') return `Resume spoken ${subject}`
+    if (playbackState.state === 'failed') return `Retry spoken ${subject}`
+    return `Read ${subject} aloud`
   })
 
   let hasInstalledTts = $state(null as boolean | null)
@@ -89,15 +105,15 @@
       onclick={activate}
     >
       {#if ownsSession && playbackState.state === 'preparing'}
-        <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+        <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'playing'}
-        <Pause size={12} aria-hidden="true" />
+        <CioPause size={12} aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'paused'}
-        <Play size={12} aria-hidden="true" />
+        <CioPlay size={12} aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'failed'}
-        <CircleAlert size={12} aria-hidden="true" />
+        <CioAlertCircle size={12} aria-hidden="true" />
       {:else}
-        <Volume2 size={12} aria-hidden="true" />
+        <CioVolume size={12} aria-hidden="true" />
       {/if}
     </button>
     {#if seekExpanded}

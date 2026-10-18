@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · two directions</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      /* Page-level ember control.
+         A custom property inherits into a <use> shadow tree and a CSS selector
+         does not, so the ember inside a symbol can only be switched on this way:
+         set --icon-ember on an ancestor and every ember under it takes it, or
+         set it to the surrounding ink for the monochrome pass. This is a study
+         control, not app code. */
+      .ember-on {
+        --icon-ember: var(--color-accent);
+      }
+
+      .ember-ink {
+        --icon-ember: currentColor;
+      }
+    </style>
+  </head>
+  <body class="ember-on">
+    <div class="wrap">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">CodeInOven · brand work</div>
+          <h1>The rail icon set, <em>two directions</em></h1>
+          <p class="lede">
+            Every icon the app draws today comes from Lucide. This is the first
+            surface to get its own language: the left view rail, eleven glyphs in
+            two complete passes. Both passes are drawn on the same rules the rest
+            of the app already keeps: right angles only, square caps, miter
+            joins, one ink colour that follows the theme, and an ember that
+            appears on the same terms the logo's does.
+          </p>
+        </div>
+        <div class="lockup">
+          <svg viewBox="0 0 96 96" aria-label="CodeInOven mark">
+            <path
+              d="M49 17a31 31 0 1 0 0 62"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="8"
+              stroke-linecap="square"
+            />
+            <path
+              d="M61 23h23v50H61z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="7"
+              stroke-linejoin="miter"
+            />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <div>
+            <b>CodeInOven</b>
+            <span>the mark both passes answer to</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ══ The map ══════════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>1 · The map</h2>
+          <span class="note"
+            >what the rail draws today, and what it is made of</span
+          >
+        </div>
+        <p class="lede">
+          Eleven glyphs sit in the rail: seven view destinations and four
+          utilities. The row below is the rail as it ships right now, Lucide
+          throughout, with Project current.
+        </p>
+
+        <div class="rail-row">
+          <div class="window">
+            <nav class="rail" aria-label="Rail as it ships today">
+              <div class="group">
+                <!-- current -->
+                <span class="item" data-current title="Project"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" /><path d="M8 10v4" /><path d="M12 10v2" /><path d="M16 10v6" /></svg
+                ></span>
+                <span class="item" title="Thread"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><path d="M8 6h10" /><path d="M6 12h10" /><path d="M4 18h10" /></svg
+                ></span>
+                <span class="item" title="Scoped"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><path d="M6 18h8" /><path d="M3 22h18" /><path d="M14 22a7 7 0 1 0 0-14h-1" /><path d="M9 14h2" /><path d="M9 12a2 2 0 0 1-2-2V6h6v4a2 2 0 0 1-2 2Z" /><path d="M12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3" /></svg
+                ></span>
+                <span class="item" title="Board"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><path d="M6 5v11" /><path d="M12 5v6" /><path d="M18 5v14" /></svg
+                ></span>
+                <span class="item" title="Chat"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><path d="M19.95 10.05a7 7 0 011.412 7.872 1 1 0 00-.058.787l.675 2.089a1 1 0 01-1.236 1.168l-2.155-.631a1 1 0 00-.745.06 7 7 0 01-7.793-1.445" /><path d="M2.696 12.708a1 1 0 00-.058-.785 7 7 0 113.518 3.473 1 1 0 00-.744-.061l-2.155.63a1 1 0 01-1.236-1.167z" /></svg
+                ></span>
+                <span class="item" title="Assistant"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg
+                ></span>
+                <span class="item" title="Browser"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></svg
+                ></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg
+                ></span>
+                <span class="item" title="Task manager"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M15 2v2" /><path d="M15 20v2" /><path d="M2 15h2" /><path d="M2 9h2" /><path d="M20 15h2" /><path d="M20 9h2" /><path d="M9 2v2" /><path d="M9 20v2" /></svg
+                ></span>
+                <span class="item" title="Utilities"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><path d="M10 15h4" /><path d="m14.817 10.995-.971-1.45 1.034-1.232a2 2 0 0 0-2.025-3.238l-1.82.364L9.91 3.885a2 2 0 0 0-3.625.748L6.141 6.55l-1.725.426a2 2 0 0 0-.19 3.756l.657.27" /><path d="m18.822 10.995 2.26-5.38a1 1 0 0 0-.557-1.318L16.954 2.9a1 1 0 0 0-1.281.533l-.924 2.122" /><path d="M4 12.006A1 1 0 0 1 4.994 11H19a1 1 0 0 1 1 1v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /></svg
+                ></span>
+                <span class="item" title="Settings"
+                  ><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                    ><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg
+                ></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <table class="ledger">
+          <thead>
+            <tr>
+              <th style="width: 9rem">Rail item</th>
+              <th style="width: 8rem">Shortcut</th>
+              <th style="width: 7rem">Today</th>
+              <th>What the mark has to carry</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="name">Project</td>
+              <td class="keys">Cmd 1</td>
+              <td class="keys">FolderKanban</td>
+              <td>A folder of work with columns in it. Lucide stacks two ideas and neither survives 16px. Both new passes read Project as the oven front, which is the folder at rest.</td>
+            </tr>
+            <tr>
+              <td class="name">Thread</td>
+              <td class="keys">Cmd 2</td>
+              <td class="keys">Timeline</td>
+              <td>Three lines of unequal length. The weakest glyph in the rail: it reads as a list, a ledger, or a hamburger, never as a conversation.</td>
+            </tr>
+            <tr>
+              <td class="name">Scoped</td>
+              <td class="keys">Cmd 3</td>
+              <td class="keys">Microscope</td>
+              <td>A region isolated inside a larger one. Drawn today as an instrument with seven sub-2px parts, which turns to noise at rail size.</td>
+            </tr>
+            <tr>
+              <td class="name">Board</td>
+              <td class="keys">Cmd 4</td>
+              <td class="keys">Kanban</td>
+              <td>Columns of work at different heights. Bare strokes with no container, so it floats and clashes with the list glyph above it.</td>
+            </tr>
+            <tr>
+              <td class="name">Chat</td>
+              <td class="keys">Cmd 5</td>
+              <td class="keys">MessagesCircle</td>
+              <td>Two round bubbles. Rounded, and the round language is exactly what the app removed everywhere else.</td>
+            </tr>
+            <tr>
+              <td class="name">Assistant</td>
+              <td class="keys">Cmd 6</td>
+              <td class="keys">AssistantIcon</td>
+              <td>The one bespoke mark in the rail: a plush body with two dots. It is already on brand and is the anchor both new passes must sit beside.</td>
+            </tr>
+            <tr>
+              <td class="name">Browser</td>
+              <td class="keys">Cmd 7</td>
+              <td class="keys">Globe</td>
+              <td>The internet. A circle with two ellipses and a rule, which is a wire globe rather than a thing in this app.</td>
+            </tr>
+            <tr>
+              <td class="name">Update</td>
+              <td class="keys">none</td>
+              <td class="keys">Info / Loader2 / Download / RefreshCw / Clock / AlertCircle / CheckCircle2</td>
+              <td>Seven glyphs behind one button, because the button is a status display. Needs one idle mark plus the state marks.</td>
+            </tr>
+            <tr>
+              <td class="name">Task manager</td>
+              <td class="keys">Cmd T</td>
+              <td class="keys">CpuIcon</td>
+              <td>Running processes. Drawn today as a chip with eight pins, the densest mark in the rail.</td>
+            </tr>
+            <tr>
+              <td class="name">Utilities</td>
+              <td class="keys">Cmd Alt T</td>
+              <td class="keys">ToolCase</td>
+              <td>Skills, MCP, plugins. A tool case is a good idea drawn as two nested curves with sub-2px detail.</td>
+            </tr>
+            <tr>
+              <td class="name">Settings</td>
+              <td class="keys">Cmd ,</td>
+              <td class="keys">Settings</td>
+              <td>A gear with a center hole. Nine sub-2px teeth, and the roundest shape in the app.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ══ Direction A ══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>2 · Direction A · The Oven Wire</h2>
+          <span class="note">outline tier · 2px ink · mitered · 24 grid</span>
+        </div>
+        <p class="lede">
+          Hairline geometry on the rail's existing 24 grid, drawn entirely in
+          right angles: a rectangular frame is the oven, a rule with entries is a
+          thread, a frame with a mark in it is a scope. Square caps and miter
+          joins, so every corner meets at a point the way the logo's brackets do.
+          A curve appears only where the curve is the object itself. The gold
+          pixel is the logo's ember, used once per glyph at most, and only where
+          the mark would otherwise be ambiguous.
+        </p>
+
+        <div class="rail-row">
+          <div class="window">
+            <nav class="rail" aria-label="Rail, direction A">
+              <div class="group">
+      <span class="item" data-current title="Project"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-assistant" /></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-browser" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-gauge" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-plug" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="plates">
+          <div class="plate">
+            <h3>Eleven glyphs</h3>
+            <p class="tagline">
+              Project, Thread, Scoped, Board, Chat, Assistant, Browser, Update,
+              Task manager, Utilities, Settings. Read left to right, top to
+              bottom.
+            </p>
+            <div class="grid-11">
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-projects" /></svg><figcaption>Project</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-threads" /></svg><figcaption>Thread</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-scoped" /></svg><figcaption>Scoped</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-board" /></svg><figcaption>Board</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-chats" /></svg><figcaption>Chat</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-assistant" /></svg><figcaption>Assistant</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-browser" /></svg><figcaption>Browser</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-info" /></svg><figcaption>Update</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-gauge" /></svg><figcaption>Tasks</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-plug" /></svg><figcaption>Utilities</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-settings" /></svg><figcaption>Settings</figcaption></figure>
+            </div>
+          </div>
+          <div class="plate">
+            <h3>Same glyphs, ink only</h3>
+            <p class="tagline">
+              The ember removed. This is what the rail looks like if the gold
+              budget stays at zero, and it is the honest test of whether the
+              drawings work without colour.
+            </p>
+            <div class="grid-11 ember-ink">
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-projects" /></svg><figcaption>Project</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-threads" /></svg><figcaption>Thread</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-scoped" /></svg><figcaption>Scoped</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-board" /></svg><figcaption>Board</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-chats" /></svg><figcaption>Chat</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-assistant" /></svg><figcaption>Assistant</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-browser" /></svg><figcaption>Browser</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-info" /></svg><figcaption>Update</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-gauge" /></svg><figcaption>Tasks</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-plug" /></svg><figcaption>Utilities</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-a.svg#a-settings" /></svg><figcaption>Settings</figcaption></figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Direction B ══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>3 · Direction B · The Slab</h2>
+          <span class="note">solid tier · ink mass, meaning knocked out</span>
+        </div>
+        <p class="lede">
+          The outline is gone. Each glyph is a solid block of ink whose meaning
+          is cut out of it, exactly how the tray mark is built: a filled slab
+          with a single knockout. Geometry widens to an 18 grid so the counters
+          stay open at 16px, and the fill, not the stroke, carries the weight.
+          These read as stamps or stencils, and they hold at a glance in a way
+          hairlines never do at the left edge of a window.
+        </p>
+
+        <div class="rail-row">
+          <div class="window">
+            <nav class="rail" aria-label="Rail, direction B">
+              <div class="group">
+      <span class="item" data-current title="Project"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-assistant" /></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-browser" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-gauge" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-plug" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="plates">
+          <div class="plate">
+            <h3>Eleven glyphs</h3>
+            <p class="tagline">The same eleven meanings, drawn as solids.</p>
+            <div class="grid-11">
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-projects" /></svg><figcaption>Project</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-threads" /></svg><figcaption>Thread</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-scoped" /></svg><figcaption>Scoped</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-board" /></svg><figcaption>Board</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-chats" /></svg><figcaption>Chat</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-assistant" /></svg><figcaption>Assistant</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-browser" /></svg><figcaption>Browser</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-info" /></svg><figcaption>Update</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-gauge" /></svg><figcaption>Tasks</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-plug" /></svg><figcaption>Utilities</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-settings" /></svg><figcaption>Settings</figcaption></figure>
+            </div>
+          </div>
+          <div class="plate">
+            <h3>Same glyphs, ink only</h3>
+            <p class="tagline">
+              The ember removed. On the solid tier the ember is a hole in the
+              slab, so the monochrome pass is where the proportions are really
+              visible.
+            </p>
+            <div class="grid-11 ember-ink">
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-projects" /></svg><figcaption>Project</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-threads" /></svg><figcaption>Thread</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-scoped" /></svg><figcaption>Scoped</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-board" /></svg><figcaption>Board</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-chats" /></svg><figcaption>Chat</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-assistant" /></svg><figcaption>Assistant</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-browser" /></svg><figcaption>Browser</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-info" /></svg><figcaption>Update</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-gauge" /></svg><figcaption>Tasks</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-plug" /></svg><figcaption>Utilities</figcaption></figure>
+              <figure><svg viewBox="0 0 24 24"><use href="./icons-b.svg#b-settings" /></svg><figcaption>Settings</figcaption></figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Comparison ═══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>4 · Given to scale</h2>
+          <span class="note">a size test rather than a beauty shot</span>
+        </div>
+        <p class="lede">
+          The rail draws at 16px and nothing else. These are the three heaviest
+          glyphs of each pass at 12, 16, 20 and 28px, plus the assistant mark the
+          rail already ships, so the two passes are weighed against the one mark
+          that is already settled.
+        </p>
+
+        <div class="plates">
+          <div class="plate">
+            <h3>Direction A</h3>
+            <p class="tagline">Four samples per size, the four busiest meanings.</p>
+            <div class="scale-row">
+              <figure>
+                <span class="cluster">
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-a.svg#a-projects" /></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-a.svg#a-threads" /></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-a.svg#a-board" /></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-a.svg#a-settings" /></svg>
+                </span>
+                <figcaption>12</figcaption>
+              </figure>
+              <figure>
+                <span class="cluster">
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-a.svg#a-projects" /></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-a.svg#a-threads" /></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-a.svg#a-board" /></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-a.svg#a-settings" /></svg>
+                </span>
+                <figcaption>16 · the rail</figcaption>
+              </figure>
+              <figure>
+                <span class="cluster">
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-a.svg#a-projects" /></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-a.svg#a-threads" /></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-a.svg#a-board" /></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-a.svg#a-settings" /></svg>
+                </span>
+                <figcaption>20</figcaption>
+              </figure>
+              <figure>
+                <span class="cluster">
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-a.svg#a-projects" /></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-a.svg#a-threads" /></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-a.svg#a-board" /></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-a.svg#a-settings" /></svg>
+                </span>
+                <figcaption>28</figcaption>
+              </figure>
+            </div>
+          </div>
+          <div class="plate">
+            <h3>Direction B</h3>
+            <p class="tagline">Same meanings, same sizes, solid tier.</p>
+            <div class="scale-row">
+              <figure>
+                <span class="cluster">
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-b.svg#b-projects" /></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-b.svg#b-threads" /></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-b.svg#b-board" /></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24"><use href="./icons-b.svg#b-settings" /></svg>
+                </span>
+                <figcaption>12</figcaption>
+              </figure>
+              <figure>
+                <span class="cluster">
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-b.svg#b-projects" /></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-b.svg#b-threads" /></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-b.svg#b-board" /></svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24"><use href="./icons-b.svg#b-settings" /></svg>
+                </span>
+                <figcaption>16 · the rail</figcaption>
+              </figure>
+              <figure>
+                <span class="cluster">
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-b.svg#b-projects" /></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-b.svg#b-threads" /></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-b.svg#b-board" /></svg>
+                  <svg width="20" height="20" viewBox="0 0 24 24"><use href="./icons-b.svg#b-settings" /></svg>
+                </span>
+                <figcaption>20</figcaption>
+              </figure>
+              <figure>
+                <span class="cluster">
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-b.svg#b-projects" /></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-b.svg#b-threads" /></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-b.svg#b-board" /></svg>
+                  <svg width="28" height="28" viewBox="0 0 24 24"><use href="./icons-b.svg#b-settings" /></svg>
+                </span>
+                <figcaption>28</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+
+        <div class="rule"></div>
+        <p class="footnote">
+          <b>What changes either way.</b> The rail stops drawing Lucide. Nothing
+          else in the app moves yet: this study is one surface and eleven
+          meanings, so a direction can be settled on a small, reversible piece of
+          work before the other roughly three hundred glyphs are drawn. The
+          assistant mark is the exception and stays as it is; it is the anchor
+          both passes answer to, and replacing it is a separate decision.
+        </p>
+      </section>
+
+      <!-- ══ Trade-offs ═══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>5 · The trade</h2>
+          <span class="note">what each one costs, stated plainly</span>
+        </div>
+        <div class="verdicts">
+          <div class="card">
+            <header>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-a.svg#a-browser" /></svg>
+              <b>A · The Oven Wire</b>
+              <span>outline</span>
+            </header>
+            <ul>
+              <li><b>Reads as an instrument.</b> Thin, exact, technical. It sits beside a terminal-native app and a monospace UI without competing with either.</li>
+              <li><b>Scales down honestly.</b> At 12px the containers survive as containers; only interior detail drops out.</li>
+              <li><b>Risk:</b> a hairline glyph looks lighter than the Lucide icons beside it in every other panel, so the rail can read as unfinished while the rest of the app is still Lucide.</li>
+              <li><b>Risk:</b> 2px ink at 16px is a 1.33px rendered stroke, which the display rounds unevenly at 1x. This is the tier's real weakness.</li>
+            </ul>
+            <div class="foot">Best when the whole app moves to the outline tier later, so nothing sits beside an outline glyph.</div>
+          </div>
+          <div class="card">
+            <header>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-b.svg#b-board" /></svg>
+              <b>B · The Slab</b>
+              <span>solid</span>
+            </header>
+            <ul>
+              <li><b>Reads as a stamp.</b> Every glyph is one unmistakable shape, which is exactly what a 32px tool button needs at the edge of a busy window.</li>
+              <li><b>Carries the tray mark's DNA directly.</b> The tray is a solid slab with a knockout, so the small-size language is already proven in this product.</li>
+              <li><b>Risk:</b> heavier than every other icon in the app, so the rail becomes the loudest column on screen until the rest catches up.</li>
+              <li><b>Risk:</b> a solid grid of ink is easy to over-apply; the ember is a hole rather than a dot, which is a different treatment from the logo's.</li>
+            </ul>
+            <div class="foot">Best if the rail should lead the identity and the rest of the app follows it rather than the other way round.</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

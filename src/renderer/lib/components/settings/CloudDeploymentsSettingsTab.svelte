@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { AlertTriangle, Loader2, Pencil, Plus, RefreshCw, Trash2 } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import CloudProviderIcon from '../cloud/icons/CloudProviderIcon.svelte'
@@ -81,7 +86,7 @@
       disabled={cloudAccountsState.loading}
       onclick={() => void cloudAccountsState.load()}
     >
-      <RefreshCw size={13} class={cloudAccountsState.loading ? 'animate-spin' : ''} /> Refresh
+      <CioRefresh size={13} class={cloudAccountsState.loading ? 'animate-spin' : ''} /> Refresh
     </button>
   </div>
 
@@ -102,13 +107,13 @@
         title="Add cloud deployment provider account"
         onclick={openCreate}
       >
-        <Plus size={13} /> Add account
+        <CioPlus size={13} /> Add account
       </button>
     </div>
 
     {#if cloudAccountsState.loading && cloudAccountsState.accounts.length === 0}
       <div class="border border-dashed p-6 text-center">
-        <Loader2 size={17} class="mx-auto animate-spin text-dimmed" />
+        <CioSpinner size={17} class="mx-auto animate-spin text-dimmed" />
       </div>
     {:else if cloudAccountsState.accounts.length === 0}
       <div class="border border-dashed p-5 text-center">
@@ -163,7 +168,7 @@
                 title="Edit {account.label}"
                 onclick={() => openEdit(account)}
               >
-                <Pencil size={13} />
+                <CioPencil size={13} />
               </button>
               <button
                 class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
@@ -171,7 +176,7 @@
                 title="Delete {account.label}"
                 onclick={() => (deleteTarget = account)}
               >
-                <Trash2 size={13} />
+                <CioTrash size={13} />
               </button>
             </div>
           {/if}
@@ -208,7 +213,7 @@
       disabled={cloudAccountsState.saving}
       onclick={() => void removeAccount()}
     >
-      {#if cloudAccountsState.saving}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+      {#if cloudAccountsState.saving}<CioSpinner size={13} class="animate-spin" />{:else}<CioTrash
           size={13}
         />{/if}
       Delete account
@@ -219,7 +224,7 @@
     <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{deleteError}</p>
   {/if}
   <div class="flex gap-2 text-sm text-muted">
-    <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
+    <CioAttention size={16} class="mt-0.5 shrink-0 text-warning" />
     <p>
       Delete <strong class="text-foreground">{deleteTarget?.label}</strong>? Its API token will be
       removed from secure storage, it will be detached from every project that uses it, and

@@ -1,14 +1,12 @@
 <script lang="ts">
-  import {
-    Bot,
-    CircleDot,
-    CircleX,
-    ExternalLink,
-    GitBranch,
-    Loader2,
-    PackageCheck,
-    Terminal
-  } from '@lucide/svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioPackageCheck from '@pillardash-oss/cio-icon/CioPackageCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
   import { onMount } from 'svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { formatDurationSeconds } from '$lib/format/duration'
@@ -204,12 +202,12 @@
 
   {#if loading && !detail}
     <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-      <Loader2 size={13} class="animate-spin" />
+      <CioSpinner size={13} class="animate-spin" />
       Loading deployment details
     </div>
   {:else if error && !detail}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <CircleX size={20} class="text-danger" />
+      <CioCrossCircle size={20} class="text-danger" />
       <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">{error}</p>
       <button
         type="button"
@@ -224,7 +222,7 @@
       <!-- Status history -->
       <section class="border-b border-border">
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-          <CircleDot size={11} class="text-dimmed" />
+          <CioDot size={11} class="text-dimmed" />
           <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
             Status history
           </h3>
@@ -266,7 +264,7 @@
       <!-- Linked workflow run -->
       <section class="border-b border-border">
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-          <PackageCheck size={11} class="text-dimmed" />
+          <CioPackageCheck size={11} class="text-dimmed" />
           <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
             Workflow run
           </h3>
@@ -295,7 +293,7 @@
                   data-external-url={run.url}
                   onclick={() => void openInBrowser(run.url)}
                 >
-                  <ExternalLink size={11} />
+                  <CioExternalLink size={11} />
                 </button>
               {/if}
             </div>
@@ -306,7 +304,7 @@
               <span>{run.event}</span>
               {#if run.branch}
                 <span class="flex items-center gap-1">
-                  <GitBranch size={9} class="shrink-0" />
+                  <CioTabGit size={9} class="shrink-0" />
                   <span class="max-w-28 truncate font-mono">{run.branch}</span>
                 </span>
               {/if}
@@ -326,7 +324,7 @@
       <!-- Jobs -->
       <section>
         <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-          <Terminal size={11} class="text-dimmed" />
+          <CioTerminal size={11} class="text-dimmed" />
           <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Jobs</h3>
           <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{detail.jobs.length}</span
           >
@@ -343,9 +341,9 @@
               onclick={() => void reviewWithAgent(failedJob)}
             >
               {#if preparingAgent}
-                <Loader2 size={11} class="animate-spin" />
+                <CioSpinner size={11} class="animate-spin" />
               {:else}
-                <Bot size={11} />
+                <CioSubagent size={11} />
               {/if}
               Review failed job
             </button>
@@ -440,7 +438,7 @@
                             data-external-url={job.url}
                             onclick={() => void openInBrowser(job.url)}
                           >
-                            <ExternalLink size={10} />
+                            <CioExternalLink size={10} />
                             Follow live on GitHub
                           </button>
                         {/if}

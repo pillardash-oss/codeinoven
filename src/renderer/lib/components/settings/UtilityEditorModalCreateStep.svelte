@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { BookOpen, Boxes, Server, Sparkles } from '@lucide/svelte'
-
+  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
   interface Props {
     onChooseCreate: (id: 'skill' | 'mcp' | 'plugin') => void
     onStartSetupThread: () => void
@@ -16,25 +18,25 @@
     id: 'skill' | 'mcp' | 'plugin'
     title: string
     description: string
-    icon: typeof BookOpen
+    icon: typeof CioBook
   }> = [
     {
       id: 'skill',
       title: 'Skill',
       description: 'Paste SKILL.md instructions an agent can load on demand.',
-      icon: BookOpen
+      icon: CioBook
     },
     {
       id: 'mcp',
       title: 'MCP server',
       description: 'Connect an MCP server over stdio, HTTP, or SSE directly.',
-      icon: Server
+      icon: CioServer
     },
     {
       id: 'plugin',
       title: 'Plugin bundle',
       description: 'Import a JSON manifest that installs several capabilities atomically.',
-      icon: Boxes
+      icon: CioTabBoxes
     }
   ]
 </script>
@@ -86,7 +88,7 @@
       disabled={busy}
       onclick={onStartSetupThread}
     >
-      <Sparkles size={14} />
+      <CioSparkles size={14} />
       Setup with agent
     </button>
   </div>

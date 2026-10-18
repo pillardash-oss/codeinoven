@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { ArrowLeft, MessageSquareText, PanelLeft } from '@lucide/svelte'
-
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioPanelLeft from '@pillardash-oss/cio-icon/CioPanelLeft.svelte'
   type StudioDocument = 'brainstorm' | 'prd' | 'spec' | 'assignment' | 'audit'
 
   interface Props {
@@ -53,7 +54,7 @@
     aria-label="Back to the conversation"
     onclick={onBack}
   >
-    <ArrowLeft size={13} class="shrink-0" />
+    <CioArrowLeft size={13} class="shrink-0" />
     <span class="conversation-text max-md:hidden">Conversation</span>
   </button>
   <!-- Show/hide the studio's own section rail. On a narrow layout it stands in
@@ -68,7 +69,7 @@
       title={sectionsOpen ? `Hide ${sectionsLabel}` : `Show ${sectionsLabel}`}
       onclick={onToggleSections}
     >
-      <PanelLeft size={13} />
+      <CioPanelLeft size={13} />
     </button>
   {/if}
   <button
@@ -80,7 +81,7 @@
     title="Show agent messages"
     onclick={onToggleAgentMessages}
   >
-    <MessageSquareText size={13} />
+    <CioMessage size={13} />
   </button>
   <div
     class="studio-tabs flex min-w-0 overflow-x-auto border border-border bg-raised p-0.5"

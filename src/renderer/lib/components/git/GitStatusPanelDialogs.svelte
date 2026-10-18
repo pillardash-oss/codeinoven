@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { GitMerge, Loader2 } from '@lucide/svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type {
@@ -237,7 +238,7 @@
           onclick={() => void recoverPush('rebase')}
         >
           {#if pushRecoverMode === 'rebase'}
-            <Loader2 size={11} class="animate-spin" />
+            <CioSpinner size={11} class="animate-spin" />
           {/if}
           Rebase &amp; push
         </button>
@@ -248,7 +249,7 @@
           onclick={() => void recoverPush('merge')}
         >
           {#if pushRecoverMode === 'merge'}
-            <Loader2 size={11} class="animate-spin" />
+            <CioSpinner size={11} class="animate-spin" />
           {/if}
           Pull &amp; push
         </button>
@@ -522,7 +523,7 @@
           disabled={completeMergeBusy}
           onclick={() => void confirmCompleteMerge()}
         >
-          {#if completeMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge
+          {#if completeMergeBusy}<CioSpinner size={11} class="animate-spin" />{:else}<CioMerge
               size={11}
             />{/if}
           Complete merge
@@ -552,9 +553,9 @@
       onclick={openCompleteMerge}
     >
       {#if completeMergeBusy}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <GitMerge size={11} />
+        <CioMerge size={11} />
       {/if}
       Complete merge
     </button>
@@ -612,7 +613,7 @@
           onclick={() => void stashChanges()}
         >
           {#if gitState.isBusy('stash')}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {stashPaths ? 'Stash selected' : 'Stash changes'}
         </button>
@@ -744,7 +745,7 @@
           onclick={() => void confirmPendingOperation()}
         >
           {#if gitState.isBusy('merge') || gitState.isBusy('rebase')}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {operation.kind === 'merge' ? 'Merge' : 'Rebase'}
         </button>
@@ -855,7 +856,7 @@
           onclick={() => void confirmReset()}
         >
           {#if gitState.isBusy('reset')}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {pendingReset.mode === 'hard' ? 'Reset hard' : 'Reset'}
         </button>
@@ -1018,7 +1019,7 @@
           onclick={requestSetOrigin}
         >
           {#if originBusy}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {originMode === 'replace' ? 'Replace Origin' : 'Add Origin'}
         </button>

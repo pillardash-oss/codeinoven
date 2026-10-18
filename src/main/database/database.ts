@@ -1,3 +1,4 @@
+import { RECONCILE_THREAD_CONTEXT_USAGE_SQL } from './thread-context-usage-sql'
 import { mkdirSync } from 'fs'
 import { dirname, join } from 'path'
 import { performance } from 'node:perf_hooks'
@@ -5,11 +6,17 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { DEFAULT_WORK_ROOTS, authoredWorkKindOf } from '../../lib/design/work-roots'
+import {
+  orderAuthoredWorkKinds,
+  parseAuthoredWorkKinds,
+  serializeAuthoredWorkKinds
+} from '../../lib/design/authored-work-kinds'
 import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
 import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
   LEGACY_RUBRIC_VERSION,
+  MAX_PLAUSIBLE_SHOT_COST_USD,
   MODEL_RANKINGS_COLUMNS_SQL,
   MODEL_RANKING_CALC_VERSION,
   MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL,
@@ -73,6 +80,8 @@ export class Database {
    * `backfillAgentMessageSearchMeta`).
    */
   private searchMetaReady = false
+  private closing = false
+  private contextCostRepair: Promise<void> | null = null
 
   constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
     this.path = path ?? getConfigRoot() + '/codeinoven.db'
@@ -82,6 +91,7 @@ export class Database {
   /** Initialise the database: open connection, apply schema, set WAL mode. */
   async init(): Promise<void> {
     if (this.db) return
+    this.closing = false
     const startedAt = performance.now()
 
     // On a fresh install the config root does not exist yet and
@@ -102,11 +112,49 @@ export class Database {
     // serialized batches, so init never waits on it and the main thread stays
     // free. Until it reports ready, search uses the legacy (correct) query.
     void this.backfillAgentMessageSearchMeta()
+    this.contextCostRepair = this.reconcileLegacyContextUsageCosts()
 
     Logger.info('SQLite database initialised', {
       path: this.path,
       durationMs: this.roundDuration(performance.now() - startedAt)
     })
+  }
+
+  /** One bounded worker-only repair pass for snapshots written before ledger reconciliation. */
+  private async reconcileLegacyContextUsageCosts(): Promise<void> {
+    try {
+      const marker = await this.queryViaWorker(
+        "SELECT value FROM db_meta WHERE key = 'context_usage_cost_v1'",
+        [],
+        1
+      )
+      if (!marker.ok || marker.rows.length > 0) return
+      let cursor = ''
+      for (;;) {
+        if (this.closing) return
+        const batch = await this.queryViaWorker(
+          'SELECT id FROM threads WHERE id > ? AND context_usage IS NOT NULL ORDER BY id LIMIT 32',
+          [cursor],
+          32
+        )
+        if (!batch.ok) throw new Error(batch.error ?? 'Context cost repair read failed')
+        if (batch.rows.length === 0) break
+        for (const row of batch.rows) {
+          if (this.closing) return
+          const id = String(row['id'])
+          const result = await this.executeViaWorker(RECONCILE_THREAD_CONTEXT_USAGE_SQL, [id])
+          if (!result.ok) throw new Error(result.error ?? 'Context cost repair failed')
+          cursor = id
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      await this.executeViaWorker(
+        "INSERT OR REPLACE INTO db_meta(key,value) VALUES('context_usage_cost_v1','complete')",
+        []
+      )
+    } catch (error) {
+      Logger.error('Legacy context cost reconciliation failed:', error)
+    }
   }
 
   /** Whether thread search may rank against the narrow search mirror. */
@@ -243,6 +291,9 @@ export class Database {
    * worker has stopped and its connection is closed before teardown completes.
    */
   async close(): Promise<void> {
+    this.closing = true
+    await this.contextCostRepair
+    this.contextCostRepair = null
     const worker = this.maintenanceWorker
     this.maintenanceWorker = null
     if (worker?.isRunning()) {
@@ -434,6 +485,11 @@ export class Database {
     if (!worker || !worker.isRunning()) {
       return { ok: false, reason: 'io', error: 'no maintenance worker' }
     }
+    // Drain the bounded repair before the worker swaps database files. Its
+    // next queued statement must never race a restore onto a different inode.
+    this.closing = true
+    await this.contextCostRepair
+    this.contextCostRepair = null
     // Close the primary connection so it cannot hold the pre-restore inode.
     this.closeConnection()
     let result: WorkerRestoreResult
@@ -858,6 +914,7 @@ export class Database {
       this.migrateAssistantVocabulary(connection)
       this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
+      this.migrateModelRankingCostPlausibility(connection)
       this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateModelRankingSnapshotAnchorMessageId(connection)
       this.migrateModelRankingSnapshotUndoneAt(connection)
@@ -867,6 +924,7 @@ export class Database {
       this.migrateThreadEngineeringColumn(connection)
       this.migrateThreadAccountColumn(connection)
       this.migrateThreadDraftColumns(connection)
+      this.migrateThreadBookmarkColumn(connection)
       this.migrateThreadAssistantColumns(connection)
       this.migrateThreadFailureColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
@@ -895,7 +953,9 @@ export class Database {
       this.migrateAssistantScheduled(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
+      this.migrateThreadAuthoredWorkKinds(connection)
       this.migrateDesignRevisionMetadata(connection)
+      this.migrateSettledAuditThreadStatus(connection)
     })()
   }
 
@@ -1333,6 +1393,71 @@ export class Database {
   }
 
   /**
+   * Add the durable set of authored-work kinds beside the current session kind.
+   *
+   * `authored_work_kind` answers "which session is this thread in now". The row's
+   * marker has to answer "what work has this thread done", because a thread that
+   * designed something and later cut a video about it has done both and a single
+   * column can only name one. Without this backfill every thread alive before the
+   * column existed would show one marker, and the thread the set exists to
+   * describe, one that started as a design and has since moved to a video
+   * session, would lose its design marker on upgrade.
+   *
+   * Two sources, because neither alone is the whole set. The session kind is what
+   * the thread was already showing. The creator records are what it did earlier:
+   * `design_origins` names the thread that first previewed a folder and
+   * `authored_work_folders` gives that folder's kind, so the join recovers a
+   * design the thread has since navigated away from. Both reads are one grouped
+   * statement for the whole table rather than a query per thread.
+   */
+  private migrateThreadAuthoredWorkKinds(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.has('authored_work_kinds')) return
+    connection.exec('ALTER TABLE threads ADD COLUMN authored_work_kinds TEXT')
+    const rows = connection
+      .prepare('SELECT id, authored_work_kind, authored_work_kinds FROM threads')
+      .all() as Array<{
+      id: string
+      authored_work_kind: string | null
+      authored_work_kinds: string | null
+    }>
+    if (rows.length === 0) return
+    const created = connection
+      .prepare(
+        `SELECT o.thread_id AS thread_id, f.kind AS kind
+           FROM design_origins o
+           JOIN authored_work_folders f
+             ON f.project_id = o.project_id AND f.directory = o.directory
+          GROUP BY o.thread_id, f.kind`
+      )
+      .all() as Array<{ thread_id: string; kind: string }>
+    const createdByThread = new Map<string, string[]>()
+    for (const row of created) {
+      const kinds = createdByThread.get(row.thread_id)
+      if (kinds) kinds.push(row.kind)
+      else createdByThread.set(row.thread_id, [row.kind])
+    }
+    const update = connection.prepare('UPDATE threads SET authored_work_kinds = ? WHERE id = ?')
+    for (const row of rows) {
+      // Both spellings feed the same normalizer, so an unknown or corrupt value
+      // reads as "nothing recorded" instead of failing a startup migration.
+      const kinds = serializeAuthoredWorkKinds(
+        orderAuthoredWorkKinds([
+          ...parseAuthoredWorkKinds(row.authored_work_kinds),
+          row.authored_work_kind,
+          ...(createdByThread.get(row.id) ?? [])
+        ])
+      )
+      if (kinds === null || kinds === row.authored_work_kinds) continue
+      update.run(kinds, row.id)
+    }
+  }
+
+  /**
    * One-time replacement of the legacy per-turn `turn_feedback` ledger (1–5
    * grades) with the `model_rankings` aggregate + `model_ranking_snapshots`
    * queue. Graded legacy rows are folded into the aggregate with the linear
@@ -1468,6 +1593,42 @@ export class Database {
     )
     if (columns.size === 0 || columns.has('undone_at_ms')) return
     target.exec('ALTER TABLE model_ranking_snapshots ADD COLUMN undone_at_ms INTEGER')
+  }
+
+  /**
+   * Discard ranking cost sums that an arithmetic artifact poisoned.
+   *
+   * The cost columns of `model_rankings` are running sums whose snapshots are
+   * hard-deleted the moment they are scored, so one absurd addend can never be
+   * subtracted back out   it only ever surfaces as an impossible per-sample
+   * average, and it takes the "spent across ranked conversations" figure with
+   * it forever. Anything above `MAX_PLAUSIBLE_SHOT_COST_USD` per ranked
+   * conversation is therefore dropped to 0, exactly how an unpriced session is
+   * already recorded: the priced siblings of those samples under-report by the
+   * few cents they actually cost, which is the honest direction for a sum
+   * nothing can recompute. Scores, sample counts, and durations are untouched,
+   * because those are the ranking's own numbers and they were never corrupt.
+   * The 2026-10-10 pi cumulative-cost fix stopped the one producer of such
+   * addends, and `ModelRankingRepo` now refuses to fold a new one in at all.
+   * Idempotent: a repaired row is already below the ceiling.
+   */
+  migrateModelRankingCostPlausibility(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const beyondCeiling = (samplesColumn: string, costColumn: string): string =>
+      `${samplesColumn} > 0 AND ${costColumn} > ${samplesColumn} * ${MAX_PLAUSIBLE_SHOT_COST_USD}`
+    target.exec(`
+      UPDATE model_rankings
+      SET one_shot_cost_usd = CASE
+            WHEN ${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')} THEN 0
+            ELSE one_shot_cost_usd
+          END,
+          multi_shot_cost_usd = CASE
+            WHEN ${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')} THEN 0
+            ELSE multi_shot_cost_usd
+          END
+      WHERE (${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')})
+         OR (${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')})
+    `)
   }
 
   /**
@@ -1614,6 +1775,38 @@ export class Database {
     )
   }
 
+  /**
+   * Land threads a settled audit left parked on `spec`.
+   *
+   * An audit parks its thread on `spec` while the report waits on the user, and
+   * settling the report used to clear the audit state without moving the status:
+   * the thread kept reading "Spec ready" with nothing left to review, holding a
+   * review count on its project strip forever. `completed` is what a settled
+   * audit means, so the thread is done.
+   *
+   * Only a row whose `spec` can have come from an audit is touched: an
+   * independent-audit thread (locked out of the specification flows for its
+   * lifetime) and an Achievement coordinator that owns a durable auditor. A
+   * thread parked on a specification that is still waiting for approval keeps
+   * its status, and so does an audit `offered`, which is still an open question
+   * for the user. Idempotent: a database with nothing left to settle is
+   * untouched.
+   */
+  private migrateSettledAuditThreadStatus(connection: DatabaseType): void {
+    connection.exec(
+      `UPDATE threads
+          SET status = 'completed',
+              scope_sort_order = NULL,
+              sort_order = NULL
+        WHERE status = 'spec'
+          AND audit_state IS NULL
+          AND (
+            independent_audit = 1
+            OR (achievement_role = 'coordinator' AND auditor_thread_id IS NOT NULL)
+          )`
+    )
+  }
+
   /** Existing databases predate the in-flight turn owner recorded for cross-instance recovery. */
   private migrateActiveTurnOwnerColumn(connection: DatabaseType): void {
     const columns = new Set<string>(
@@ -1652,6 +1845,17 @@ export class Database {
     }
     if (!columns.has('draft_json')) {
       connection.exec('ALTER TABLE threads ADD COLUMN draft_json TEXT')
+    }
+  }
+
+  private migrateThreadBookmarkColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('bookmarked')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN bookmarked INTEGER NOT NULL DEFAULT 0')
     }
   }
 

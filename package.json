@@ -3,13 +3,16 @@
   "version": "0.5.62",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
-  "packageManager": "bun@1.3.14",
+  "packageManager": "bun@1.4.3",
   "engines": {
-    "bun": ">=1.3.14",
+    "bun": ">=1.4.3",
     "node": ">=22.13.0"
   },
   "main": "out/main/index.js",
   "type": "module",
+  "workspaces": [
+    "packages/cio-icons"
+  ],
   "author": {
     "name": "Pillardash Solutions Limited",
     "email": "hey@pillardash.com"
@@ -38,13 +41,13 @@
     "source-map-js": "1.2.2"
   },
   "scripts": {
-    "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps",
-    "predev": "bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
+    "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps && bun scripts/ensure-pty-helper.ts",
+    "predev": "bun run --filter @pillardash-oss/cio-icon build && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/ensure-pty-helper.ts && bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "dev:probe": "bun scripts/dev-probe.ts",
     "probe": "bun scripts/probe.ts",
     "build": "electron-vite build",
-    "build:production": "electron-vite build --mode production",
+    "build:production": "bun scripts/ensure-ffmpeg-binary.ts && electron-vite build --mode production",
     "preview": "electron-vite preview",
     "check": "bun scripts/check.ts",
     "lint": "eslint --max-warnings 0",
@@ -53,6 +56,7 @@
     "check:bundle": "bun scripts/check-bundle-budgets.ts",
     "verify:packaged-app": "bun run scripts/verify-packaged-app.ts",
     "smoke:packaged": "bun run scripts/smoke-packaged-app.ts",
+    "icons:build": "bun scripts/icons/build-icons.ts",
     "speech:catalog": "bun scripts/benchmark-speech-models.ts",
     "speech:build-mlx": "bun scripts/build-mlx-speech-worker.ts",
     "speech:build-coreml": "bun scripts/build-coreml-speech-worker.ts",
@@ -75,9 +79,14 @@
     "release:mirror": "bun scripts/publish-release-mirror.ts",
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
-    "msix:build": "bun scripts/msix.ts"
+    "msix:build": "bun scripts/msix.ts",
+    "prebuild": "bun run --filter @pillardash-oss/cio-icon build",
+    "prebuild:production": "bun run --filter @pillardash-oss/cio-icon build",
+    "precheck": "bun run --filter @pillardash-oss/cio-icon build",
+    "pretest": "bun run --filter @pillardash-oss/cio-icon build"
   },
   "dependencies": {
+    "@pillardash-oss/cio-icon": "workspace:*",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
@@ -106,19 +115,19 @@
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.280",
     "@baybreezy/file-extension-icon": "^0.0.5",
-    "@earendil-works/pi-coding-agent": "1.1.0",
-    "@earendil-works/pi-mcp": "1.2.0",
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "@earendil-works/pi-mcp": "1.3.0",
     "@electron-toolkit/utils": "^4.0.0",
     "@electron/fuses": "2.1.3",
     "@electron/osx-sign": "2.7.0",
     "@eslint/js": "^10.0.1",
     "@huggingface/transformers": "4.2.0",
     "@lobehub/icons-static-svg": "^1.95.1",
-    "@lucide/svelte": "^1.47.0",
     "@mediabunny/server": "1.61.3",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@remotion/video-matting": "4.0.535",
     "@resvg/resvg-js": "^2.6.2",
+    "sharp": "0.35.5",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/better-sqlite3": "^9.6.0",
@@ -128,7 +137,7 @@
     "bits-ui": "^2.19.3",
     "builder-util": "26.15.3",
     "dompurify": "^3.4.16",
-    "electron": "^44.7.2",
+    "electron": "^44.8.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "eslint": "^10.11.0",

@@ -1,0 +1,11 @@
+# Bun 1.4 installs a workspace project with the isolated linker by default: only
+# each workspace's own declared dependencies are exposed at the root
+# node_modules, and a transitive package stays inside its dependent's private
+# node_modules. This repo builds, tests and packages against the hoisted layout
+# instead. The test suite imports `esbuild` directly and the bundled Pi harness
+# resolves `typebox`, both transitive today, and the previously pinned Bun
+# (1.3.14) hoisted every package to the root. Pin the linker so a fresh
+# `bun install --frozen-lockfile` gives the same tree locally and on CI, rather
+# than losing those packages to the node_modules of whoever depended on them.
+[install]
+linker = "hoisted"

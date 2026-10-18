@@ -127,7 +127,16 @@ describe('IPC structured input validation', () => {
   })
 
   it('rejects invalid, incomplete, and extended thread settings', () => {
-    expect(() => validateThreadSettings({ ...validSettings, contextWindow: 999_999 })).toThrow(
+    // Codex states 500k and 872k for one of its models; a harness value must
+    // survive untouched, while a value no harness could mean is rejected.
+    expect(validateThreadSettings({ ...validSettings, contextWindow: 872_000 })).toEqual({
+      ...validSettings,
+      contextWindow: 872_000
+    })
+    expect(() => validateThreadSettings({ ...validSettings, contextWindow: 4_000_001 })).toThrow(
+      TypeError
+    )
+    expect(() => validateThreadSettings({ ...validSettings, contextWindow: 12.5 })).toThrow(
       TypeError
     )
     expect(() => validateThreadSettings({ ...validSettings, permissionLevel: 'all' })).toThrow(

@@ -140,10 +140,9 @@ function windowCopy(window: string | undefined): { label?: string; minutes?: num
  * the bare payload (`groups`) and the language-server envelope
  * (`response.groups`).
  *
- * Returns `null` when the body is not a summary at all, so the caller can fall
- * back to the per-model snapshot. A parsed summary is authoritative even when it
- * is empty: the fallback pools coarse model quotas and must never be used to
- * dress up a body the provider already answered properly.
+ * Returns `null` when the body is not a summary at all. Reported buckets stay
+ * authoritative, but a partial summary can be supplemented with missing pools
+ * from the per-model snapshot.
  */
 export function mapAntigravityQuotaSummary(value: unknown): AgentRateLimitWindow[] | null {
   const root = record(value)
@@ -161,7 +160,12 @@ export function mapAntigravityQuotaSummary(value: unknown): AgentRateLimitWindow
     for (const rawBucket of buckets) {
       const bucket = record(rawBucket)
       if (!bucket) continue
-      const remainingFraction = finiteNumber(bucket['remainingFraction'])
+      const remainingFraction =
+        finiteNumber(bucket['remainingFraction']) ??
+        (bucket['remainingFraction'] === undefined &&
+        epochMilliseconds(bucket['resetTime']) !== undefined
+          ? 0
+          : undefined)
       if (remainingFraction === undefined) continue
       const bucketId = stringValue(bucket['bucketId'])
       const id = bucketId ?? `${groupName ?? 'pool'}-${windows.length}`
@@ -192,15 +196,20 @@ export function mapAntigravityModelQuotas(value: unknown): AgentRateLimitWindow[
   const models = record(record(value)?.['models'])
   if (!models) return []
   const pools = new Map<string, { remainingFraction: number; resetsAt?: number }>()
-  for (const rawModel of Object.values(models)) {
+  for (const [modelId, rawModel] of Object.entries(models)) {
     const model = record(rawModel)
-    if (!model || model['isInternal'] === true) continue
+    if (!model || model['isInternal'] === true || modelId.startsWith('tab_')) continue
     const quota = record(model['quotaInfo'])
-    const remainingFraction = finiteNumber(quota?.['remainingFraction'])
-    if (quota === null || remainingFraction === undefined) continue
+    if (quota === null) continue
+    const resetsAt = epochMilliseconds(quota['resetTime'])
+    // Cloud Code omits the numeric zero for exhausted quotas. Require a reset
+    // timestamp before interpreting an absent fraction as an exhausted pool.
+    const remainingFraction =
+      finiteNumber(quota['remainingFraction']) ??
+      (quota['remainingFraction'] === undefined && resetsAt !== undefined ? 0 : undefined)
+    if (remainingFraction === undefined) continue
     const provider = `${stringValue(model['apiProvider']) ?? ''} ${stringValue(model['modelProvider']) ?? ''}`
     const pool = /GEMINI/iu.test(provider) ? POOL_ORDER[0] : POOL_ORDER[1]
-    const resetsAt = epochMilliseconds(quota['resetTime'])
     const existing = pools.get(pool)
     if (existing && existing.remainingFraction <= remainingFraction) continue
     pools.set(pool, { remainingFraction, ...(resetsAt === undefined ? {} : { resetsAt }) })
@@ -337,18 +346,32 @@ export async function readAntigravityAccountUsage(
   if (summary.kind === 'auth' && refreshToken !== undefined && !refreshed) {
     const renewed = await refreshAccessToken(refreshToken)
     if (renewed !== undefined) {
-      summary = await cloudCodeRequest(QUOTA_SUMMARY_PATH, renewed, ANTIGRAVITY_USER_AGENT)
+      accessToken = renewed
+      summary = await cloudCodeRequest(QUOTA_SUMMARY_PATH, accessToken, ANTIGRAVITY_USER_AGENT)
     }
   }
   if (summary.kind === 'auth') return null
-  if (summary.kind === 'ok') {
-    const windows = mapAntigravityQuotaSummary(summary.value)
-    if (windows) return { rateLimits: windows }
+  const summaryWindows = summary.kind === 'ok' ? mapAntigravityQuotaSummary(summary.value) : null
+  const missingPools = POOL_ORDER.filter(
+    (pool) =>
+      !summaryWindows?.some(
+        (window) => window.label.startsWith(`${pool} `) || window.label === pool
+      )
+  )
+  if (summaryWindows && missingPools.length === 0) {
+    return { rateLimits: summaryWindows }
   }
 
-  // A build without the summary RPC: answer from the per-model snapshot instead.
+  // Google can omit exhausted pools from an otherwise valid summary. Fill only
+  // missing pools, preserving the authoritative summary buckets and windows.
   const models = await cloudCodeRequest(AVAILABLE_MODELS_PATH, accessToken, ANTIGRAVITY_USER_AGENT)
-  if (models.kind !== 'ok') return null
+  if (models.kind !== 'ok') return summaryWindows ? { rateLimits: summaryWindows } : null
   const windows = mapAntigravityModelQuotas(models.value)
+  if (summaryWindows) {
+    const supplements = windows.filter((window) =>
+      missingPools.some((pool) => window.id === `antigravity:${pool}`)
+    )
+    return { rateLimits: [...supplements, ...summaryWindows] }
+  }
   return windows.length > 0 ? { rateLimits: windows } : null
 }

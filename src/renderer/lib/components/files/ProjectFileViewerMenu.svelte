@@ -1,29 +1,30 @@
 <script lang="ts">
+  import CioBraces from '@pillardash-oss/cio-icon/CioBraces.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioListOrdered from '@pillardash-oss/cio-icon/CioListOrdered.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioRedo from '@pillardash-oss/cio-icon/CioRedo.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import {
-    Braces,
-    Check,
-    Ellipsis,
-    Info,
-    ListOrdered,
-    Maximize2,
-    Pencil,
-    Redo2,
-    RefreshCw,
-    Trash2,
-    Undo2,
-    WrapText
-  } from '@lucide/svelte'
-
   interface Props {
     diffView: boolean
     lineNumbers: boolean
     wrap: boolean
     reloadDisabled: boolean
     mutationDisabled: boolean
-    /** Show undo/redo buttons ahead of the wrap button; only the file editor
+    /** Show undo/redo buttons ahead of the menu; only the file editor
      *  (editable source view) sets this. */
     showUndoRedo?: boolean
+    /** Whether the editor behind this menu still holds history in that
+     *  direction; a button whose action would do nothing is disabled. */
+    canUndo?: boolean
+    canRedo?: boolean
     /** Open the same File info dialog the file tree's context menu shows for
      *  the active file. Disabled (greyed out) while infoDisabled is set. */
     onInfo: () => void
@@ -32,7 +33,7 @@
     infoDisabled?: boolean
     /** Format label the active file can be beautified as ("JSON"), or null when
      *  the editor cannot reformat it. Drives the menu item and, in fullscreen,
-     *  the toolbar button beside the wrap button. */
+     *  the toolbar button beside the fullscreen controls. */
     beautifyLabel?: string | null
     /** The viewer already fills the window, so it no longer offers fullscreen. */
     fullscreen?: boolean
@@ -54,6 +55,8 @@
     reloadDisabled,
     mutationDisabled,
     showUndoRedo = false,
+    canUndo = false,
+    canRedo = false,
     beautifyLabel = null,
     fullscreen = false,
     onInfo,
@@ -73,11 +76,9 @@
     'flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
 
   const btnClass =
-    'flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
+    'flex h-6 w-6 items-center justify-center text-dimmed transition-colors enabled:hover:bg-elevated enabled:hover:text-foreground disabled:opacity-30'
 
   let open = $state(false)
-
-  const wrapTitle = $derived(wrap ? 'Unwrap text' : 'Wrap text')
 </script>
 
 {#if showUndoRedo}
@@ -86,30 +87,20 @@
     class={btnClass}
     aria-label="Undo (Cmd+Z)"
     title="Undo (Cmd+Z)"
+    disabled={!canUndo}
     onclick={onUndo}
   >
-    <Undo2 size={13} />
+    <CioUndo size={13} />
   </button>
   <button
     type="button"
     class={btnClass}
     aria-label="Redo (Shift+Cmd+Z)"
     title="Redo (Shift+Cmd+Z)"
+    disabled={!canRedo}
     onclick={onRedo}
   >
-    <Redo2 size={13} />
-  </button>
-{/if}
-{#if !diffView}
-  <button
-    type="button"
-    class={btnClass}
-    aria-label={wrapTitle}
-    title={wrapTitle}
-    aria-pressed={wrap}
-    onclick={onToggleWrap}
-  >
-    <WrapText size={13} class={wrap ? 'text-primary' : ''} />
+    <CioRedo size={13} />
   </button>
 {/if}
 {#if fullscreen && beautifyLabel}
@@ -120,7 +111,7 @@
     title={`Beautify ${beautifyLabel}`}
     onclick={onBeautify}
   >
-    <Braces size={13} />
+    <CioBraces size={13} />
   </button>
 {/if}
 {#if !fullscreen}
@@ -131,7 +122,7 @@
     title="Fullscreen"
     onclick={onFullscreen}
   >
-    <Maximize2 size={13} />
+    <CioMaximize size={13} />
   </button>
 {/if}
 {#if !diffView}
@@ -145,7 +136,7 @@
         open = true
       }}
     >
-      <Ellipsis size={13} />
+      <CioEllipsis size={13} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -154,39 +145,39 @@
         sideOffset={5}
         avoidCollisions
         collisionPadding={10}
-        class="z-50 min-w-52 border border-border bg-surface p-1 shadow-lg"
+        class="z-90 min-w-52 border border-border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
-          <RefreshCw size={13} class="text-muted" />
+          <CioRefresh size={13} class="text-muted" />
           Reload file
         </DropdownMenu.Item>
         <DropdownMenu.Item class={itemClass} onSelect={onToggleLineNumbers}>
-          <ListOrdered size={13} class="text-muted" />
+          <CioListOrdered size={13} class="text-muted" />
           <span class="flex-1">{lineNumbers ? 'Hide line numbers' : 'Show line numbers'}</span>
           {#if lineNumbers}
-            <Check size={12} class="text-primary" />
+            <CioCheck size={12} class="text-primary" />
           {/if}
         </DropdownMenu.Item>
         <DropdownMenu.Item class={itemClass} onSelect={onToggleWrap}>
-          <WrapText size={13} class="text-muted" />
+          <CioWrapText size={13} class="text-muted" />
           <span class="flex-1">Wrap</span>
           {#if wrap}
-            <Check size={12} class="text-primary" />
+            <CioCheck size={12} class="text-primary" />
           {/if}
         </DropdownMenu.Item>
         {#if beautifyLabel}
           <DropdownMenu.Item class={itemClass} onSelect={onBeautify}>
-            <Braces size={13} class="text-muted" />
+            <CioBraces size={13} class="text-muted" />
             Beautify {beautifyLabel}
           </DropdownMenu.Item>
         {/if}
         <DropdownMenu.Item class={itemClass} disabled={infoDisabled} onSelect={onInfo}>
-          <Info size={13} class="text-muted" />
+          <CioTabInfo size={13} class="text-muted" />
           File info
         </DropdownMenu.Item>
         <DropdownMenu.Separator class="my-1 h-px bg-border" />
         <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
-          <Pencil size={13} class="text-muted" />
+          <CioPencil size={13} class="text-muted" />
           Rename
         </DropdownMenu.Item>
         <DropdownMenu.Item
@@ -194,7 +185,7 @@
           disabled={mutationDisabled}
           onSelect={onDelete}
         >
-          <Trash2 size={13} />
+          <CioTrash size={13} />
           Delete
         </DropdownMenu.Item>
       </DropdownMenu.Content>

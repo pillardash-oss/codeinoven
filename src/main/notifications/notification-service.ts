@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { requireString } from '../ipc/handlers/shared'
 import { NotificationInboxStore } from './notification-inbox-store'
-import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { APP_ID, APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -14,7 +14,6 @@ import { AssignmentRepo } from '../database/repositories/assignment-repo'
 import { AssistantRepo } from '../database/repositories/assistant-repo'
 import {
   ASSISTANT_SPACE_ID,
-  GLOBAL_BROWSER_PROJECT_ID,
   INBOX_PROJECT_ID,
   isAssistantRunThread,
   isAssistantSetupThread,
@@ -22,7 +21,11 @@ import {
   type Thread,
   type ThreadStatus
 } from '../../lib/types'
-import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-policy'
+import {
+  THREAD_STATUSES,
+  threadAwaitsIndependentAuditReview,
+  threadStatusPolicy
+} from '../../lib/thread-status-policy'
 import {
   NOTIFICATION_SOUND_DEDUP_MS,
   notificationSoundKind,
@@ -340,7 +343,7 @@ export class NotificationService {
 
     const notification = new Notification({
       id: `${APP_SLUG}-permission-verify`,
-      groupId: `${APP_SLUG}-system`,
+      groupId: APP_ID,
       title: `${APP_NAME} notifications`,
       body: 'You will be notified when an agent finishes, has a specification ready, needs attention, or encounters an error.',
       silent: true
@@ -617,23 +620,21 @@ export class NotificationService {
 
     const threadKey = `${thread.projectId}:${thread.id}`
     if (this.abortingThreads.has(threadKey)) return
-    // A browser tab's assistant conversation is answered beside the page it is
-    // about, so a settled turn there is never something the user has to be told
-    // about while they are looking elsewhere. That was already true of the side
-    // chat it replaced, and it stays true of the thread it is now. A thread
-    // parked on the user is the exception and always notifies: it can only be
-    // waiting because they moved on, and the conversation they left behind has
-    // no other surface to ask them from, so staying silent made an agent
-    // question indistinguishable from an idle tab.
-    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID && thread.status !== 'awaiting_approval') {
-      return
-    }
+    // A browser tab's assistant conversation is a real thread of the hidden
+    // browser project, so it notifies exactly like any other thread: a finished
+    // turn, a parked question and a failure all earn a card. The answer itself
+    // is still delivered beside the page it is about, but the card is what
+    // reaches the user when they are looking somewhere else.
     // In Achievement/Assignment mode only the Sr. Engineer (coordinator) thread
     // notifies, and only when the whole process is over or human intervention
     // is needed. Worker/auditor threads never notify, and the coordinator's
     // intermediate turn completions do not.
     if (this.isSuppressedOrchestration(thread)) return
     if (this.isPrematureCoordinatorCompletion(thread)) return
+    // A ready independent-audit report parks its thread on `spec` and is announced
+    // by the audit card, which names the auditor's finding; the generic "spec is
+    // ready" card for the same write would report one moment twice.
+    if (threadAwaitsIndependentAuditReview(thread)) return
     const previous = this.lastObservedStatus.get(threadKey)
     this.lastObservedStatus.set(threadKey, thread.status)
 
@@ -765,7 +766,8 @@ export class NotificationService {
     try {
       const notification = new Notification({
         id: compactNotificationId(options.id),
-        groupId: compactNotificationId(options.id),
+        // A unique group per notification prevents Notification Center from stacking alerts.
+        groupId: APP_ID,
         title: options.title,
         ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
         body: options.body,
@@ -938,7 +940,7 @@ export class NotificationService {
     return new Promise((resolve) => {
       const notification = new Notification({
         id: `${APP_SLUG}-notification-test`,
-        groupId: `${APP_SLUG}-system`,
+        groupId: APP_ID,
         title: `${APP_NAME} notifications`,
         body: 'You will be notified when an agent finishes, needs attention, or encounters an error.',
         silent

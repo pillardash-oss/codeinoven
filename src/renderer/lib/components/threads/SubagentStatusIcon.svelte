@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CheckCircle2, CircleSlash2, Clock, XCircle } from '@lucide/svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
   import type { AgentToolStatus } from '$shared/types'
   import { SUBAGENT_STATUS_TONE, subagentStatusLabel } from '$lib/subagent-presentation'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -42,7 +45,7 @@
     <StatusBadge tone="working" size={workingDotSize} decorative />
   </span>
 {:else if status === 'completed'}
-  <CheckCircle2
+  <CioCheckCircle
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.completed}"
     role="img"
@@ -50,7 +53,7 @@
     title={label}
   />
 {:else if status === 'error'}
-  <XCircle
+  <CioCrossCircle
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.error}"
     role="img"
@@ -58,7 +61,7 @@
     title={label}
   />
 {:else if status === 'aborted'}
-  <CircleSlash2
+  <CioBan
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.aborted}"
     role="img"
@@ -66,7 +69,7 @@
     title={label}
   />
 {:else}
-  <Clock
+  <CioClock
     {size}
     class="shrink-0 {SUBAGENT_STATUS_TONE.pending}"
     role="img"

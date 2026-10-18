@@ -1,4 +1,13 @@
 <script lang="ts">
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioPackagePlus from '@pillardash-oss/cio-icon/CioPackagePlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import {
     cachedAgentPluginIcon,
     cachedAgentPluginMarketplaces,
@@ -15,17 +24,6 @@
   import { invoke } from '$lib/ipc.svelte'
   import { pluginInitials } from '$lib/plugin-identity'
   import type { AgentPluginMarketEntry, AgentPluginMarketplace } from '$shared/types'
-  import {
-    Bookmark,
-    ChevronDown,
-    Download,
-    Loader2,
-    PackagePlus,
-    RefreshCw,
-    Search,
-    Trash2,
-    X
-  } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { onMount } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
@@ -281,7 +279,7 @@
             >
               Sources
               <span class="tabular-nums text-dimmed">{marketplaces.length}</span>
-              <ChevronDown size={13} />
+              <CioChevronDown size={13} />
             </Popover.Trigger>
             <Popover.Portal>
               <Popover.Content
@@ -314,7 +312,7 @@
                           title={`Remove ${marketplace.name} source`}
                           aria-label={`Remove ${marketplace.name} source`}
                         >
-                          <Trash2 size={13} />
+                          <CioTrash size={13} />
                         </button>
                       </div>
                     {/each}
@@ -345,10 +343,10 @@
                     type="submit"
                     disabled={busyId === 'add-source' || !marketUrl.trim()}
                   >
-                    {#if busyId === 'add-source'}<Loader2
+                    {#if busyId === 'add-source'}<CioSpinner
                         size={12}
                         class="animate-spin"
-                      />{:else}<PackagePlus size={12} />{/if}
+                      />{:else}<CioPackagePlus size={12} />{/if}
                     Add source
                   </button>
                 </form>
@@ -363,9 +361,10 @@
             onclick={() => void refreshSources()}
             disabled={busyId === 'refresh'}
           >
-            {#if busyId === 'refresh'}<Loader2 size={13} class="animate-spin" />{:else}<RefreshCw
+            {#if busyId === 'refresh'}<CioSpinner
                 size={13}
-              />{/if}
+                class="animate-spin"
+              />{:else}<CioRefresh size={13} />{/if}
             Refresh
           </button>
         </div>
@@ -374,7 +373,7 @@
       <form class="mt-4 flex gap-2" onsubmit={searchPlugins}>
         <label class="relative min-w-0 flex-1">
           <span class="sr-only">Search plugins</span>
-          <Search
+          <CioSearch
             size={15}
             class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
           />
@@ -393,7 +392,7 @@
               aria-label="Clear search"
               onclick={() => void clearSearch()}
             >
-              <X size={13} />
+              <CioClose size={13} />
             </button>
           {/if}
         </label>
@@ -402,8 +401,8 @@
           type="submit"
           disabled={loading || query.trim().length < 2}
         >
-          {#if loading && searchQuery}<Loader2 size={13} class="animate-spin" />{/if}
-          Search
+          {#if loading && searchQuery}<CioSpinner size={13} class="animate-spin" />{/if}
+          CioSearch
         </button>
       </form>
 
@@ -441,12 +440,12 @@
     <div class="min-h-0 flex-1 overflow-y-auto pb-24">
       {#if loading}
         <div class="mt-2 border border-dashed p-10 text-center">
-          <Loader2 size={20} class="mx-auto animate-spin text-dimmed" />
+          <CioSpinner size={20} class="mx-auto animate-spin text-dimmed" />
           <p class="mt-2 text-xs text-dimmed">Loading plugins…</p>
         </div>
       {:else if entries.length === 0}
         <div class="mt-2 border border-dashed p-10 text-center">
-          <Search size={20} class="mx-auto text-dimmed" />
+          <CioSearch size={20} class="mx-auto text-dimmed" />
           <p class="mt-2 text-sm font-medium">
             {view === 'bookmarks'
               ? 'No bookmarked plugins'
@@ -509,7 +508,7 @@
                   : `Bookmark ${entry.displayName}`}
                 aria-pressed={entry.bookmarked}
               >
-                <Bookmark size={15} fill={entry.bookmarked ? 'currentColor' : 'none'} />
+                <CioBookmark size={15} fill={entry.bookmarked ? 'currentColor' : 'none'} />
               </button>
               {#if entry.installed}
                 <button
@@ -532,10 +531,10 @@
                     : (entry.unsupportedReason ?? 'This plugin cannot be installed')}
                   aria-label={`Install ${entry.displayName}`}
                 >
-                  {#if busyId === entry.id}<Loader2
+                  {#if busyId === entry.id}<CioSpinner
                       size={13}
                       class="animate-spin"
-                    />{:else}<Download size={13} />{/if}
+                    />{:else}<CioDownload size={13} />{/if}
                   Install
                 </button>
               {/if}
@@ -550,7 +549,7 @@
               onclick={() => void loadMore()}
               disabled={loadingMore}
             >
-              {#if loadingMore}<Loader2 size={14} class="animate-spin" />{/if} Load more plugins
+              {#if loadingMore}<CioSpinner size={14} class="animate-spin" />{/if} Load more plugins
             </button>
           </div>
         {/if}

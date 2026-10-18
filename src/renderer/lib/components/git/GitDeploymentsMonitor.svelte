@@ -1,15 +1,13 @@
 <script lang="ts">
-  import {
-    CircleCheck,
-    CircleDot,
-    CircleX,
-    Clock3,
-    GitBranch,
-    Loader2,
-    Minus,
-    PackageCheck,
-    Rocket
-  } from '@lucide/svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+  import CioMinus from '@pillardash-oss/cio-icon/CioMinus.svelte'
+  import CioPackageCheck from '@pillardash-oss/cio-icon/CioPackageCheck.svelte'
+  import CioRocket from '@pillardash-oss/cio-icon/CioRocket.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { onMount } from 'svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -169,7 +167,7 @@
 <div class="flex h-full min-h-0 flex-col">
   {#if !githubConnected}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <Rocket size={22} class="text-dimmed" />
+      <CioRocket size={22} class="text-dimmed" />
       <p class="max-w-[34ch] text-[0.6875rem] leading-relaxed text-muted">
         Sign in to GitHub to monitor workflow runs and deployments.
       </p>
@@ -183,7 +181,7 @@
     </div>
   {:else if !identity}
     <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-      <Rocket size={20} class="text-dimmed" />
+      <CioRocket size={20} class="text-dimmed" />
       <p class="max-w-[36ch] text-[0.6875rem] leading-relaxed text-muted">
         Add a GitHub origin remote to monitor deployments for this project.
       </p>
@@ -205,12 +203,12 @@
       />
     {:else if loading && !overview}
       <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Loading deployment activity
       </div>
     {:else if error && !overview}
       <div class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-        <CircleX size={20} class="text-danger" />
+        <CioCrossCircle size={20} class="text-danger" />
         <div>
           <p class="text-[0.6875rem] font-medium text-foreground">
             Deployment activity unavailable
@@ -246,7 +244,7 @@
       <div class="min-h-0 flex-1 overflow-y-auto">
         <section class="border-b border-border">
           <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-            <CircleDot size={11} class="text-dimmed" />
+            <CioDot size={11} class="text-dimmed" />
             <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Workflow runs
             </h3>
@@ -274,13 +272,13 @@
                   onclick={() => (selectedRun = run)}
                 >
                   {#if run.status !== 'completed'}
-                    <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
+                    <CioClock size={13} class="mt-0.5 shrink-0 text-warning" />
                   {:else if run.conclusion === 'success'}
-                    <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
+                    <CioCheckCircle size={13} class="mt-0.5 shrink-0 text-success" />
                   {:else if run.conclusion === 'skipped'}
-                    <Minus size={13} class="mt-0.5 shrink-0 text-dimmed" />
+                    <CioMinus size={13} class="mt-0.5 shrink-0 text-dimmed" />
                   {:else}
-                    <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
+                    <CioCrossCircle size={13} class="mt-0.5 shrink-0 text-danger" />
                   {/if}
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
@@ -300,7 +298,7 @@
                       <span class="truncate">{run.name} #{run.runNumber}</span>
                       {#if run.branch}
                         <span>·</span>
-                        <GitBranch size={9} class="shrink-0" />
+                        <CioTabGit size={9} class="shrink-0" />
                         <span class="max-w-28 truncate font-mono">{run.branch}</span>
                       {/if}
                       <span>·</span>
@@ -315,7 +313,7 @@
 
         <section>
           <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-            <PackageCheck size={11} class="text-dimmed" />
+            <CioPackageCheck size={11} class="text-dimmed" />
             <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Environments
             </h3>
@@ -337,7 +335,7 @@
                   aria-label="View {deployment.environment} deployment"
                   onclick={() => (selectedDeployment = deployment)}
                 >
-                  <Rocket size={13} class="mt-0.5 shrink-0 text-muted" />
+                  <CioRocket size={13} class="mt-0.5 shrink-0 text-muted" />
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
                       <p class="truncate text-[0.6875rem] font-medium text-foreground">

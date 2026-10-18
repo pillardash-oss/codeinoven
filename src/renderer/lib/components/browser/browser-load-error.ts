@@ -1,16 +1,14 @@
+import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+import CioFileWarning from '@pillardash-oss/cio-icon/CioFileWarning.svelte'
+import CioPlugZap from '@pillardash-oss/cio-icon/CioPlugZap.svelte'
+import CioServerCrash from '@pillardash-oss/cio-icon/CioServerCrash.svelte'
+import CioShieldAlert from '@pillardash-oss/cio-icon/CioShieldAlert.svelte'
+import CioUnplug from '@pillardash-oss/cio-icon/CioUnplug.svelte'
+import CioWifiOff from '@pillardash-oss/cio-icon/CioWifiOff.svelte'
 import type { Component } from 'svelte'
-import {
-  Ban,
-  CircleAlert,
-  Clock,
-  FileWarning,
-  Globe,
-  PlugZap,
-  ServerCrash,
-  ShieldAlert,
-  Unplug,
-  WifiOff
-} from '@lucide/svelte'
 import type { BrowserLoadError } from '$shared/ipc-contract'
 
 /**
@@ -49,7 +47,7 @@ export function browserLoadErrorHost(url: string): string {
 export function browserLoadErrorCopy(error: BrowserLoadError, host: string): BrowserLoadErrorCopy {
   if (error.kind === 'crashed') {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'This page stopped',
       description: `${host ? `${host} stopped` : 'This page stopped'} running unexpectedly. Reloading usually brings it back.`
     }
@@ -79,76 +77,76 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
   const label = statusText ? `${code} ${statusText}` : `${code}`
   if (code === 400) {
     return {
-      icon: FileWarning,
+      icon: CioFileWarning,
       title: 'Bad request',
       description: `${host ? `${host} rejected` : 'The server rejected'} the browser's request (${label}). Reload to try again.`
     }
   }
   if (code === 401) {
     return {
-      icon: ShieldAlert,
+      icon: CioShieldAlert,
       title: 'Sign in required',
       description: `Sign in to reach this page${host ? ` on ${host}` : ''} (${label}).`
     }
   }
   if (code === 403) {
     return {
-      icon: ShieldAlert,
+      icon: CioShieldAlert,
       title: 'Access denied',
       description: `Access to this page${host ? ` on ${host}` : ''} was refused (${label}).`
     }
   }
   if (code === 404 || code === 410) {
     return {
-      icon: FileWarning,
+      icon: CioFileWarning,
       title: 'Page not found',
       description: `There is no page at this address${host ? ` on ${host}` : ''} (${label}). Check the address for typos.`
     }
   }
   if (code === 408 || code === 504) {
     return {
-      icon: Clock,
+      icon: CioClock,
       title: 'The server timed out',
       description: `${host ? `The server at ${host} did` : 'The server did'} not answer in time (${label}). Try again in a moment.`
     }
   }
   if (code === 429) {
     return {
-      icon: Clock,
+      icon: CioClock,
       title: 'Too many requests',
       description: `${host ? `${host} is` : 'The server is'} rate limiting this address (${label}). Wait a moment, then reload.`
     }
   }
   if (code === 502) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'Bad gateway',
       description: `The server reached a gateway that answered wrongly${host ? ` for ${host}` : ''} (${label}). This is often temporary.`
     }
   }
   if (code === 503) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'Service unavailable',
       description: `${host ? `${host} is` : 'The server is'} temporarily unavailable (${label}). Reload in a moment.`
     }
   }
   if (code === 501) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'Not implemented',
       description: `${host ? `${host} does` : 'The server does'} not support this request (${label}).`
     }
   }
   if (code >= 500) {
     return {
-      icon: ServerCrash,
+      icon: CioServerCrash,
       title: 'The server errored',
       description: `${host ? `${host} could` : 'The server could'} not serve this page (${label}). Reloading may help.`
     }
   }
   return {
-    icon: FileWarning,
+    icon: CioFileWarning,
     title: 'The page could not load',
     description: `${host ? `${host} answered` : 'The server answered'} with an error (${label}).`
   }
@@ -157,69 +155,69 @@ function httpErrorCopy(code: number, statusText: string, host: string): BrowserL
 function networkErrorCopy(code: number, host: string): BrowserLoadErrorCopy {
   if (code === -106 || code === -21) {
     return {
-      icon: WifiOff,
+      icon: CioWifiOff,
       title: 'You are offline',
       description: 'This device has no network connection. Reconnect, then reload.'
     }
   }
   if (code === -105 || code === -137) {
     return {
-      icon: Globe,
+      icon: CioBrowser,
       title: 'Site not found',
       description: `The server could not be found${host ? ` for ${host}` : ''}. Check the address for typos.`
     }
   }
   if (code === -102) {
     return {
-      icon: PlugZap,
+      icon: CioPlugZap,
       title: 'Connection refused',
       description: `The connection was refused${host ? ` by ${host}` : ''}. The server there may not be running.`
     }
   }
   if (code === -101 || code === -117) {
     return {
-      icon: Unplug,
+      icon: CioUnplug,
       title: 'Connection reset',
       description: `The connection${host ? ` to ${host}` : ''} closed before the page arrived. Reload to try again.`
     }
   }
   if (code === -104 || code === -109) {
     return {
-      icon: Unplug,
+      icon: CioUnplug,
       title: 'Server unreachable',
       description: `The server could not be reached${host ? ` at ${host}` : ''} from this network.`
     }
   }
   if (code === -7 || code === -118) {
     return {
-      icon: Clock,
+      icon: CioClock,
       title: 'The connection timed out',
       description: `The connection${host ? ` to ${host}` : ''} timed out. Reload to try again.`
     }
   }
   if (code >= CERTIFICATE_ERROR_START && code <= CERTIFICATE_ERROR_END) {
     return {
-      icon: ShieldAlert,
+      icon: CioShieldAlert,
       title: 'Connection not secure',
       description: `A secure connection could not be established${host ? ` with ${host}` : ''}.`
     }
   }
   if (code === -324) {
     return {
-      icon: FileWarning,
+      icon: CioFileWarning,
       title: 'The server sent nothing',
       description: `The server${host ? ` at ${host}` : ''} closed the connection without sending a page. Reload to try again.`
     }
   }
   if (code === -20 || code === -27) {
     return {
-      icon: Ban,
+      icon: CioBan,
       title: 'Request blocked',
       description: `The request was blocked${host ? ` for ${host}` : ''}.`
     }
   }
   return {
-    icon: CircleAlert,
+    icon: CioAlertCircle,
     title: 'This page could not load',
     description: `The page could not be reached${host ? ` at ${host}` : ''}. Reload to try again.`
   }

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Eye, EyeOff } from '@lucide/svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioEyeOff from '@pillardash-oss/cio-icon/CioEyeOff.svelte'
   let {
     revealed,
     title,
@@ -22,5 +23,5 @@
   {disabled}
   {onclick}
 >
-  {#if revealed}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+  {#if revealed}<CioEyeOff size={14} />{:else}<CioEye size={14} />{/if}
 </button>

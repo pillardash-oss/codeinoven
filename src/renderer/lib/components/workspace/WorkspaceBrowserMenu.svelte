@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Cookie, Download } from '@lucide/svelte'
+  import CioCookie from '@pillardash-oss/cio-icon/CioCookie.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
@@ -31,7 +32,7 @@
     title="Manage downloaded files"
     onclick={() => browser.openDownloads()}
   >
-    <Download size={14} />
+    <CioDownload size={14} />
     <span>Manage downloads</span>
     {#if browser.unfinishedDownloadCount > 0}
       <span
@@ -48,7 +49,7 @@
     title="Clear browser cookies and site data"
     onclick={() => browser.requestDataClear()}
   >
-    <Cookie size={14} />
+    <CioCookie size={14} />
     <span>Clear cookies and site data</span>
   </button>
 </div>

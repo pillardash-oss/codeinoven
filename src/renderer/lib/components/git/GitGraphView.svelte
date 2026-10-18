@@ -1,10 +1,8 @@
 <script lang="ts">
-  import {
-    GitCommit as GitCommitIcon,
-    ArrowDownToLine,
-    ArrowUpFromLine,
-    Loader2
-  } from '@lucide/svelte'
+  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'
@@ -128,9 +126,9 @@
       title={`${direction} ${ref}${at === null ? '' : ` on ${absoluteTime(at)}`}`}
     >
       {#if direction === 'Pushed to'}
-        <ArrowUpFromLine size={10} class="shrink-0" aria-hidden="true" />
+        <CioUpload size={10} class="shrink-0" aria-hidden="true" />
       {:else}
-        <ArrowDownToLine size={10} class="shrink-0" aria-hidden="true" />
+        <CioDownload size={10} class="shrink-0" aria-hidden="true" />
       {/if}
       {direction}
       {ref}{at === null ? '' : ` · ${formatCompactAge(at)}`}
@@ -141,12 +139,12 @@
 
 {#if loading}
   <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-    <Loader2 size={14} class="animate-spin" />
+    <CioSpinner size={14} class="animate-spin" />
     Loading history
   </div>
 {:else if rows.length === 0}
   <div class="flex flex-col items-center justify-center py-12 text-center">
-    <GitCommitIcon size={22} class="mx-auto mb-2 text-dimmed" />
+    <CioCommit size={22} class="mx-auto mb-2 text-dimmed" />
     <p class="text-xs font-medium text-muted">No commits yet</p>
     <p class="mt-1 text-[0.625rem] text-dimmed">Make your first commit to see history.</p>
   </div>
@@ -285,7 +283,7 @@
 
   {#if loadingMore}
     <div class="flex items-center justify-center gap-2 py-4 text-[0.625rem] text-dimmed">
-      <Loader2 size={12} class="animate-spin" />
+      <CioSpinner size={12} class="animate-spin" />
       Loading older commits
     </div>
   {:else if !hasMore}

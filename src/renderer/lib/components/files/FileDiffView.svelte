@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
   import DiffRows from './DiffRows.svelte'
   import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
@@ -117,9 +118,9 @@
       </button>
     {/if}
     {#if isFolded}
-      <ChevronRight size={12} class="shrink-0 text-dimmed" />
+      <CioForward size={12} class="shrink-0 text-dimmed" />
     {:else}
-      <ChevronDown size={12} class="shrink-0 text-dimmed" />
+      <CioChevronDown size={12} class="shrink-0 text-dimmed" />
     {/if}
   </div>
 {/snippet}

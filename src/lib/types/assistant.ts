@@ -212,6 +212,18 @@ export const ASSISTANT_SETUP_TITLE = 'Getting started'
  */
 export const ASSISTANT_PLACEHOLDER_NAME = 'New assistant'
 
+/**
+ * Ceiling for an assistant's name, shared by the store, the IPC validator and the
+ * capability that renames an assistant mid-conversation, so the three cannot drift.
+ */
+export const ASSISTANT_NAME_LIMIT = 200
+
+/** Ceiling for the personality a user describes in the setup conversation. */
+export const ASSISTANT_PERSONALITY_LIMIT = 4_000
+
+/** Ceiling for the name a user gives their assistant's clock. */
+export const ASSISTANT_SCHEDULE_NAME_LIMIT = 120
+
 /** Whether an assistant is still wearing the name it was created with. */
 export function assistantIsUnnamed(assistant: Pick<Assistant, 'name'>): boolean {
   return assistant.name.trim() === ASSISTANT_PLACEHOLDER_NAME

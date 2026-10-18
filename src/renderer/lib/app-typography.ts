@@ -10,21 +10,13 @@
  * typography as the app it belongs to.
  */
 
-/** Font stacks for the family ids offered in Appearance settings. Keep in
- *  sync with FONT_FAMILIES in src/main/ipc/ipc-handlers.ts. */
-export const FONT_STACKS: Record<string, string> = {
-  'jetbrains-mono':
-    "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace",
-  satoshi: "'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  system: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-  'sf-mono': "'SF Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace",
-  menlo: 'Menlo, ui-monospace, monospace',
-  monaco: 'Monaco, ui-monospace, monospace',
-  'fira-code': "'Fira Code', 'JetBrains Mono Variable', ui-monospace, monospace"
-}
+import { DEFAULT_CONTRAST_LEVEL, type ContrastLevel } from '$shared/types'
 
-/** Fallbacks for a document that is drawn before any config has reached it. */
-export const DEFAULT_APP_FONT_FAMILY = 'jetbrains-mono'
+import { DEFAULT_APP_FONT_FAMILY, FONT_STACKS, normalizeAppFontFamily } from '$shared/app-fonts'
+import { syncTerminalFonts } from './terminal/host-registry'
+export { DEFAULT_APP_FONT_FAMILY, FONT_STACKS } from '$shared/app-fonts'
+
+/** Fallbacks for documents drawn before config arrives. */
 export const DEFAULT_APP_FONT_SIZE = 15
 export const DEFAULT_APP_FONT_WEIGHT = 200
 
@@ -41,11 +33,42 @@ export interface AppTypography {
  * from it), and the base weight.
  */
 export function applyAppTypography(root: HTMLElement, typography: AppTypography): void {
-  const family = typography.fontFamily ?? DEFAULT_APP_FONT_FAMILY
+  const family = normalizeAppFontFamily(typography.fontFamily)
   root.style.setProperty('--font-app', FONT_STACKS[family] ?? FONT_STACKS[DEFAULT_APP_FONT_FAMILY])
+  const mono = family === 'system' ? FONT_STACKS[DEFAULT_APP_FONT_FAMILY] : FONT_STACKS[family]
+  root.style.setProperty('--font-mono', mono)
+  syncTerminalFonts(mono)
   root.style.fontSize = `${typography.appFontSize ?? DEFAULT_APP_FONT_SIZE}px`
   root.style.setProperty(
     '--font-weight-base',
     String(typography.fontWeight ?? DEFAULT_APP_FONT_WEIGHT)
   )
+}
+
+/**
+ * Apply the reader's chosen contrast level to a document root.
+ *
+ * The level is carried as a `data-contrast` attribute rather than a class: it is
+ * one of three named states, not a toggle, and every level including `normal`
+ * gets a value so a stylesheet can select on it. `normal` is the shipped palette,
+ * which the attribute spells out explicitly instead of leaving it to the absence
+ * of an attribute, so a document that was never told a level still answers
+ * `data-contrast="normal"` when asked.
+ *
+ * The stylesheet keys the stronger palettes off this attribute next to the
+ * `.dark` class, so a theme switch and a contrast switch compose without either
+ * one knowing about the other.
+ */
+export function applyContrastLevel(root: HTMLElement, level: ContrastLevel | undefined): void {
+  root.dataset.contrast = level ?? DEFAULT_CONTRAST_LEVEL
+}
+
+/** Load the selected face before a canvas terminal measures and caches its glyphs. */
+export async function loadTerminalFontFamily(): Promise<string> {
+  const currentStack = (): string =>
+    getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim() ||
+    FONT_STACKS[DEFAULT_APP_FONT_FAMILY]
+  const stack = currentStack()
+  await document.fonts.load(`13px ${stack.split(',')[0]}`).catch(() => [])
+  return currentStack() === stack ? stack : loadTerminalFontFamily()
 }

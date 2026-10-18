@@ -9,20 +9,17 @@
 </script>
 
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioThreads from '@pillardash-oss/cio-icon/CioThreads.svelte'
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
   import { copyText } from '$lib/copy-text'
-  import {
-    ChevronDown,
-    ChevronRight,
-    Copy,
-    Check,
-    MessageSquare,
-    SquareTerminal,
-    Sparkles,
-    List,
-    AlertTriangle
-  } from '@lucide/svelte'
-
   interface Props {
     ex: DebugExchange
     open?: boolean
@@ -36,12 +33,12 @@
 
   const Icon = $derived(
     ex.channel === 'agent:sendPrompt'
-      ? MessageSquare
+      ? CioMessage
       : ex.channel === 'agent:generateSpec'
-        ? Sparkles
+        ? CioSparkles
         : ex.channel === 'agent:runCommand'
-          ? SquareTerminal
-          : MessageSquare
+          ? CioTerminal
+          : CioMessage
   )
 
   async function copyExchange(): Promise<void> {
@@ -162,9 +159,9 @@
     </span>
     <span class="shrink-0 text-dimmed">
       {#if expanded}
-        <ChevronDown size={12} />
+        <CioChevronDown size={12} />
       {:else}
-        <ChevronRight size={12} />
+        <CioForward size={12} />
       {/if}
     </span>
   </button>
@@ -176,7 +173,7 @@
         <span
           class="flex items-center gap-1 bg-danger/10 px-1.5 py-0.5 font-mono text-[0.5625rem] text-danger"
         >
-          <AlertTriangle size={9} />
+          <CioAttention size={9} />
           {ex.error}
         </span>
       {/if}
@@ -200,7 +197,7 @@
         <span
           class="flex items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
         >
-          <List size={9} />
+          <CioThreads size={9} />
           {eventSummary(ex.events)}
         </span>
       {/if}
@@ -284,10 +281,10 @@
           onclick={() => void copyExchange()}
         >
           {#if copiedId === ex.id}
-            <Check size={9} class="text-success" />
+            <CioCheck size={9} class="text-success" />
             <span class="text-success">Copied</span>
           {:else}
-            <Copy size={9} />
+            <CioCopy size={9} />
             Copy JSON
           {/if}
         </button>

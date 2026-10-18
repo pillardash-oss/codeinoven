@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Info, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import type { Component, Snippet } from 'svelte'
   import { fly } from 'svelte/transition'
   import { rowArrive } from './card-motion'
@@ -31,7 +32,7 @@
     class: className = ''
   }: Props = $props()
 
-  const Mark = $derived(icon ?? (tone === 'default' ? Info : TriangleAlert))
+  const Mark = $derived(icon ?? (tone === 'default' ? CioTabInfo : CioAttention))
 
   const toneClass = $derived(
     tone === 'warn' ? 'text-warning' : tone === 'danger' ? 'text-danger' : 'text-muted'

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot } from '@lucide/svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
   import { onDestroy, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -416,7 +416,7 @@
   function subagentSheetItems(): MenuItem[] {
     return subagentParts.map((part) => ({
       label: `${subagentTaskLabel(part.activity)} - ${subagentStatusLabel(part.activity.status)}`,
-      icon: Bot,
+      icon: CioSubagent,
       onClick: () => onOpenSubagent?.(part)
     }))
   }

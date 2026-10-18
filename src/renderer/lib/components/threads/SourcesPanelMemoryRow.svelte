@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Brain } from '@lucide/svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
   import type { MemoryEntry } from '$shared/types'
   import { memoryScopeLabel } from './sources-panel-helpers'
 
@@ -12,7 +12,7 @@
 
 <article class="border-b border-border px-4 py-3">
   <div class="flex items-center gap-2">
-    <Brain size={13} class="shrink-0 text-primary" />
+    <CioMemory size={13} class="shrink-0 text-primary" />
     <p class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground" title={entry.label}>
       {entry.label}
     </p>

@@ -1,17 +1,15 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioFileAudio from '@pillardash-oss/cio-icon/CioFileAudio.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
+  import CioPause from '@pillardash-oss/cio-icon/CioPause.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSquare from '@pillardash-oss/cio-icon/CioSquare.svelte'
   import { onDestroy } from 'svelte'
-  import {
-    Copy,
-    Check,
-    FileAudio,
-    LoaderCircle,
-    Mic,
-    Pause,
-    Play,
-    Square,
-    WandSparkles,
-    X
-  } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { SpeechSettings } from '../../../../lib/speech/types'
   import type { SpeechModelArtifact, SpeechRuntime } from '../../../../lib/speech/types'
@@ -417,8 +415,7 @@
       type="button"
       role="tab"
       aria-selected={playgroundSubTab === tab.id}
-      class="flex-1 px-3 py-2 text-sm font-medium transition-colors {playgroundSubTab ===
-      tab.id
+      class="flex-1 px-3 py-2 text-sm font-medium transition-colors {playgroundSubTab === tab.id
         ? 'bg-elevated text-foreground'
         : 'text-muted hover:text-foreground'}"
       onclick={() => (playgroundSubTab = tab.id)}
@@ -433,9 +430,11 @@
   <section id="settings-block-sound-playground" class="border bg-surface p-4">
     <div class="mb-3 flex items-start justify-between gap-3 border-b border-border pb-2">
       <div>
-        <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Transcribe</h2>
+        <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+          Transcribe
+        </h2>
         <p class="mt-1 text-[0.6875rem] text-dimmed">
-          Record your voice or import an audio file and transcribe it. Nothing is saved   the audio
+          Record your voice or import an audio file and transcribe it. Nothing is saved the audio
           and transcript live only while this page is open.
         </p>
       </div>
@@ -447,7 +446,7 @@
           aria-label="Clear audio and transcript"
           onclick={resetAll}
         >
-          <X size={12} aria-hidden="true" /> Clear
+          <CioClose size={12} aria-hidden="true" /> Clear
         </button>
       {/if}
     </div>
@@ -465,7 +464,7 @@
           aria-label="Stop recording"
           onclick={() => void stopRecording()}
         >
-          <Square size={14} aria-hidden="true" /> Stop · {formatClock(recordedMs)}
+          <CioSquare size={14} aria-hidden="true" /> Stop · {formatClock(recordedMs)}
         </button>
       {:else}
         <button
@@ -475,7 +474,7 @@
           aria-label="Record your voice"
           onclick={() => void startRecording()}
         >
-          <Mic size={14} aria-hidden="true" /> Record
+          <CioMic size={14} aria-hidden="true" /> Record
         </button>
         <button
           type="button"
@@ -484,7 +483,7 @@
           aria-label="Pick an audio file"
           onclick={() => void pickAudioFile()}
         >
-          <FileAudio size={14} aria-hidden="true" /> Pick audio file
+          <CioFileAudio size={14} aria-hidden="true" /> Pick audio file
         </button>
       {/if}
     </div>
@@ -499,9 +498,9 @@
           onclick={() => void togglePlayback()}
         >
           {#if isPlaying}
-            <Pause size={14} aria-hidden="true" />
+            <CioPause size={14} aria-hidden="true" />
           {:else}
-            <Play size={14} aria-hidden="true" />
+            <CioPlay size={14} aria-hidden="true" />
           {/if}
         </button>
         <div class="min-w-0 flex-1">
@@ -527,9 +526,9 @@
           onclick={() => void transcribe(false)}
         >
           {#if transcribing === 'plain'}
-            <LoaderCircle size={13} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
           {:else}
-            <FileAudio size={13} aria-hidden="true" />
+            <CioFileAudio size={13} aria-hidden="true" />
           {/if}
           Transcribe
         </button>
@@ -544,15 +543,15 @@
           onclick={() => void transcribe(true)}
         >
           {#if transcribing === 'cleanup'}
-            <LoaderCircle size={13} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
           {:else}
-            <WandSparkles size={13} aria-hidden="true" />
+            <CioSparkles size={13} aria-hidden="true" />
           {/if}
           Transcribe &amp; cleanup
         </button>
         {#if !cleanupReady}
           <span class="text-[0.6875rem] text-dimmed">
-            Cleanup needs a local cleanup model   download one in the Models tab.
+            Cleanup needs a local cleanup model download one in the Models tab.
           </span>
         {/if}
       </div>
@@ -565,7 +564,9 @@
     {#if transcript || transcribing}
       <div class="mt-4">
         <div class="mb-1.5 flex items-center justify-between gap-3">
-          <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Transcript</p>
+          <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+            Transcript
+          </p>
           <div class="flex items-center gap-2">
             <span class="text-[0.625rem] text-dimmed tabular-nums">{transcript.length} chars</span>
             <button
@@ -577,18 +578,16 @@
               onclick={() => void copyTranscript()}
             >
               {#if copied}
-                <Check size={11} aria-hidden="true" /> Copied
+                <CioCheck size={11} aria-hidden="true" /> Copied
               {:else}
-                <Copy size={11} aria-hidden="true" /> Copy
+                <CioCopy size={11} aria-hidden="true" /> Copy
               {/if}
             </button>
           </div>
         </div>
         {#if transcribing}
-          <p
-            class="flex items-center gap-2 border bg-elevated/40 px-3 py-3 text-xs text-muted"
-          >
-            <LoaderCircle size={13} class="animate-spin" aria-hidden="true" />
+          <p class="flex items-center gap-2 border bg-elevated/40 px-3 py-3 text-xs text-muted">
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Transcribing{transcribing === 'cleanup' ? ' and cleaning up' : ''}…
           </p>
         {:else}
@@ -611,8 +610,8 @@
         <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Read out</h2>
         <p class="mt-1 text-[0.6875rem] text-dimmed">
           Paste text or import a text, PDF, or Office document, then have the local text-to-speech
-          model read it aloud. Nothing is saved   blocks and playback state are cleared when you
-          leave the page.
+          model read it aloud. Nothing is saved blocks and playback state are cleared when you leave
+          the page.
         </p>
       </div>
       {#if readingBlocks.length > 0}
@@ -623,7 +622,7 @@
           aria-label="Remove all text blocks"
           onclick={clearReadingBlocks}
         >
-          <X size={12} aria-hidden="true" /> Clear all
+          <CioClose size={12} aria-hidden="true" /> Clear all
         </button>
       {/if}
     </div>
@@ -651,7 +650,7 @@
         disabled={!readingDraft.trim()}
         onclick={addReadingDraft}
       >
-        <FileAudio size={14} aria-hidden="true" /> Add text
+        <CioFileAudio size={14} aria-hidden="true" /> Add text
       </button>
       <button
         type="button"
@@ -662,9 +661,9 @@
         onclick={() => void importReadingFile()}
       >
         {#if readingImporting}
-          <LoaderCircle size={14} class="animate-spin" aria-hidden="true" />
+          <CioSpinner size={14} class="animate-spin" aria-hidden="true" />
         {:else}
-          <FileAudio size={14} aria-hidden="true" />
+          <CioFileAudio size={14} aria-hidden="true" />
         {/if}
         Import file
       </button>
@@ -690,7 +689,7 @@
                 disabled={isBeingRead}
                 onclick={() => removeReadingBlock(block.id)}
               >
-                <X size={12} aria-hidden="true" />
+                <CioClose size={12} aria-hidden="true" />
               </button>
             </div>
             {#if isBeingRead && speechController.activeSegments && activeOverlayLive}
@@ -706,7 +705,7 @@
               <p
                 class="mt-2 flex items-center gap-2 border border-dashed border-info/40 bg-info/5 px-2.5 py-2 text-xs text-muted"
               >
-                <LoaderCircle size={12} class="animate-spin" aria-hidden="true" /> Preparing…
+                <CioSpinner size={12} class="animate-spin" aria-hidden="true" /> Preparing…
               </p>
             {:else}
               <p class="mt-2 text-xs leading-relaxed text-muted">{block.text}</p>
@@ -721,7 +720,7 @@
 
     {#if hasInstalledTts === false && readingBlocks.length > 0}
       <p class="mt-2 text-[0.6875rem] text-dimmed">
-        Read-aloud needs a text-to-speech model   download one in the Models tab.
+        Read-aloud needs a text-to-speech model download one in the Models tab.
       </p>
     {/if}
   </section>

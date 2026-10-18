@@ -29,8 +29,6 @@
     dragHandleTitle?: string
     closeLabel?: string
     removeTitle?: string
-    /** Keep Remove available while the comment is still empty. */
-    allowEmptyRemove?: boolean
   }
 
   let {
@@ -46,8 +44,7 @@
     title = 'Comment on selection',
     dragHandleTitle = 'Move selection comment',
     closeLabel = 'Close selection comment',
-    removeTitle,
-    allowEmptyRemove = false
+    removeTitle
   }: Props = $props()
 
   const POPOVER_WIDTH = 400
@@ -79,6 +76,5 @@
     {onRemove}
     {onClose}
     {removeTitle}
-    {allowEmptyRemove}
   />
 </div>

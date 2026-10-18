@@ -1,20 +1,9 @@
 import { readdir, stat } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import type { DesignEntry } from '../../lib/ipc/design'
 import { SERVED_FOLDER_ENTRY_FILE } from '../preview/served-folder'
 
-/**
- * Reading a project's authored work from disk.
- *
- * `.cio/designs/<name>/` and `.cio/videos/<name>/` are the documented layouts, so
- * the folder listing *is* the registry: a folder another thread wrote is found
- * here with nothing having registered it, and a folder the user deleted stops
- * appearing. The root is a parameter because a design session and a video session
- * list identically, down to the `index.html` entry file both contracts use.
- *
- * Kept apart from `design-service.ts`, which talks to the database and to IPC, so
- * the listing can be exercised on its own.
- */
+/** Folder metadata shared by canonical-root discovery and exact registry checks. */
 
 /** Most files scanned for a folder's latest modification time. */
 const MAX_SCANNED_FILES = 50
@@ -70,4 +59,32 @@ export async function listProjectWorkFolders(
     })
   }
   return folders.sort((left, right) => right.updatedAt - left.updatedAt)
+}
+
+/** Inspect exactly one registered folder, without enumerating its siblings. */
+export async function readWorkFolder(
+  projectPath: string,
+  directory: string
+): Promise<DesignEntry | null> {
+  const absolute = resolve(projectPath, directory)
+  const info = await stat(absolute).catch((error: unknown) => {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+    )
+      return null
+    throw error
+  })
+  if (!info?.isDirectory()) return null
+  const entry = await stat(resolve(absolute, SERVED_FOLDER_ENTRY_FILE)).catch(() => null)
+  const stamps = await folderStamps(absolute)
+  return {
+    directory,
+    name: basename(directory),
+    hasEntry: entry?.isFile() === true,
+    ...stamps,
+    creatorThreadId: null,
+    missing: false
+  }
 }

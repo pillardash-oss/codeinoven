@@ -7,7 +7,8 @@ const state = vi.hoisted(() => ({
 
 vi.mock('../../../src/main/agents/opencode-installation', () => ({
   cachedOpenCodeInstallation: () => state.installation,
-  detectOpenCodeInstallation: async () => state.installation
+  detectOpenCodeInstallation: async () => state.installation,
+  resolvedOpenCodeCommand: () => 'opencode'
 }))
 
 import { ProviderAccountOrchestrator } from '../../../src/main/providers/provider-account-orchestrator'

@@ -69,7 +69,8 @@ export function piCoreToolsEventsSource(): string {
       'Your turn is ending, but the task list you last published still shows unfinished work: ' +
       unfinished.join('; ') +
       '. The task card is how the user follows the run, and a run that ends on that list reads as abandoned work. Publish the final list before you finish: call ' +
-      '${CIO_TODO_WRITE_TOOL_NAME} once more with the list as it really stands, marking every task you completed as completed and dropping the tasks you no longer intend to do (an empty list clears them). Only end your turn once the list matches what you actually did.'
+      '${CIO_TODO_WRITE_TOOL_NAME} once more with the list as it really stands, marking every task you completed as completed and dropping the tasks you no longer intend to do (an empty list clears them). ' +
+      'When the work is truly complete and only the list lagged, make that one ${CIO_TODO_WRITE_TOOL_NAME} call and nothing else: add no prose and no other tool call. The app keeps the final answer you already gave the user and shows it, so any words you add here would only replace that answer with a redundant second version of it. Write text only if something material truly changed since that answer, and never mark a task complete that you did not actually finish. Only end your turn once the list matches what you actually did.'
     )
   }
 
@@ -213,11 +214,12 @@ export function piCoreToolsEventsSource(): string {
   pi.on('before_agent_start', (event) => {
     // A genuine user prompt begins a fresh task-list budget: the previous
     // turn's list is gone from the screen, and a reconciliation nudge may be
-    // spent again. This hook fires only for a user prompt   never for the
-    // guard's own synthetic reconciliation turn   so it can never disarm the
-    // guard mid-flight.
-    latestTodoItems = []
-    todoReconcileSpent = false
+    // spent again. Pi 1.2 also fires this hook for custom-message runs; those
+    // must preserve the guard's budget and current task list.
+    if (event.messageType === 'user') {
+      latestTodoItems = []
+      todoReconcileSpent = false
+    }
     // Pi reports each surface's annotations here, and an MCP server can connect
     // between turns, so the read-only set is refreshed before every turn.
     refreshCioReadOnlyTools(pi)

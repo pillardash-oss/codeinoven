@@ -1,15 +1,14 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBraces from '@pillardash-oss/cio-icon/CioBraces.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioFileCode from '@pillardash-oss/cio-icon/CioFileCode.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    Braces,
-    Eye,
-    FileCode2,
-    FolderOpen,
-    Loader2,
-    RotateCw,
-    Save
-  } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
 
   import { beautifyFileContent, fileBeautifyLabel } from '$lib/file-beautify'
@@ -252,7 +251,7 @@
     title="Source"
     onclick={() => (view = 'source')}
   >
-    <FileCode2 size={12} />
+    <CioFileCode size={12} />
   </button>
   {#if previewable}
     <button
@@ -268,7 +267,7 @@
       title="Preview"
       onclick={() => (view = 'preview')}
     >
-      <Eye size={12} />
+      <CioEye size={12} />
     </button>
   {/if}
   {#if dirty}
@@ -287,7 +286,7 @@
       title={`Beautify ${beautifyLabel}`}
       onclick={beautifySource}
     >
-      <Braces size={12} />
+      <CioBraces size={12} />
     </button>
   {/if}
   {#if session}
@@ -300,9 +299,9 @@
       onclick={() => void standaloneFiles.save(path)}
     >
       {#if session.saving}
-        <Loader2 size={12} class="animate-spin" />
+        <CioSpinner size={12} class="animate-spin" />
       {:else}
-        <Save size={12} />
+        <CioSave size={12} />
       {/if}
       <span class="text-[0.625rem]">Save</span>
     </button>
@@ -315,7 +314,7 @@
     disabled={loading}
     onclick={reload}
   >
-    <RotateCw size={12} />
+    <CioRefresh size={12} />
   </button>
   <button
     type="button"
@@ -324,14 +323,14 @@
     title="Show in file manager"
     onclick={() => void revealInFileManager()}
   >
-    <FolderOpen size={12} />
+    <CioFolderOpen size={12} />
   </button>
   <span class="ml-1 truncate text-[0.625rem] text-dimmed" title={path}>{path}</span>
 </div>
 
 {#if session?.error}
   <div class="flex shrink-0 items-start gap-2 border-b border-border bg-danger/10 px-2 py-1.5">
-    <AlertTriangle size={12} class="mt-0.5 shrink-0 text-danger" />
+    <CioAttention size={12} class="mt-0.5 shrink-0 text-danger" />
     <p class="min-w-0 flex-1 text-[0.625rem] break-words text-danger">{session.error}</p>
     {#if !binaryPreview}
       <button
@@ -351,7 +350,7 @@
     class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed"
     role="status"
   >
-    <Loader2 size={13} class="animate-spin" />
+    <CioSpinner size={13} class="animate-spin" />
     Loading file
   </div>
 {:else if activeView === 'preview' && markdown && session}
@@ -371,7 +370,7 @@
   <div class="min-h-0 flex-1 overflow-auto bg-surface">
     {#if documentLoading}
       <div class="flex h-full items-center justify-center gap-2 text-dimmed" role="status">
-        <Loader2 size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         <span class="sr-only">Loading document preview</span>
       </div>
     {:else if documentHtml}

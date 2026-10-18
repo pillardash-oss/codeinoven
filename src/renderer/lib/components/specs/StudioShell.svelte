@@ -25,8 +25,9 @@
   lang="ts"
   generics="SectionId extends string, Annotation extends { id: string; quote?: string; body: string }"
 >
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { tick } from 'svelte'
-  import { X } from '@lucide/svelte'
+
   import type { Snippet } from 'svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
 
@@ -168,7 +169,7 @@
           title="Close sections"
           onclick={() => (sectionsOpen = false)}
         >
-          <X size={16} />
+          <CioClose size={16} />
         </button>
       </div>
       <div class="flex min-h-0 flex-1 flex-col overscroll-contain">

@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { X, Download, FileQuestion, FolderOpen, Loader2, Save, WrapText } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFileQuestion from '@pillardash-oss/cio-icon/CioFileQuestion.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -228,11 +234,11 @@
         onclick={() => void saveText()}
       >
         {#if saving}
-          <Loader2 size={11} class="animate-spin" />
+          <CioSpinner size={11} class="animate-spin" />
         {:else}
-          <Save size={11} />
+          <CioSave size={11} />
         {/if}
-        Save
+        CioSave
       </button>
       <button
         type="button"
@@ -245,7 +251,7 @@
         title={wrapTitle}
         onclick={() => wrapTextState.toggle()}
       >
-        <WrapText size={14} />
+        <CioWrapText size={14} />
       </button>
       <button
         type="button"
@@ -254,7 +260,7 @@
         title="Download attachment"
         onclick={handleDownload}
       >
-        <Download size={14} />
+        <CioDownload size={14} />
       </button>
       {#if revealable}
         <button
@@ -264,7 +270,7 @@
           title="Reveal path"
           onclick={revealFromButton}
         >
-          <FolderOpen size={14} />
+          <CioFolderOpen size={14} />
         </button>
       {/if}
       <button
@@ -274,7 +280,7 @@
         title="Close attachment editor (Esc)"
         onclick={requestClose}
       >
-        <X size={14} />
+        <CioClose size={14} />
       </button>
     </div>
     <ProjectTextEditor
@@ -319,7 +325,7 @@
           title="Reveal path"
           onclick={revealFromButton}
         >
-          <FolderOpen size={14} />
+          <CioFolderOpen size={14} />
         </button>
       {/if}
       <button
@@ -329,7 +335,7 @@
         title="Download file"
         onclick={downloadFromButton}
       >
-        <Download size={14} />
+        <CioDownload size={14} />
       </button>
       <button
         type="button"
@@ -338,7 +344,7 @@
         title="Close preview (Esc)"
         onclick={closeFromButton}
       >
-        <X size={14} />
+        <CioClose size={14} />
       </button>
     </div>
     <div
@@ -399,7 +405,7 @@
             class="flex h-full w-full items-center justify-center bg-surface text-muted shadow-2xl"
             role="status"
           >
-            <Loader2 size={24} class="animate-spin" />
+            <CioSpinner size={24} class="animate-spin" />
             <span class="sr-only">Loading document preview</span>
           </div>
         {:else if kind === 'markdown' && text !== undefined}
@@ -413,13 +419,27 @@
           <div
             class="flex h-full w-full flex-col items-center justify-center gap-2 bg-surface text-muted shadow-2xl"
           >
-            <FileQuestion size={32} class="text-dimmed" />
+            <CioFileQuestion size={32} class="text-dimmed" />
             <span class="text-xs">No preview available for this file type</span>
           </div>
         {/if}
       </div>
       {#if pagerState || (kind === 'image' && src)}
-        <div class="absolute right-3 bottom-3 flex items-center gap-2">
+        <!-- The floating controls belong to the content, not to the backdrop
+             behind it: the lightbox dismisses on a press of its backdrop, so the
+             cluster's own box and the gap between its controls must not read as
+             one, and an activation key pressed on a focused control (Enter on
+             the zoom toolbar) must not reach the lightbox's activate handler
+             either. The controls guard their own buttons; this guards the
+             region. -->
+        <div
+          class="absolute right-3 bottom-3 flex items-center gap-2"
+          role="presentation"
+          onclick={(event: MouseEvent) => event.stopPropagation()}
+          onkeydown={(event: KeyboardEvent) => {
+            if (keymapState.matches('ui-activate', event)) event.stopPropagation()
+          }}
+        >
           {#if pagerState}
             <PreviewPager pager={pagerState} />
           {/if}

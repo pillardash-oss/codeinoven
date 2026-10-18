@@ -1,6 +1,8 @@
+import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
 import { createSubscriber } from 'svelte/reactivity'
 import type { Component } from 'svelte'
-import { BotMessageSquare, Download, MessageSquare, Timeline } from '@lucide/svelte'
+import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {
   browserDownloads,
@@ -78,10 +80,12 @@ export interface ViewAudioActivity {
 const NO_AUDIO_ACTIVITY: ViewAudioActivity = { families: new Set(), global: false }
 
 /** The three families the rail's badges and labels are keyed by. */
+// Each family wears the mark its own view wears, from the one place that holds a
+// family's mark, so a badge and the view it counts can never disagree.
 const FAMILY_ICONS: Record<ContentThreadFamily, Component> = {
-  projects: Timeline,
-  chats: MessageSquare,
-  assistant: BotMessageSquare
+  projects: CioProjects,
+  chats: CONTENT_FAMILY_ICONS.chats,
+  assistant: CONTENT_FAMILY_ICONS.assistant
 }
 
 const FAMILY_NOUN: Record<ContentThreadFamily, string> = {
@@ -227,6 +231,13 @@ export class ViewRailActivity {
  * The single activity pill a rail view shows, chosen by priority: working
  * outranks attention, which outranks a parked retry. The returned label always
  * carries the family's full breakdown. Returns null when the family is quiet.
+ *
+ * The review-ready bucket a project strip draws in purple is deliberately not
+ * badged here. The rail answers "what wants the user now" across every project
+ * at once, and a finished artifact waiting to be read is already announced by
+ * that thread's own unread dot (the card that delivered it), so a second badge
+ * would report the same landing twice. The strip, which speaks for one project,
+ * is where the review trace belongs.
  *
  * The project family spans four views (Projects, Threads, Scoped threads, Scope
  * Board), so its badge rides only one of them at a time: the option the caller
@@ -390,7 +401,7 @@ function browserTransferBadge(transfers: BrowserDownloadOutstanding): ViewBadge 
     tone: transfers.running > 0 ? 'working' : 'attention',
     count,
     label: browserTransferLabel(transfers),
-    icon: Download
+    icon: CioDownload
   }
 }
 

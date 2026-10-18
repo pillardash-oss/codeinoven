@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bot } from '@lucide/svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { formatDurationSeconds } from '$lib/format/duration'
   import {
@@ -50,7 +50,7 @@
       onOpenSheet()
     }}
   >
-    <Bot size={10} />
+    <CioSubagent size={10} />
     {label}
   </button>
 {:else}
@@ -64,7 +64,7 @@
         e.stopPropagation()
       }}
     >
-      <Bot size={10} />
+      <CioSubagent size={10} />
       {label}
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
@@ -76,7 +76,7 @@
         class="z-50 w-96 overflow-hidden border bg-surface p-1 shadow-lg"
       >
         <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-          <Bot size={12} class="shrink-0 text-muted" />
+          <CioSubagent size={12} class="shrink-0 text-muted" />
           <span class="text-[0.6875rem] font-semibold text-foreground">
             {subagentCount}
             {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}

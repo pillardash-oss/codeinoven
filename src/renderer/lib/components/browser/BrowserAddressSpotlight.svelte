@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioLock from '@pillardash-oss/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pillardash-oss/cio-icon/CioLockOpen.svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Globe, Lock, LockOpen } from '@lucide/svelte'
+
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
@@ -144,11 +147,11 @@
 >
   <div class="flex items-center gap-2 bg-elevated px-3">
     {#if secure}
-      <Lock size={13} class="shrink-0 text-success" />
+      <CioLock size={13} class="shrink-0 text-success" />
     {:else if initialValue !== ''}
-      <LockOpen size={13} class="shrink-0 text-dimmed" />
+      <CioLockOpen size={13} class="shrink-0 text-dimmed" />
     {:else}
-      <Globe size={15} class="shrink-0 text-dimmed" />
+      <CioBrowser size={15} class="shrink-0 text-dimmed" />
     {/if}
     <input
       {@attach captureAddress}

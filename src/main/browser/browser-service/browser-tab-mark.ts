@@ -37,6 +37,12 @@ export const NO_TAB_MARK: BrowserTabMark = Object.freeze({ design: null, composi
  * nowhere else, so the rule that sets a mark and the rule that clears it stay one
  * rule. It answers asynchronously because a composition's mark carries the
  * timeline its manifest declares, and that has to be read.
+ *
+ * It answers with a mark and nothing else. Which folder a page is showing is a fact
+ * about the page; whether the thread authored that work is a fact about the thread,
+ * and the two are not the same question: a user who opens a design folder in their
+ * own tab is looking at it, not working in it. Authorship is written where a
+ * session starts (the tag, the capability's own preview and checkpoint), never here.
  */
 export type TabMarkRecogniser = (
   projectId: string,

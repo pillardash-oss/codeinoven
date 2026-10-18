@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none">
+  <!--
+    DIRECTION B · "The Slab" — solid tier
+    The outline is gone. Each glyph is a solid block of ink with its meaning cut
+    out of it, the way the tray mark is built: a filled slab with a single
+    knockout. Geometry is on an 18 grid (4 to 20) instead of a 16 grid, so the
+    strokes thin to ~2.5 units and the fill carries the weight at 16px.
+    One glyph keeps the ember (the ember variable), the way the logo does.
+  -->
+  <symbol id="b-projects" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The slab: one block of ink with the chamber punched through it, and the
+         ember burning in the opening. The opening is 8 units so the 4-unit
+         ember keeps a 2-unit clearance and reads as a square at 16px. -->
+    <path fill-rule="evenodd" d="M4 4h16v16H4z M6 8h8v8H6z" />
+    <rect x="8" y="10" width="4" height="4" fill="var(--icon-ember, var(--color-accent))" stroke="none" />
+  </symbol>
+
+  <symbol id="b-threads" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The rack: three entries, all solid, each one shorter than the last. -->
+    <rect x="4" y="5.5" width="16" height="3" />
+    <rect x="4" y="10.5" width="12" height="3" />
+    <rect x="4" y="15.5" width="8" height="3" />
+  </symbol>
+
+  <symbol id="b-scoped" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The frame: a solid border with the selected region cut out of it. -->
+    <path fill-rule="evenodd" d="M4 4h16v16H4z M9.5 9.5h5v5h-5z" />
+  </symbol>
+
+  <symbol id="b-board" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The board: a solid header, then three solid columns of unequal drop. -->
+    <rect x="4" y="4.5" width="16" height="2.5" />
+    <rect x="5.5" y="9.5" width="3.4" height="8.5" />
+    <rect x="10.3" y="9.5" width="3.4" height="11" />
+    <rect x="15.1" y="9.5" width="3.4" height="6" />
+  </symbol>
+
+  <symbol id="b-chats" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The bubble: solid, with the spoken line cut through it. -->
+    <path fill-rule="evenodd" d="M4 4.5h16v12H10.5l-4.5 4v-4H4z M7.5 9.5h9v2h-9z" />
+  </symbol>
+
+  <symbol id="b-assistant" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The sentinel: solid head, knocked-out square eyes, one antenna stub. -->
+    <path fill-rule="evenodd" d="M5.5 7.5h13v8h-13z M7.7 10.3h2.6v2.6H7.7z M13.7 10.3h2.6v2.6h-2.6z" />
+    <rect x="11" y="3.5" width="2" height="4" />
+  </symbol>
+
+  <symbol id="b-browser" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The shell: solid chrome and a solid right dock, content cut out. -->
+    <path fill-rule="evenodd" d="M4 4.5h16v15H4z M7 9h10v8.5H7z" />
+    <rect x="9" y="12" width="6" height="2" />
+  </symbol>
+
+  <symbol id="b-info" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The plate: a solid nameplate with its mark struck into it. -->
+    <path fill-rule="evenodd" d="M4 6.5h16v11H4z M11.2 9.1h1.6v1.6h-1.6z M11.2 12.2h1.6v3.6h-1.6z" />
+  </symbol>
+
+  <symbol id="b-gauge" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The gauge: solid bezel, solid needle, solid pivot. -->
+    <path fill-rule="evenodd" d="M4 4.5h16v15H4z M6.5 7h11v10h-11z" />
+    <path d="M12 12.5l4.2-4.2 1.4 1.4-4.2 4.2z" />
+    <rect x="10.9" y="11.4" width="2.2" height="2.2" />
+  </symbol>
+
+  <symbol id="b-plug" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The plug: solid body, two thick pins. -->
+    <rect x="6.5" y="12.5" width="11" height="7" />
+    <path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="square" d="M9.5 12.5V5.5 M14.5 12.5V5.5" />
+  </symbol>
+
+  <symbol id="b-settings" viewBox="0 0 24 24" fill="currentColor">
+    <!-- The panel: four solid cells. Settings is where the controls live. -->
+    <rect x="4" y="4.5" width="7" height="6.5" />
+    <rect x="13" y="4.5" width="7" height="6.5" />
+    <rect x="4" y="13" width="7" height="6.5" />
+    <rect x="13" y="13" width="7" height="6.5" />
+  </symbol>
+</svg>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createTestDb, destroyTestDb } from './test-helper'
 import { ModelRankingRepo } from '../../../src/main/database/repositories/model-ranking-repo'
 import type { ModelRankingIncrement } from '../../../src/main/database/repositories/model-ranking-repo'
+import { MAX_PLAUSIBLE_SHOT_COST_USD } from '../../../src/main/database/schema'
 import type { ModelRankingRow } from '../../../src/lib/types'
 import type { Database } from '../../../src/main/database/database'
 
@@ -22,8 +23,7 @@ function increment(overrides: Partial<ModelRankingIncrement> = {}): ModelRanking
 
 function row(db: Database, modelId: string): ModelRankingRow | undefined {
   return db.get('SELECT * FROM model_rankings WHERE model_id = ?', modelId) as
-    | ModelRankingRow
-    | undefined
+    ModelRankingRow | undefined
 }
 
 describe('ModelRankingRepo', () => {
@@ -136,6 +136,30 @@ describe('ModelRankingRepo', () => {
 
       const spend = repo.gradingSpend()
       expect(spend.costUsd).toBeCloseTo(0.07, 10)
+    } finally {
+      destroyTestDb(db)
+    }
+  })
+
+  it('refuses an implausible conversation cost at the ceiling instead of folding it in', async () => {
+    const db = await createTestDb()
+    try {
+      const repo = new ModelRankingRepo(db)
+      // A running sum whose snapshots are deleted when they are scored can never
+      // be repaired afterwards, so the corrupted sample has to be refused here.
+      repo.increment(increment({ costUsd: 0.02 }))
+      repo.increment(increment({ costUsd: 3.4145364020951987e46 }))
+      repo.increment(increment({ costUsd: Number.POSITIVE_INFINITY }))
+      repo.increment(increment({ costUsd: -0.5 }))
+
+      expect(repo.gradingSpend().costUsd).toBeCloseTo(0.02, 10)
+      // The sample still counts: its score is real, only the figure is not.
+      expect(row(db, 'gpt-5')?.one_shot_samples).toBe(4)
+
+      // A genuinely expensive conversation is spend, not corruption.
+      repo.increment(increment({ costUsd: 21.5 }))
+      repo.increment(increment({ costUsd: MAX_PLAUSIBLE_SHOT_COST_USD }))
+      expect(repo.gradingSpend().costUsd).toBeCloseTo(0.02 + 21.5 + MAX_PLAUSIBLE_SHOT_COST_USD, 10)
     } finally {
       destroyTestDb(db)
     }

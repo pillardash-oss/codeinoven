@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { relative, isAbsolute } from 'node:path'
 import createReviewWorker from './design-review-worker.ts?nodeWorker'
+import { currentWorkRoot } from './work-roots-state'
 import type { Database } from '../database/database'
 import { requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import { resolveServedFolder, resolveServedEntry } from '../preview/served-folder'
@@ -21,7 +22,11 @@ export async function runDesignReview(
   critique: boolean
 ): Promise<unknown> {
   const project = await requireLocalProjectViaWorker(database, context.projectId)
-  const folder = resolveServedFolder(project.path, input['directory'], '.cio/designs')
+  const folder = resolveServedFolder(
+    project.path,
+    input['directory'],
+    currentWorkRoot('design', context.projectId)
+  )
   const canonicalFolder = await realpath(folder.absolute)
   const canonicalProject = await realpath(project.path)
   const within = relative(canonicalProject, canonicalFolder)

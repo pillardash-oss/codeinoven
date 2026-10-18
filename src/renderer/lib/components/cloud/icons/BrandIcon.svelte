@@ -2,7 +2,7 @@
   import type { Snippet } from 'svelte'
 
   interface Props {
-    /** Icon edge length in px, matching the `@lucide/svelte` `size` prop. */
+    /** Icon edge length in px, the same `size` prop every CIO glyph takes. */
     size?: number | string
     /** Fill color for the monochrome brand mark. Defaults to currentColor. */
     color?: string
@@ -25,10 +25,10 @@
 </script>
 
 <!--
-  A Lucide-compatible wrapper for solid brand marks. Brand logos are filled
-  paths (not stroked outlines), so this renders `fill={color}` instead of the
-  stroke model used by `@lucide/svelte`, while keeping the same `size` /
-  `class` / `color` prop interface so call sites look identical.
+  A wrapper for solid brand marks. Brand logos are filled paths, not stroked
+  outlines, so this renders `fill={color}` rather than the stroke model the CIO
+  set draws with, while keeping the same `size` / `class` / `color` props so a
+  call site reads the same either way.
 -->
 <svg
   xmlns="http://www.w3.org/2000/svg"

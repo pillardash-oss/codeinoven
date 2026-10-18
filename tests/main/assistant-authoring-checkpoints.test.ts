@@ -182,4 +182,30 @@ describe('assistantAuthoringContext', () => {
     expect(contract).toContain('cio_util_init')
     expect(contract).toContain('cio_util_docs_lookup')
   })
+
+  it('does not ask again for a name and personality the user already gave', () => {
+    const settled = assistantAuthoringContext({
+      name: 'Engineer',
+      scheduled: false,
+      personality: 'blunt and quick'
+    })
+    expect(settled).not.toContain('Ask what they would like to name you')
+    expect(settled).toContain('are already settled')
+    expect(settled).toContain('blunt and quick')
+
+    // A create-by-chat assistant has no name yet, so the interview still opens
+    // on the naming question.
+    const unnamed = assistantAuthoringContext({ name: 'New assistant', scheduled: false })
+    expect(unnamed).toContain('Ask what they would like to name you')
+  })
+
+  it('heads up the next-steps list that fits how the assistant runs', () => {
+    expect(assistantAuthoringContext({ name: 'Digest', scheduled: true })).toContain(
+      'lead with adding fallback models'
+    )
+    const onDemand = assistantAuthoringContext({ name: 'Digest', scheduled: false })
+    expect(onDemand).toContain('lead with how to start a task')
+    expect(onDemand).toContain('Cmd/Ctrl+N')
+    expect(onDemand).not.toContain('fallback models')
+  })
 })

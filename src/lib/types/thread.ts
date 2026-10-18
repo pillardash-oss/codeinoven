@@ -43,6 +43,8 @@ export interface Thread {
   titleSource: ThreadTitleSource
   status: ThreadStatus
   pinned: boolean
+  /** Project-view bookmark; bookmarks are also pinned across other views. */
+  bookmarked?: boolean
   /** Timestamp (ms) when the thread was pinned; pins are ordered newest-first by this. */
   pinnedAt?: number
   /** Position for manual drag-to-reorder; items without sortOrder fall back to lastActivity. */
@@ -72,6 +74,15 @@ export interface Thread {
    * stands between the persisted fact and the sidebar.
    */
   authoredWorkKind?: AuthoredWorkKind
+  /**
+   * Every authored-work session this thread has entered, written at the same
+   * moments as `authoredWorkKind` above and never cleared, because the row draws
+   * one marker per kind: a thread that designed something and later cut a video
+   * about it shows both. `authoredWorkKind` still says which session it is in
+   * now, which is what a preview resolves against. Always in the app's canonical
+   * order, so the glyphs never swap places between renders.
+   */
+  authoredWorkKinds?: AuthoredWorkKind[]
   /** User-defined feature bucket used by the project's Scope board. */
   scopeBucketId?: string
   /** Per-thread agent configuration (harness, model, thinking, permissions). */
@@ -451,7 +462,8 @@ export interface ForeignRunNotice {
  * window asking to take over a run it cannot see, and a silent failure would
  * leave the transfer card stuck with no explanation.
  */
-export type ThreadTransferResult = { ok: true } | { ok: false; reason: string }
+export type ThreadTransferResult =
+  { ok: true; noLongerForeign?: true } | { ok: false; reason: string }
 
 export type HistoryRole = 'user' | 'assistant' | 'system' | 'tool'
 

@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ExternalLink, KeyRound, Loader2, Trash2 } from '@lucide/svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke } from '$lib/ipc.svelte'
@@ -131,7 +134,11 @@
 </script>
 
 <div id="settings-block-design-generation" class="border bg-surface p-4">
-  <h3 class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Generation backend</h3>
+  <h3
+    class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Generation backend
+  </h3>
   <p class="mt-2 text-xs leading-relaxed text-dimmed">
     The service that makes images, clips and sound when a design or a composition needs them. One
     token reaches many models, and you pick which model each craft uses below. Store your own key:
@@ -144,7 +151,7 @@
 
   {#if loading}
     <div class="mt-3 flex items-center gap-2 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading generation settings…
+      <CioSpinner size={14} class="animate-spin" /> Loading generation settings…
     </div>
   {:else if generationState}
     <div class="mt-3 flex flex-wrap items-start gap-3">
@@ -176,7 +183,7 @@
           data-external-url={selectedProvider.keyUrl}
           onclick={() => void openInBrowser(selectedProvider.keyUrl)}
         >
-          <ExternalLink size={12} /> Get a {selectedProvider.label} token
+          <CioExternalLink size={12} /> Get a {selectedProvider.label} token
         </button>
 
         {#if !generationState.secureStorageAvailable}
@@ -215,9 +222,9 @@
               onclick={() => void saveToken()}
             >
               {#if saving}
-                <Loader2 size={13} class="animate-spin" />
+                <CioSpinner size={13} class="animate-spin" />
               {:else}
-                <KeyRound size={13} />
+                <CioKey size={13} />
               {/if}
               Save
             </button>
@@ -232,7 +239,7 @@
                   pendingRemoval = true
                 }}
               >
-                <Trash2 size={13} /> Remove
+                <CioTrash size={13} /> Remove
               </button>
             {/if}
           </div>

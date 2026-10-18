@@ -1,5 +1,6 @@
+import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
 import { SvelteSet } from 'svelte/reactivity'
-import { Globe } from '@lucide/svelte'
+
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { browserStore, loadBrowser } from '$lib/stores/browser-access.svelte'
 import { browserTabLabel } from '$lib/stores/global-browser-types'
@@ -104,7 +105,7 @@ export class BrowserTabPaletteController {
           ...(group?.color ? { color: group.color } : {})
         },
         showSourceBadge: false,
-        ...(iconUri ? { iconUri } : { icon: Globe }),
+        ...(iconUri ? { iconUri } : { icon: CioBrowser }),
         keywords: [label, tab.url, groupName].filter(Boolean)
       })
       if (actions.length >= MAX_RESULTS) break

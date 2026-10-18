@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Puzzle } from '@lucide/svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
@@ -159,7 +159,7 @@
             onerror={() => actionIcon !== null && undrawableIcons.add(actionIcon)}
           />
         {:else}
-          <Puzzle size={15} />
+          <CioTabExtensions size={15} />
         {/if}
         {#if activity?.badgeText}
           <!-- The extension's own badge, in its own colour: the one part of a

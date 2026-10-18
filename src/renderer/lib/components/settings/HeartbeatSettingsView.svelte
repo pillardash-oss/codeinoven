@@ -1,17 +1,15 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioHeartPulse from '@pillardash-oss/cio-icon/CioHeartPulse.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    CheckCircle2,
-    HeartPulse,
-    Loader2,
-    Pencil,
-    Plus,
-    Trash2,
-    UserRound,
-    XCircle,
-    Zap
-  } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { heartbeatStore } from '$lib/stores/heartbeat.svelte'
@@ -237,7 +235,7 @@
       disabled={providers.length === 0}
       onclick={openCreate}
     >
-      <Plus size={13} /> Add heartbeat
+      <CioPlus size={13} /> Add heartbeat
     </button>
   </div>
 
@@ -254,11 +252,11 @@
 
   {#if heartbeatStore.loading && heartbeatStore.heartbeats.length === 0}
     <div class="border border-dashed p-6 text-center">
-      <Loader2 size={17} class="mx-auto animate-spin text-dimmed" />
+      <CioSpinner size={17} class="mx-auto animate-spin text-dimmed" />
     </div>
   {:else if heartbeatStore.heartbeats.length === 0}
     <div class="border border-dashed p-6 text-center">
-      <HeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
+      <CioHeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
       <p class="text-xs text-muted">No heartbeats configured yet.</p>
       {#if providers.length === 0 && !providersLoading}
         <p class="mt-1 text-[0.6875rem] text-dimmed">Select a configured project first.</p>
@@ -287,9 +285,9 @@
                   title={formatLastRun(config)}
                 >
                   {#if config.lastRun.success}
-                    <CheckCircle2 size={11} />
+                    <CioCheckCircle size={11} />
                   {:else}
-                    <XCircle size={11} />
+                    <CioCrossCircle size={11} />
                   {/if}
                   {formatLastRun(config)}
                 </span>
@@ -310,12 +308,14 @@
                 class="mt-1 inline-flex max-w-full truncate border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
                 title="Account: {account.label}"
               >
-                <UserRound size={10} class="mr-1 shrink-0" />{account.label}
+                <CioPerson size={10} class="mr-1 shrink-0" />{account.label}
               </span>
             {/if}
             <div class="mt-1.5 flex flex-wrap gap-1">
               {#each config.times as time (time)}
-                <span class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-muted">
+                <span
+                  class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-muted"
+                >
                   {formatTimeOfDay(time)}
                 </span>
               {/each}
@@ -332,9 +332,9 @@
               onclick={() => void triggerNow(config.id)}
             >
               {#if triggeringId === config.id}
-                <Loader2 size={13} class="animate-spin" />
+                <CioSpinner size={13} class="animate-spin" />
               {:else}
-                <Zap size={13} />
+                <CioZap size={13} />
               {/if}
             </button>
             <Switch
@@ -349,7 +349,7 @@
               title="Edit {config.name}"
               onclick={() => openEdit(config)}
             >
-              <Pencil size={13} />
+              <CioPencil size={13} />
             </button>
             <button
               class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
@@ -357,7 +357,7 @@
               title="Delete {config.name}"
               onclick={() => (deleteTarget = config)}
             >
-              <Trash2 size={13} />
+              <CioTrash size={13} />
             </button>
           </div>
         </div>
@@ -385,7 +385,7 @@
       disabled={heartbeatStore.saving}
       onclick={() => void saveDraft()}
     >
-      {#if heartbeatStore.saving}<Loader2 size={13} class="animate-spin" />{/if}
+      {#if heartbeatStore.saving}<CioSpinner size={13} class="animate-spin" />{/if}
       Save heartbeat
     </button>
   {/snippet}
@@ -458,7 +458,7 @@
           disabled={!draftTimeInput}
           onclick={addDraftTime}
         >
-          <Plus size={13} /> Add
+          <CioPlus size={13} /> Add
         </button>
       </div>
       {#if draftTimes.length > 0}
@@ -501,14 +501,14 @@
       disabled={heartbeatStore.saving}
       onclick={() => void removeHeartbeat()}
     >
-      {#if heartbeatStore.saving}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+      {#if heartbeatStore.saving}<CioSpinner size={13} class="animate-spin" />{:else}<CioTrash
           size={13}
         />{/if}
       Delete heartbeat
     </button>
   {/snippet}
   <div class="flex gap-2 text-sm text-muted">
-    <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
+    <CioAttention size={16} class="mt-0.5 shrink-0 text-warning" />
     <p>
       Delete <strong class="text-foreground">{deleteTarget?.name}</strong>? This can't be undone.
     </p>

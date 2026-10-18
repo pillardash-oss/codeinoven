@@ -1,7 +1,10 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { ProjectFileEntry } from '$shared/types'
   import type { ProjectFilesState } from '$lib/stores/project-files.svelte'
+  import type { WorkRoots } from '$shared/design/work-roots'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FolderTypeIcon from './FolderTypeIcon.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
@@ -41,10 +44,12 @@
     onOpenInTerminal: (entry: ProjectFileEntry) => void
     cioCleanupExcluded: boolean
     onToggleCioCleanupExclusion: (entry: ProjectFileEntry) => void
+    /** The folders this row's project writes designed work into. */
+    workRoots: WorkRoots
     onRowClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowDoubleClick: (entry: ProjectFileEntry, event: MouseEvent) => void
     onRowContextMenu: (entry: ProjectFileEntry) => void
-    onRowPointerDown: (entry: ProjectFileEntry) => void
+    onRowPointerDown: (entry: ProjectFileEntry, event: PointerEvent) => void
     onRowDragStart: (entry: ProjectFileEntry, event: DragEvent) => void
   }
 
@@ -75,6 +80,7 @@
     onOpenInTerminal,
     cioCleanupExcluded,
     onToggleCioCleanupExclusion,
+    workRoots,
     onRowClick,
     onRowDoubleClick,
     onRowContextMenu,
@@ -157,6 +163,7 @@
     onOpenInBrowser={() => onOpenInBrowser(entry)}
     onOpenInTerminal={() => onOpenInTerminal(entry)}
     {cioCleanupExcluded}
+    {workRoots}
     onToggleCioCleanupExclusion={() => onToggleCioCleanupExclusion(entry)}
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
@@ -194,7 +201,7 @@
         onclick={(event: MouseEvent) => onRowClick(entry, event)}
         ondblclick={(event: MouseEvent) => onRowDoubleClick(entry, event)}
         oncontextmenu={() => onRowContextMenu(entry)}
-        onpointerdown={() => onRowPointerDown(entry)}
+        onpointerdown={(event) => onRowPointerDown(entry, event)}
         ondragstart={(event: DragEvent) => onRowDragStart(entry, event)}
       >
         <div
@@ -211,11 +218,11 @@
         ></div>
         {#if entry.kind === 'directory'}
           {#if projectState.loadingDirectories[entry.path]}
-            <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
+            <CioSpinner size={12} class="shrink-0 animate-spin text-dimmed" />
           {:else if projectState.expandedDirectories[entry.path]}
-            <ChevronDown size={12} class="shrink-0 text-dimmed" />
+            <CioChevronDown size={12} class="shrink-0 text-dimmed" />
           {:else}
-            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+            <CioForward size={12} class="shrink-0 text-dimmed" />
           {/if}
           {#if projectState.expandedDirectories[entry.path]}
             <FolderTypeIcon name={entry.name} open size={13} />

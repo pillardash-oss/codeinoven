@@ -2,37 +2,55 @@
  * The Ctrl+Tab switcher's entry list.
  *
  * The switcher is a task switcher, not a thread list. A project thread, a chat,
- * an assistant task and a browser tab are all views, and every one of them
- * competes for the same slots in one recency order (`recent-visits.svelte`): the
- * surface the user used most recently is first, the one used before that is
- * next, and a newer visit pushes an older one off the end whatever kind it is.
- * The pure builder here resolves those stored keys against live data. It never
- * invents a row for a surface the order does not name, with one deliberate
- * exception: the browser tab on screen leads the list (see `currentBrowserTabId`).
- * A browser tab the user never opened therefore cannot appear.
+ * an assistant task, a browser tab and a panel tab (a terminal, a file, or the
+ * thread browser) are all views, and every one of them competes for the same
+ * slots in one recency order (`recent-visits.svelte`): the surface the user used
+ * most recently is first, the one used before that is next, and a newer visit
+ * pushes an older one off the end whatever kind it is. The pure builder here
+ * resolves those stored keys against live data. It never invents a row for a
+ * surface the order does not name, with one deliberate exception: the browser tab
+ * on screen leads the list (see `currentBrowserTabId`). A browser tab the user
+ * never opened therefore cannot appear.
  */
 
 import type { Thread } from '$shared/types'
 import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
+import type { ContextSidebarTab } from '$lib/stores/context-sidebar-types'
 import {
   browserTabIdFromVisitKey,
   browserTabVisitKey,
   isBrowserTabVisitKey,
+  isPanelTabVisitKey,
+  panelTabIdFromVisitKey,
+  panelTabVisitKey,
   threadVisitKey
 } from '$lib/stores/recent-visits.svelte'
 
+/**
+ * The panel tabs the switcher can land on: a tab of a panel that keeps its own
+ * tab strip (a terminal, a file, or the thread browser).
+ */
+export type SwitcherPanelTab = Extract<
+  ContextSidebarTab,
+  { kind: 'terminal' | 'files' | 'browser' }
+>
+
 /** One row the switcher can land on. */
 export type ThreadSwitcherEntry =
-  { kind: 'thread'; thread: Thread } | { kind: 'browser'; tab: GlobalBrowserTab }
+  | { kind: 'thread'; thread: Thread }
+  | { kind: 'browser'; tab: GlobalBrowserTab }
+  | { kind: 'panel'; tab: SwitcherPanelTab }
 
 /** How many entries the switcher shows, matching the thread list it grew from. */
-export const THREAD_SWITCHER_ENTRY_LIMIT = 10
+export const THREAD_SWITCHER_ENTRY_LIMIT = 15
 
 /** The stable identity of an entry, used to mark the highlighted one. It is the
  *  same key form the recent list stores, so a browser entry and the active tab
  *  id compare equal. */
 export function threadSwitcherEntryKey(entry: ThreadSwitcherEntry): string {
-  return entry.kind === 'thread' ? threadVisitKey(entry.thread) : browserTabVisitKey(entry.tab.id)
+  if (entry.kind === 'thread') return threadVisitKey(entry.thread)
+  if (entry.kind === 'browser') return browserTabVisitKey(entry.tab.id)
+  return panelTabVisitKey(entry.tab.id)
 }
 
 export interface ThreadSwitcherEntrySource {
@@ -43,6 +61,9 @@ export interface ThreadSwitcherEntrySource {
   /** Every open browser tab, used only to resolve a visit key into a row. A tab
    *  the visit order never names is never listed. */
   tabs: readonly GlobalBrowserTab[]
+  /** Every open panel tab of the active context, used only to resolve a visit
+   *  key into a row. A tab the visit order never names is never listed. */
+  panelTabs?: readonly SwitcherPanelTab[]
   /**
    * The browser tab on screen right now, while the browser view is the surface
    * the user is looking at, otherwise null.
@@ -70,13 +91,14 @@ const MIN_SWITCHER_ENTRIES = 2
  * Resolve the recent-visit keys into live entries in one recency order.
  *
  * Every kind competes on the same terms: the walk takes whatever the order names
- * next, thread or browser tab, until the limit is reached. Nothing is reserved or
- * force-added, so the list is exactly the surfaces the user has used, newest
- * first. Browser tabs may fill every slot. When the order names fewer surfaces than
- * the list can hold, the tail is filled with the most recently active threads.
- * That keeps the switcher useful on a cold start, and it is the only padding the
- * builder does: padding with browser tabs is what used to fill the list with
- * pages the user had never opened.
+ * next, thread, browser tab or panel tab, until the limit is reached. Nothing is
+ * reserved or force-added, so the list is exactly the surfaces the user has used,
+ * newest first. Threads, browser tabs and panel tabs may each fill every slot.
+ * When the order names fewer surfaces than the list can hold, the tail is filled
+ * with the most recently active threads. That keeps the switcher useful on a cold
+ * start, and it is the only padding the builder does: padding with browser tabs
+ * is what used to fill the list with pages the user had never opened, and padding
+ * with panel tabs would do the same for terminals and files.
  */
 export function buildThreadSwitcherEntries(
   source: ThreadSwitcherEntrySource
@@ -88,9 +110,11 @@ export function buildThreadSwitcherEntries(
       : MIN_SWITCHER_ENTRIES
   const threadsByKey = new Map(source.threads.map((thread) => [threadVisitKey(thread), thread]))
   const tabsById = new Map(source.tabs.map((tab) => [tab.id, tab]))
+  const panelTabsById = new Map((source.panelTabs ?? []).map((tab) => [tab.id, tab]))
   const entries: ThreadSwitcherEntry[] = []
   const usedThreads = new Set<string>()
   const usedTabs = new Set<string>()
+  const usedPanelTabs = new Set<string>()
   const currentTabId = source.currentBrowserTabId ?? null
   const currentTab = currentTabId ? (tabsById.get(currentTabId) ?? null) : null
   const currentKey = currentTab ? browserTabVisitKey(currentTab.id) : null
@@ -107,6 +131,13 @@ export function buildThreadSwitcherEntries(
       if (!tab || usedTabs.has(tab.id)) continue
       entries.push({ kind: 'browser', tab })
       usedTabs.add(tab.id)
+      continue
+    }
+    if (isPanelTabVisitKey(visit)) {
+      const tab = panelTabsById.get(panelTabIdFromVisitKey(visit))
+      if (!tab || usedPanelTabs.has(tab.id)) continue
+      entries.push({ kind: 'panel', tab })
+      usedPanelTabs.add(tab.id)
       continue
     }
     const thread = threadsByKey.get(visit)

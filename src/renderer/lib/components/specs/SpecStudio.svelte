@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { AlertCircle, ArrowRight, MessageSquare, ShieldCheck, X } from '@lucide/svelte'
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
   import { onDestroy, tick } from 'svelte'
   import { exportEngineeringSpecMarkdown } from '$shared/spec/spec-markdown'
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
@@ -841,7 +845,7 @@
             : 'Audit the completed implementation'}
         onclick={() => void onRunImplementationAudit?.()}
       >
-        <ShieldCheck size={13} />
+        <CioShieldCheck size={13} />
         {implementationAuditReady
           ? 'View audit'
           : implementationAuditRunning
@@ -875,7 +879,7 @@
         onclick={() => (assignmentAvailable ? onOpenAssignment?.() : void generateAssignment())}
       >
         {assignmentAvailable ? 'View Assignment' : 'Generate Assignment'}
-        <ArrowRight size={13} />
+        <CioArrowRight size={13} />
       </button>
     {:else if canDecide}
       <button
@@ -892,7 +896,7 @@
         }}
       >
         Implement
-        <ArrowRight size={13} />
+        <CioArrowRight size={13} />
       </button>
     {/if}
   {/snippet}
@@ -956,7 +960,7 @@
         {#each selectedSectionIssues as issue (`${issue.code}:${issue.path}`)}
           <div class="border border-danger/30 bg-danger/10 px-2.5 py-2">
             <div class="flex items-start gap-2">
-              <AlertCircle size={13} class="mt-0.5 shrink-0 text-danger" />
+              <CioAlertCircle size={13} class="mt-0.5 shrink-0 text-danger" />
               <div class="min-w-0 flex-1">
                 <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
                 <p
@@ -980,7 +984,7 @@
                 aria-label={`Dismiss validation issue: ${issue.message}`}
                 onclick={() => void dismissValidationIssue(issue)}
               >
-                <X size={12} />
+                <CioClose size={12} />
               </button>
             </div>
           </div>
@@ -1014,7 +1018,7 @@
         aria-label="Open anchored comment"
         onclick={() => void openAnnotation(marker.annotation)}
       >
-        <MessageSquare size={13} />
+        <CioMessage size={13} />
       </button>
     {/each}
   {/snippet}

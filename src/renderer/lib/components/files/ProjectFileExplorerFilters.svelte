@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { FileDiff, GitMerge, Search, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -64,7 +67,7 @@
       />
     </div>
     <div class="flex items-center gap-1 p-1.5">
-      <Search size={13} class="shrink-0 text-dimmed" />
+      <CioSearch size={13} class="shrink-0 text-dimmed" />
       <input
         bind:this={filterInput}
         type="search"
@@ -82,7 +85,7 @@
         title="Close file search (Escape)"
         onclick={onCloseFilter}
       >
-        <X size={12} />
+        <CioClose size={12} />
       </button>
     </div>
   </div>
@@ -103,7 +106,7 @@
     disabled={lastTurnDisabled}
     onclick={onToggleLastTurn}
   >
-    <FileDiff size={12} />
+    <CioDiff size={12} />
     <span class="flex-1 text-left">Last turn</span>
     <span class="tabular-nums text-dimmed">{lastTurnCount}</span>
   </button>
@@ -121,7 +124,7 @@
       title="Show only files that still need conflict resolution"
       onclick={onToggleConflicts}
     >
-      <GitMerge size={12} />
+      <CioMerge size={12} />
       <span class="flex-1 text-left">Conflicts</span>
       <span class="tabular-nums text-dimmed">{conflictCount}</span>
     </button>

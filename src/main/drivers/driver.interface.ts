@@ -14,6 +14,7 @@ import type {
   UtilityKind
 } from '../../lib/types'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
+import type { TokenUsageScope } from '../../lib/usage-rate'
 
 /** Callback invoked whenever the harness emits a streaming event. */
 export type AgentEventCallback = (event: AgentEvent) => void
@@ -113,6 +114,19 @@ export interface HarnessCapabilities {
   handlesTaskReconcile?: boolean
   /** Can force a model response through a validated JSON-schema output tool. */
   structuredOutput?: boolean
+  /**
+   * What one reported token count describes. A tokens-per-second figure divides
+   * the count by the time the model spent generating, so a count that covers
+   * more than the message it is attached to cannot be divided by one message's
+   * window.
+   *
+   * - `message` (the default): the count covers the message it is reported on.
+   * - `request`: the count covers one request, so consumers sum the counts of
+   *   the requests that produced a message instead of keeping the largest.
+   * - `session`: the count is cumulative for the harness session and never
+   *   describes a single message, so no consumer may attribute it to one.
+   */
+  tokenUsageScope?: TokenUsageScope
   /** Utility capabilities already supplied natively by this harness. */
   nativeUtilities?: UtilityKind[]
   /**
@@ -274,6 +288,8 @@ export interface HarnessLoginHandoff {
 
 /** Options for sending a prompt to the harness. */
 export interface SendPromptOptions {
+  /** Tool-free auxiliary inference, isolated from engineering instructions. */
+  minimalContext?: boolean
   sessionId: string
   settings: ThreadSettings
   text: string

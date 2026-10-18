@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CircleCheck, Loader2, PlugZap, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioPlugZap from '@pillardash-oss/cio-icon/CioPlugZap.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { McpConnectionTestResult, McpProbeTarget } from '$shared/types'
 
@@ -65,16 +68,16 @@
     onclick={() => void run()}
   >
     {#if running}
-      <Loader2 size={13} class="animate-spin" />
+      <CioSpinner size={13} class="animate-spin" />
     {:else}
-      <PlugZap size={13} />
+      <CioPlugZap size={13} />
     {/if}
     {running ? 'Testing…' : 'Test connection'}
   </button>
 
   {#if failure}
     <p class="flex items-start gap-1.5 text-[0.6875rem] text-danger" role="alert">
-      <TriangleAlert size={12} class="mt-0.5 shrink-0" />
+      <CioAttention size={12} class="mt-0.5 shrink-0" />
       <span class={variant === 'row' ? 'line-clamp-2' : ''} title={rowTitle(failure)}
         >{failure}</span
       >
@@ -82,7 +85,7 @@
   {:else if result}
     {#if result.ok}
       <p class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-success">
-        <CircleCheck size={12} class="shrink-0" />
+        <CioCheckCircle size={12} class="shrink-0" />
         <span>
           {answeredBy} in {result.latencyMs} ms with {result.toolCount}
           {result.toolCount === 1 ? 'tool' : 'tools'}
@@ -90,7 +93,7 @@
       </p>
     {:else}
       <p class="flex items-start gap-1.5 text-[0.6875rem] text-danger" role="alert">
-        <TriangleAlert size={12} class="mt-0.5 shrink-0" />
+        <CioAttention size={12} class="mt-0.5 shrink-0" />
         <span class={variant === 'row' ? 'line-clamp-2' : ''} title={rowTitle(reason)}>
           {reason}
         </span>

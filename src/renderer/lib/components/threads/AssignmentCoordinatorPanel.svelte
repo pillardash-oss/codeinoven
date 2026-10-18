@@ -1,14 +1,12 @@
 <script lang="ts">
-  import {
-    ArrowLeft,
-    ArrowUpRight,
-    ClipboardCheck,
-    Loader2,
-    Network,
-    Play,
-    Rows3,
-    Square
-  } from '@lucide/svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioArrowUpRight from '@pillardash-oss/cio-icon/CioArrowUpRight.svelte'
+  import CioClipboardCheck from '@pillardash-oss/cio-icon/CioClipboardCheck.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioRows3 from '@pillardash-oss/cio-icon/CioRows3.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSquare from '@pillardash-oss/cio-icon/CioSquare.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
@@ -202,7 +200,7 @@
 >
   <header class="shrink-0 border-b border-border p-4">
     <div class="flex min-w-0 items-center gap-2 text-primary">
-      <Network size={15} class="shrink-0" />
+      <CioNetwork size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Assignment coordinator</h2>
     </div>
     <h3 class="mt-3 text-sm font-semibold text-foreground">{assignment.content.title}</h3>
@@ -222,7 +220,7 @@
           <span class="assignment-label-full">Review Assignment</span>
           <span class="assignment-label-short">Assignment</span>
         {/if}
-        <ArrowUpRight size={13} />
+        <CioArrowUpRight size={13} />
       </button>
       {#if assignment.status === 'stopped'}
         <button
@@ -233,9 +231,9 @@
           onclick={() => void resumeStoppedAssignment()}
         >
           {#if resumeBusy}
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
           {:else}
-            <Play size={12} fill="currentColor" />
+            <CioPlay size={12} fill="currentColor" />
           {/if}
           {resumeBusy ? 'Resuming…' : 'Resume'}
         </button>
@@ -247,7 +245,7 @@
           aria-label="Stop the Sr. Engineer, workers, and auditor"
           onclick={() => (showStopConfirmation = true)}
         >
-          <Square size={12} fill="currentColor" />
+          <CioSquare size={12} fill="currentColor" />
           Stop
         </button>
       {/if}
@@ -318,7 +316,7 @@
     {#if stalled}
       <section class="border-b border-border p-4" aria-label="Assignment needs direction">
         <div class="flex items-start gap-2">
-          <Rows3 size={14} class="mt-0.5 shrink-0 text-warning" />
+          <CioRows3 size={14} class="mt-0.5 shrink-0 text-warning" />
           <div class="min-w-0">
             <h3 class="text-xs font-semibold text-foreground">Coordination paused</h3>
             <p class="mt-1 text-xs leading-relaxed text-muted">
@@ -333,7 +331,7 @@
           title="Ask the Sr. Engineer to review blockers and continue coordination"
           onclick={onResume}
         >
-          <Play size={12} />
+          <CioPlay size={12} />
           Resume coordination
         </button>
       </section>
@@ -443,10 +441,10 @@
           onclick={() => void reportToCoordinator()}
         >
           {#if reportBusy}
-            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Reporting…
           {:else}
-            <ClipboardCheck size={13} aria-hidden="true" />
+            <CioClipboardCheck size={13} aria-hidden="true" />
             Report to Sr. Engineer
           {/if}
         </button>
@@ -459,7 +457,7 @@
           aria-label="Back to the Sr. Engineer thread that owns this Assignment"
           onclick={onBackToCoordinator}
         >
-          <ArrowLeft size={13} aria-hidden="true" />
+          <CioArrowLeft size={13} aria-hidden="true" />
           Back to Sr. Engineer
         </button>
       {/if}
@@ -496,11 +494,11 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      class="flex items-center gap-2 bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
       disabled={stopBusy}
       onclick={() => void confirmStop()}
     >
-      {#if stopBusy}<Loader2 size={14} class="animate-spin" />{/if}
+      {#if stopBusy}<CioSpinner size={14} class="animate-spin" />{/if}
       {stopBusy ? 'Stopping…' : 'Stop Assignment'}
     </button>
   {/snippet}

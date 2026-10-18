@@ -20,7 +20,7 @@ import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { recentVisits, threadVisitKey } from './recent-visits.svelte'
-import type { WorkspaceTourView } from '$lib/components/onboarding/onboarding-tour-steps'
+import type { WorkspaceTourView } from '$lib/guide/guide-stops'
 
 // Thread navigation history is shared with the browser tab visits so the Ctrl+Tab
 // switcher can interleave both kinds of surface in one recency order. The keys
@@ -492,20 +492,6 @@ class WorkspaceState {
     return true
   }
 
-  /** Incremented to signal the app shell to open the getting-started tour. */
-  requestOnboardingCount = $state(0)
-  private consumedOnboardingRequestCount = 0
-
-  requestOnboarding(): void {
-    this.requestOnboardingCount++
-  }
-
-  consumeOnboardingRequest(): boolean {
-    if (this.consumedOnboardingRequestCount === this.requestOnboardingCount) return false
-    this.consumedOnboardingRequestCount = this.requestOnboardingCount
-    return true
-  }
-
   /** A view asked for its own tour, from that view's empty state or the command
    *  palette. Value-carrying like `requestProjectFileOpen`: the requested view
    *  *is* the request, so one slot plus a count is the whole handshake. */
@@ -598,22 +584,12 @@ export function wouldThreadChangePosition(prev: Thread, next: Thread): boolean {
 }
 
 /**
- * The key a thread sorts by inside its own bucket: the newer of the thread's
- * last activity and its manual drag anchor.
- *
- * Any new activity (a send, rename, status change, a working thread) always
- * pushes the thread to the top, because its `lastActivity` (epoch time, always
- * growing) outranks an older manual anchor. A manual drag sets a newer anchor so
- * the thread holds its place, until something moves again, at which point it can
- * be dragged back above. Threads without an anchor fall back to last activity,
- * so the default is pure recency ordering.
- *
- * Both sidebar orders (the project folders' and the Threads view's) and the drop
- * handler that writes the anchor share this one function, so an anchor means the
- * same thing everywhere it is read or written.
+ * Manual positions override recency in either direction. Activity clears the
+ * anchor in persistence, returning the thread to ordinary recency ordering.
+ * Shared by the sidebar sorters and the drop handler's neighbor calculation.
  */
 export function threadOrderKey(thread: Thread): number {
-  return Math.max(thread.sortOrder ?? 0, thread.lastActivity)
+  return thread.sortOrder ?? thread.lastActivity
 }
 
 export function threadSort(
@@ -621,14 +597,15 @@ export function threadSort(
   b: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
+  // Bookmarks belong at the head of their project strip, ahead of unsent drafts.
+  if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1
   // Unsent drafts and the empty "New Thread" placeholder stay pinned at the top.
   const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
   const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false
   if (aDraft !== bDraft) return aDraft ? -1 : 1
   if (a.status === 'created' && b.status !== 'created') return -1
   if (b.status === 'created' && a.status !== 'created') return 1
-  // Order by the newer of the thread's last activity and its manual sort-order
-  // anchor; see {@link threadOrderKey}.
+  // Order by the explicit position, falling back to last activity.
   const aKey = threadOrderKey(a)
   const bKey = threadOrderKey(b)
   if (aKey !== bKey) return bKey - aKey
@@ -687,12 +664,43 @@ export function threadStatusSort(
   const ka = threadStatusSortKey(a, draftThreadKeys)
   const kb = threadStatusSortKey(b, draftThreadKeys)
   if (ka !== kb) return ka - kb
+  // A bookmarked row heads the status it is in. A bookmark never lifts a thread
+  // out of that status   it keeps the row at the top of it (see
+  // {@link splitTimelineThreads}), so the group it lands in is the group it
+  // would have been in unpinned, with the bookmarked rows leading it.
+  if (a.bookmarked !== b.bookmarked) return a.bookmarked ? -1 : 1
   // Same anchor rule as the project folders' sort, so a dropped row holds the
   // slot the user put it in until newer activity or another drop moves it.
   const aKey = threadOrderKey(a)
   const bKey = threadOrderKey(b)
   if (aKey !== bKey) return bKey - aKey
   return a.id.localeCompare(b.id)
+}
+
+/**
+ * The Threads timeline as the two lists it draws: the pinned rows that open it,
+ * and every row that carries its own status below them.
+ *
+ * A bookmarked thread is pinned in the database   that is what keeps it out of
+ * the automatic cleanup   but it is not a pin to the reader. It stays in the
+ * status it is in, at the head of it (see {@link threadStatusSort}), and the
+ * Projects view keeps it at the head of its project's own strip. Only a plain
+ * pin, the one the user made with the pin action, leaves its status for the
+ * pinned section.
+ */
+export function splitTimelineThreads(
+  threads: readonly Thread[],
+  draftThreadKeys?: ReadonlySet<string> | null
+): { pinned: Thread[]; statusListed: Thread[] } {
+  const pinned: Thread[] = []
+  const statusListed: Thread[] = []
+  for (const thread of threads) {
+    if (thread.pinned && !thread.bookmarked) pinned.push(thread)
+    else statusListed.push(thread)
+  }
+  pinned.sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
+  statusListed.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
+  return { pinned, statusListed }
 }
 
 /**

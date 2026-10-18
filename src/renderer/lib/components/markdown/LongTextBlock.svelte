@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, ChevronDown, ChevronUp, Copy } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
   import { copyText } from '$lib/copy-text'
 
   interface Props {
@@ -51,9 +54,9 @@
         onclick={() => (expanded = !expanded)}
       >
         {#if expanded}
-          <ChevronUp size={12} />
+          <CioChevronUp size={12} />
         {:else}
-          <ChevronDown size={12} />
+          <CioChevronDown size={12} />
         {/if}
       </button>
       <button
@@ -63,9 +66,9 @@
         onclick={() => void copy()}
       >
         {#if copied}
-          <Check size={12} class="text-success" />
+          <CioCheck size={12} class="text-success" />
         {:else}
-          <Copy size={12} />
+          <CioCopy size={12} />
         {/if}
       </button>
     </div>

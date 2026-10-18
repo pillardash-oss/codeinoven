@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Kanban } from '@lucide/svelte'
+  import CioBoard from '@pillardash-oss/cio-icon/CioBoard.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
 
@@ -19,7 +19,7 @@
   disabled={!scopeState.activeProjectId}
   onclick={() => (open = true)}
 >
-  <Kanban size={15} strokeWidth={1.8} />
+  <CioBoard size={15} strokeWidth={1.8} />
 </button>
 
 {#if open && scopeState.activeProjectId}

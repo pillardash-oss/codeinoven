@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
-
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 
   /**
@@ -48,7 +47,7 @@
         title={`Close ${file.name}`}
         onclick={() => standaloneFiles.requestClose(file.path)}
       >
-        <X size={11} />
+        <CioClose size={11} />
       </button>
     {/each}
   </div>

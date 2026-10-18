@@ -1,5 +1,7 @@
-import { CircleCheck, CircleDot, CircleX, Recycle } from '@lucide/svelte'
-
+import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
 /**
  * How a deployment or workflow run state reads at a glance.
  *
@@ -52,12 +54,12 @@ function stateTone(state: string): StateTone {
 }
 
 /** The glyph for one state. */
-export function stateGlyph(state: string): typeof CircleCheck {
+export function stateGlyph(state: string): typeof CioCheckCircle {
   const tone = stateTone(state)
-  if (tone === 'success') return CircleCheck
-  if (tone === 'failure') return CircleX
-  if (tone === 'idle') return CircleDot
-  return Recycle
+  if (tone === 'success') return CioCheckCircle
+  if (tone === 'failure') return CioCrossCircle
+  if (tone === 'idle') return CioDot
+  return CioRefresh
 }
 
 /** The glyph's colour, matching the tone the state pills use. */

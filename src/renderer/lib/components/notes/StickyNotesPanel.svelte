@@ -1,4 +1,10 @@
 <script lang="ts">
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioNotes from '@pillardash-oss/cio-icon/CioNotes.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioRedo from '@pillardash-oss/cio-icon/CioRedo.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '$lib/components/speech/VoiceInputButton.svelte'
@@ -10,7 +16,7 @@
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { StickyNoteAppearance } from '$shared/types'
-  import { Eye, Maximize2, Redo2, SquarePen, StickyNotes, Undo2 } from '@lucide/svelte'
+
   import { tick } from 'svelte'
   import { cubicOut } from 'svelte/easing'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
@@ -140,7 +146,7 @@
       aria-pressed={!activeIsEditing}
       onclick={() => stopEditing(activeNote.id)}
     >
-      <Eye size={14} />
+      <CioEye size={14} />
     </button>
   {:else if activeNote}
     <button
@@ -151,7 +157,7 @@
       aria-pressed={activeIsEditing}
       onclick={() => startEditing(activeNote.id)}
     >
-      <SquarePen size={14} />
+      <CioPencil size={14} />
     </button>
   {/if}
 {/snippet}
@@ -162,7 +168,7 @@
   {#if icon}
     <img src={icon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
   {:else}
-    <StickyNotes size={13} class="shrink-0" />
+    <CioNotes size={13} class="shrink-0" />
   {/if}
 {/snippet}
 
@@ -178,7 +184,7 @@
       out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
       style="width: 1.75rem"
     >
-      <Undo2 size={14} />
+      <CioUndo size={14} />
     </button>
   {/if}
   {#if activeNote?.loaded && activeIsEditing && canRedo}
@@ -192,7 +198,7 @@
       out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
       style="width: 1.75rem"
     >
-      <Redo2 size={14} />
+      <CioRedo size={14} />
     </button>
   {/if}
   <VoiceInputButton
@@ -272,7 +278,7 @@
       </div>
     {:else if stickyNotes.error && !stickyNotes.isLoaded}
       <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-        <StickyNotes size={22} class="text-dimmed" />
+        <CioNotes size={22} class="text-dimmed" />
         <p class="max-w-64 text-sm text-muted">{stickyNotes.error}</p>
         <button
           type="button"
@@ -286,7 +292,7 @@
       </div>
     {:else if stickyNotes.entries.length === 0}
       <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-        <StickyNotes size={22} class="text-dimmed" />
+        <CioNotes size={22} class="text-dimmed" />
         <div class="space-y-1">
           <h2 class="text-sm font-medium text-foreground">No sticky notes yet</h2>
           <p class="text-xs text-muted">Create a note to keep it handy across the app.</p>
@@ -299,7 +305,7 @@
           disabled={!stickyNotes.isLoaded}
           onclick={() => void createNote()}
         >
-          <StickyNotes size={13} />
+          <CioNotes size={13} />
           New sticky note
         </button>
         {#if createError}<p class="text-xs text-danger" role="alert">{createError}</p>{/if}
@@ -325,7 +331,7 @@
       >
         {#snippet actions()}{@render stripActions()}{/snippet}
         {#snippet trailingIcon()}
-          <Maximize2 size={13} />
+          <CioMaximize size={13} />
         {/snippet}
       </PanelTabStrip>
 

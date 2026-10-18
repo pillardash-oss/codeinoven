@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Ban, CornerDownRight, Link2, ListTree, Plus, X } from '@lucide/svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEnter from '@pillardash-oss/cio-icon/CioEnter.svelte'
+  import CioLink from '@pillardash-oss/cio-icon/CioLink.svelte'
+  import CioListTree from '@pillardash-oss/cio-icon/CioListTree.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import { issueStateIcon } from './issue-view'
   import type {
     IssueRelationshipItem,
@@ -92,7 +97,7 @@
       aria-label={label}
       onclick={() => onAdd(mode)}
     >
-      <Plus size={9} />
+      <CioPlus size={9} />
       Add
     </button>
   {/if}
@@ -129,7 +134,7 @@
           aria-label="Unlink {item.repository}#{item.number}"
           onclick={() => onRemove(mode, item)}
         >
-          <X size={8} />
+          <CioClose size={8} />
         </button>
       {/if}
     </div>
@@ -139,7 +144,7 @@
 {#snippet group(
   labelText: string,
   items: IssueRelationshipItem[],
-  Icon: typeof Ban,
+  Icon: typeof CioBan,
   tone: string,
   mode: IssueRelationshipMode
 )}
@@ -156,7 +161,7 @@
 
 <div class="mt-2 border border-border bg-surface/40 px-2.5 py-2">
   <div class="flex items-center gap-1.5">
-    <ListTree size={10} class="text-dimmed" />
+    <CioListTree size={10} class="text-dimmed" />
     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
       Relationships
     </span>
@@ -173,13 +178,13 @@
         so an empty parent is something to offer rather than something to list.
       -->
       {#if relationships.parent}
-        {@render group('Parent', [relationships.parent], CornerDownRight, '', 'parent')}
+        {@render group('Parent', [relationships.parent], CioEnter, '', 'parent')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <CornerDownRight size={9} />
+            <CioEnter size={9} />
             Parent
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">
@@ -195,7 +200,7 @@
         <span
           class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
         >
-          <ListTree size={9} />
+          <CioListTree size={9} />
           Sub-issues
         </span>
         <div class="flex min-w-0 flex-1 flex-col gap-1">
@@ -212,13 +217,13 @@
       </div>
 
       {#if relationships.blockedBy.length > 0}
-        {@render group('Blocked by', relationships.blockedBy, Ban, 'text-warning', 'blocked-by')}
+        {@render group('Blocked by', relationships.blockedBy, CioBan, 'text-warning', 'blocked-by')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <Ban size={9} class="text-warning" />
+            <CioBan size={9} class="text-warning" />
             Blocked by
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">
@@ -228,13 +233,13 @@
       {/if}
 
       {#if relationships.blocking.length > 0}
-        {@render group('Blocking', relationships.blocking, Link2, '', 'blocking')}
+        {@render group('Blocking', relationships.blocking, CioLink, '', 'blocking')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <Link2 size={9} />
+            <CioLink size={9} />
             Blocking
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CornerDownRight, Layers3 } from '@lucide/svelte'
+  import CioEnter from '@pillardash-oss/cio-icon/CioEnter.svelte'
+  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
   import { subagentModeLabel, subagentModeTitle } from '$lib/subagent-presentation'
 
   interface Props {
@@ -25,14 +26,14 @@
     aria-label={title}
   >
     {#if background}
-      <Layers3 size={9} />
+      <CioLayers size={9} />
     {:else}
-      <CornerDownRight size={9} />
+      <CioEnter size={9} />
     {/if}
     {subagentModeLabel(background)}
   </span>
 {:else if background}
   <span class="flex shrink-0 items-center" {title} aria-label={title}>
-    <Layers3 size={9} class="text-dimmed" />
+    <CioLayers size={9} class="text-dimmed" />
   </span>
 {/if}

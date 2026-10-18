@@ -1,7 +1,10 @@
 <script lang="ts">
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { MemoryExportKind, MemoryImportPreview } from '$shared/types'
-  import { Download, Loader2, Upload } from '@lucide/svelte'
+
   import Modal from '../ui/Modal.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
 
@@ -120,7 +123,7 @@
     title="Export or import memory as a backup file"
     onclick={() => (transferOpen = true)}
   >
-    <Upload size={13} />
+    <CioUpload size={13} />
     Transfer
   </button>
 
@@ -166,9 +169,9 @@
             onclick={() => void exportMemory()}
           >
             {#if busy}
-              <Loader2 size={13} class="animate-spin" />
+              <CioSpinner size={13} class="animate-spin" />
             {:else}
-              <Download size={13} />
+              <CioDownload size={13} />
             {/if}
             Export
           </button>
@@ -179,7 +182,7 @@
             title="Import a memory export file and merge its entries"
             onclick={() => void pickImport()}
           >
-            <Upload size={13} />
+            <CioUpload size={13} />
             Import
           </button>
         </div>
@@ -200,13 +203,13 @@
     items={[
       {
         label: 'Export memory',
-        icon: Download,
+        icon: CioDownload,
         disabled: busy,
         onClick: () => void exportMemory()
       },
       {
         label: 'Import memory',
-        icon: Upload,
+        icon: CioUpload,
         disabled: busy,
         onClick: () => void pickImport()
       }
@@ -260,9 +263,9 @@
         onclick={() => void applyImport()}
       >
         {#if applying}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Upload size={13} />
+          <CioUpload size={13} />
         {/if}
         Import
       </button>

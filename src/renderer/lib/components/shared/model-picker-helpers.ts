@@ -1,4 +1,5 @@
-import { Clock, Star } from '@lucide/svelte'
+import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
 import { getAgentIcon } from '$lib/agent-icons/registry'
 import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'
@@ -159,7 +160,7 @@ export type PickerListItem =
       key: string
       id: string
       text: string
-      icon: typeof Star
+      icon: typeof CioStar
       iconClass: string
       count: number
     }
@@ -340,7 +341,7 @@ export function buildPickerLayout(input: {
       key: 'header-favorites',
       id: 'favorites',
       text: 'Favorites',
-      icon: Star,
+      icon: CioStar,
       iconClass: 'text-amber-400',
       count: favoriteModelsList.length
     })
@@ -364,7 +365,7 @@ export function buildPickerLayout(input: {
       key: 'header-recent',
       id: 'recent',
       text: 'Recently used',
-      icon: Clock,
+      icon: CioClock,
       iconClass: 'text-muted',
       count: recentModelsList.length
     })
@@ -388,7 +389,7 @@ export function buildPickerLayout(input: {
       key: 'header-unavailable',
       id: 'unavailable-favorites',
       text: 'Unavailable favorites',
-      icon: Star,
+      icon: CioStar,
       iconClass: 'text-dimmed',
       count: unavailableFavoriteModels.length
     })

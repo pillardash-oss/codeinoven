@@ -23,7 +23,23 @@
   let hoveredAt = 0
   let selectedAction: string | null = null
   let modalRoot: HTMLDivElement | null = null
-  let lastScroll: { target: string; top: number } | null = null
+  /**
+   * The position this document last reported for each scroll host.
+   *
+   * The app mirrors what this document reports, so its next projection carries
+   * the position sent a round trip ago as `data-native-dock-scroll-top`.
+   * Writing that back drags a live gesture backwards every time a frame lands,
+   * which reads as a list that shakes and crawls instead of scrolling. A
+   * projected position this document never reported is the app moving the
+   * container itself   a search result scrolled into view, a list reset to the
+   * top   and that one is applied.
+   *
+   * Keyed by the host element rather than the identity the projection gives it,
+   * so a replaced host can never be answered for with a dead position. It is also
+   * deliberately not reactive: bookkeeping the draw attachment reads may not
+   * schedule the draw again, or every scroll would re-patch the whole panel.
+   */
+  const reportedScrollTops = new WeakMap<HTMLElement, number>()
   let images: Record<string, string> = {}
   function report(report: NativeDockInteraction): void {
     void invoke('browser:overlayDockInteract', report).catch(() => {})
@@ -60,7 +76,9 @@
       current.nodes.map((node) => create(node))
     )
     for (const target of element.querySelectorAll<HTMLElement>('[data-native-dock-scroll]')) {
-      target.scrollTop = Number(target.dataset.nativeDockScrollTop ?? 0)
+      const top = Number(target.dataset.nativeDockScrollTop ?? 0)
+      if (reportedScrollTops.get(target) === top) continue
+      if (target.scrollTop !== top) target.scrollTop = top
     }
     if (current.panel) {
       const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
@@ -180,8 +198,8 @@
     const target = event.target
     if (!(target instanceof HTMLElement) || !target.dataset.nativeDockScroll) return
     const id = target.dataset.nativeDockScroll
-    if (lastScroll?.target === id && lastScroll.top === target.scrollTop) return
-    lastScroll = { target: id, top: target.scrollTop }
+    if (reportedScrollTops.get(target) === target.scrollTop) return
+    reportedScrollTops.set(target, target.scrollTop)
     report({ id: dock.id, kind: 'scroll', target: id, top: target.scrollTop })
   }
   onMount(() =>
@@ -311,6 +329,12 @@
     // so only the native document's own defaults are settled here: Escape and
     // Cmd+Enter belong to the source, a control activates on Enter and Space,
     // and Tab walks the panel and wraps at its own edges.
+    // The switcher source owns Tab cycling. Native traversal would scroll a
+    // different row into view before the projected highlight arrives.
+    if (event.key === 'Tab' && dock.id === 'thread-switcher') {
+      event.preventDefault()
+      return
+    }
     if (event.key === 'Tab' && modalRoot) {
       const controls = focusOrder(modalRoot)
       const next = event.shiftKey ? controls.at(-1) : controls[0]

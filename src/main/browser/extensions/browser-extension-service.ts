@@ -1,3 +1,4 @@
+import { dialog } from '../../system/file-dialogs'
 /**
  * Browser extensions: what is installed, and which jars load them.
  *
@@ -35,7 +36,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve, sep } from 'node:path'
-import { app, dialog, type BrowserWindow, type Session } from 'electron'
+import { app, type BrowserWindow, type Session } from 'electron'
 import preambleSource from './compat/cio-compat-preamble.js?raw'
 import { missingExtensionCapabilities } from '../../../lib/browser/browser-extension-capabilities'
 import { MAX_PINNED_EXTENSIONS } from '../../../lib/browser/browser-extension-pins'

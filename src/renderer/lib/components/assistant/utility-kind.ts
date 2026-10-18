@@ -1,4 +1,10 @@
-import { Cpu, Globe, Image, MonitorCog, Plug, Search, Sparkles } from '@lucide/svelte'
+import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+import CioCpu from '@pillardash-oss/cio-icon/CioCpu.svelte'
+import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
+import CioPlug from '@pillardash-oss/cio-icon/CioPlug.svelte'
+import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
 import type { Component } from 'svelte'
 import type { UtilityKind } from '$shared/types'
 
@@ -7,13 +13,13 @@ import type { UtilityKind } from '$shared/types'
  * picker so a kind always reads the same wherever a connection is shown.
  */
 export const UTILITY_KIND_ICONS: Readonly<Record<UtilityKind, Component>> = {
-  mcp: Plug,
-  skill: Sparkles,
-  web_search: Search,
-  web_fetch: Globe,
-  computer_use: MonitorCog,
-  provider: Cpu,
-  image_descriptor: Image
+  mcp: CioPlug,
+  skill: CioSparkles,
+  web_search: CioSearch,
+  web_fetch: CioBrowser,
+  computer_use: CioActions,
+  provider: CioCpu,
+  image_descriptor: CioImage
 }
 
 const UTILITY_KIND_LABELS: Readonly<Record<UtilityKind, string>> = {
@@ -34,6 +40,6 @@ export function utilityKindLabel(kind: string | undefined): string {
 
 /** Glyph for a utility kind, falling back to the generic connection icon. */
 export function utilityKindIcon(kind: string | undefined): Component {
-  if (!kind) return Plug
-  return UTILITY_KIND_ICONS[kind as UtilityKind] ?? Plug
+  if (!kind) return CioPlug
+  return UTILITY_KIND_ICONS[kind as UtilityKind] ?? CioPlug
 }

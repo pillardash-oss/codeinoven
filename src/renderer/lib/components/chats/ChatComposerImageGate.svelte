@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, Eye, X } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
   import { slide } from 'svelte/transition'
   import CardHead from '../shared/CardHead.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -58,7 +60,7 @@ are the shared card shape. -->
   aria-label="Pick a vision model to describe this image"
 >
   <CardHead
-    icon={Eye}
+    icon={CioEye}
     title="This model can't see images"
     chip={{ text: 'Waiting', tone: 'paused' }}
     bind:folded
@@ -69,9 +71,9 @@ are the shared card shape. -->
     <div transition:slide={foldSlide()}>
       <div class="flex flex-col gap-2 px-3 py-2.5">
         <p class="text-xs leading-relaxed text-muted">
-          You're about to send an image to a model without vision capability. Image Descriptor is a
-          tool the model can call to describe the image for it but you need to pick the vision model
-          that does the describing.
+          You're about to send an image to a model without vision capability. The
+          <span class="font-mono">cio:see-image</span> utility is a tool the model can call to describe
+          the image for it, but you need to pick the vision model that does the describing.
         </p>
         <ModelPicker
           {providers}
@@ -122,7 +124,7 @@ are the shared card shape. -->
             variant="ghost"
             label="Cancel"
             title="Cancel and keep your message and attachment"
-            icon={X}
+            icon={CioClose}
             onclick={onCancel}
           />
         {/snippet}
@@ -132,7 +134,7 @@ are the shared card shape. -->
             variant="primary"
             label="Continue"
             title="Send the image and describe it with the selected vision model"
-            icon={Check}
+            icon={CioCheck}
             disabled={!visionSelection}
             onclick={onConfirm}
           />

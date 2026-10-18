@@ -1,17 +1,16 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFilter from '@pillardash-oss/cio-icon/CioFilter.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import {
-    AlertTriangle,
-    ListFilter,
-    Loader2,
-    Pencil,
-    Plus,
-    RefreshCw,
-    Server,
-    Trash2,
-    X
-  } from '@lucide/svelte'
+
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -167,7 +166,7 @@
               title="Show providers for all harnesses"
               onclick={clearHarnessFilter}
             >
-              <ListFilter size={11} class="shrink-0" />
+              <CioFilter size={11} class="shrink-0" />
               All
             </button>
             {#each filterHarnesses as harness (harness.id)}
@@ -193,7 +192,7 @@
                 title="Clear harness filter"
                 onclick={clearHarnessFilter}
               >
-                <X size={11} /> Clear
+                <CioClose size={11} /> Clear
               </button>
             {/if}
           </div>
@@ -206,25 +205,25 @@
           disabled={baseUrlProviderStore.loading}
           onclick={() => void baseUrlProviderStore.load()}
         >
-          <RefreshCw size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
+          <CioRefresh size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
         </button>
         <button
           class="flex h-8 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
           title="Add base URL provider"
           onclick={openCreate}
         >
-          <Plus size={13} /> Add provider
+          <CioPlus size={13} /> Add provider
         </button>
       </div>
     </div>
 
     {#if baseUrlProviderStore.loading && baseUrlProviderStore.providers.length === 0}
       <div class="border border-dashed p-6 text-center">
-        <Loader2 size={17} class="mx-auto animate-spin text-dimmed" />
+        <CioSpinner size={17} class="mx-auto animate-spin text-dimmed" />
       </div>
     {:else if baseUrlProviderStore.providers.length === 0}
       <div class="border border-dashed p-5 text-center">
-        <Server size={17} class="mx-auto mb-1.5 text-dimmed" />
+        <CioServer size={17} class="mx-auto mb-1.5 text-dimmed" />
         <p class="text-xs text-muted">No custom base URL providers yet.</p>
         <button class="mt-2 text-xs font-medium text-primary hover:underline" onclick={openCreate}>
           Add the first provider
@@ -232,7 +231,7 @@
       </div>
     {:else if filteredGroups.length === 0}
       <div class="border border-dashed p-5 text-center">
-        <ListFilter size={17} class="mx-auto mb-1.5 text-dimmed" />
+        <CioFilter size={17} class="mx-auto mb-1.5 text-dimmed" />
         <p class="text-xs text-muted">No providers match the selected harnesses.</p>
         <button
           class="mt-2 text-xs font-medium text-primary hover:underline"
@@ -289,7 +288,7 @@
                 title="Edit {provider.name}"
                 onclick={() => openEdit(group)}
               >
-                <Pencil size={13} />
+                <CioPencil size={13} />
               </button>
               <button
                 class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
@@ -297,7 +296,7 @@
                 title="Delete {provider.name}"
                 onclick={() => (deleteTarget = group)}
               >
-                <Trash2 size={13} />
+                <CioTrash size={13} />
               </button>
             </div>
           </div>
@@ -326,7 +325,7 @@
       disabled={baseUrlProviderStore.saving}
       onclick={() => void removeProvider()}
     >
-      {#if baseUrlProviderStore.saving}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+      {#if baseUrlProviderStore.saving}<CioSpinner size={13} class="animate-spin" />{:else}<CioTrash
           size={13}
         />{/if}
       Delete provider
@@ -339,7 +338,7 @@
     </p>
   {/if}
   <div class="flex gap-2 text-sm text-muted">
-    <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
+    <CioAttention size={16} class="mt-0.5 shrink-0 text-warning" />
     <p>
       Delete <strong class="text-foreground">{deleteTarget?.[0]?.name}</strong>?
       {#if deleteTarget && deleteTarget.length > 1}

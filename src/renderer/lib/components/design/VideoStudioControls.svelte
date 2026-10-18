@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
+  import CioCaptions from '@pillardash-oss/cio-icon/CioCaptions.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
   import { onMount } from 'svelte'
-  import { AudioLines, Captions, ChevronDown, SlidersHorizontal } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
@@ -190,7 +193,7 @@
         <legend class="sr-only">Composition settings</legend>
         <div class="flex items-center justify-between gap-2">
           <div class="flex min-w-0 items-center gap-1.5">
-            <SlidersHorizontal size={13} class="text-accent" aria-hidden="true" />
+            <CioTabSettings size={13} class="text-accent" aria-hidden="true" />
             <span class="text-xs font-semibold text-foreground">Settings</span>
             {#if dirty}
               <span class="truncate text-[0.6875rem] text-muted">Unsaved changes</span>
@@ -259,11 +262,11 @@
               onclick={() => (captionsOpen = !captionsOpen)}
             >
               <span class="flex items-center gap-1.5">
-                <Captions size={12} aria-hidden="true" />
+                <CioCaptions size={12} aria-hidden="true" />
                 <span class="font-medium text-foreground">Captions</span>
                 <span class="tabular-nums text-dimmed">{studio.captions.length}</span>
               </span>
-              <ChevronDown
+              <CioChevronDown
                 size={12}
                 aria-hidden="true"
                 class={captionsOpen ? 'rotate-180 transition-transform' : 'transition-transform'}
@@ -378,11 +381,11 @@
               onclick={() => (tracksOpen = !tracksOpen)}
             >
               <span class="flex items-center gap-1.5">
-                <AudioLines size={12} aria-hidden="true" />
+                <CioAudioLines size={12} aria-hidden="true" />
                 <span class="font-medium text-foreground">Audio tracks</span>
                 <span class="tabular-nums text-dimmed">{studio.audioTracks.length}</span>
               </span>
-              <ChevronDown
+              <CioChevronDown
                 size={12}
                 aria-hidden="true"
                 class={tracksOpen ? 'rotate-180 transition-transform' : 'transition-transform'}

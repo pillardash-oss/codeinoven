@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
@@ -161,7 +161,7 @@
           aria-label="Test connection without saving"
           onclick={() => void testConnection()}
         >
-          {#if testing}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if testing}<CioSpinner size={13} class="animate-spin" />{/if}
           Test connection
         </button>
         <button
@@ -170,7 +170,7 @@
           form="cloud-account-form"
           disabled={saving}
         >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
           Save account
         </button>
       </div>

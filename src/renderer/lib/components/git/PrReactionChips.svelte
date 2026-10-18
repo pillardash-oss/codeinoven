@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   /**
    * The reactions on one comment, as the chips a reader clicks.
    *
@@ -10,7 +11,7 @@
    * is where a reaction starts, and an empty row under every comment would cost
    * the conversation a line each for nothing.
    */
-  import { Loader2 } from '@lucide/svelte'
+
   import { gitState } from '$lib/stores/git.svelte'
   import { prReactionBusyKey } from '$lib/stores/git-store-helpers'
   import type { PrReactionContent, PrReactionGroup } from '$shared/types'
@@ -50,7 +51,7 @@
       >
         <span aria-hidden="true">{option?.emoji ?? group.content}</span>
         {#if busy(group.content)}
-          <Loader2 size={10} class="animate-spin" />
+          <CioSpinner size={10} class="animate-spin" />
         {:else}
           <span>{group.count}</span>
         {/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { KeyRound, ShieldCheck } from '@lucide/svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
   import { createSubscriber } from 'svelte/reactivity'
   import { fly, slide } from 'svelte/transition'
   import { formatKeyCombo } from '$lib/keymap/keymap'
@@ -275,7 +276,7 @@
   <!-- The card that takes the composer's place while the agent waits for a
      credential: what it needs, the field, and the two actions that end it. -->
   <CardHead
-    icon={KeyRound}
+    icon={CioKey}
     title={question.header ?? 'Secret'}
     chip={{
       text: remainingLabel,
@@ -374,7 +375,7 @@
                   class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-dimmed"
                   aria-hidden="true"
                 >
-                  <KeyRound size={14} />
+                  <CioKey size={14} />
                 </span>
                 <input
                   id={`secret-value-${request.requestId}-${currentIndex}`}
@@ -440,7 +441,7 @@
         title="Secrets are stored in your encrypted vault and are never sent to the agent"
         aria-label="Secrets are stored in your encrypted vault and are never sent to the agent"
       >
-        <ShieldCheck size={13} class="shrink-0 text-primary" />
+        <CioShieldCheck size={13} class="shrink-0 text-primary" />
         <span class="agent-card-footer-note-text min-w-0 truncate">Secrets are safe</span>
       </p>
     {/snippet}
@@ -459,7 +460,7 @@
       <CardButton
         label={working ? 'Storing…' : 'Submit'}
         title="Store the secret and answer the agent"
-        icon={ShieldCheck}
+        icon={CioShieldCheck}
         variant="primary"
         loading={working}
         disabled={working || !allFilled}

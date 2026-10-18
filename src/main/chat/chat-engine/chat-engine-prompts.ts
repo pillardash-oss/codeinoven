@@ -1,10 +1,13 @@
 import { BRAINSTORM_ALIGNMENT_UTILITY_ID } from '../../../lib/brainstorm/brainstorm-alignment'
 import { toPosixPath } from '../../../lib/paths'
 import type { HarnessCapabilities } from '../../drivers/driver.interface'
-import { IMAGE_DESCRIPTOR_PROMPT } from '../../providers/image-descriptor-provider'
 import { APP_NAME } from '../../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
-import { registerCioPromptDefault, SKILL_OUTPUT_INSTRUCTION } from '../../../lib/cio-prompts'
+import {
+  registerCioPromptDefault,
+  DIAGRAM_OUTPUT_RULE,
+  SKILL_OUTPUT_INSTRUCTION
+} from '../../../lib/cio-prompts'
 import {
   BRAINSTORM_DOCUMENT_TOOL_NAME,
   ENGINEERING_SPEC_TOOL_NAME,
@@ -143,13 +146,41 @@ export const INDEPENDENT_AUDIT_SYSTEM_PROMPT = [
   'Return only the requested structured audit report.'
 ].join(' ')
 
+/**
+ * Reply budget for the day-to-day conversations: regular implementation and
+ * chats. Injected by the turn composers, and deliberately app-owned: the
+ * editable Agent behavior prompt can neither drop it nor shorten it, and the
+ * user can always ask for more.
+ *
+ * Two modes are deliberately excluded because they own their own output shape:
+ *
+ * - The engineering lifecycle (specification, PRD and Assignment planning turns)
+ *   must produce the full technical detail, so the brevity budget never applies
+ *   to those stages.
+ * - An assistant already owns its reply contract, and it is stricter than this
+ *   budget: the voice instruction that rides the assistant persona layers asks
+ *   for one short message, and the run contract caps the delivered result at 80
+ *   words (`ASSISTANT_VOICE_INSTRUCTION` and `ASSISTANT_BRIEF_REPLY_INSTRUCTION`
+ *   in `src/lib/assistant-voice.ts`). Two style owners in one prompt contradict
+ *   each other, so the executable contract wins.
+ */
+export const RESPONSE_STYLE_INSTRUCTION = [
+  'Write to the user the way a senior engineer briefs an executive: the outcome first, then only what the user has to know, decide, or do.',
+  'Keep the whole reply to at most two short paragraphs and fit every concept into them. Prefer plain sentences; when a few short bullets are clearer than prose, use bullets instead of longer paragraphs.',
+  'No preamble, no restating the request, no filler, no hedging, no closing summary, and no narration of your process or your tool calls. Reporting a problem means exactly three things: what happened, what actually caused it, and what you changed to fix it.',
+  'Keep the detail out of the reply. Put long-form and technical breakdowns into the artifacts the task requires, or into a document in the scratch path you are allowed to write to, and point the user at that path so they can read more.',
+  'This budget governs the reply you write for the user, never the content the work itself requires: specifications, documents, reports, structured output, and evidence keep their full required detail.',
+  'Exceed it only when the user explicitly asks for the full explanation, a walkthrough, or the underlying reasoning.'
+].join(' ')
+
+/** Diagram discipline plus the two rules the renderer and validator add on top of
+ *  it. `DIAGRAM_OUTPUT_RULE` carries the shared text the editable templates also
+ *  embed, so the app instruction and the Settings default cannot drift apart. */
 export const MERMAID_OUTPUT_INSTRUCTION = [
-  'Use a fenced `mermaid` block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram.',
-  'Keep diagrams concise and parse-valid.',
+  DIAGRAM_OUTPUT_RULE,
   'In flowcharts, wrap every human-readable node label in double quotes, especially labels containing punctuation, parentheses, paths, or code.',
   'The application validates completed Mermaid blocks and rejects an invalid answer for one automatic correction attempt.',
-  'A diagram supplements the required explanation and specification detail; it never replaces them.',
-  'Do not add decorative diagrams.'
+  'A diagram supplements the required explanation and specification detail; it never replaces them.'
 ].join(' ')
 
 export const ARTIFACT_OUTPUT_INSTRUCTION = [
@@ -306,7 +337,8 @@ export const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.',
   'Do not ask to broaden the task. Respond only to the user request in this temporary chat.',
   CITATION_SYSTEM_INSTRUCTION,
-  MERMAID_OUTPUT_INSTRUCTION
+  MERMAID_OUTPUT_INSTRUCTION,
+  RESPONSE_STYLE_INSTRUCTION
 ].join(' ')
 
 export const TEMPORARY_CHAT_ALLOWED_TOOLS = [
@@ -621,8 +653,6 @@ registerCioPromptDefault(
 
 registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
 
-registerCioPromptDefault('image-description', IMAGE_DESCRIPTOR_PROMPT)
-
 export function buildSpecRevisionSystemPrompt(
   specPath: string,
   annotations: ReadonlyArray<{ section: string; body: string; quote?: string; status: string }>
@@ -653,9 +683,12 @@ export function formatOpenAnnotations(
 /**
  * Final composition of the per-turn system prompt for the implement/chat path.
  * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
- * planning or implementation instruction exactly once; mermaid, artifact and question
- * instructions are injected here for the conversational modes (`chat` and
- * `assistant`), where no app layer supplies them.
+ * planning or implementation instruction exactly once. The reply budget is
+ * injected only for the day-to-day conversations (`implement` and `chat`); the
+ * engineering lifecycle (`brainstorm`) and the `assistant` mode own their own
+ * output shape and keep the full technical detail. Mermaid, artifact and
+ * question instructions are injected here for the conversational modes (`chat`
+ * and `assistant`), where no app layer supplies them.
  *
  * The restored history recap is deliberately NOT a layer here: it rides the
  * user channel through `SendPromptOptions.historyRecap`, so the system role is
@@ -681,6 +714,10 @@ export function composeTurnSystemPrompt(input: {
   // both carry the mermaid rules and the question-tool instruction; a project
   // thread gets them from its own application layer instead.
   const conversational = input.behaviorMode === 'chat' || input.behaviorMode === 'assistant'
+  // Only the day-to-day conversations carry the executive budget: a previous
+  // engineering lifecycle turn loses the technical detail the later stages need,
+  // and an assistant already carries a stricter reply contract of its own.
+  const dayToDayConversation = input.behaviorMode === 'implement' || input.behaviorMode === 'chat'
   return [
     input.chatPrompt,
     input.memoryInstruction,
@@ -689,6 +726,7 @@ export function composeTurnSystemPrompt(input: {
     input.behaviorPrompt,
     input.utilityInstructions,
     input.assistantInstruction,
+    dayToDayConversation ? RESPONSE_STYLE_INSTRUCTION : undefined,
     conversational ? MERMAID_OUTPUT_INSTRUCTION : undefined,
     conversational ? ARTIFACT_OUTPUT_INSTRUCTION : undefined,
     conversational ? QUESTION_TOOL_INSTRUCTION : undefined

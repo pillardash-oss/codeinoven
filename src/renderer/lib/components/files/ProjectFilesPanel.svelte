@@ -1,19 +1,17 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMinimize from '@pillardash-oss/cio-icon/CioMinimize.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import {
-    ChevronRight,
-    FolderTree,
-    FolderOpen,
-    Loader2,
-    Minimize2,
-    Save,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
   import { htmlPreviewFrame } from '$lib/document-preview-frame'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
@@ -58,6 +56,7 @@
   import ProjectFilesPanelAnnotator from './ProjectFilesPanelAnnotator.svelte'
   import ProjectFilesPanelPreviewPane from './ProjectFilesPanelPreviewPane.svelte'
   import ProjectFilesPanelToolbar from './ProjectFilesPanelToolbar.svelte'
+  import ProjectFilesPanelReadAlong from './ProjectFilesPanelReadAlong.svelte'
   import { ProjectFilesPanelSvgPreview } from './project-files-panel-svg-preview.svelte'
   import { ProjectFilesPanelFind } from './project-files-panel-find.svelte'
   import { ProjectFilesPanelDocumentPreview } from './project-files-panel-document-preview.svelte'
@@ -67,10 +66,16 @@
     hasAnyPreview,
     previewKindLabel as previewKindLabelFor
   } from './project-files-panel-preview'
+  import {
+    documentReadAloudId,
+    hasSpeakableText,
+    type DocumentReadAloud
+  } from './project-files-panel-read-aloud'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
   import { ovenRootThread } from '$lib/oven-root-target'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { usesThreadWorkspaceMount } from '$shared/types'
 
   interface Props {
@@ -152,7 +157,7 @@
   )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
   /** Reload is available for text files with a session and for previewable
-   *  files without one (media, images, SVG, PDF, documents), which re-read
+   *  files without one (media, images, SVG, PDF, Files), which re-read
    *  their preview content instead. */
   let reloadDisabled = $derived(
     deletedAtCheckpoint ||
@@ -175,6 +180,18 @@
     if (!activeTab) return
     editRequest = { nonce: ++editNonce, action }
   }
+  /** What one editor surface (sidebar or fullscreen) last reported about its own
+   *  undo/redo depth. The tab id rides along so a report from the file that was
+   *  open a moment ago can never light up the current file's buttons. */
+  interface EditorHistoryReport {
+    tabId: string
+    canUndo: boolean
+    canRedo: boolean
+  }
+  let sidebarHistory = $state<EditorHistoryReport | null>(null)
+  let fullscreenHistory = $state<EditorHistoryReport | null>(null)
+  const reportsHistory = (report: EditorHistoryReport, tabId: string | undefined): boolean =>
+    tabId !== undefined && report.tabId === tabId
   /** Paths still carrying merge/rebase conflicts, straight from the git store. */
   let conflictedPaths = $derived([...gitState.conflicted])
   /**
@@ -209,6 +226,33 @@
       !activeFileInMergeEditor &&
       activeTab?.view === 'source'
   )
+  /** Undo/redo are only live when the editor behind that toolbar still holds
+   *  history in that direction. The two surfaces own separate CodeMirror
+   *  instances, so each toolbar reads its own report rather than sharing one. */
+  let sidebarCanUndo = $derived(
+    canUndoRedo &&
+      sidebarHistory !== null &&
+      reportsHistory(sidebarHistory, activeTab?.id) &&
+      sidebarHistory.canUndo
+  )
+  let sidebarCanRedo = $derived(
+    canUndoRedo &&
+      sidebarHistory !== null &&
+      reportsHistory(sidebarHistory, activeTab?.id) &&
+      sidebarHistory.canRedo
+  )
+  let fullscreenCanUndo = $derived(
+    canUndoRedo &&
+      fullscreenHistory !== null &&
+      reportsHistory(fullscreenHistory, activeTab?.id) &&
+      fullscreenHistory.canUndo
+  )
+  let fullscreenCanRedo = $derived(
+    canUndoRedo &&
+      fullscreenHistory !== null &&
+      reportsHistory(fullscreenHistory, activeTab?.id) &&
+      fullscreenHistory.canRedo
+  )
   /** Beautify is offered for the same editable source view as undo/redo, and
    *  only for a format the editor can reformat. The label doubles as the flag,
    *  so no action is shown that could not run. */
@@ -224,7 +268,7 @@
   )
   /** The Save button only exists for editable content: a conflicted file being
    *  resolved, or a text session with unsaved changes. Preview-only content
-   *  (images, PDF, media, documents, SVG) and clean sessions show no button. */
+   *  (images, PDF, media, Files, SVG) and clean sessions show no button. */
   let showSaveButton = $derived(
     activeTab !== null &&
       activeTab.view !== 'diff' &&
@@ -321,6 +365,30 @@
   /** An annotation is a composer reference, so there has to be a conversation
    *  open for it to attach to; the toolbar explains that instead of hiding. */
   let annotateDisabled = $derived(!activeThreadId || deletedAtCheckpoint)
+  /** The active document as a read-aloud target. Read-aloud is offered for
+   *  exactly the documents that carry annotations, the rendered Markdown whose
+   *  text the viewer holds as plain source; the speaker control then hides
+   *  itself while no text-to-speech model is installed. */
+  let documentReadAloud = $derived.by<DocumentReadAloud | null>(() => {
+    if (!activeTab || !showAnnotateToggle) return null
+    return {
+      messageId: documentReadAloudId(projectId, activeTab.path),
+      markdown: visibleContent,
+      scope: { kind: 'project', projectId, threadId: activeThreadId ?? undefined },
+      disabled: !hasSpeakableText(visibleContent)
+    }
+  })
+  /** Segments of this document's read-aloud while the read-along is up, so the
+   *  body shows the lines being read instead of the file itself; null whenever
+   *  the file belongs on screen. */
+  let readAlongSegments = $derived(
+    documentReadAloud !== null &&
+      'messageId' in speechController.playback &&
+      speechController.playback.messageId === documentReadAloud.messageId &&
+      speechController.readingOverlayActive
+      ? speechController.activeSegments
+      : null
+  )
   let fullscreenOpen = $derived(projectState.fullscreenActive)
   // The browser's native view floats above every DOM overlay, so a full-window
   // editor must register itself as a fullscreen surface while it is up. The
@@ -829,7 +897,7 @@
       ]}
       role="alert"
     >
-      <TriangleAlert size={13} class="shrink-0 text-warning" />
+      <CioAttention size={13} class="shrink-0 text-warning" />
       <span class="text-[0.625rem] font-medium text-warning">Viewing an older version</span>
       <button
         type="button"
@@ -876,7 +944,7 @@
             {/if}
           </button>
           {#each breadcrumbParts as part, index (`${part}:${index}`)}
-            <ChevronRight size={10} class="shrink-0 text-dimmed" />
+            <CioForward size={10} class="shrink-0 text-dimmed" />
             {#if index === breadcrumbParts.length - 1}
               <span class="shrink-0 text-foreground">{part}</span>
             {:else}
@@ -909,7 +977,7 @@
           title={projectState.explorerVisible ? 'Hide file explorer' : 'Show file explorer'}
           onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
         >
-          <FolderTree size={15} />
+          <CioFiles size={15} />
         </button>
       </div>
 
@@ -922,8 +990,11 @@
           showPreviewToggle={hasAnyPreview(previewFlags)}
           {showAnnotateToggle}
           {annotateDisabled}
+          readAloud={documentReadAloud}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
+          canUndo={sidebarCanUndo}
+          canRedo={sidebarCanRedo}
           {reloadDisabled}
           mutationDisabled={deletedAtCheckpoint || mutationPending}
           {showLineNumbers}
@@ -991,10 +1062,16 @@
         />
       {/if}
 
-      {#if !activeTab}
+      {#if readAlongSegments}
+        <ProjectFilesPanelReadAlong
+          segments={readAlongSegments}
+          activeIndex={speechController.visibleSegmentIndex}
+          spokenProgress={speechController.activeSegmentProgress}
+        />
+      {:else if !activeTab}
         <div class="flex min-h-0 flex-1 items-center justify-center px-6">
           <div class="text-center">
-            <FolderOpen size={24} class="mx-auto mb-2 text-dimmed" />
+            <CioFolderOpen size={24} class="mx-auto mb-2 text-dimmed" />
             <p class="text-xs font-medium text-foreground">Open file</p>
             <p class="mt-1 text-[0.625rem] text-dimmed">Select a file from the workspace tree.</p>
             {#if !projectState.explorerVisible}
@@ -1033,7 +1110,7 @@
         </div>
       {:else if activeTab.loadingDiff && !checkpointDiff}
         <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading diff
         </div>
       {:else if activeTab.view === 'diff' && checkpointDiff}
@@ -1062,7 +1139,7 @@
         />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
         <div class="flex flex-1 items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading file
         </div>
       {:else if activeTab && !activeSession && !deletedAtCheckpoint}
@@ -1128,6 +1205,10 @@
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : (matches) => editorFind.setMatches(matches)}
             onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
+            onHistoryChange={(history) => {
+              if (!activeTab) return
+              sidebarHistory = { tabId: activeTab.id, ...history }
+            }}
             onInput={handleEditorInput}
           />
         {/key}
@@ -1231,7 +1312,7 @@
                 onclick={() =>
                   fileTab.fileTabId && closeFullscreenFileTab(fileTab.id, fileTab.fileTabId)}
               >
-                <X size={11} />
+                <CioClose size={11} />
               </button>
             {/if}
           </div>
@@ -1249,13 +1330,13 @@
         onclick={runPanelSave}
       >
         {#if activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving}
-          <Loader2 size={11} class="animate-spin" />
+          <CioSpinner size={11} class="animate-spin" />
         {:else}
-          <Save size={11} />
+          <CioSave size={11} />
         {/if}
         {#if activeFileInMergeEditor}
           {conflictSaveText}
-        {:else}Save{/if}
+        {:else}CioSave{/if}
       </button>
     {/if}
     <button
@@ -1271,7 +1352,7 @@
       title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
       onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
     >
-      <FolderTree size={15} />
+      <CioFiles size={15} />
     </button>
     <button
       type="button"
@@ -1280,7 +1361,7 @@
       title="Minimize fullscreen file viewer"
       onclick={closeFullscreen}
     >
-      <Minimize2 size={14} />
+      <CioMinimize size={14} />
     </button>
   </div>
   <div class="relative flex min-h-0 min-w-0 flex-1">
@@ -1294,8 +1375,11 @@
           showPreviewToggle={hasAnyPreview(previewFlags)}
           {showAnnotateToggle}
           {annotateDisabled}
+          readAloud={documentReadAloud}
           {deletedAtCheckpoint}
           showUndoRedo={canUndoRedo}
+          canUndo={fullscreenCanUndo}
+          canRedo={fullscreenCanRedo}
           {reloadDisabled}
           mutationDisabled={deletedAtCheckpoint || mutationPending}
           {showLineNumbers}
@@ -1354,7 +1438,13 @@
             onClose={() => (goToLineOpen = false)}
           />
         {/if}
-        {#if activeTab?.view === 'diff' && checkpointDiff}
+        {#if readAlongSegments}
+          <ProjectFilesPanelReadAlong
+            segments={readAlongSegments}
+            activeIndex={speechController.visibleSegmentIndex}
+            spokenProgress={speechController.activeSegmentProgress}
+          />
+        {:else if activeTab?.view === 'diff' && checkpointDiff}
           <FileDiffView diff={checkpointDiff} />
         {:else if activeTab?.view === 'annotate' && showAnnotateToggle && activeThreadId}
           <ProjectFilesPanelAnnotator
@@ -1422,6 +1512,10 @@
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={(matches) => editorFind.setMatches(matches)}
                 onReplaceDone={(replaced) => editorFind.handleReplaceDone(replaced)}
+                onHistoryChange={(history) => {
+                  if (!activeTab) return
+                  fullscreenHistory = { tabId: activeTab.id, ...history }
+                }}
                 onInput={handleEditorInput}
               />
             {/key}

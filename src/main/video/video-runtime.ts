@@ -42,6 +42,45 @@ function installVideoRuntime(): void {
   const interpolate = (from: number, to: number, progress: number): number =>
     from + (to - from) * clamp(progress)
   const ease = (progress: number): number => 1 - Math.pow(1 - clamp(progress), 3)
+  /**
+   * The curves a film reaches for, named by what they do rather than by their maths.
+   *
+   * One curve is not enough to cut a film with: an entrance wants to arrive, a pop
+   * wants to overshoot, a shape crossing the frame wants the same easing in and out.
+   * Without a set, the author writes the same three functions inside every
+   * composition, which is what compositions did before these existed. `ease` stays
+   * exactly the cubic out it always was, so a film authored against it is unchanged.
+   */
+  const easings = {
+    linear: (progress: number): number => clamp(progress),
+    inCubic: (progress: number): number => Math.pow(clamp(progress), 3),
+    outCubic: ease,
+    inOutCubic: (progress: number): number => {
+      const p = clamp(progress)
+      return p < 0.5 ? 4 * Math.pow(p, 3) : 1 - Math.pow(-2 * p + 2, 3) / 2
+    },
+    inQuint: (progress: number): number => Math.pow(clamp(progress), 5),
+    outQuint: (progress: number): number => 1 - Math.pow(1 - clamp(progress), 5),
+    inExpo: (progress: number): number => {
+      const p = clamp(progress)
+      return p === 0 ? 0 : Math.pow(2, 10 * p - 10)
+    },
+    outExpo: (progress: number): number => {
+      const p = clamp(progress)
+      return p === 1 ? 1 : 1 - Math.pow(2, -10 * p)
+    },
+    inOutExpo: (progress: number): number => {
+      const p = clamp(progress)
+      if (p === 0 || p === 1) return p
+      return p < 0.5 ? Math.pow(2, 20 * p - 10) / 2 : (2 - Math.pow(2, -20 * p + 10)) / 2
+    },
+    outBack: (progress: number): number => {
+      const p = clamp(progress),
+        overshoot = 1.70158,
+        scaled = overshoot + 1
+      return 1 + scaled * Math.pow(p - 1, 3) + overshoot * Math.pow(p - 1, 2)
+    }
+  }
   function drawCaptions(
     ctx: CanvasRenderingContext2D,
     seconds: number,
@@ -246,6 +285,7 @@ function installVideoRuntime(): void {
     progress,
     interpolate,
     ease,
+    easings,
     drawCaptions,
     strokePath,
     polygon,

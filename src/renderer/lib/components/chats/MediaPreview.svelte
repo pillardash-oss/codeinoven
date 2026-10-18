@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { X, Download, FolderOpen } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
   import type { Snippet } from 'svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -126,7 +128,7 @@
         title="Reveal path"
         onclick={revealFromButton}
       >
-        <FolderOpen size={14} />
+        <CioFolderOpen size={14} />
       </button>
     {/if}
     <a
@@ -136,7 +138,7 @@
       aria-label={downloadLabel}
       title={downloadLabel}
     >
-      <Download size={14} />
+      <CioDownload size={14} />
     </a>
     <button
       type="button"
@@ -145,7 +147,7 @@
       title="Close (Esc)"
       onclick={onClose}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
   <div
@@ -209,7 +211,19 @@
       {/if}
     </div>
     {#if pager || (kind === 'image' && !annotate)}
-      <div class="absolute right-4 bottom-4 flex items-center gap-2">
+      <!-- The floating controls belong to the content, not to the backdrop behind
+           it: the lightbox dismisses on a press of its backdrop, so the cluster's
+           own box and the gap between its controls must not read as one, and an
+           activation key pressed on a focused control must not reach the
+           lightbox's activate handler either. -->
+      <div
+        class="absolute right-4 bottom-4 flex items-center gap-2"
+        role="presentation"
+        onclick={(event: MouseEvent) => event.stopPropagation()}
+        onkeydown={(event: KeyboardEvent) => {
+          if (keymapState.matches('ui-activate', event)) event.stopPropagation()
+        }}
+      >
         {#if pager}
           <PreviewPager {pager} />
         {/if}

@@ -59,7 +59,11 @@
        the utility group, so a view switch slides it to the icon that took over. -->
   <RailHighlight revision={highlightRevision} currentValue="page" accentSide="right" />
 
-  <div class="flex flex-col items-center gap-0.5" data-onboarding="view-switcher">
+  <div
+    class="flex flex-col items-center gap-0.5"
+    data-onboarding="view-switcher"
+    data-guide="view-switcher"
+  >
     {#each options as option (option.id)}
       {@const badges = viewBadgesFor(
         option.id,

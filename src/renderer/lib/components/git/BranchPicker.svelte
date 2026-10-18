@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { ChevronDown, Check, FolderTree, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import type { Snippet } from 'svelte'
   import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -188,7 +194,7 @@
     {#if statusIcon}
       {@render statusIcon(true)}
     {:else}
-      <GitBranch size={11} class="shrink-0" />
+      <CioTabGit size={11} class="shrink-0" />
     {/if}
     <!--
       Wide enough for a real branch name (`feature/git-panel-redesign`) instead
@@ -198,7 +204,7 @@
       in the trigger's tooltip for when it does truncate.
     -->
     <span class="max-w-[26ch] truncate">{currentBranch ?? 'detached'}</span>
-    <ChevronDown size={10} class="shrink-0 text-dimmed" />
+    <CioChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
 
   <DropdownMenu.Portal>
@@ -239,14 +245,14 @@
           aria-label="Add Git Origin"
           onclick={onAddOrigin}
         >
-          <Plus size={11} class="shrink-0" />
+          <CioPlus size={11} class="shrink-0" />
           Add Git Origin
         </button>
       {/if}
 
       <div class="border-b border-border px-3 py-2">
         <div class="flex items-center gap-2 border border-border bg-elevated px-2 py-1">
-          <Search size={12} class="shrink-0 text-dimmed" />
+          <CioSearch size={12} class="shrink-0 text-dimmed" />
           <input
             class="min-w-0 flex-1 bg-transparent font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
             placeholder="Search branches…"
@@ -269,7 +275,7 @@
               onkeydown={(e: KeyboardEvent) =>
                 keymapState.matches('ui-activate', e) && handleSelect(branch)}
             >
-              <GitBranch size={11} class="shrink-0 text-dimmed" />
+              <CioTabGit size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-foreground">{branch.name}</span>
               {#if branch.ahead > 0 || branch.behind > 0}
                 <span class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums">
@@ -285,7 +291,7 @@
                 {#if statusBadge}
                   {@render statusBadge(false)}
                 {/if}
-                <Check size={12} class="shrink-0 text-primary" />
+                <CioCheck size={12} class="shrink-0 text-primary" />
               {:else if onDelete}
                 <button
                   type="button"
@@ -294,7 +300,7 @@
                   aria-label="Delete branch {branch.name}"
                   onclick={(e: MouseEvent) => handleDelete(e, branch.name)}
                 >
-                  <Trash2 size={12} />
+                  <CioTrash size={12} />
                 </button>
               {/if}
             </div>
@@ -311,7 +317,7 @@
               class="flex w-full items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none"
               title={`Checked out in worktree ${branch.worktreePath ?? ''}`}
             >
-              <FolderTree size={11} class="shrink-0 text-warning" />
+              <CioFiles size={11} class="shrink-0 text-warning" />
               <span class="min-w-0 flex-1 truncate text-left text-muted">{branch.name}</span>
               {#if branch.ahead > 0 || branch.behind > 0}
                 <span class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums">
@@ -352,7 +358,7 @@
               disabled={localNames.has(branch.name)}
               onclick={() => handleSelect(branch)}
             >
-              <GitBranch size={11} class="shrink-0 text-dimmed" />
+              <CioTabGit size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-muted">{branch.ref}</span>
               {#if localNames.has(branch.name)}
                 <span class="shrink-0 text-[0.5625rem] text-dimmed">local exists</span>
@@ -390,7 +396,7 @@
             class="flex w-full cursor-pointer items-center gap-2 text-[0.6875rem] text-muted outline-none transition-colors hover:text-foreground"
             onclick={() => (creating = true)}
           >
-            <Plus size={12} class="shrink-0" />
+            <CioPlus size={12} class="shrink-0" />
             New branch…
           </button>
         {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Trash2 } from '@lucide/svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { toast } from 'svelte-sonner'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
   import { openInGlobalBrowserTabOnScreen } from '$lib/open-in-browser'
@@ -77,7 +77,7 @@
         title="Forget this page"
         onclick={() => (forgettingUrl = entry.url)}
       >
-        <Trash2 size={12} />
+        <CioTrash size={12} />
       </button>
     {/snippet}
   </BrowserHistoryList>
@@ -90,7 +90,7 @@
       aria-label="Clear all browsing history"
       onclick={() => (confirmingClear = true)}
     >
-      <Trash2 size={13} />
+      <CioTrash size={13} />
       Clear all history
     </button>
   {/snippet}

@@ -1,4 +1,9 @@
 <script lang="ts">
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import type { MemoryCategory, MemoryEntry, MemoryPriority, Thread } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { locationScopeOf } from '$shared/memory/memory-scopes'
@@ -13,7 +18,6 @@
   import MemoryToggle from './MemoryToggle.svelte'
   import MemoryScopeSelect from './MemoryScopeSelect.svelte'
   import type { MemoryScopeOption } from './memory-routing'
-  import { Trash2, ChevronDown, ChevronUp, Zap, Clock } from '@lucide/svelte'
 
   interface Props {
     entry: MemoryEntry
@@ -150,7 +154,7 @@
       {/if}
       {#if entry.frequency > 1}
         <span class="shrink-0 flex items-center gap-0.5 text-[0.625rem] text-dimmed">
-          <Zap size={10} />
+          <CioZap size={10} />
           {entry.frequency}x
         </span>
       {/if}
@@ -164,9 +168,9 @@
         onclick={() => (expanded = !expanded)}
       >
         {#if expanded}
-          <ChevronUp size={14} />
+          <CioChevronUp size={14} />
         {:else}
-          <ChevronDown size={14} />
+          <CioChevronDown size={14} />
         {/if}
       </button>
       <button
@@ -175,7 +179,7 @@
         aria-label="Delete memory entry"
         onclick={() => onRemove(index)}
       >
-        <Trash2 size={14} />
+        <CioTrash size={14} />
       </button>
     </div>
   </div>
@@ -345,12 +349,12 @@
 
       <div class="flex items-center gap-4 text-[0.6875rem] text-dimmed">
         <span class="flex items-center gap-1">
-          <Clock size={10} />
+          <CioClock size={10} />
           Updated {formatDate(entry.updatedAt)}
         </span>
         {#if entry.lastReinforced}
           <span class="flex items-center gap-1">
-            <Zap size={10} />
+            <CioZap size={10} />
             Reinforced {entry.frequency}x
           </span>
         {/if}

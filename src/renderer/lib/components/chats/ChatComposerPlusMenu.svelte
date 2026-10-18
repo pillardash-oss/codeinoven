@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Clock, HardDrive, Paperclip, Plus, ShieldCheck, X } from '@lucide/svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDisk from '@pillardash-oss/cio-icon/CioDisk.svelte'
+  import CioPaperclip from '@pillardash-oss/cio-icon/CioPaperclip.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
   import Switch from '../ui/Switch.svelte'
   import type { StartAfterSelection } from './chat-composer-attachments'
 
@@ -62,7 +67,7 @@
       aria-expanded={open}
       onclick={onToggle}
     >
-      <Plus size={15} class="transition-transform {open ? 'rotate-45' : ''}" />
+      <CioPlus size={15} class="transition-transform {open ? 'rotate-45' : ''}" />
     </button>
 
     {#if open}
@@ -86,7 +91,7 @@
                   ? 'text-foreground'
                   : 'text-muted'}"
               >
-                <HardDrive size={13} class={fileSystemMode ? 'text-info' : 'text-dimmed'} />
+                <CioDisk size={13} class={fileSystemMode ? 'text-info' : 'text-dimmed'} />
                 File System
               </span>
             </Switch>
@@ -109,7 +114,7 @@
                   ? 'text-foreground'
                   : 'text-muted'}"
               >
-                <ShieldCheck
+                <CioShieldCheck
                   size={13}
                   class={independentAuditEnabled ? 'text-info' : 'text-dimmed'}
                 />
@@ -135,7 +140,7 @@
                   ? 'text-foreground'
                   : 'text-muted'}"
               >
-                <Clock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
+                <CioClock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
                 <span class="min-w-0 truncate">
                   {startAfterEnabled && startAfterThreads.length > 0
                     ? `Start after · ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
@@ -156,7 +161,7 @@
                     aria-label={`Remove ${startAfterThread.title} from Start after`}
                     onclick={() => onRemoveStartAfterThread(startAfterThread.id)}
                   >
-                    <X size={11} />
+                    <CioClose size={11} />
                   </button>
                 </div>
               {/each}
@@ -187,7 +192,7 @@
             disabled={selectedHarnessLacksAttachments}
             onclick={onPickAttachment}
           >
-            <Paperclip size={13} class="text-dimmed" />
+            <CioPaperclip size={13} class="text-dimmed" />
             Attach Files
           </button>
         {/if}

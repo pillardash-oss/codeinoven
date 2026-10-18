@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ArrowRight, Check, MessageSquare, Network } from '@lucide/svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -605,7 +608,7 @@
         onclick={() => void signOff()}
       >
         Sign off & assign
-        <ArrowRight size={13} />
+        <CioArrowRight size={13} />
       </button>
     {/if}
   {/snippet}
@@ -634,7 +637,7 @@
           </div>
         {:else}
           <div class="flex items-center gap-2 border border-dashed px-2.5 py-3">
-            <Check size={13} class="text-primary" />
+            <CioCheck size={13} class="text-primary" />
             <p class="text-[0.6875rem] text-dimmed">Ready to assign.</p>
           </div>
         {/each}
@@ -663,14 +666,14 @@
         aria-label="Open anchored comment"
         onclick={() => void openAnnotation(marker.annotation)}
       >
-        <MessageSquare size={13} />
+        <CioMessage size={13} />
       </button>
     {/each}
   {/snippet}
 
   <div bind:this={documentContent} class="px-6 py-6 md:px-14 md:py-8">
     <div class="mb-6 flex items-center gap-2">
-      <Network size={18} class="text-primary" />
+      <CioNetwork size={18} class="text-primary" />
       <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>
     </div>
     <AssignmentReviewContent

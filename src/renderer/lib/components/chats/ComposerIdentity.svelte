@@ -55,8 +55,10 @@
 </script>
 
 <script lang="ts">
-  import { ChevronDown, Folder, Globe } from '@lucide/svelte'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
   import {
     ASSISTANT_ICON_FALLBACK_COLOR,
@@ -130,7 +132,7 @@
     {#if identity.project?.iconUrl}
       <img src={identity.project.iconUrl} alt="" class="h-3.5 w-3.5 shrink-0" />
     {:else}
-      <Folder
+      <CioFolder
         size={13}
         class="shrink-0 text-dimmed transition-colors group-hover:text-foreground"
       />
@@ -153,7 +155,7 @@
       <span
         class="composer-identity-chevron shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
       >
-        <ChevronDown size={11} />
+        <CioChevronDown size={11} />
       </span>
     {/if}
   </ProjectSwitch>
@@ -217,7 +219,7 @@
     {#if pageFavicon}
       <img src={pageFavicon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
     {:else}
-      <Globe size={13} class="shrink-0 text-dimmed" />
+      <CioBrowser size={13} class="shrink-0 text-dimmed" />
     {/if}
     {#if pageLabel !== ''}
       <span class="composer-identity-label min-w-0 truncate font-medium text-foreground"

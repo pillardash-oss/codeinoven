@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../../src/lib/types'
-import { GATEWAY_TOOLS } from '../../../src/lib/gateway-tools'
+import { GATEWAY_TOOLS, gatewayToolForModel } from '../../../src/lib/gateway-tools'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import {
   CodexDriver,
@@ -246,11 +246,13 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     const fetchMock = vi
       .spyOn(globalThis, 'fetch')
       .mockImplementation(async () => Response.json({ notFound: false, utilities: [] }))
-    const dynamicTools = GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
-      name,
-      description,
-      inputSchema
-    }))
+    const dynamicTools = GATEWAY_TOOLS.map(gatewayToolForModel).map(
+      ({ name, description, inputSchema }) => ({
+        name,
+        description,
+        inputSchema
+      })
+    )
     await driver.publishUtilityGatewayEndpoint('/project', sessionId, {
       url: 'http://127.0.0.1:12345',
       token: 'first-turn',
@@ -468,6 +470,42 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
         expectedTurnId: 'turn-1'
       }
     })
+    // The cumulative counters include a request whose last snapshot was missed.
+    const firstUsage = {
+      inputTokens: 100,
+      outputTokens: 20,
+      cachedInputTokens: 40,
+      totalTokens: 120
+    }
+    sharedChild.emitPayload({
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'native-1', tokenUsage: { last: firstUsage, total: firstUsage } }
+    })
+    const cumulativeUsage = {
+      inputTokens: 300,
+      outputTokens: 50,
+      cachedInputTokens: 200,
+      totalTokens: 350
+    }
+    const lastUsage = {
+      inputTokens: 110,
+      outputTokens: 10,
+      cachedInputTokens: 100,
+      totalTokens: 120
+    }
+    for (let replay = 0; replay < 2; replay += 1) {
+      sharedChild.emitPayload({
+        method: 'thread/tokenUsage/updated',
+        params: { threadId: 'native-1', tokenUsage: { last: lastUsage, total: cumulativeUsage } }
+      })
+    }
+    expect(events.findLast((event) => event.type === 'usage.updated')).toEqual(
+      expect.objectContaining({
+        tokens: expect.objectContaining({ input: 300, output: 50, cacheRead: 200, total: 350 }),
+        contextUsed: 110,
+        normalizedUsage: expect.objectContaining({ uncachedInput: 100, cacheWrite: null })
+      })
+    )
     const workerSessionId = await driver.createSession('/project', 'Worker')
     await driver.sendPrompt('/project', {
       sessionId: workerSessionId,
@@ -520,7 +558,8 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
     await driver.publishUtilityGatewayEndpoint('/project', sessionId, {
       url: 'http://127.0.0.1:12345',
       token: 'second-turn',
-      timeoutMs: 600_000
+      timeoutMs: 600_000,
+      toolNames: ['cio_util_find']
     })
     await driver.sendPrompt('/project', {
       sessionId,
@@ -540,12 +579,16 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       params: {
         threadId: 'native-1',
         excludeTurns: true,
-        config: { model_context_window: 1_000_000, model_auto_compact_token_limit: 900_000 },
+        config: {
+          model_context_window: 1_000_000,
+          model_auto_compact_token_limit: 900_000,
+          tool_output_token_limit: 3_000
+        },
         developerInstructions: CODEX_QUESTION_INSTRUCTION,
-        dynamicTools: expect.arrayContaining([
+        dynamicTools: [
           expect.objectContaining({ name: 'cio_ask_user' }),
-          ...dynamicTools
-        ])
+          ...dynamicTools.filter(({ name }) => name === 'cio_util_find')
+        ]
       }
     })
     expect(sharedChild.requests()).toContainEqual(
@@ -555,6 +598,37 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
           serviceTier: 'ultrafast',
           sandboxPolicy: { type: 'dangerFullAccess' }
         })
+      })
+    )
+    const resumedUsage = {
+      inputTokens: 50,
+      outputTokens: 5,
+      cachedInputTokens: 20,
+      totalTokens: 55
+    }
+    sharedChild.emitPayload({
+      method: 'thread/tokenUsage/updated',
+      params: {
+        threadId: 'native-1',
+        tokenUsage: {
+          last: resumedUsage,
+          total: { inputTokens: 350, outputTokens: 55, cachedInputTokens: 220, totalTokens: 405 }
+        }
+      }
+    })
+    // An early usage update waits for the current response instead of being
+    // charged to the previous turn's final message.
+    sharedChild.emitPayload({
+      method: 'item/started',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-3',
+        item: { id: 'resumed-response', type: 'agentMessage', text: 'Working' }
+      }
+    })
+    expect(events.findLast((event) => event.type === 'usage.updated')).toEqual(
+      expect.objectContaining({
+        tokens: expect.objectContaining({ input: 50, output: 5, total: 55 })
       })
     )
     sharedChild.emitPayload({

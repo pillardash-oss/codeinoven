@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { CheckCircle2, ExternalLink, Eye } from '@lucide/svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
   import type { PullRequestReference } from '$shared/types'
 
   interface Props {
@@ -13,7 +15,7 @@
 
 <div class="w-full max-w-sm border border-success/30 bg-success/10 px-6 py-7 text-center">
   <div class="mx-auto flex h-11 w-11 items-center justify-center bg-success/15 text-success">
-    <CheckCircle2 size={24} aria-hidden="true" />
+    <CioCheckCircle size={24} aria-hidden="true" />
   </div>
   <p class="mt-3 text-sm font-semibold text-success">Pull request #{result.number} created</p>
   <p class="mt-1 truncate text-[0.6875rem] text-muted">{result.title}</p>
@@ -24,7 +26,7 @@
       title="Open this pull request in the Git panel"
       onclick={onView}
     >
-      <Eye size={12} />
+      <CioEye size={12} />
       View PR
     </button>
     <button
@@ -34,7 +36,7 @@
       data-external-url={result.url}
       onclick={() => onOpenBrowser(result.url)}
     >
-      <ExternalLink size={12} />
+      <CioExternalLink size={12} />
       Open in browser
     </button>
   </div>

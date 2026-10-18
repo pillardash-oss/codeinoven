@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   /**
    * One comment in a pull request conversation: who wrote it, when, what it says,
    * and everything that can be done to it.
@@ -10,7 +14,7 @@
    * draws no border of its own when it is embedded (`framed={false}`).
    */
   import type { Snippet } from 'svelte'
-  import { Check, ChevronDown, Loader2, MoreHorizontal } from '@lucide/svelte'
+
   import { DropdownMenu } from 'bits-ui'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -363,7 +367,7 @@
         title={folded ? 'Show this comment' : 'Fold this comment'}
         onclick={() => (folded = !folded)}
       >
-        <ChevronDown size={13} class={['transition-transform', folded && '-rotate-90']} />
+        <CioChevronDown size={13} class={['transition-transform', folded && '-rotate-90']} />
       </button>
     {/if}
     {#if !editing && reactable}
@@ -382,7 +386,7 @@
           aria-label="Actions for {displayLogin}'s comment"
           title="Comment actions"
         >
-          <MoreHorizontal size={13} />
+          <CioEllipsis size={13} />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
@@ -459,10 +463,10 @@
           onclick={() => void saveEdit()}
         >
           {#if savingComment}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
             Saving…
           {:else}
-            <Check size={12} />
+            <CioCheck size={12} />
             Save
           {/if}
         </button>

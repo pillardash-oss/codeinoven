@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ArrowLeft, ArrowUpRight, Play, ShieldCheck, Target } from '@lucide/svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioArrowUpRight from '@pillardash-oss/cio-icon/CioArrowUpRight.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { AchievementCoordinatorPanelProps, ThinkingLevel } from '$shared/types'
@@ -134,9 +138,9 @@
   <header class="shrink-0 border-b border-border p-4">
     <div class="flex min-w-0 items-center gap-2 text-primary">
       {#if mode === 'achievement'}
-        <Target size={15} class="shrink-0" />
+        <CioTarget size={15} class="shrink-0" />
       {:else}
-        <ShieldCheck size={15} class="shrink-0" />
+        <CioShieldCheck size={15} class="shrink-0" />
       {/if}
       <h2 class="text-xs font-semibold uppercase tracking-wide">{coordinatorLabel}</h2>
     </div>
@@ -152,7 +156,7 @@
           onclick={onOpenAudit}
         >
           Audit work
-          <ShieldCheck size={13} />
+          <CioShieldCheck size={13} />
         </button>
       {/if}
       {#if reportAvailable && onViewReport}
@@ -163,7 +167,7 @@
           onclick={onViewReport}
         >
           View report
-          <ArrowUpRight size={13} />
+          <CioArrowUpRight size={13} />
         </button>
       {/if}
     </div>
@@ -186,7 +190,7 @@
           title="Ask the Sr. Engineer to continue working toward the achievement"
           onclick={onResume}
         >
-          <Play size={12} />
+          <CioPlay size={12} />
           Resume coordination
         </button>
       {/if}
@@ -195,7 +199,7 @@
     <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} auditor model`}>
       <div class="flex items-start gap-3">
         <div class="bg-primary/10 p-2 text-primary">
-          <ShieldCheck size={16} />
+          <CioShieldCheck size={16} />
         </div>
         <div class="min-w-0 flex-1">
           <h3 class="text-xs font-semibold text-foreground">Auditor model</h3>
@@ -270,7 +274,7 @@
         aria-label="Back to the Sr. Engineer thread that owns this coordination"
         onclick={onBackToCoordinator}
       >
-        <ArrowLeft size={13} aria-hidden="true" />
+        <CioArrowLeft size={13} aria-hidden="true" />
         Back to Sr. Engineer
       </button>
     </footer>

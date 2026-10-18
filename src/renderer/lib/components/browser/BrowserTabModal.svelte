@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
@@ -182,7 +182,7 @@
           title="Save this tab"
           onclick={save}
         >
-          <Check size={14} />
+          <CioCheck size={14} />
           Save
         </button>
       </div>

@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Eye, FileDiff, RotateCcw, RotateCw } from '@lucide/svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { fly, slide } from 'svelte/transition'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import HoverDiffPopover from '../files/HoverDiffPopover.svelte'
@@ -152,7 +155,7 @@ the composer cards, with both actions quiet in the head: undoing is the frequent
 one and reviewing is optional, so neither is dressed as the card's main call. -->
 <div bind:this={cardRoot} class="min-w-0">
   <CardFrame placement="top" label="Edited files">
-    <CardHead {title} icon={FileDiff} {chip} foldLabel="changed files" bind:folded>
+    <CardHead {title} icon={CioDiff} {chip} foldLabel="changed files" bind:folded>
       {#snippet meta()}
         <span class="flex shrink-0 gap-1.5 text-xs font-medium tabular-nums">
           <span class="text-success">+{additionsTotal}</span>
@@ -167,7 +170,7 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
           <CardButton
             label={redoing ? 'Redoing…' : 'Redo'}
             title={undoTitle}
-            icon={RotateCw}
+            icon={CioRefresh}
             variant="ghost-text"
             loading={redoing}
             disabled={undoing || redoing || !canRedo}
@@ -177,7 +180,7 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
           <CardButton
             label={undoing ? 'Undoing…' : 'Undo'}
             title={undoTitle}
-            icon={RotateCcw}
+            icon={CioUndo}
             variant="ghost-text"
             loading={undoing}
             disabled={undoing || redoing || !canUndo}
@@ -282,7 +285,7 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
                   title={`Open ${change.path} in the file viewer`}
                   onclick={() => onOpenFile(change.path)}
                 >
-                  <Eye size={13} />
+                  <CioEye size={13} />
                 </button>
               </div>
             {/each}

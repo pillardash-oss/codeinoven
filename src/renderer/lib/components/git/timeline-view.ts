@@ -1,26 +1,24 @@
-import {
-  ArrowRightLeft,
-  CircleSlash,
-  Copy,
-  Eye,
-  GitBranch,
-  GitCommitHorizontal,
-  GitMerge,
-  GitPullRequestDraft,
-  Lock,
-  LockOpen,
-  Milestone,
-  Pencil,
-  Pin,
-  PinOff,
-  RotateCcw,
-  Scissors,
-  SlidersHorizontal,
-  Tag,
-  UserCheck,
-  UserMinus,
-  UserPlus
-} from '@lucide/svelte'
+import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+import CioLock from '@pillardash-oss/cio-icon/CioLock.svelte'
+import CioLockOpen from '@pillardash-oss/cio-icon/CioLockOpen.svelte'
+import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+import CioMilestone from '@pillardash-oss/cio-icon/CioMilestone.svelte'
+import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+import CioPersonPlus from '@pillardash-oss/cio-icon/CioPersonPlus.svelte'
+import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+import CioPinOff from '@pillardash-oss/cio-icon/CioPinOff.svelte'
+import CioPullRequestDraft from '@pillardash-oss/cio-icon/CioPullRequestDraft.svelte'
+import CioScissors from '@pillardash-oss/cio-icon/CioScissors.svelte'
+import CioSwap from '@pillardash-oss/cio-icon/CioSwap.svelte'
+import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
+import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+import CioUserCheck from '@pillardash-oss/cio-icon/CioUserCheck.svelte'
+import CioUserMinus from '@pillardash-oss/cio-icon/CioUserMinus.svelte'
 import type { IssueTimelineEvent } from '$shared/types'
 
 /**
@@ -35,55 +33,55 @@ import type { IssueTimelineEvent } from '$shared/types'
  * The icon is decoration: the sentence beside it already says what happened, so
  * the row hides it from assistive technology instead of announcing the kind twice.
  */
-export function timelineEventIcon(event: Pick<IssueTimelineEvent, 'kind'>): typeof Tag {
+export function timelineEventIcon(event: Pick<IssueTimelineEvent, 'kind'>): typeof CioTag {
   switch (event.kind) {
     case 'labeled':
     case 'unlabeled':
-      return Tag
+      return CioTag
     case 'assigned':
-      return UserPlus
+      return CioPersonPlus
     case 'unassigned':
-      return UserMinus
+      return CioUserMinus
     case 'closed':
-      return CircleSlash
+      return CioBan
     case 'reopened':
-      return RotateCcw
+      return CioUndo
     case 'renamed':
-      return Pencil
+      return CioPencil
     case 'milestoned':
     case 'demilestoned':
-      return Milestone
+      return CioMilestone
     case 'locked':
-      return Lock
+      return CioLock
     case 'unlocked':
-      return LockOpen
+      return CioLockOpen
     case 'pinned':
-      return Pin
+      return CioPin
     case 'unpinned':
-      return PinOff
+      return CioPinOff
     case 'referenced':
-      return GitCommitHorizontal
+      return CioCommit
     case 'cross-referenced':
-      return ArrowRightLeft
+      return CioSwap
     case 'marked_as_duplicate':
-      return Copy
+      return CioCopy
     case 'connected':
-      return GitBranch
+      return CioTabGit
     case 'fields':
-      return SlidersHorizontal
+      return CioTabSettings
     case 'merged':
-      return GitMerge
+      return CioMerge
     case 'review_requested':
     case 'review_request_removed':
-      return UserCheck
+      return CioUserCheck
     case 'ready_for_review':
-      return Eye
+      return CioEye
     case 'converted_to_draft':
-      return GitPullRequestDraft
+      return CioPullRequestDraft
     case 'head_ref_deleted':
-      return Scissors
+      return CioScissors
     default:
-      return Tag
+      return CioTag
   }
 }
 

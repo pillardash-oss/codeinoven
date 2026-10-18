@@ -15,8 +15,8 @@
 </script>
 
 <script lang="ts">
-  import { ChevronLeft, ChevronRight } from '@lucide/svelte'
-
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   interface Props {
     pager: PreviewPagerState
     class?: string
@@ -52,7 +52,7 @@
     disabled={atStart}
     onclick={(event) => step(event, pager.onPrevious)}
   >
-    <ChevronLeft size={14} />
+    <CioBack size={14} />
   </button>
   <span class="min-w-11 text-center font-mono text-[0.625rem] text-dimmed">{position}</span>
   <button
@@ -63,6 +63,6 @@
     disabled={atEnd}
     onclick={(event) => step(event, pager.onNext)}
   >
-    <ChevronRight size={14} />
+    <CioForward size={14} />
   </button>
 </div>

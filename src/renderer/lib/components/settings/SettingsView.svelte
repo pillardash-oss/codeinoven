@@ -1,4 +1,17 @@
 <script lang="ts">
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioMoon from '@pillardash-oss/cio-icon/CioMoon.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSun from '@pillardash-oss/cio-icon/CioSun.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -8,6 +21,7 @@
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
+    CONTRAST_LEVEL_OPTIONS,
     FONT_FAMILY_OPTIONS,
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
@@ -45,23 +59,7 @@
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
-  import {
-    AlertCircle,
-    AlertTriangle,
-    Bell,
-    CheckCircle2,
-    Clock,
-    Download,
-    FolderOpen,
-    Loader2,
-    Monitor,
-    Moon,
-    RefreshCw,
-    Search,
-    Sun,
-    type LucideIcon
-  } from '@lucide/svelte'
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, type Component } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
@@ -81,7 +79,6 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
-  import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
@@ -252,7 +249,7 @@
   const tabs: Array<{
     id: SettingsSection
     label: string
-    icon: LucideIcon
+    icon: Component
   }> = SETTINGS_SEARCH_ENTRIES.filter((entry) => !entry.blockId).map((entry) => ({
     id: entry.section,
     label: entry.title,
@@ -276,9 +273,9 @@
   })
 
   const themeOptions = [
-    { id: 'system' as const, label: 'System', icon: Monitor },
-    { id: 'light' as const, label: 'Light', icon: Sun },
-    { id: 'dark' as const, label: 'Dark', icon: Moon }
+    { id: 'system' as const, label: 'System', icon: CioDisplay },
+    { id: 'light' as const, label: 'Light', icon: CioSun },
+    { id: 'dark' as const, label: 'Dark', icon: CioMoon }
   ]
 
   const slashCommandOptions: Array<{
@@ -690,6 +687,30 @@
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
+                <p class="text-sm font-medium">Contrast</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  Strengthen text and rules for a dim or washed-out display
+                </p>
+              </div>
+              <div class="flex items-center gap-0.5 border bg-elevated p-0.5">
+                {#each CONTRAST_LEVEL_OPTIONS as option (option.id)}
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium transition-colors {config.contrastLevel ===
+                    option.id
+                      ? 'bg-surface text-foreground'
+                      : 'text-muted hover:text-foreground'}"
+                    aria-pressed={config.contrastLevel === option.id}
+                    disabled={!settingsReady}
+                    title={option.hint}
+                    onclick={() => void updateConfig({ contrastLevel: option.id })}
+                  >
+                    {option.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
                 <p class="text-sm font-medium">Font</p>
                 <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
@@ -798,7 +819,7 @@
                 </p>
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
-                    <CheckCircle2 size={13} />
+                    <CioCheckCircle size={13} />
                     Notifications are allowed
                   </p>
                 {/if}
@@ -808,7 +829,7 @@
                     role="alert"
                   >
                     <div class="flex items-start gap-2">
-                      <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+                      <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
                       <div>
                         <p class="text-xs font-medium text-warning">Notifications are blocked</p>
                         <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
@@ -846,9 +867,9 @@
                 onclick={() => void testSystemNotification()}
               >
                 {#if notificationTestBusy}
-                  <Loader2 size={13} class="animate-spin" />
+                  <CioSpinner size={13} class="animate-spin" />
                 {:else}
-                  <Bell size={13} />
+                  <CioNotifications size={13} />
                 {/if}
                 Test notification
               </button>
@@ -1152,6 +1173,55 @@
                   onchange={saveAgentQuestionCap}
                 />
               </div>
+              <div class="space-y-2 border-t border-border pt-3">
+                <div>
+                  <p class="text-sm font-medium">Switcher panel tabs</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Let Ctrl+Tab also cycle these panels' own tabs
+                  </p>
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Terminal tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open terminal</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherTerminalTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherTerminalTabs: !config.switcherTerminalTabs })}
+                    aria-label="Toggle listing terminal tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Project file tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open file</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherFileTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherFileTabs: !config.switcherFileTabs })}
+                    aria-label="Toggle listing project file tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Thread browser tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open browser tab</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherThreadBrowserTabs}
+                    onchange={() =>
+                      void updateConfig({
+                        switcherThreadBrowserTabs: !config.switcherThreadBrowserTabs
+                      })}
+                    aria-label="Toggle listing thread browser tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+              </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Run in the background</p>
@@ -1294,7 +1364,7 @@
                   disabled={!settingsReady || cioCleanupStore.state.running}
                   onclick={() => void cioCleanupStore.runNow()}
                 >
-                  <RefreshCw
+                  <CioRefresh
                     size={13}
                     class={cioCleanupStore.state.running ? 'animate-spin' : ''}
                   />
@@ -1355,17 +1425,14 @@
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
           <p class="mt-0.5 text-sm text-muted">
-            Where design and video work is saved, which model does each kind of it, and the optional
-            video pack.
+            Which model does each kind of design and video work, and the optional video pack. Save
+            folders belong to each project and are changed from its design or video board.
           </p>
           {#if error}
             <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
-        </div>
-        <div class="mb-6">
-          <DesignWorkFoldersSettings {config} {settingsReady} {updateConfig} />
         </div>
         <div class="mb-6">
           <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
@@ -1548,12 +1615,12 @@
           <!-- Update status -->
           {#if updaterState.status.state === 'checking'}
             <div class="mb-3 flex items-center gap-2 text-xs text-muted">
-              <Loader2 size={13} class="animate-spin" />
+              <CioSpinner size={13} class="animate-spin" />
               Checking for updates…
             </div>
           {:else if updaterState.status.state === 'available'}
             <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <Download size={13} />
+              <CioDownload size={13} />
               <span>
                 Update <strong>{updaterState.status.availableVersion}</strong> available
               </span>
@@ -1571,20 +1638,20 @@
             </div>
           {:else if updaterState.status.state === 'downloaded'}
             <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <CheckCircle2 size={13} />
+              <CioCheckCircle size={13} />
               <span>
                 Update <strong>{updaterState.status.availableVersion}</strong> ready to install
               </span>
             </div>
             {#if updaterState.status.blockedReason}
               <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
-                <AlertCircle size={13} class="shrink-0" />
+                <CioAlertCircle size={13} class="shrink-0" />
                 <span>{updaterState.status.blockedReason}</span>
               </div>
             {/if}
           {:else if updaterState.status.state === 'waiting'}
             <div class="mb-3 flex items-center gap-2 text-xs text-accent">
-              <Clock size={13} class="shrink-0" />
+              <CioClock size={13} class="shrink-0" />
               <span>
                 Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
                 1
@@ -1602,12 +1669,12 @@
             </div>
           {:else if updaterState.status.state === 'error'}
             <div class="mb-3 flex items-center gap-2 text-xs text-danger">
-              <AlertCircle size={13} />
+              <CioAlertCircle size={13} />
               <span>{updaterState.status.errorMessage ?? 'Update check failed'}</span>
             </div>
           {:else if updaterState.status.state === 'idle' && updaterState.status.canAutoUpdate}
             <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
-              <CheckCircle2 size={13} />
+              <CioCheckCircle size={13} />
               <span>{APP_NAME} is up to date</span>
             </div>
           {/if}
@@ -1678,7 +1745,7 @@
                   title="Check for updates now"
                   onclick={() => void updaterState.checkForUpdates()}
                 >
-                  <RefreshCw
+                  <CioRefresh
                     size={13}
                     class={updaterState.status.state === 'checking' ? 'animate-spin' : ''}
                   />
@@ -1691,7 +1758,7 @@
                     title="Download update"
                     onclick={() => void updaterState.downloadUpdate()}
                   >
-                    <Download size={13} />
+                    <CioDownload size={13} />
                     Download
                   </button>
                 {/if}
@@ -1702,7 +1769,7 @@
                     title="Restart and install update"
                     onclick={() => void updaterState.installUpdate()}
                   >
-                    <RefreshCw size={13} />
+                    <CioRefresh size={13} />
                     Restart &amp; install
                   </button>
                 {/if}
@@ -1736,7 +1803,7 @@
                 title="Open the data directory in the file manager"
                 onclick={() => void openDataDirectory()}
               >
-                <FolderOpen size={13} />
+                <CioFolderOpen size={13} />
                 Open in file manager
               </button>
             </div>
@@ -1762,9 +1829,9 @@
               onclick={() => void exportDiagnostics()}
             >
               {#if diagnosticsBusy}
-                <Loader2 size={13} class="animate-spin" />
+                <CioSpinner size={13} class="animate-spin" />
               {:else}
-                <Download size={13} />
+                <CioDownload size={13} />
               {/if}
               Export
             </button>
@@ -1787,7 +1854,7 @@
     title="Search settings"
     placeholder="Search settings pages and sections…"
     emptyLabel="No matching settings"
-    headerIcon={Search}
+    headerIcon={CioSearch}
     onSelect={handleSettingsSearch}
     onClose={() => (settingsUiState.searchOpen = false)}
   />
@@ -1848,9 +1915,9 @@
         onclick={() => void setChannel('nightly')}
       >
         {#if channelBusy}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Download size={13} />
+          <CioDownload size={13} />
         {/if}
         Enable nightly builds
       </button>

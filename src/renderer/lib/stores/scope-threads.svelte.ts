@@ -280,19 +280,79 @@ export class ScopeThreads {
   }
 
   /**
-   * Patch one thread's authored-work kind in place.
+   * Patch one thread's authored-work kinds in place.
    *
-   * The design-capability path pushes this field on a light event instead of the
-   * full `thread:updated` snapshot, so the row's marker appears the moment the
+   * The design-capability path pushes these fields on a light event instead of the
+   * full `thread:updated` snapshot, so the row's markers appear the moment the
    * agent opens a session without forcing a transcript reconcile. Mutating the
-   * proxied row is enough: the marker is read straight off the object, so no list
-   * rebuild is needed.
+   * proxied row is enough: the markers are read straight off the object, so no
+   * list rebuild is needed. Both facts are patched together, because a row that
+   * learned the session kind without the set would drop a marker.
    */
-  patchAuthoredWorkKind(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
+  patchAuthoredWorkKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    kinds: readonly AuthoredWorkKind[]
+  ): void {
     const thread = this.allScopeThreads.find(
       (candidate) => candidate.projectId === projectId && candidate.id === threadId
     )
-    if (thread !== undefined) thread.authoredWorkKind = kind
+    if (thread === undefined) return
+    thread.authoredWorkKind = kind
+    thread.authoredWorkKinds = [...kinds]
+  }
+
+  /**
+   * The sidebar context a refreshed row hands back, or null when the context
+   * already describes that row as it is now.
+   *
+   * The docked scope and its visible slice are the user's selection, so a row
+   * refresh may only move the fields that still mirror the row: the scope the
+   * user switched to, and the slice the user picked, are theirs to keep. Each
+   * field is mirrored from the row only while the context was still holding the
+   * row's own previous value for it, which keeps the follow faithful (an agent
+   * moving the open thread into another scope still takes the sidebar with it)
+   * without letting a background status tick pull the pane back to the open
+   * thread's scope seconds after the user switched scopes.
+   */
+  private nextSidebarContextForRow(
+    context: ScopeSidebarContext,
+    previous: Thread | undefined,
+    updated: Thread
+  ): ScopeSidebarContext | null {
+    const previousBucket = previous === undefined ? null : this.bucketForThread(previous)
+    const followsBucket = previousBucket !== null && context.bucketId === previousBucket
+    // The slice follows the row only while the pane still shows the row's own
+    // scope. Browsing another scope makes the open thread's slice irrelevant to
+    // the pane, and a slice the user picked by hand is never theirs to lose.
+    const previousStage = previous === undefined ? null : this.stageForThread(previous)
+    const followsStage = followsBucket && context.stage === previousStage
+    const next: ScopeSidebarContext = {
+      projectId: updated.projectId,
+      bucketId: followsBucket ? this.bucketForThread(updated) : context.bucketId,
+      stage: followsStage ? this.stageForThread(updated) : context.stage,
+      threadId: updated.id
+    }
+    if (
+      next.projectId === context.projectId &&
+      next.bucketId === context.bucketId &&
+      next.stage === context.stage &&
+      next.threadId === context.threadId
+    ) {
+      return null
+    }
+    return next
+  }
+
+  /** Hand a refreshed open thread's context to the host, when it moved. */
+  private refreshSidebarContextForRow(previous: Thread | undefined, updated: Thread): void {
+    const context = this.host.currentSidebarContext()
+    if (context?.threadId !== updated.id) return
+    const next = this.nextSidebarContextForRow(context, previous, updated)
+    if (!next) return
+    this.host.updateSidebarContext(next)
+    this.host.persist()
   }
 
   updateThread(updated: Thread): void {
@@ -304,6 +364,7 @@ export class ScopeThreads {
     // own rail owns that conversation instead.
     if (updated.projectId === GLOBAL_BROWSER_PROJECT_ID) return
     const index = this.allScopeThreads.findIndex((thread) => thread.id === updated.id)
+    const previous = index === -1 ? undefined : this.allScopeThreads[index]
     if (index === -1) {
       this.allScopeThreads = [updated, ...this.allScopeThreads]
     } else if (!threadSnapshotEqual(this.allScopeThreads[index], updated)) {
@@ -315,16 +376,7 @@ export class ScopeThreads {
       next[index] = updated
       this.allScopeThreads = next
     }
-    const context = this.host.currentSidebarContext()
-    if (context?.threadId === updated.id) {
-      this.host.updateSidebarContext({
-        projectId: updated.projectId,
-        bucketId: this.bucketForThread(updated),
-        stage: this.stageForThread(updated),
-        threadId: updated.id
-      })
-      this.host.persist()
-    }
+    this.refreshSidebarContextForRow(previous, updated)
   }
 
   /**
@@ -355,9 +407,15 @@ export class ScopeThreads {
     }
     if (incoming.size === 0) return
 
+    const contextThreadId = this.host.currentSidebarContext()?.threadId ?? null
     const next: Thread[] = []
     let changed = 0
+    // The row the sidebar context follows, as it stood before this page: the
+    // mirror guard needs the pre-merge snapshot to tell a scope the user
+    // switched to apart from one the row itself moved.
+    let contextPrevious: Thread | undefined
     for (const thread of this.allScopeThreads) {
+      if (thread.id === contextThreadId) contextPrevious = thread
       const replacement = incoming.get(thread.id)
       if (replacement === undefined) {
         next.push(thread)
@@ -378,19 +436,10 @@ export class ScopeThreads {
     if (changed === 0) return
     this.allScopeThreads = additions.length === 0 ? next : [...additions, ...next]
     // The remembered sidebar context carries the row's own fields, so a page
-    // that moved it has to hand the fresh copy back   once, not once per row.
-    const context = this.host.currentSidebarContext()
-    if (context) {
-      const updated = this.allScopeThreads.find((thread) => thread.id === context.threadId)
-      if (updated) {
-        this.host.updateSidebarContext({
-          projectId: updated.projectId,
-          bucketId: this.bucketForThread(updated),
-          stage: this.stageForThread(updated),
-          threadId: updated.id
-        })
-        this.host.persist()
-      }
+    // that moved it has to hand the fresh copy back, once, not once per row.
+    if (contextThreadId !== null) {
+      const updated = this.allScopeThreads.find((thread) => thread.id === contextThreadId)
+      if (updated) this.refreshSidebarContextForRow(contextPrevious, updated)
     }
   }
 

@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Flag, Loader2, Tag, User } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioFlag from '@pillardash-oss/cio-icon/CioFlag.svelte'
+  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { gitState } from '$lib/stores/git.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -254,7 +258,7 @@
     {#if swatch}
       <span class="h-3 w-3 shrink-0" style={prLabelStyle(swatch)} aria-hidden="true"></span>
     {:else}
-      <User size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+      <CioPerson size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
     {/if}
     <span class="min-w-0 flex-1">
       <span class="block truncate font-mono text-[0.6875rem] text-foreground">{label}</span>
@@ -263,7 +267,7 @@
       {/if}
     </span>
     {#if checked}
-      <Check size={13} class="shrink-0 text-primary" />
+      <CioCheck size={13} class="shrink-0 text-primary" />
     {/if}
   </button>
 {/snippet}
@@ -280,7 +284,7 @@
     <div class="max-h-72 min-h-24 overflow-y-auto border border-border p-1">
       {#if loading && labelRows.length === 0 && accountRows.length === 0 && milestoneRows.length === 0}
         <p class="flex items-center justify-center gap-2 py-6 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading…
         </p>
       {:else if mode === 'labels'}
@@ -335,10 +339,10 @@
           title="Clear the milestone"
           onclick={() => chooseMilestone(null)}
         >
-          <Flag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioFlag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
           <span class="min-w-0 flex-1 text-[0.6875rem] text-foreground">No milestone</span>
           {#if draftMilestone === null}
-            <Check size={13} class="shrink-0 text-primary" />
+            <CioCheck size={13} class="shrink-0 text-primary" />
           {/if}
         </button>
         <div class="my-1 h-px bg-border"></div>
@@ -360,7 +364,7 @@
               title={`Attach ${milestone.title}`}
               onclick={() => chooseMilestone(milestone.number)}
             >
-              <Tag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+              <CioTag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-[0.6875rem] text-foreground">
                   {milestone.title}
@@ -373,7 +377,7 @@
                 </span>
               </span>
               {#if draftMilestone === milestone.number}
-                <Check size={13} class="shrink-0 text-primary" />
+                <CioCheck size={13} class="shrink-0 text-primary" />
               {/if}
             </button>
           {/each}
@@ -402,7 +406,7 @@
       onclick={() => void save()}
     >
       {#if busy}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {/if}
       Save
     </button>

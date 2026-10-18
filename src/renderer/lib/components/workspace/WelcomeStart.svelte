@@ -1,18 +1,15 @@
 <script lang="ts">
-  import {
-    FolderGit2,
-    FolderPlus,
-    GraduationCap,
-    MessageSquarePlus,
-    PanelLeft,
-    Settings2
-  } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
+  import CioFolderGit from '@pillardash-oss/cio-icon/CioFolderGit.svelte'
+  import CioFolderPlus from '@pillardash-oss/cio-icon/CioFolderPlus.svelte'
+  import CioLearn from '@pillardash-oss/cio-icon/CioLearn.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioPanelLeft from '@pillardash-oss/cio-icon/CioPanelLeft.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
-  import type { WorkspaceTourView } from '../onboarding/onboarding-tour-steps'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
-  import AssistantTaskIcon from '$lib/components/icons/AssistantTaskIcon.svelte'
-
+  import type { WorkspaceTourView } from '$lib/guide/guide-stops'
   interface Props {
     /**
      * Which view's empty state this is. Projects and Threads share their body
@@ -79,7 +76,7 @@
 
   const settingsAction = (): ActionItem => ({
     id: 'settings',
-    icon: Settings2,
+    icon: CioTabSettings,
     title: 'Open settings',
     description: 'Configure agents, models, and preferences',
     run: () => onOpenSettings?.()
@@ -87,7 +84,7 @@
 
   const tourAction = (view: WorkspaceTourView): ActionItem => ({
     id: 'tour',
-    icon: GraduationCap,
+    icon: CioLearn,
     title: 'Learn what CodeInOven can do',
     description: `Get a tour of the ${view} view`,
     run: () => onShowTour?.()
@@ -133,7 +130,7 @@
     if (onNewChat) {
       items.push({
         id: 'new-chat',
-        icon: MessageSquarePlus,
+        icon: CioMessagePlus,
         title: 'New chat',
         description: 'Start a conversation with an agent',
         run: () => onNewChat?.(),
@@ -143,7 +140,7 @@
     if (sidebarHasContent && onToggleSidebar) {
       items.push({
         id: 'toggle-sidebar',
-        icon: PanelLeft,
+        icon: CioPanelLeft,
         title: 'Toggle chats sidebar',
         description: 'Choose an existing chat to continue the conversation',
         run: () => onToggleSidebar?.()
@@ -161,7 +158,7 @@
     if (sidebarHasContent && onToggleSidebar) {
       items.push({
         id: 'toggle-sidebar',
-        icon: PanelLeft,
+        icon: CioPanelLeft,
         title: variant === 'threads' ? 'Toggle threads sidebar' : 'Toggle project sidebar',
         description: 'Hover on a project to create a new thread',
         run: () => onToggleSidebar?.(),
@@ -171,7 +168,7 @@
     if (onAddProject) {
       items.push({
         id: 'add-project',
-        icon: FolderPlus,
+        icon: CioFolderPlus,
         title: 'Add project',
         description: 'Create one from a local folder',
         run: () => onAddProject?.()
@@ -180,7 +177,7 @@
     if (onCloneRepo) {
       items.push({
         id: 'clone-repo',
-        icon: FolderGit2,
+        icon: CioFolderGit,
         title: 'Clone repository',
         description: 'Add a project from a git URL',
         run: () => onCloneRepo?.()
@@ -190,7 +187,7 @@
     if (onNewChat) {
       items.push({
         id: 'new-chat',
-        icon: MessageSquarePlus,
+        icon: CioMessagePlus,
         title: 'New chat',
         description: 'Start a conversation, no project needed',
         run: () => onNewChat?.()
@@ -214,7 +211,11 @@
   <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">CodeInOven</h1>
   <p class="mt-1 text-[0.8125rem] text-muted">{subtitles[variant]}</p>
 
-  <div class="mt-8 flex w-full max-w-sm flex-col gap-1" data-onboarding="empty-state-actions">
+  <div
+    class="mt-8 flex w-full max-w-sm flex-col gap-1"
+    data-onboarding="empty-state-actions"
+    data-guide="empty-state-actions"
+  >
     {#each actions as action (action.id)}
       <button
         type="button"

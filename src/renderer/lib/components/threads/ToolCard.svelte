@@ -1,19 +1,17 @@
 <script lang="ts">
-  import {
-    BookOpenText,
-    CheckCircle2,
-    ChevronRight,
-    Clock,
-    CodeXml,
-    FilePenLine,
-    FilePlus2,
-    GlobeCode,
-    Loader2,
-    Search,
-    Terminal,
-    Wrench,
-    XCircle
-  } from '@lucide/svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioCode from '@pillardash-oss/cio-icon/CioCode.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioFilePen from '@pillardash-oss/cio-icon/CioFilePen.svelte'
+  import CioFilePlus from '@pillardash-oss/cio-icon/CioFilePlus.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioWrench from '@pillardash-oss/cio-icon/CioWrench.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { invoke } from '$lib/ipc.svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
@@ -115,13 +113,13 @@
   const statusMeta = $derived.by(() => {
     switch (part.state.status) {
       case 'running':
-        return { icon: Loader2, class: 'text-info animate-spin' }
+        return { icon: CioSpinner, class: 'text-info animate-spin' }
       case 'completed':
-        return { icon: CheckCircle2, class: 'text-success' }
+        return { icon: CioCheckCircle, class: 'text-success' }
       case 'error':
-        return { icon: XCircle, class: 'text-danger' }
+        return { icon: CioCrossCircle, class: 'text-danger' }
       default:
-        return { icon: Clock, class: 'text-dimmed' }
+        return { icon: CioClock, class: 'text-dimmed' }
     }
   })
 
@@ -206,31 +204,31 @@
       open = !open
     }}
   >
-    {#if statusMeta.icon === Loader2}
-      <Loader2 size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === CheckCircle2}
-      <CheckCircle2 size={14} class="shrink-0 {statusMeta.class}" />
-    {:else if statusMeta.icon === XCircle}
-      <XCircle size={14} class="shrink-0 {statusMeta.class}" />
+    {#if statusMeta.icon === CioSpinner}
+      <CioSpinner size={14} class="shrink-0 {statusMeta.class}" />
+    {:else if statusMeta.icon === CioCheckCircle}
+      <CioCheckCircle size={14} class="shrink-0 {statusMeta.class}" />
+    {:else if statusMeta.icon === CioCrossCircle}
+      <CioCrossCircle size={14} class="shrink-0 {statusMeta.class}" />
     {:else}
-      <Clock size={14} class="shrink-0 {statusMeta.class}" />
+      <CioClock size={14} class="shrink-0 {statusMeta.class}" />
     {/if}
     {#if toolKind === 'code'}
-      <CodeXml size={12} class={kindIconClass} />
+      <CioCode size={12} class={kindIconClass} />
     {:else if toolKind === 'read'}
-      <BookOpenText size={12} class={kindIconClass} />
+      <CioCheckCircle size={12} class={kindIconClass} />
     {:else if toolKind === 'edit'}
-      <FilePenLine size={12} class={kindIconClass} />
+      <CioFilePen size={12} class={kindIconClass} />
     {:else if toolKind === 'write'}
-      <FilePlus2 size={12} class={kindIconClass} />
+      <CioFilePlus size={12} class={kindIconClass} />
     {:else if toolKind === 'search'}
-      <Search size={12} class={kindIconClass} />
+      <CioSearch size={12} class={kindIconClass} />
     {:else if toolKind === 'web'}
-      <GlobeCode size={12} class={kindIconClass} />
+      <CioBrowser size={ICON_SIZE.inline} class={kindIconClass} />
     {:else if toolKind === 'shell'}
-      <Terminal size={12} class={kindIconClass} />
+      <CioTerminal size={12} class={kindIconClass} />
     {:else}
-      <Wrench size={12} class={kindIconClass} />
+      <CioWrench size={12} class={kindIconClass} />
     {/if}
     <span class="shrink-0 font-mono font-medium">
       {codeModeLabel}
@@ -249,7 +247,7 @@
     {:else}
       <span class="flex-1"></span>
     {/if}
-    <ChevronRight
+    <CioForward
       size={13}
       class="shrink-0 text-dimmed transition-transform group-hover/tool:text-foreground {open
         ? 'rotate-90'

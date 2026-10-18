@@ -340,10 +340,11 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     '',
     'AGENT SCRATCH SPACE   where non-source outputs live:',
     `1. The project's \`.cio/\` folder is the agent scratch pad. ${APP_NAME} creates it when the project is added and gitignores it from day one, so nothing inside it is ever committed.`,
-    '2. Unless the user explicitly asks otherwise, route every artifact that is not part of the application source into the `.cio/` subfolder rule 3 names for it: context documents, walkthroughs, reports, and test output. Disposable scratch, probes, and intermediate files belong in `.cio/tmp/`. Never write files at the `.cio/` root, and name every file so a human can read it at a glance.',
+    '2. Unless the user explicitly asks otherwise, route every artifact that is not part of the application source, and is not authored work (rule 6), into the `.cio/` subfolder rule 3 names for it: context documents, walkthroughs, reports, and test output. Disposable scratch, probes, and intermediate files belong in `.cio/tmp/`. Never write files at the `.cio/` root, and name every file so a human can read it at a glance.',
     '3. Scratch routing is mode-dependent: only Engineering mode (`engineer`, `assignment`, or `achievement`) may use CodeInOven-managed lifecycle files (spec.md, plan.md, progress.md, Assignment, audit, and task evidence) under `.cio/specs/<feature-slug>/`. Regular chats and every other mode must not create, modify, or use `.cio/specs/`; put their non-source work (including walkthroughs, reports, test output, and any chat plan/progress notes) in `.cio/work/<feature>/`.',
     '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
     '5. In Engineering mode, the platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite those platform-owned files. In regular chats, `.cio/specs/` is out of scope and must not be created or overwritten.',
+    "6. Authored work is not scratch: a design or a composition is a deliverable the user reviews on a board that lists this project's design and video folders, so it is written into the project's own design or video folder (`.cio/designs` and `.cio/videos` by default, or whichever folder the project was pointed at for that kind) and never into `.cio/work`, which the board does not read. A design under `.cio/work` is work the user cannot find.",
     '',
     'CITATION & SOURCE RULES   apply to every report, answer, and artifact you produce:',
     '1. Cite the source of every factual claim. Files must be cited with their project-rooted relative path, e.g. `src/app.html`   never a bare filename like `app.html` and never a full absolute filesystem path, because the relative form is what renders as a clickable citation in the app UI.',
@@ -371,6 +372,7 @@ export function abbreviatedWorkspaceGuard(driver: DriverInfo | null, projectPath
     projectLine,
     'Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.',
     "Keep every non-source output inside the project's `.cio/` scratch space, with disposable scratch under `.cio/tmp/`; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).",
+    "Authored work is the exception: a design or a composition goes in this project's design or video folder, which is the only place the app's board lists it from, never in the scratch space.",
     'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.'
   ].join(' ')
 }

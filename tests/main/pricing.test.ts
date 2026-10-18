@@ -31,9 +31,9 @@ describe('estimateTokenCostUsd', () => {
       }
     ])
     // uncached input 90 * 1.25 + cacheRead 10 * 0.125 + cacheWrite 5 * 1.5625
-    //        + output 20 * 10 + reasoning 5 * 10, all / 1M
+    //        + visible output 15 * 10 + reasoning 5 * 10, all / 1M
     expect(estimateTokenCostUsd('gpt-5', 'openai', gpt5Tokens)).toBeCloseTo(
-      (90 * 1.25 + 10 * 0.125 + 5 * 1.5625 + 20 * 10 + 5 * 10) / 1_000_000,
+      (90 * 1.25 + 10 * 0.125 + 5 * 1.5625 + 15 * 10 + 5 * 10) / 1_000_000,
       6
     )
   })

@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
   import { onMount } from 'svelte'
-  import { Check, Copy, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
 
@@ -67,7 +69,7 @@
           aria-pressed={wrapped}
           onclick={() => wrapTextState.toggle()}
         >
-          <WrapText size={12} class={wrapped ? 'text-primary' : ''} />
+          <CioWrapText size={12} class={wrapped ? 'text-primary' : ''} />
         </button>
         <button
           class="flex items-center gap-1 p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
@@ -76,9 +78,9 @@
           onclick={() => void copy()}
         >
           {#if copied}
-            <Check size={12} class="text-success" />
+            <CioCheck size={12} class="text-success" />
           {:else}
-            <Copy size={12} />
+            <CioCopy size={12} />
           {/if}
         </button>
       </div>

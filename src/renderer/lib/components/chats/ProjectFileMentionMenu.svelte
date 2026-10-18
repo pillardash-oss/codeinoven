@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronRight, Film, ListTodo, Palette, Wrench } from '@lucide/svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioListTodo from '@pillardash-oss/cio-icon/CioListTodo.svelte'
+  import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
+  import CioWrench from '@pillardash-oss/cio-icon/CioWrench.svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
@@ -105,14 +109,14 @@
         >
           {#if mention.type === 'utility'}
             {#if mention.entry.id === 'cio-design'}
-              <Palette size={13} class="shrink-0 text-primary" />
+              <CioPalette size={13} class="shrink-0 text-primary" />
             {:else if mention.entry.id === 'cio-video'}
-              <Film size={13} class="shrink-0 text-primary" />
+              <CioClapper size={13} class="shrink-0 text-primary" />
             {:else}
-              <Wrench size={13} class="shrink-0 text-primary" />
+              <CioWrench size={13} class="shrink-0 text-primary" />
             {/if}
           {:else if mention.type === 'task'}
-            <ListTodo size={13} class="shrink-0 text-info" />
+            <CioListTodo size={13} class="shrink-0 text-info" />
           {:else if mention.entry.kind === 'directory'}
             <FolderTypeIcon name={mention.entry.name} size={13} />
           {:else}
@@ -137,7 +141,7 @@
             {/if}
           </span>
           {#if mention.type === 'project' && mention.entry.kind === 'directory'}
-            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+            <CioForward size={12} class="shrink-0 text-dimmed" />
           {/if}
         </button>
       {/each}

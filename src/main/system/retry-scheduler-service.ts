@@ -55,9 +55,10 @@ const MAX_SAVED_ISSUE_MESSAGE_LENGTH = 1_000
 const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
 
 /**
- * RetrySchedulerService retains provider-reset and connection failures. Device
- * connection recovery always resumes once online; usage resets honor the
- * autoRetryAfterReset preference. Records without a retry deadline remain
+ * RetrySchedulerService retains provider-reset and connection failures. A device
+ * connection wait resumes as soon as connectivity is *verified* back (a real
+ * round trip, not the operating system's guess), in bounded batches; usage
+ * resets honor the autoRetryAfterReset preference. Records without a retry deadline remain
  * persisted for restart recovery but are never fired automatically. Listeners
  * are notified on every pending-set change so dependents (e.g. the power-wake
  * service) can re-evaluate.
@@ -120,13 +121,34 @@ export class RetrySchedulerService {
     this.isStopped = test
   }
 
-  /** Main-process connectivity is authoritative; renderer events only wake the queue. */
+  /**
+   * Main-process connectivity is authoritative; renderer events only wake the
+   * queue. The test is expected to answer with *verified* connectivity (see
+   * `ConnectivityService`), because a connection wait fired against a link that
+   * is not actually up burns a resume attempt, while one that never fires
+   * strands the thread.
+   *
+   * Without a test attached a network wait is never gated at all: a missing
+   * wiring bug must fail towards resuming, never towards a wait that outlives
+   * the reconnection it was parked on.
+   */
   attachNetworkTest(test: () => boolean): void {
     this.isOnline = test
   }
 
   connectionRestored(): void {
     this.tick()
+  }
+
+  /**
+   * Connectivity is only a gate for connection waits, and only when something
+   * can actually answer for it. Every other kind of wait is the provider's
+   * clock, not the device's link.
+   */
+  private networkReachable(record: PendingRetryRecord): boolean {
+    if (record.issueKind !== 'network') return true
+    if (this.isOnline === null) return true
+    return this.isOnline()
   }
 
   /** Drop every pending record whose thread is currently user-stopped. */
@@ -210,6 +232,7 @@ export class RetrySchedulerService {
       projectId: record.projectId,
       threadId: record.threadId,
       harnessId: record.harnessId,
+      issueKind: record.issueKind,
       retryAt: record.retryAt === undefined ? null : new Date(record.retryAt).toISOString(),
       automatic: (this.enabled || record.issueKind === 'network') && record.retryAt !== undefined
     })
@@ -379,7 +402,7 @@ export class RetrySchedulerService {
     for (const record of this.pending.values()) {
       if (
         (this.enabled || record.issueKind === 'network') &&
-        (record.issueKind !== 'network' || this.isOnline?.() === true) &&
+        this.networkReachable(record) &&
         record.retryAt !== undefined &&
         record.retryAt <= now &&
         !this.resuming.has(record.sessionId)
@@ -407,7 +430,7 @@ export class RetrySchedulerService {
         !vetoed.includes(record) &&
         !deferred.has(record) &&
         (this.enabled || record.issueKind === 'network') &&
-        (record.issueKind !== 'network' || this.isOnline?.() === true)
+        this.networkReachable(record)
     )
     for (const record of vetoed) {
       if (this.pending.get(record.sessionId) === record) {

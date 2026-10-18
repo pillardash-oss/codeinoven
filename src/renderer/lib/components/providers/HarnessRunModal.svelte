@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CheckCircle2, Loader2, X, XCircle } from '@lucide/svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { type Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
   import DockableModal from '../ui/DockableModal.svelte'
@@ -146,13 +149,13 @@
             {#if run.exitCode === undefined}
               <span class="absolute -right-0.5 -top-0.5 h-2 w-2 bg-info" aria-hidden="true"></span>
             {:else if run.exitCode === 0}
-              <CheckCircle2
+              <CioCheckCircle
                 size={10}
                 class="absolute -right-1 -top-1 bg-surface text-success"
                 aria-hidden="true"
               />
             {:else}
-              <XCircle
+              <CioCrossCircle
                 size={10}
                 class="absolute -right-1 -top-1 bg-surface text-danger"
                 aria-hidden="true"
@@ -177,7 +180,7 @@
             title="Close tasks"
             onclick={() => store.close()}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         {/if}
       </div>
@@ -231,7 +234,7 @@
                 <span
                   class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-info"
                 >
-                  <Loader2 size={11} class="animate-spin" />
+                  <CioSpinner size={11} class="animate-spin" />
                   {activeLabel(run.kind)}
                 </span>
               </div>
@@ -239,14 +242,14 @@
               <span
                 class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-success"
               >
-                <CheckCircle2 size={11} />
+                <CioCheckCircle size={11} />
                 {finishedLabel(run.kind)}
               </span>
             {:else}
               <span
                 class="flex shrink-0 items-center gap-1 text-[0.625rem] font-medium text-danger"
               >
-                <XCircle size={11} /> Exited with code {run.exitCode}
+                <CioCrossCircle size={11} /> Exited with code {run.exitCode}
               </span>
             {/if}
           </div>

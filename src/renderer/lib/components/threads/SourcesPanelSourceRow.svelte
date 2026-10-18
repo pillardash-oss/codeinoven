@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { FileText, GlobeCode, Hash, Image as ImageIcon } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
+  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type {
     AgentSource,
     FileAgentSource,
@@ -43,16 +47,16 @@
         {#if favicon}
           <img src={favicon} alt="" class="h-5 w-5 object-contain" />
         {:else}
-          <GlobeCode size={15} />
+          <CioBrowser size={ICON_SIZE.row} />
         {/if}
       </span>
     {:else if source.kind === 'file-citation'}
       <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary">
-        <FileText size={15} />
+        <CioFileText size={15} />
       </span>
     {:else if source.kind === 'section'}
       <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary">
-        <Hash size={15} />
+        <CioTag size={15} />
       </span>
     {:else if isImageSource(source)}
       <button
@@ -72,7 +76,7 @@
       </button>
     {:else}
       <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-muted">
-        <FileText size={15} />
+        <CioFileText size={15} />
       </span>
     {/if}
 
@@ -134,7 +138,7 @@
     </div>
 
     {#if source.kind === 'generated-image'}
-      <ImageIcon size={13} class="mt-1 shrink-0 text-dimmed" />
+      <CioImage size={13} class="mt-1 shrink-0 text-dimmed" />
     {/if}
   </div>
 </div>

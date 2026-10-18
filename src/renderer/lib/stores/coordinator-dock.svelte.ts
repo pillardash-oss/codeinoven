@@ -103,6 +103,26 @@ class CoordinatorDockState {
   }
 
   /**
+   * The authored-work board to restore when a thread opens, or null.
+   *
+   * A board belongs to the thread that opened the session, never to the thread
+   * the user happened to be looking at before. So this only ever returns the
+   * entering thread's own design board: a thread that is not in a session keeps
+   * its own panel (or none) rather than wearing the previous thread's board, and
+   * the board never follows the user onto unrelated threads. A board the user
+   * dismissed stays dismissed on the way back in, the same rule every
+   * coordinator follows.
+   */
+  inheritWork(projectId: string, threadId: string): CoordinatorDockRegistration | null {
+    if (!this.autoOpen) return null
+    const known = this.forThread(projectId, threadId)
+    if (known?.panel.component !== 'design') return null
+    // A registration recalled under this row always carries this thread's own
+    // props; one that names another thread is a stale carry-over and is refused.
+    return known.panel.props.threadId === threadId ? known : null
+  }
+
+  /**
    * Publish a coordinator. The registration is replaced on every call so the
    * panel always renders current props; the sidebar keeps the same component
    * instance because it selects the component from the registration rather

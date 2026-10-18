@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioSmilePlus from '@pillardash-oss/cio-icon/CioSmilePlus.svelte'
   /**
    * The "add a reaction" control for one comment: GitHub's own eight reactions,
    * with the ones the reader already used lit up.
@@ -8,7 +9,6 @@
    * the invitation. The chips themselves appear under the body once a reaction
    * exists, which is where a reader looks to see who agreed.
    */
-  import { SmilePlus } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { gitState } from '$lib/stores/git.svelte'
   import { prReactionBusyKey } from '$lib/stores/git-store-helpers'
@@ -47,7 +47,7 @@
     aria-label="Add a reaction"
     title="Add a reaction"
   >
-    <SmilePlus size={13} />
+    <CioSmilePlus size={13} />
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content

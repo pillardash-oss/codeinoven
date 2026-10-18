@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Trash2 } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { plainTextEditorTarget } from '../../speech/editor-target'
@@ -36,16 +37,6 @@
     fieldClass?: string
     removeTitle?: string
     doneTitle?: string
-    /**
-     * Keep Remove available with an empty comment.
-     *
-     * A response selection only exists because its comment does, so removing
-     * the comment removes the reference and an empty field has nothing to
-     * remove. A mark drawn on a picture is the payload itself: it can be
-     * deleted before any comment is written, so its editor must not gate
-     * removal on text the user never intended to write.
-     */
-    allowEmptyRemove?: boolean
   }
 
   let {
@@ -59,8 +50,7 @@
     placeholder = 'Add a comment for the agent…',
     fieldClass = 'h-20 min-h-20',
     removeTitle = 'Remove this comment and the reference it belongs to',
-    doneTitle = 'Done: attach this comment',
-    allowEmptyRemove = false
+    doneTitle = 'Done: attach this comment'
   }: Props = $props()
 
   // The editor is remounted fresh each time it opens, so the initial text is
@@ -128,10 +118,9 @@
     type="button"
     class="flex h-8 items-center gap-1.5 px-2.5 text-xs text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
     title={removeTitle}
-    disabled={!allowEmptyRemove && !comment.trim()}
     onclick={onRemove}
   >
-    <Trash2 size={12} />
+    <CioTrash size={12} />
     Remove
   </button>
   <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} triggerPriority={6} />
@@ -141,7 +130,7 @@
     title={doneTitle}
     onclick={submit}
   >
-    <Check size={12} />
+    <CioCheck size={12} />
     Done
   </button>
 </div>

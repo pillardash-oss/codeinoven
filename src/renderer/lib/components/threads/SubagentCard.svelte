@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Bot, ExternalLink } from '@lucide/svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import {
@@ -61,7 +62,7 @@
 </script>
 
 <CardFrame placement="top" label="Sub-agent">
-  <CardHead {chip} icon={Bot} title={taskLabel} divider={false}>
+  <CardHead {chip} icon={CioSubagent} title={taskLabel} divider={false}>
     {#snippet meta()}
       <SubagentStatusIcon {status} size={12} />
       <SubagentModeBadge background={activity.background} />
@@ -79,7 +80,7 @@
         <CardButton
           label="Open session"
           title="Open the sub-agent session"
-          icon={ExternalLink}
+          icon={CioExternalLink}
           size="xs"
           onclick={() => onOpen?.(part)}
         />

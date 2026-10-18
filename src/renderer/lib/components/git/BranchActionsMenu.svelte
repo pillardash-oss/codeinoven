@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CircleCheck, Download, GitBranch, Trash2 } from '@lucide/svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   interface Props {
@@ -46,19 +49,19 @@
 
 {#if isCurrent}
   <DropdownMenu.Item class={itemClass} disabled>
-    <CircleCheck size={12} class="shrink-0 text-primary" />
+    <CioCheckCircle size={12} class="shrink-0 text-primary" />
     Current branch
   </DropdownMenu.Item>
 {:else if canCheckout}
   <DropdownMenu.Item class={itemClass} onSelect={onCheckout} disabled={busy}>
-    <GitBranch size={12} class="shrink-0 text-dimmed" />
+    <CioTabGit size={12} class="shrink-0 text-dimmed" />
     {checkoutLabel}
   </DropdownMenu.Item>
 {/if}
 
 {#if canFetch}
   <DropdownMenu.Item class={itemClass} onSelect={onFetch} disabled={fetchBusy}>
-    <Download size={12} class="shrink-0 text-dimmed" />
+    <CioDownload size={12} class="shrink-0 text-dimmed" />
     Fetch this branch
   </DropdownMenu.Item>
 {/if}
@@ -70,7 +73,7 @@
     onSelect={onDeleteRemote}
     disabled={remoteBusy}
   >
-    <Trash2 size={12} class="shrink-0" />
+    <CioTrash size={12} class="shrink-0" />
     Delete remote branch
   </DropdownMenu.Item>
 {/if}
@@ -82,7 +85,7 @@
     onSelect={onDelete}
     disabled={busy}
   >
-    <Trash2 size={12} class="shrink-0" />
+    <CioTrash size={12} class="shrink-0" />
     Delete branch
   </DropdownMenu.Item>
 {/if}

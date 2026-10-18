@@ -1,21 +1,18 @@
 <script lang="ts">
-  import {
-    Bot,
-    Check,
-    Copy,
-    ExternalLink,
-    GitBranch,
-    GitMerge,
-    GitPullRequest,
-    ListChecks,
-    MessageCircleDashed,
-    MessageSquareDashed,
-    Milestone,
-    RotateCcw,
-    Tag,
-    UserPlus,
-    X
-  } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioListChecks from '@pillardash-oss/cio-icon/CioListChecks.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioMilestone from '@pillardash-oss/cio-icon/CioMilestone.svelte'
+  import CioPersonPlus from '@pillardash-oss/cio-icon/CioPersonPlus.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { PullRequestSummary } from '$shared/types'
@@ -122,11 +119,11 @@
 
       {#if single}
         <ContextMenu.Item class={itemClass} onSelect={() => onOpen(pr)}>
-          <GitPullRequest size={13} class="shrink-0 text-muted" />
+          <CioPullRequest size={13} class="shrink-0 text-muted" />
           Open
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={() => onOpenInBrowser(pr)}>
-          <ExternalLink size={13} class="shrink-0 text-muted" />
+          <CioExternalLink size={13} class="shrink-0 text-muted" />
           Open pull request on GitHub
         </ContextMenu.Item>
       {/if}
@@ -134,11 +131,11 @@
       <ContextMenu.Separator class="my-1 h-px bg-border" />
 
       <ContextMenu.Item class={itemClass} onSelect={() => onCopyLinks(targets)}>
-        <Copy size={13} class="shrink-0 text-muted" />
+        <CioCopy size={13} class="shrink-0 text-muted" />
         {single ? 'Copy link' : `Copy ${targets.length} links`}
       </ContextMenu.Item>
       <ContextMenu.Item class={itemClass} onSelect={() => onCopyBranches(targets)}>
-        <GitBranch size={13} class="shrink-0 text-muted" />
+        <CioTabGit size={13} class="shrink-0 text-muted" />
         {single ? 'Copy branch name' : `Copy ${targets.length} branch names`}
       </ContextMenu.Item>
 
@@ -149,7 +146,7 @@
             class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
             onSelect={() => onClosePullRequests(closable)}
           >
-            <X size={13} class="shrink-0" />
+            <CioClose size={13} class="shrink-0" />
             {closable.length === 1
               ? 'Close pull request'
               : `Close ${closable.length} pull requests`}
@@ -157,7 +154,7 @@
         {/if}
         {#if reopenable.length > 0}
           <ContextMenu.Item class={itemClass} onSelect={() => onReopenPullRequests(reopenable)}>
-            <RotateCcw size={13} class="shrink-0 text-muted" />
+            <CioUndo size={13} class="shrink-0 text-muted" />
             {reopenable.length === 1
               ? 'Reopen pull request'
               : `Reopen ${reopenable.length} pull requests`}
@@ -168,15 +165,15 @@
       {#if single}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         <ContextMenu.Item class={itemClass} onSelect={() => onExplain(pr)}>
-          <MessageCircleDashed size={13} class="shrink-0 text-muted" />
+          <CioTemporaryChat size={13} class="shrink-0 text-muted" />
           Explain this pull request
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={() => onQuickChat(pr)}>
-          <MessageSquareDashed size={13} class="shrink-0 text-muted" />
+          <CioTemporaryChat size={13} class="shrink-0 text-muted" />
           Quick chat about this pull request
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={() => onAssignAgent(pr)}>
-          <Bot size={13} class="shrink-0 text-muted" />
+          <CioSubagent size={13} class="shrink-0 text-muted" />
           Assign to an agent
         </ContextMenu.Item>
         {#if assignedThreadId}
@@ -186,7 +183,7 @@
             after the agent has had time to work.
           -->
           <ContextMenu.Item class={itemClass} onSelect={() => onOpenAgentThread(assignedThreadId)}>
-            <Bot size={13} class="shrink-0 text-primary" />
+            <CioSubagent size={13} class="shrink-0 text-primary" />
             Open agent thread
           </ContextMenu.Item>
         {/if}
@@ -195,7 +192,7 @@
           <ContextMenu.Separator class="my-1 h-px bg-border" />
           {#if pr.draft}
             <ContextMenu.Item class={itemClass} onSelect={() => onMarkReady(pr)}>
-              <Check size={13} class="shrink-0 text-muted" />
+              <CioCheck size={13} class="shrink-0 text-muted" />
               Mark ready for review
             </ContextMenu.Item>
           {/if}
@@ -205,41 +202,41 @@
             a merge that changes what the commit history looks like.
           -->
           <ContextMenu.Item class={itemClass} onSelect={() => onMerge(pr, 'merge')}>
-            <GitMerge size={13} class="shrink-0 text-muted" />
+            <CioMerge size={13} class="shrink-0 text-muted" />
             Merge commit into {pr.baseRef}…
           </ContextMenu.Item>
           <ContextMenu.Item class={itemClass} onSelect={() => onMerge(pr, 'squash')}>
-            <GitMerge size={13} class="shrink-0 text-muted" />
+            <CioMerge size={13} class="shrink-0 text-muted" />
             Squash and merge into {pr.baseRef}…
           </ContextMenu.Item>
           <ContextMenu.Item class={itemClass} onSelect={() => onMerge(pr, 'rebase')}>
-            <GitMerge size={13} class="shrink-0 text-muted" />
+            <CioMerge size={13} class="shrink-0 text-muted" />
             Rebase and merge into {pr.baseRef}…
           </ContextMenu.Item>
         {/if}
 
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         <ContextMenu.Item class={itemClass} onSelect={() => onEditLabels(pr)}>
-          <Tag size={13} class="shrink-0 text-muted" />
+          <CioTag size={13} class="shrink-0 text-muted" />
           Labels…
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={() => onEditAssignees(pr)}>
-          <UserPlus size={13} class="shrink-0 text-muted" />
+          <CioPersonPlus size={13} class="shrink-0 text-muted" />
           Assign…
         </ContextMenu.Item>
         <ContextMenu.Item class={itemClass} onSelect={() => onEditMilestone(pr)}>
-          <Milestone size={13} class="shrink-0 text-muted" />
+          <CioMilestone size={13} class="shrink-0 text-muted" />
           Milestone…
         </ContextMenu.Item>
       {/if}
 
       <ContextMenu.Separator class="my-1 h-px bg-border" />
       <ContextMenu.Item class={itemClass} onSelect={onSelectAll}>
-        <ListChecks size={13} class="shrink-0 text-muted" />
+        <CioListChecks size={13} class="shrink-0 text-muted" />
         Select every row
       </ContextMenu.Item>
       <ContextMenu.Item class={itemClass} onSelect={onClearSelection}>
-        <X size={13} class="shrink-0 text-muted" />
+        <CioClose size={13} class="shrink-0 text-muted" />
         Clear selection
       </ContextMenu.Item>
     </ContextMenu.Content>

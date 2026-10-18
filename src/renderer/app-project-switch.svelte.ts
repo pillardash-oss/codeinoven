@@ -1,5 +1,6 @@
+import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
 import { SvelteMap } from 'svelte/reactivity'
-import { FolderKanban } from '@lucide/svelte'
+
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { projectLocationLabel } from '$lib/project-location'
 import { scopeState } from '$lib/stores/scope.svelte'
@@ -82,7 +83,7 @@ export class ProjectSwitchPaletteController {
         // The project name is already the row title, so the source badge would
         // only repeat it.
         showSourceBadge: false,
-        icon: FolderKanban,
+        icon: CioProjects,
         ...(iconUrl ? { iconUri: iconUrl } : {}),
         ...(isActive ? { status: { label: 'Current' } } : {}),
         keywords: [project.name, project.path, project.host ?? '', location].filter(

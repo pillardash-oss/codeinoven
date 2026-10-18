@@ -6,6 +6,7 @@ import type {
   GitHubUser
 } from '../../lib/types'
 import { uuidv7 } from '../../lib/id'
+import { CrossProcessMutex, GITHUB_CREDENTIAL_LOCK_NAME } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
 import type { SecretVault } from '../storage/secret-vault'
 
@@ -48,6 +49,34 @@ const REFRESH_GRANT_TYPE = 'refresh_token'
 const NETWORK_TIMEOUT_MS = 15_000
 const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000
 const ACCOUNTS_VERSION = 1
+
+/**
+ * How long a refresh waits for another instance's exchange before it overtakes
+ * the credential lock.
+ *
+ * Short on purpose: the wait sits behind an IPC status read the Git panel is
+ * awaiting, and a caller that overtakes re-reads the vault before it exchanges
+ * anything, so waiting longer buys nothing except a slow panel.
+ */
+const REFRESH_LOCK_WAIT_MS = 5_000
+
+/**
+ * Delays a refused refresh waits out before the credential is declared dead.
+ *
+ * GitHub answers `incorrect_client_credentials` for every refresh token that is
+ * not currently valid, which covers a token that is gone for good and one a
+ * sibling instance redeemed a moment ago. Two instances share one vault and the
+ * winner's write lands tens of milliseconds after the loser's refusal (24 ms to
+ * 113 ms in the app's own logs), and an instance running older code takes no
+ * credential lock at all, so the vault is polled across this window before an
+ * account is dropped. Without it, losing the race reads as a terminal failure and
+ * signs the user out of an account that is still perfectly healthy.
+ */
+const REFUSED_REFRESH_RECOVERY_DELAYS_MS = [200, 300, 500, 750, 1_000] as const
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 /**
  * How long a fetched GitHub profile (with its inlined avatar) is served from
@@ -139,7 +168,11 @@ class GitHubOAuthError extends Error {
  * client ID when the registration expires user access tokens (GitHub's default).
  * Because a refresh token GitHub refuses is terminal, such a credential is
  * dropped once and reported as signed out, so the sidebar offers sign-in again
- * instead of the app retrying a dead token on every call.
+ * instead of the app retrying a dead token on every call. That drop is the last
+ * resort: a refusal is first given the window in which the instance that really
+ * redeemed the token persists its replacement, because a refresh token is single
+ * use and every instance sharing this vault refreshes through one cross-process
+ * lock.
  *
  * The whole list lives in one vault ref, so a token never reaches the renderer
  * and a second account cannot silently overwrite the first.
@@ -151,6 +184,23 @@ export class GitHubAuthService {
    * turn rather than being answered by the wrong promise.
    */
   private refresh: { accountId: string; promise: Promise<string | null> } | null = null
+
+  /**
+   * Cross-instance lock around a refresh exchange. A packaged app and a dev run
+   * share this config root and therefore this vault, and only one of them may
+   * redeem an account's single-use refresh token at a time.
+   */
+  private readonly refreshLock = new CrossProcessMutex(GITHUB_CREDENTIAL_LOCK_NAME)
+
+  /**
+   * Tail of the in-process account-file queue, so two writers here cannot lose
+   * each other's change. Without it a sign-in, a switch or a profile write that
+   * read the list before a refresh replaced the credentials would write that
+   * older snapshot back and restore a refresh token GitHub has already spent.
+   */
+  private fileTail: Promise<void> = Promise.resolve()
+  /** How deep this call stack is inside its own account-file lock. */
+  private fileDepth = 0
 
   /**
    * Last fetched profile per account, with its timestamp. Served without network
@@ -219,12 +269,16 @@ export class GitHubAuthService {
 
   /** Make one signed-in account the one every GitHub call runs as. */
   async switchAccount(accountId: string): Promise<GitHubAuthStatus> {
-    const file = await this.readFile()
-    const account = this.accountById(file, accountId)
+    await this.withFileLock(async () => {
+      const file = await this.readFile()
+      const account = this.accountById(file, accountId)
+      if (!account) throw new Error('That GitHub account is no longer signed in')
+      account.lastUsedAt = Date.now()
+      file.activeId = account.id
+      await this.writeFile(file)
+    })
+    const account = this.activeAccount(await this.readFile())
     if (!account) throw new Error('That GitHub account is no longer signed in')
-    account.lastUsedAt = Date.now()
-    file.activeId = account.id
-    await this.writeFile(file)
     await this.refreshProfile(account)
     return this.toStatus(await this.readFile())
   }
@@ -327,28 +381,30 @@ export class GitHubAuthService {
   private async addAccount(record: Record<string, unknown>): Promise<void> {
     const credentials = this.buildCredentials(record)
     const login = await this.loginForToken(credentials.accessToken)
-    const file = await this.readFile()
-    const now = Date.now()
-    const existing = login ? this.accountByLogin(file, login) : null
-    if (existing) {
-      existing.credentials = credentials
-      existing.lastUsedAt = now
-      if (login) existing.login = login
-      this.profiles.delete(existing.id)
-      file.activeId = existing.id
-    } else {
-      const account: StoredGitHubAccount = {
-        id: uuidv7(),
-        login: login ?? '',
-        name: null,
-        credentials,
-        addedAt: now,
-        lastUsedAt: now
+    await this.withFileLock(async () => {
+      const file = await this.readFile()
+      const now = Date.now()
+      const existing = login ? this.accountByLogin(file, login) : null
+      if (existing) {
+        existing.credentials = credentials
+        existing.lastUsedAt = now
+        if (login) existing.login = login
+        this.profiles.delete(existing.id)
+        file.activeId = existing.id
+      } else {
+        const account: StoredGitHubAccount = {
+          id: uuidv7(),
+          login: login ?? '',
+          name: null,
+          credentials,
+          addedAt: now,
+          lastUsedAt: now
+        }
+        file.accounts.push(account)
+        file.activeId = account.id
       }
-      file.accounts.push(account)
-      file.activeId = account.id
-    }
-    await this.writeFile(file)
+      await this.writeFile(file)
+    })
   }
 
   /**
@@ -417,25 +473,45 @@ export class GitHubAuthService {
   /**
    * Exchange one account's refresh token for a new access token, recovering from
    * the ways GitHub refuses it. Never throws.
+   *
+   * The exchange runs inside the account-file lock and behind the cross-instance
+   * credential lock, and the vault is re-read once both are held before anything
+   * is sent: a refresh token is single use, so an instance that waited out a
+   * sibling's exchange must use the credential that sibling stored, never the one
+   * it read before the sibling ran.
    */
   private async renewCredentials(account: StoredGitHubAccount): Promise<string | null> {
     const stored = account.credentials
     const refreshToken = stored.refreshToken
     if (!refreshToken) return stored.accessToken
-    try {
-      return await this.exchangeRefreshToken(account.id, refreshToken)
-    } catch (failure) {
-      if (failure instanceof GitHubOAuthError && DEAD_REFRESH_TOKEN_ERRORS.has(failure.code)) {
-        const rotated = await this.accessTokenAfterRotation(account.id, refreshToken)
+    return await this.withFileLock(async () => {
+      const release = await this.refreshLock.acquire({ timeoutMs: REFRESH_LOCK_WAIT_MS })
+      try {
+        const rotated = await this.credentialRotatedBySibling(account.id, refreshToken)
         if (rotated) return rotated
-        await this.discardAccount(account.id, `GitHub refused the refresh token (${failure.code})`)
-        return null
+        try {
+          return await this.exchangeRefreshToken(account.id, refreshToken)
+        } catch (failure) {
+          if (failure instanceof GitHubOAuthError && DEAD_REFRESH_TOKEN_ERRORS.has(failure.code)) {
+            const recovered = await this.credentialAfterRefusal(account.id, refreshToken)
+            if (recovered) return recovered
+            await this.discardAccount(
+              account.id,
+              `GitHub refused the refresh token (${failure.code})`
+            )
+            return null
+          }
+          // Transient (timeout, HTTP error, offline). Keep the credentials: the
+          // refresh token is normally still valid, so a later call can succeed.
+          Logger.error('GitHub token refresh failed', failure)
+          const current = await this.credentialRotatedBySibling(account.id, refreshToken)
+          if (current) return current
+          return this.isAccessTokenStillValid(stored) ? stored.accessToken : null
+        }
+      } finally {
+        release()
       }
-      // Transient (timeout, HTTP error, offline). Keep the credentials: the
-      // refresh token is normally still valid, so a later call can succeed.
-      Logger.error('GitHub token refresh failed', failure)
-      return this.isAccessTokenStillValid(stored) ? stored.accessToken : null
-    }
+    })
   }
 
   /** True while the stored access token is still accepted by GitHub. */
@@ -463,15 +539,15 @@ export class GitHubAuthService {
   }
 
   /**
-   * Recover when another app instance redeemed the refresh token first.
+   * The credential the vault holds now, when a sibling instance rotated this
+   * account's refresh token after `previousRefreshToken` was read.
    *
-   * The guard against reusing a refresh token lives in this process only, so two
-   * instances sharing one vault (a dev run beside the packaged app) can refresh
-   * at the same moment. The loser is refused even though the winner has just
-   * stored a usable replacement, so re-read the vault once before declaring the
-   * credentials dead.
+   * Null means the vault still holds the token we tried, or the account is gone;
+   * either way there is nothing to gain from asking GitHub again with the same
+   * token. A rotated credential whose access token is still valid is handed back
+   * as it is, and an expired one is exchanged for a fresh pair.
    */
-  private async accessTokenAfterRotation(
+  private async credentialRotatedBySibling(
     accountId: string,
     previousRefreshToken: string
   ): Promise<string | null> {
@@ -485,6 +561,28 @@ export class GitHubAuthService {
       Logger.error('GitHub token recovery after a rotated refresh token failed', failure)
       return null
     }
+  }
+
+  /**
+   * Give a refused refresh token the window in which the instance that actually
+   * redeemed it persists the replacement, before the account is declared dead.
+   *
+   * The refusal alone cannot tell "this token is gone" from "another instance
+   * just spent it": GitHub answers `incorrect_client_credentials` for both. The
+   * winner's vault write lands tens of milliseconds after our refusal, and an
+   * instance running older code or another client takes no credential lock at
+   * all, so the vault is polled across the window instead of being read once.
+   */
+  private async credentialAfterRefusal(
+    accountId: string,
+    previousRefreshToken: string
+  ): Promise<string | null> {
+    for (const delayMs of REFUSED_REFRESH_RECOVERY_DELAYS_MS) {
+      const rotated = await this.credentialRotatedBySibling(accountId, previousRefreshToken)
+      if (rotated) return rotated
+      await sleep(delayMs)
+    }
+    return await this.credentialRotatedBySibling(accountId, previousRefreshToken)
   }
 
   /** Build a credential set from a token endpoint response. */
@@ -591,25 +689,30 @@ export class GitHubAuthService {
 
   /** Write a profile's login and name onto the account that carries it. */
   private async rememberLogin(accountId: string, user: GitHubUser): Promise<void> {
-    const file = await this.readFile()
-    const account = this.accountById(file, accountId)
-    if (!account) return
-    account.login = user.login
-    account.name = user.name
-    await this.writeFile(file)
+    await this.withFileLock(async () => {
+      const file = await this.readFile()
+      const account = this.accountById(file, accountId)
+      if (!account) return
+      account.login = user.login
+      account.name = user.name
+      await this.writeFile(file)
+    })
   }
 
-  /** Replace one account's credentials after a refresh, keeping its identity. */ private async replaceCredentials(
+  /** Replace one account's credentials after a refresh, keeping its identity. */
+  private async replaceCredentials(
     accountId: string,
     credentials: StoredGitHubCredentials
   ): Promise<void> {
-    const file = await this.readFile()
-    const account = this.accountById(file, accountId)
-    if (!account) return
-    account.credentials = credentials
-    account.lastUsedAt = Date.now()
-    this.profiles.delete(accountId)
-    await this.writeFile(file)
+    await this.withFileLock(async () => {
+      const file = await this.readFile()
+      const account = this.accountById(file, accountId)
+      if (!account) return
+      account.credentials = credentials
+      account.lastUsedAt = Date.now()
+      this.profiles.delete(accountId)
+      await this.writeFile(file)
+    })
   }
 
   /**
@@ -638,13 +741,15 @@ export class GitHubAuthService {
   private async removeAccount(accountId: string): Promise<void> {
     this.profiles.delete(accountId)
     try {
-      const file = await this.readFile()
-      file.accounts = file.accounts.filter((account) => account.id !== accountId)
-      if (file.activeId === accountId) {
-        const next = [...file.accounts].sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]
-        file.activeId = next?.id ?? null
-      }
-      await this.writeFile(file)
+      await this.withFileLock(async () => {
+        const file = await this.readFile()
+        file.accounts = file.accounts.filter((account) => account.id !== accountId)
+        if (file.activeId === accountId) {
+          const next = [...file.accounts].sort((a, b) => b.lastUsedAt - a.lastUsedAt)[0]
+          file.activeId = next?.id ?? null
+        }
+        await this.writeFile(file)
+      })
     } catch (failure) {
       Logger.error('GitHub account removal failed', failure)
     }
@@ -759,7 +864,33 @@ export class GitHubAuthService {
     }
   }
 
-  /** Serialized so two sign-ins cannot interleave a read-modify-write. */
+  /**
+   * Run one read-modify-write of the account list against every other writer in
+   * this process.
+   *
+   * The vault serializes its own writes, but a read-modify-write of the account
+   * list is not one write: a caller that read the list before a refresh replaced
+   * an account's credentials would write its older snapshot back and restore a
+   * refresh token GitHub has already spent. Re-entrant, so a mutation made by a
+   * caller that already holds it (a refresh persisting its new credentials, a
+   * refused account being dropped) runs inline instead of waiting on itself.
+   */
+  private async withFileLock<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.fileDepth > 0) return await operation()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const previous = this.fileTail
+    this.fileTail = previous.then(() => held)
+    await previous
+    this.fileDepth += 1
+    try {
+      return await operation()
+    } finally {
+      this.fileDepth -= 1
+      release()
+    }
+  }
+
   private async writeFile(file: StoredGitHubAccountsFile): Promise<void> {
     await this.vault.save(JSON.stringify(file), GITHUB_ACCOUNTS_REF)
   }

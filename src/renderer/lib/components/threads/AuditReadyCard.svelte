@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, ExternalLink, RefreshCw, ShieldCheck } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -103,7 +106,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Auditor is done">
     <CardHead
-      icon={ShieldCheck}
+      icon={CioShieldCheck}
       title="Auditor is done"
       {chip}
       bind:folded
@@ -173,7 +176,7 @@
             <CardButton
               label="Reaudit"
               title="Run the audit again with the selected auditor model"
-              icon={RefreshCw}
+              icon={CioRefresh}
               variant="secondary"
               disabled={busy || !settings || !onReaudit}
               onclick={() => settings && onReaudit?.(settings)}
@@ -181,7 +184,7 @@
             <CardButton
               label="View report"
               title="View the audit report"
-              icon={ExternalLink}
+              icon={CioExternalLink}
               variant="secondary"
               onclick={viewReport}
             />
@@ -189,7 +192,7 @@
               <CardButton
                 label="Complete"
                 title="Complete this audit cycle"
-                icon={Check}
+                icon={CioCheck}
                 variant="primary"
                 disabled={busy || !onComplete}
                 onclick={completeAudit}

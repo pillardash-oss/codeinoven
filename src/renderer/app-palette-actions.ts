@@ -1,37 +1,34 @@
+import CioBoard from '@pillardash-oss/cio-icon/CioBoard.svelte'
+import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+import CioChart from '@pillardash-oss/cio-icon/CioChart.svelte'
+import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
+import CioFind from '@pillardash-oss/cio-icon/CioFind.svelte'
+import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+import CioFolderPlus from '@pillardash-oss/cio-icon/CioFolderPlus.svelte'
+import CioHarness from '@pillardash-oss/cio-icon/CioHarness.svelte'
+import CioKeyboard from '@pillardash-oss/cio-icon/CioKeyboard.svelte'
+import CioLearn from '@pillardash-oss/cio-icon/CioLearn.svelte'
+import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+import CioTeam from '@pillardash-oss/cio-icon/CioTeam.svelte'
+import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+import CioThreads from '@pillardash-oss/cio-icon/CioThreads.svelte'
+import CioWrench from '@pillardash-oss/cio-icon/CioWrench.svelte'
 import type { Component } from 'svelte'
-import {
-  Bell,
-  Blocks,
-  BookOpen,
-  Brain,
-  ChartColumn,
-  FileSearch,
-  FolderKanban,
-  FolderOpen,
-  FolderPlus,
-  GitBranch,
-  Globe,
-  GraduationCap,
-  Info,
-  Keyboard,
-  LayoutDashboard,
-  ListTree,
-  MessageSquarePlus,
-  MessagesSquare,
-  SlidersHorizontal,
-  SquarePen,
-  Terminal,
-  Timeline,
-  Users,
-  Wrench
-} from '@lucide/svelte'
 import { APP_NAME } from '$shared/brand'
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
 import type { ActionDefinition, ActionSource } from '$lib/actions'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
 import type { MainView, SettingsSection } from '$lib/stores/renderer-recovery'
-import { workspaceTourViewFor, VIEW_TOURS } from '$lib/components/onboarding/onboarding-tour-steps'
+import { VIEW_GUIDES, workspaceTourViewFor } from '$lib/guide/guide-stops'
 
 export function actionId(value: string): ActionDefinition['id'] {
   return value as ActionDefinition['id']
@@ -50,7 +47,7 @@ export const navigationActions = [
     description: 'Browse projects and engineering threads',
     category: 'navigation',
     source: applicationSource,
-    icon: FolderOpen,
+    icon: CioFolderOpen,
     keywords: ['workspace', 'threads']
   },
   {
@@ -59,7 +56,7 @@ export const navigationActions = [
     description: 'Browse standalone conversations',
     category: 'navigation',
     source: applicationSource,
-    icon: MessagesSquare,
+    icon: CioChat,
     keywords: ['conversations', 'messages']
   },
   {
@@ -68,7 +65,7 @@ export const navigationActions = [
     description: 'Review work across projects',
     category: 'navigation',
     source: applicationSource,
-    icon: LayoutDashboard,
+    icon: CioBoard,
     keywords: ['board', 'overview']
   },
   {
@@ -77,7 +74,7 @@ export const navigationActions = [
     description: 'Browse threads across all projects',
     category: 'navigation',
     source: applicationSource,
-    icon: ListTree,
+    icon: CioThreads,
     keywords: ['timeline', 'all']
   }
 ] satisfies ActionDefinition[]
@@ -92,55 +89,55 @@ export const settingsTabs: Array<{
     id: 'general',
     label: 'General',
     keywords: ['appearance', 'theme', 'preferences'],
-    icon: SlidersHorizontal
+    icon: CioTabSettings
   },
   {
     id: 'browser',
     label: 'Browser',
     keywords: ['search engine', 'address bar', 'links', 'tabs', 'prototype', 'cdn'],
-    icon: Globe
+    icon: CioBrowser
   },
   {
     id: 'memory',
     label: 'Memory',
     keywords: ['instructions', 'knowledge'],
-    icon: Brain
+    icon: CioMemory
   },
   {
     id: 'audits',
     label: 'Agents',
     keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review'],
-    icon: Users
+    icon: CioTeam
   },
   {
     id: 'harnesses',
     label: 'Harnesses',
     keywords: ['models', 'providers', 'harnesses'],
-    icon: Blocks
+    icon: CioHarness
   },
   {
     id: 'utilities',
     label: 'Utilities',
     keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools'],
-    icon: Wrench
+    icon: CioWrench
   },
   {
     id: 'keymap',
     label: 'Keymap',
     keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
-    icon: Keyboard
+    icon: CioKeyboard
   },
   {
     id: 'profile',
     label: 'Usage',
     keywords: ['usage', 'activity', 'tokens', 'cost', 'rankings'],
-    icon: ChartColumn
+    icon: CioChart
   },
   {
     id: 'about',
     label: 'About',
     keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug'],
-    icon: Info
+    icon: CioTabInfo
   }
 ]
 
@@ -197,11 +194,11 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       ? [
           {
             id: 'app:tour-view',
-            title: `Learn what the ${VIEW_TOURS[tourView].name} view can do`,
+            title: `Learn what the ${VIEW_GUIDES[tourView].viewName} view can do`,
             description: 'Walk through this view with pointers, one step at a time',
             category: 'navigation',
             source: applicationSource,
-            icon: GraduationCap,
+            icon: CioLearn,
             keywords: ['tour', 'onboarding', 'walkthrough', 'guide', 'help', 'tips']
           } satisfies ActionDefinition
         ]
@@ -212,7 +209,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Choose how to add a project   local folder or Oven over SSH',
       category: 'command',
       source: applicationSource,
-      icon: FolderPlus,
+      icon: CioFolderPlus,
       shortcut: ['Ctrl', 'Shift', 'N'],
       keywords: ['add', 'folder', 'repository', 'oven', 'ssh', 'remote']
     },
@@ -222,7 +219,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Pick a project to focus on',
       category: 'navigation',
       source: applicationSource,
-      icon: FolderKanban,
+      icon: CioProjects,
       keywords: ['focus', 'open', 'change', 'select', 'workspace', 'project'],
       ...(projectRecords.length === 0 ? { disabledReason: 'No projects yet' } : {})
     },
@@ -232,17 +229,8 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Open or close the notifications sidebar',
       category: 'navigation',
       source: applicationSource,
-      icon: Bell,
+      icon: CioNotifications,
       keywords: ['alerts', 'completed', 'attention']
-    },
-    {
-      id: 'app:getting-started',
-      title: 'Open getting started guide',
-      description: 'Tour the workspace and set up a project and coding agent',
-      category: 'navigation',
-      source: applicationSource,
-      icon: GraduationCap,
-      keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
     }
   ]
 
@@ -253,7 +241,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Find and open a file from any local project',
       category: 'file',
       source: applicationSource,
-      icon: FileSearch,
+      icon: CioFind,
       keywords: ['quick open', 'find', 'workspace']
     })
   }
@@ -265,7 +253,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: 'Start a standalone conversation',
       category: 'command',
       source: applicationSource,
-      icon: MessageSquarePlus,
+      icon: CioMessagePlus,
       shortcut: ['Ctrl', 'N'],
       keywords: ['conversation', 'message']
     })
@@ -277,7 +265,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
       category: 'command',
       source: applicationSource,
-      icon: SquarePen,
+      icon: CioPencil,
       shortcut: ['Ctrl', 'N'],
       keywords: ['task', 'conversation', 'project']
     })
@@ -289,7 +277,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
       category: 'command',
       source: applicationSource,
-      icon: SquarePen,
+      icon: CioPencil,
       shortcut: ['Ctrl', 'N'],
       keywords: ['task', 'conversation', 'project', 'scope']
     })
@@ -304,7 +292,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       description: `Create a thread in ${input.activeProject.name}`,
       category: 'command',
       source: applicationSource,
-      icon: SquarePen,
+      icon: CioPencil,
       shortcut: ['Ctrl', 'N'],
       keywords: ['task', 'conversation', 'project']
     })
@@ -320,7 +308,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
         description: 'Open a terminal for this thread',
         category: 'navigation',
         source: applicationSource,
-        icon: Terminal,
+        icon: CioTerminal,
         keywords: ['shell', 'console', 'command line', 'run']
       },
       {
@@ -329,7 +317,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
         description: 'View changes, commits and branches for this project',
         category: 'navigation',
         source: applicationSource,
-        icon: GitBranch,
+        icon: CioTabGit,
         keywords: ['changes', 'commits', 'branches', 'status', 'diff'],
         ...(threadProject?.changeTrackingMode !== 'git'
           ? { disabledReason: 'This project does not use Git tracking' }
@@ -341,7 +329,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
         description: 'View the memory context available to this thread',
         category: 'navigation',
         source: applicationSource,
-        icon: Brain,
+        icon: CioMemory,
         keywords: ['prompt', 'instructions', 'context']
       },
       {
@@ -350,7 +338,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
         description: 'View sources attached to this conversation',
         category: 'navigation',
         source: applicationSource,
-        icon: BookOpen,
+        icon: CioBook,
         keywords: ['citations', 'references', 'attachments']
       }
     )
@@ -389,7 +377,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
       category: 'browser',
       source: applicationSource,
       // The Browser view's rail mark.
-      icon: Globe,
+      icon: CioBrowser,
       keywords: ['quick open', 'find', 'tab', 'browser', 'group', 'url']
     }
   ]
@@ -403,7 +391,7 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
             category: 'thread',
             source: applicationSource,
             // The Threads view's rail mark, not the generic chat bubble.
-            icon: Timeline,
+            icon: CioThreads,
             keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline', 'project']
           } satisfies ActionDefinition
         ]

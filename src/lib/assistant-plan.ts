@@ -1,4 +1,11 @@
-import { parseTimeOfDay, type AssistantSchedule, type ScheduleCadence } from './types'
+import {
+  ASSISTANT_NAME_LIMIT,
+  ASSISTANT_PERSONALITY_LIMIT,
+  ASSISTANT_SCHEDULE_NAME_LIMIT,
+  parseTimeOfDay,
+  type AssistantSchedule,
+  type ScheduleCadence
+} from './types'
 import {
   normalizePlanDelivery,
   normalizePlanPriority,
@@ -207,11 +214,11 @@ export const ASSISTANT_PLAN_JSON_SCHEMA: Record<string, unknown> = {
 export const ASSISTANT_PLAN_SCHEMA_TEXT = JSON.stringify(ASSISTANT_PLAN_JSON_SCHEMA)
 
 /** Ceiling for the name a plan may carry, matching the store's own limit. */
-const MAX_PLAN_TEXT = 200
+const MAX_PLAN_TEXT = ASSISTANT_NAME_LIMIT
 /** Ceiling for the personality a plan may carry, matching the IPC validator. */
-const MAX_PLAN_PERSONALITY = 4_000
+const MAX_PLAN_PERSONALITY = ASSISTANT_PERSONALITY_LIMIT
 /** Ceiling for the schedule name a plan may carry, matching the IPC validator. */
-const MAX_PLAN_SCHEDULE_NAME = 120
+const MAX_PLAN_SCHEDULE_NAME = ASSISTANT_SCHEDULE_NAME_LIMIT
 
 /**
  * One free-text field of a plan, trimmed and capped, or null when it carries
@@ -341,7 +348,28 @@ export function parseAssistantPlanJson(body: string): AssistantPlan | null {
   const text = body.trim()
   if (!text.startsWith('{')) return null
   try {
-    return parseAssistantPlanValue(JSON.parse(text))
+    const value: unknown = JSON.parse(text)
+    if (!isRecord(value)) return null
+    // A valid name must never disguise a broken schedule or reporting agreement.
+    // Keep the tolerant value parser for legacy prose, but reject invalid fields
+    // explicitly supplied in a JSON recap instead of silently dropping them.
+    if (
+      value.schedule !== undefined &&
+      value.schedule !== null &&
+      !normalizePlanSchedule(value.schedule)
+    )
+      return null
+    if (
+      value.connections !== undefined &&
+      (!Array.isArray(value.connections) ||
+        normalizePlanConnections(value.connections).length !== value.connections.length)
+    )
+      return null
+    if (value.scheduled !== undefined && typeof value.scheduled !== 'boolean') return null
+    if (value.delivery !== undefined && !normalizePlanDelivery(value.delivery)) return null
+    if (value.priority !== undefined && !normalizePlanPriority(value.priority)) return null
+    if ('properties' in value || '$schema' in value) return null
+    return parseAssistantPlanValue(value)
   } catch {
     return null
   }

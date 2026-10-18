@@ -1,4 +1,17 @@
 <script lang="ts">
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioCalendar from '@pillardash-oss/cio-icon/CioCalendar.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -26,21 +39,6 @@
     SkillMarketInstallRequest,
     UtilityActivation
   } from '$shared/types'
-  import {
-    ArrowLeft,
-    CalendarDays,
-    Check,
-    Download,
-    Earth,
-    ExternalLink,
-    FolderKanban,
-    GitFork,
-    Loader2,
-    ShieldCheck,
-    SquareTerminal,
-    Star,
-    Trash2
-  } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -341,7 +339,7 @@
   One scope destination per row: they are independent choices, so a shared row
   made them read as one segmented selector.
 -->
-{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof Earth)}
+{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof CioBrowser)}
   <button
     type="button"
     class="flex h-9 items-center justify-center gap-2 border px-3 text-xs font-medium transition-colors {scope ===
@@ -369,7 +367,7 @@
         title={backLabel}
         onclick={onBack}
       >
-        <ArrowLeft size={13} />
+        <CioArrowLeft size={13} />
         {backLabel}
       </button>
       <SkillBookmarkButton
@@ -420,7 +418,7 @@
           >
             SKILL.md
           </h2>
-          {#if loading}<Loader2 size={12} class="animate-spin text-dimmed" />{/if}
+          {#if loading}<CioSpinner size={12} class="animate-spin text-dimmed" />{/if}
         </div>
         {#if detail?.skillMarkdown}
           <MarkdownView text={skillPreview} class="mt-4" />
@@ -475,7 +473,7 @@
             aria-pressed={manager === 'native'}
             onclick={() => selectManager('native')}
           >
-            <SquareTerminal size={12} /> Harnesses
+            <CioTerminal size={12} /> Harnesses
           </button>
         </div>
 
@@ -517,10 +515,10 @@
           <!-- One destination per row: each scope is a separate decision, and
                side-by-side chips read as one shared choice. -->
           <div class="grid gap-2">
-            {@render scopeOption('global', 'Global', Earth)}
-            {@render scopeOption('projects', 'Projects', FolderKanban)}
+            {@render scopeOption('global', 'Global', CioBrowser)}
+            {@render scopeOption('projects', 'Projects', CioProjects)}
             {#if manager === 'native'}
-              {@render scopeOption('harnesses', 'Harnesses', SquareTerminal)}
+              {@render scopeOption('harnesses', 'Harnesses', CioTerminal)}
             {/if}
           </div>
           {#if scope === 'projects'}
@@ -610,8 +608,8 @@
           disabled={installing || selectionInstalled || selectionIncomplete}
           onclick={() => void installSkill()}
         >
-          {#if installing}<Loader2 size={13} class="animate-spin" />{:else if selectionInstalled}
-            <Check size={13} />{:else}<Download size={13} />{/if}
+          {#if installing}<CioSpinner size={13} class="animate-spin" />{:else if selectionInstalled}
+            <CioCheck size={13} />{:else}<CioDownload size={13} />{/if}
           {installing ? 'Installing…' : selectionInstalled ? 'Installed' : 'Install skill'}
         </button>
 
@@ -622,7 +620,7 @@
             disabled={uninstalling}
             onclick={() => (confirmingUninstall = true)}
           >
-            {#if uninstalling}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+            {#if uninstalling}<CioSpinner size={13} class="animate-spin" />{:else}<CioTrash
                 size={13}
               />{/if}
             {uninstalling ? 'Uninstalling…' : 'Uninstall'}
@@ -642,7 +640,7 @@
             <p
               class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
-              <Star size={11} /> Stars
+              <CioStar size={11} /> Stars
             </p>
             <p class="mt-1 font-mono text-sm tabular-nums">
               {detail?.githubStars === null || detail?.githubStars === undefined
@@ -654,7 +652,7 @@
             <p
               class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
-              <CalendarDays size={11} /> First seen
+              <CioCalendar size={11} /> First seen
             </p>
             <p class="mt-1 font-mono text-xs">{detail?.firstSeen ?? ' '}</p>
           </div>
@@ -662,7 +660,7 @@
             <p
               class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
-              <GitFork size={11} /> Repository
+              <CioFork size={11} /> Repository
             </p>
             <button
               class="mt-1 flex max-w-full items-center gap-1 text-left font-mono text-xs hover:underline"
@@ -671,7 +669,7 @@
               data-external-url={detail?.repositoryUrl ?? entry.url}
               onclick={() => void openInBrowser(detail?.repositoryUrl ?? entry.url)}
             >
-              <span class="truncate">{entry.source}</span><ExternalLink
+              <span class="truncate">{entry.source}</span><CioExternalLink
                 size={10}
                 class="shrink-0"
               />
@@ -683,7 +681,7 @@
           <p
             class="flex items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
           >
-            <ShieldCheck size={12} /> Security audits
+            <CioShieldCheck size={12} /> Security audits
           </p>
           {#if detail?.audits.length}
             <div class="mt-2 flex flex-wrap gap-1.5">
@@ -711,7 +709,7 @@
           data-external-url={entry.url}
           onclick={() => void openInBrowser(entry.url)}
         >
-          View on skills.sh <ExternalLink size={12} />
+          View on skills.sh <CioExternalLink size={12} />
         </button>
       </section>
     </aside>

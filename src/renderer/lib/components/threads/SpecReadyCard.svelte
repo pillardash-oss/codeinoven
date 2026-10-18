@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ListChecks, Play, Toolbox, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioListChecks from '@pillardash-oss/cio-icon/CioListChecks.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioTools from '@pillardash-oss/cio-icon/CioTools.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -102,7 +105,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label={specless ? 'Assignment' : 'Specification ready'}>
     <CardHead
-      icon={specless ? ListChecks : Toolbox}
+      icon={specless ? CioListChecks : CioTools}
       title={specless ? 'Assignment' : 'Specification ready'}
       {chip}
       bind:folded
@@ -117,7 +120,7 @@
           aria-label={specless ? 'Dismiss Assignment entry' : 'Cancel specification review'}
           title="Cancel"
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       {/snippet}
     </CardHead>
@@ -204,7 +207,7 @@
                 title={assignmentAvailable
                   ? 'Open the existing Assignment'
                   : 'Generate the Assignment from this thread'}
-                icon={Play}
+                icon={CioPlay}
                 variant="primary"
                 disabled={busy}
                 loading={busy}
@@ -214,7 +217,7 @@
               <CardButton
                 label="Implement"
                 title="Implement this specification"
-                icon={Play}
+                icon={CioPlay}
                 variant="primary"
                 disabled={busy}
                 loading={busy}

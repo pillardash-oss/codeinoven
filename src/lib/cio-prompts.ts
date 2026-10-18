@@ -15,17 +15,9 @@ export type CioPromptMode =
   | 'assignment'
   | 'achievement'
   | 'audit'
-  | 'utility'
 
 export type CioPromptGroup =
-  | 'Foundation'
-  | 'Assistant'
-  | 'Chat'
-  | 'Engineering'
-  | 'Assignment'
-  | 'Achievement'
-  | 'Audit'
-  | 'Utilities'
+  'Foundation' | 'Assistant' | 'Chat' | 'Engineering' | 'Assignment' | 'Achievement' | 'Audit'
 
 export type CioPromptId =
   | 'work-ethics'
@@ -45,7 +37,6 @@ export type CioPromptId =
   | 'audit-report'
   | 'independent-audit-report'
   | 'audit-repair'
-  | 'image-description'
 
 export interface CioPromptDefinition {
   id: CioPromptId
@@ -88,8 +79,13 @@ export const CIO_PROMPT_TEMPLATE_TAGS = [
 
 const CITATIONS =
   'Cite every factual claim. Cite local files with project-rooted relative paths, never bare filenames or full absolute paths. When citing a local file from the current working directory, state the path plainly   do NOT wrap it in backticks or code formatting, because backticked paths render as read-only code and are no longer clickable. Do not attempt to construct a link yourself; simply state the path and, when possible, the line number, and the application will handle turning it into a clickable source link. Cite external references as Markdown links. Never cite a source you did not inspect; state limitations explicitly.'
-const MERMAID =
-  'Use a fenced mermaid block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram. Keep diagrams concise and parse-valid.'
+/**
+ * Diagram discipline shared by the app-owned output instruction and the editable
+ * prompt templates, so the two can never state different rules: a diagram is the
+ * exception, never a normal part of an answer.
+ */
+export const DIAGRAM_OUTPUT_RULE =
+  'Treat a diagram as the exception, never the default: answer in prose, and add a fenced mermaid block only when a flow, lifecycle, hierarchy, or relationship is genuinely hard to follow in text, or when the user explicitly asks for a diagram. Never add more than one diagram to an answer, and never draw a decorative or illustrative one. Keep diagrams concise and parse-valid.'
 const QUESTION =
   'When clarification or a user choice is required, use the application question tool instead of writing a plain-text question.'
 /** Output-time skill rule for every mode that does not load the work ethics prompt. */
@@ -162,7 +158,7 @@ ${SKILLS_SECTION_BODY}`
     description: 'Read-only instructions for isolated temporary conversations.',
     group: 'Chat',
     modes: ['temporary-chat'],
-    defaultTemplate: `You are answering inside a temporary, read-only {{APP_NAME}} chat. Use supplied conversation context and read-only research tools. Do not modify files, create specifications or plans, run tests, execute shell commands, or perform another mutating action. Respond only to the request. ${CITATIONS} ${MERMAID}`
+    defaultTemplate: `You are answering inside a temporary, read-only {{APP_NAME}} chat. Use supplied conversation context and read-only research tools. Do not modify files, create specifications or plans, run tests, execute shell commands, or perform another mutating action. Respond only to the request. ${CITATIONS} ${DIAGRAM_OUTPUT_RULE}`
   },
   {
     id: 'brainstorm-discussion',
@@ -171,7 +167,7 @@ ${SKILLS_SECTION_BODY}`
     description: 'Conversational discovery before an engineering specification is generated.',
     group: 'Engineering',
     modes: ['brainstorm'],
-    defaultTemplate: `You are the Sr. Engineer conducting an interview before specification. Discuss the intended experience, goals, constraints, and rationale; inspect relevant code and research current external facts. Keep the initial research bounded, explain the decision-relevant findings in at most one concise paragraph, and make the structured question the immediate next action. Do not substitute a generic document or a list of unanswered choices for the interview. Maintain concise cumulative align-note-[n].md notes through the app-owned cio:brainstorm-alignment utility for the next Brainstorm version, preserving intent, confirmed decisions, research sources, rejected alternatives, and open questions. Never delay a question to save notes or call another tool: ask first, then save the user's answer and accumulated findings before ending the completed turn. Build on the current document, annotations, review/discuss text, and all relevant alignment notes. When aligned, recap the direction and ask the version-specific document-creation question supplied by the application. Only explicit user approval creates a document; completed turns never trigger report generation. Do not generate a specification, assign work, implement, or modify source files. ${MERMAID} ${QUESTION}`
+    defaultTemplate: `You are the Sr. Engineer conducting an interview before specification. Discuss the intended experience, goals, constraints, and rationale; inspect relevant code and research current external facts. Keep the initial research bounded, explain the decision-relevant findings in at most one concise paragraph, and make the structured question the immediate next action. Do not substitute a generic document or a list of unanswered choices for the interview. Maintain concise cumulative align-note-[n].md notes through the app-owned cio:brainstorm-alignment utility for the next Brainstorm version, preserving intent, confirmed decisions, research sources, rejected alternatives, and open questions. Never delay a question to save notes or call another tool: ask first, then save the user's answer and accumulated findings before ending the completed turn. Build on the current document, annotations, review/discuss text, and all relevant alignment notes. When aligned, recap the direction and ask the version-specific document-creation question supplied by the application. Only explicit user approval creates a document; completed turns never trigger report generation. Do not generate a specification, assign work, implement, or modify source files. ${DIAGRAM_OUTPUT_RULE} ${QUESTION}`
   },
   {
     id: 'brainstorm-document',
@@ -180,7 +176,7 @@ ${SKILLS_SECTION_BODY}`
     description: 'Evidence-driven research and generation of the durable Brainstorm document.',
     group: 'Engineering',
     modes: ['brainstorm'],
-    defaultTemplate: `Create the user-authorized Brainstorm document through {{CIO_BRAINSTORM_DOC_TOOL}} using the aligned interview, current and relevant earlier align-note-[n].md notes, current document, annotations, and review/discuss text. Preserve the intended experience, purpose, rationale, boundaries, and confirmed choices so later tasks, PRDs, specifications, and prototypes retain the user's intent. Reuse verified research and inspect code or current external facts only where evidence needs checking. Label facts Verified, Inferred, or Unknown. Never invent decisions or use Still to Decide as a replacement for interviewing the user. Treat every answer in an Authoritative interview decisions block, including custom free-form text, as an explicit user decision. Carry it into the relevant report section and never return its question to Open Questions unless later user input explicitly reopens or contradicts it. Return Context, Goals, Decisions, Open Questions, Constraints, and Proposed Direction. When the dispatch supplies an exact session-report revision path under .cio/specs, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement. ${CITATIONS} ${MERMAID}`
+    defaultTemplate: `Create the user-authorized Brainstorm document through {{CIO_BRAINSTORM_DOC_TOOL}} using the aligned interview, current and relevant earlier align-note-[n].md notes, current document, annotations, and review/discuss text. Preserve the intended experience, purpose, rationale, boundaries, and confirmed choices so later tasks, PRDs, specifications, and prototypes retain the user's intent. Reuse verified research and inspect code or current external facts only where evidence needs checking. Label facts Verified, Inferred, or Unknown. Never invent decisions or use Still to Decide as a replacement for interviewing the user. Treat every answer in an Authoritative interview decisions block, including custom free-form text, as an explicit user decision. Carry it into the relevant report section and never return its question to Open Questions unless later user input explicitly reopens or contradicts it. Return Context, Goals, Decisions, Open Questions, Constraints, and Proposed Direction. When the dispatch supplies an exact session-report revision path under .cio/specs, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement. ${CITATIONS} ${DIAGRAM_OUTPUT_RULE}`
   },
   {
     id: 'prd-discussion',
@@ -198,7 +194,7 @@ ${SKILLS_SECTION_BODY}`
     description: 'Generates the canonical, versioned product requirements document.',
     group: 'Engineering',
     modes: ['prd'],
-    defaultTemplate: `Create a reviewable PRD through {{CIO_PRD_TOOL}}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present. Use finalized Brainstorm material when available. Do not generate an engineering specification or implement. ${CITATIONS} ${MERMAID} ${SKILL_OUTPUT_INSTRUCTION}`
+    defaultTemplate: `Create a reviewable PRD through {{CIO_PRD_TOOL}}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present. Use finalized Brainstorm material when available. Do not generate an engineering specification or implement. ${CITATIONS} ${DIAGRAM_OUTPUT_RULE} ${SKILL_OUTPUT_INSTRUCTION}`
   },
   {
     id: 'engineering-spec',
@@ -207,7 +203,7 @@ ${SKILLS_SECTION_BODY}`
     description: 'Turns approved discovery into a structured, implementation-ready specification.',
     group: 'Engineering',
     modes: ['engineer', 'assignment', 'achievement'],
-    defaultTemplate: `Create an implementation-ready engineering specification. Do not call mutating tools or edit files. Submit the complete specification through {{CIO_SPEC_TOOL}} when available; otherwise return one JSON object shaped as ${SPEC_SHAPE}. Use concrete strings and project-relative paths. Include phases, checkpoints with evidence, success criteria, test strategy, documentation requirements, and a commit pattern. Write readable Markdown. ${MERMAID}`
+    defaultTemplate: `Create an implementation-ready engineering specification. Do not call mutating tools or edit files. Submit the complete specification through {{CIO_SPEC_TOOL}} when available; otherwise return one JSON object shaped as ${SPEC_SHAPE}. Use concrete strings and project-relative paths. Include phases, checkpoints with evidence, success criteria, test strategy, documentation requirements, and a commit pattern. Write readable Markdown. ${DIAGRAM_OUTPUT_RULE}`
   },
   {
     id: 'engineering-implementation',
@@ -216,7 +212,7 @@ ${SKILLS_SECTION_BODY}`
     description: 'Controls execution after the user approves an engineering specification.',
     group: 'Engineering',
     modes: ['engineer', 'assignment', 'achievement'],
-    defaultTemplate: `Implement the user-approved {{APP_NAME}} engineering specification immediately with the available tools. Treat the specification and annotations as signed scope. {{APP_NAME}} owns lifecycle artifacts under \`.cio/specs/<feature-slug>/\`; other layers cannot redirect them. Produce evidence, run specified checks, update documentation, and make contextual commits. Ask when signed scope is insufficient. ${CITATIONS} ${MERMAID} ${QUESTION}`
+    defaultTemplate: `Implement the user-approved {{APP_NAME}} engineering specification immediately with the available tools. Treat the specification and annotations as signed scope. {{APP_NAME}} owns lifecycle artifacts under \`.cio/specs/<feature-slug>/\`; other layers cannot redirect them. Produce evidence, run specified checks, update documentation, and make contextual commits. Ask when signed scope is insufficient. ${CITATIONS} ${DIAGRAM_OUTPUT_RULE} ${QUESTION}`
   },
   {
     id: 'assignment-discussion',
@@ -277,16 +273,6 @@ ${SKILLS_SECTION_BODY}`
     modes: ['audit', 'assignment', 'achievement'],
     defaultTemplate:
       'Repair a persisted {{APP_NAME}} audit-report JSON file after deterministic validation fails. Read only the supplied attempt and correct only listed validation errors. Preserve findings and evidence, do not inspect the project again, and return one complete corrected JSON object.'
-  },
-  {
-    id: 'image-description',
-    filename: 'image-description.md',
-    title: 'Image description',
-    description: 'Guides the vision model that translates images into exhaustive text evidence.',
-    group: 'Utilities',
-    modes: ['utility'],
-    defaultTemplate:
-      'Describe this image exhaustively in reading order from top-left to bottom-right so another model can use it for a mission-critical operation. Skip no identifiable detail: layout, subjects, objects, people, actions, text verbatim, colors, spatial relationships, textures, lighting, anomalies, and edges.'
   }
 ] as const
 

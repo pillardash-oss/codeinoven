@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, ChevronUp, Plus, Trash2 } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import type { ScopeSetupCommandSpec } from '$shared/types'
   import Modal from '../ui/Modal.svelte'
 
@@ -104,7 +107,7 @@
               disabled={index === 0}
               onclick={() => moveCommand(index, -1)}
             >
-              <ChevronUp size={14} />
+              <CioChevronUp size={14} />
             </button>
             <button
               type="button"
@@ -114,7 +117,7 @@
               disabled={index === commands.length - 1}
               onclick={() => moveCommand(index, 1)}
             >
-              <ChevronDown size={14} />
+              <CioChevronDown size={14} />
             </button>
             <button
               type="button"
@@ -123,7 +126,7 @@
               aria-label={`Remove command ${index + 1}`}
               onclick={() => (removalIndex = index)}
             >
-              <Trash2 size={14} />
+              <CioTrash size={14} />
             </button>
           </div>
         </li>
@@ -166,7 +169,7 @@
       disabled={!pendingExecutable.trim()}
       onclick={addCommand}
     >
-      <Plus size={14} />
+      <CioPlus size={14} />
     </button>
   </div>
 </div>

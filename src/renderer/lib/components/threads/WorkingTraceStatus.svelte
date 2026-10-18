@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { AppWindow, Loader2, RefreshCw } from '@lucide/svelte'
-
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   interface Props {
     /** True when this trace was rehydrated from persisted state instead of a live run. */
     rehydrated: boolean
@@ -22,17 +23,17 @@
 <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
   {#if foreignRun}
     <span class="flex min-w-0 shrink items-center gap-2 text-[0.625rem] text-info/80">
-      <AppWindow size={11} class="shrink-0 text-info" />
+      <CioWindow size={11} class="shrink-0 text-info" />
       Running in another instance · showing last saved activity
     </span>
   {:else if rehydrated}
     <span class="flex min-w-0 shrink items-center gap-2 text-[0.625rem] text-info/80">
-      <RefreshCw size={11} class="shrink-0 text-info" />
+      <CioRefresh size={11} class="shrink-0 text-info" />
       Showing last saved activity · live run not confirmed
     </span>
   {:else if note}
     <span class="flex min-w-0 shrink items-center gap-2">
-      <Loader2 size={12} class="shrink-0 animate-spin text-info" />
+      <CioSpinner size={12} class="shrink-0 animate-spin text-info" />
       <span class="min-w-0 truncate text-[0.625rem] text-dimmed">{note}</span>
     </span>
   {/if}

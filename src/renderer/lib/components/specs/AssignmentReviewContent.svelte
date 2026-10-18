@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { FolderTree, Info, MessageSquarePlus } from '@lucide/svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import WorkerScopePicker from '../shared/WorkerScopePicker.svelte'
@@ -511,7 +513,7 @@
             aria-label="Annotate Assignment overview"
             onclick={(event: MouseEvent) =>
               onAnnotateSection?.('overview', 'Assignment overview', event)}
-            ><MessageSquarePlus size={14} /></button
+            ><CioMessagePlus size={14} /></button
           >
         {/if}
       </div>
@@ -571,7 +573,7 @@
             title="Annotate execution graph"
             aria-label="Annotate execution graph"
             onclick={(event: MouseEvent) => onAnnotateSection?.('graph', 'Execution graph', event)}
-            ><MessageSquarePlus size={14} /></button
+            ><CioMessagePlus size={14} /></button
           >
         {/if}
       </div>
@@ -611,7 +613,7 @@
                 title={phase.info}
                 aria-label={`About ${phase.title}`}
               >
-                <Info size={12} />
+                <CioTabInfo size={12} />
               </button>
             {/if}
             {#if !readOnly && onAnnotateSection}
@@ -621,7 +623,7 @@
                 aria-label={`Annotate ${phase.title}`}
                 onclick={(event: MouseEvent) =>
                   onAnnotateSection?.(`phase:${phase.id}`, phase.title, event)}
-                ><MessageSquarePlus size={13} /></button
+                ><CioMessagePlus size={13} /></button
               >
             {/if}
           </div>
@@ -711,7 +713,7 @@
                   title={task.info}
                   aria-label={`About ${task.title}`}
                 >
-                  <Info size={12} />
+                  <CioTabInfo size={12} />
                 </button>
               {/if}
               {#if !readOnly && onAnnotateSection}
@@ -721,7 +723,7 @@
                   aria-label={`Annotate ${task.title}`}
                   onclick={(event: MouseEvent) =>
                     onAnnotateSection?.(`task:${task.id}`, task.title, event)}
-                  ><MessageSquarePlus size={13} /></button
+                  ><CioMessagePlus size={13} /></button
                 >
               {/if}
               {#if taskThread && onOpenTaskThread}
@@ -753,7 +755,7 @@
                   title={`This worker runs in its own scope: ${workerScopeName}`}
                   aria-label={`This worker runs in its own scope: ${workerScopeName}`}
                 >
-                  <FolderTree size={10} class="shrink-0 text-warning" />
+                  <CioFiles size={10} class="shrink-0 text-warning" />
                   <span class="min-w-0 truncate">{workerScopeName}</span>
                 </span>
               {/if}

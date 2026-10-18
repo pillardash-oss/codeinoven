@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Loader2, Circle, CheckCircle2, AlertCircle, X, Minus } from '@lucide/svelte'
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCircle from '@pillardash-oss/cio-icon/CioCircle.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioMinus from '@pillardash-oss/cio-icon/CioMinus.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
@@ -250,7 +255,7 @@
 
     {#if preflightBusy}
       <p class="flex items-center gap-2 text-sm text-muted">
-        <Loader2 size={15} class="animate-spin" /> Checking the Oven without making changes
+        <CioSpinner size={15} class="animate-spin" /> Checking the Oven without making changes
       </p>
     {:else if peek?.error}
       <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -334,10 +339,8 @@
   </div>
   {#snippet footer()}
     <div class="flex justify-between gap-2">
-      <button
-        type="button"
-        class="border px-3 py-2 text-sm hover:bg-elevated"
-        onclick={onClose}>Close</button
+      <button type="button" class="border px-3 py-2 text-sm hover:bg-elevated" onclick={onClose}
+        >Close</button
       >
       <button
         type="button"
@@ -353,7 +356,7 @@
           (gitEnabled && !privateKey.trim())}
         onclick={() => void start()}
       >
-        {#if startBusy}<Loader2 size={14} class="animate-spin" />{/if}Start setup
+        {#if startBusy}<CioSpinner size={14} class="animate-spin" />{/if}Start setup
       </button>
     </div>
   {/snippet}
@@ -381,13 +384,13 @@
             aria-label="Show oven setup progress"
             onclick={() => (minimized = false)}
           >
-            {#if active}<Loader2
+            {#if active}<CioSpinner
                 size={14}
                 class="animate-spin"
-              />{:else if operation?.status === 'succeeded'}<CheckCircle2
+              />{:else if operation?.status === 'succeeded'}<CioCheckCircle
                 size={14}
                 class="text-success"
-              />{:else}<AlertCircle size={14} class="text-danger" />{/if}
+              />{:else}<CioAlertCircle size={14} class="text-danger" />{/if}
             <span
               >Oven setup · {completedSteps}/{operation?.steps.length ?? 0} · {currentStep?.name ??
                 operation?.status}{#if active && currentStep?.installProgress}
@@ -405,7 +408,7 @@
               class="p-1.5 text-muted hover:bg-elevated"
               title="Close oven setup progress"
               aria-label="Close oven setup progress"
-              onclick={closeProgress}><X size={14} /></button
+              onclick={closeProgress}><CioClose size={14} /></button
             >
           {/if}
         </div>
@@ -436,19 +439,19 @@
       <ol class="space-y-2">
         {#each operation.steps as step (step.id)}
           <li class="flex items-start gap-2 border px-3 py-2">
-            {#if step.status === 'succeeded' || (step.status === 'skipped' && /already installed|meets the service requirement|is installed/u.test(step.skippedReason ?? ''))}<CheckCircle2
+            {#if step.status === 'succeeded' || (step.status === 'skipped' && /already installed|meets the service requirement|is installed/u.test(step.skippedReason ?? ''))}<CioCheckCircle
                 size={15}
                 class="mt-0.5 shrink-0 text-success"
-              />{:else if step.status === 'skipped'}<Minus
+              />{:else if step.status === 'skipped'}<CioMinus
                 size={15}
                 class="mt-0.5 shrink-0 text-muted"
-              />{:else if step.status === 'failed' || step.status === 'blocked'}<AlertCircle
+              />{:else if step.status === 'failed' || step.status === 'blocked'}<CioAlertCircle
                 size={15}
                 class="mt-0.5 shrink-0 text-danger"
-              />{:else if step.status === 'running'}<Loader2
+              />{:else if step.status === 'running'}<CioSpinner
                 size={15}
                 class="mt-0.5 shrink-0 animate-spin text-primary"
-              />{:else}<Circle size={15} class="mt-0.5 shrink-0 text-muted" />{/if}
+              />{:else}<CioCircle size={15} class="mt-0.5 shrink-0 text-muted" />{/if}
             <div class="min-w-0 flex-1">
               <p class="text-sm">{step.name}</p>
               {#if step.status === 'running' && step.installProgress}

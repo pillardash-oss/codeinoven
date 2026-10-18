@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import BottomSheet from './BottomSheet.svelte'
 
@@ -44,7 +44,7 @@
           {/if}
           <span class="min-w-0 flex-1 truncate text-left">{item.label}</span>
           {#if item.selected}
-            <Check size={17} class="shrink-0 text-primary" />
+            <CioCheck size={17} class="shrink-0 text-primary" />
           {/if}
         </button>
       {/if}

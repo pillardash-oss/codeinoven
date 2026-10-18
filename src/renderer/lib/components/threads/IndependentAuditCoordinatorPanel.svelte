@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ArrowLeft, ArrowUpRight, FileSearch, RotateCcw, ShieldCheck } from '@lucide/svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioArrowUpRight from '@pillardash-oss/cio-icon/CioArrowUpRight.svelte'
+  import CioFind from '@pillardash-oss/cio-icon/CioFind.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
@@ -123,7 +127,7 @@
 <div class="independent-audit-panel flex h-full min-h-0 flex-col" aria-label="Audit coordinator">
   <header class="shrink-0 border-b border-border p-4">
     <div class="flex min-w-0 items-center gap-2 text-primary">
-      <ShieldCheck size={15} class="shrink-0" />
+      <CioShieldCheck size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Audit coordinator</h2>
     </div>
     <p class="mt-3 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Scope</p>
@@ -149,7 +153,7 @@
             : auditFailed
               ? 'Resume audit'
               : 'Run audit'}
-          <ShieldCheck size={13} />
+          <CioShieldCheck size={13} />
         </button>
       {/if}
       {#if reportAvailable && onViewReport}
@@ -160,7 +164,7 @@
           onclick={onViewReport}
         >
           View report
-          <ArrowUpRight size={13} />
+          <CioArrowUpRight size={13} />
         </button>
       {/if}
     </div>
@@ -175,7 +179,7 @@
         onclick={() => (newAuditOpen = true)}
       >
         New audit
-        <RotateCcw size={13} />
+        <CioUndo size={13} />
       </button>
     {/if}
   </header>
@@ -195,7 +199,7 @@
     <section class="border-b border-border p-4" aria-label="Independent auditor model">
       <div class="flex items-start gap-3">
         <div class="bg-primary/10 p-2 text-primary">
-          <FileSearch size={16} />
+          <CioFind size={16} />
         </div>
         <div class="min-w-0 flex-1">
           <h3 class="text-xs font-semibold text-foreground">Auditor model</h3>
@@ -271,7 +275,7 @@
         aria-label="Back to the thread that owns this audit"
         onclick={onBackToCoordinator}
       >
-        <ArrowLeft size={13} aria-hidden="true" />
+        <CioArrowLeft size={13} aria-hidden="true" />
         Back to Sr. Engineer
       </button>
     </footer>
@@ -300,7 +304,7 @@
     <button
       type="button"
       data-modal-primary
-      class="bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Delete the auditor thread and start a fresh audit"
       onclick={confirmNewAudit}
     >

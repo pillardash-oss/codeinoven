@@ -56,6 +56,10 @@ import type { AppControlRequest } from '../app-control'
 export const IPC_EVENT_CONTRACT = {
   'customVendors:iconChanged': [] as unknown as [payload: { providerId: string; icon: string }],
   'design:historyChanged': [] as unknown as [projectId: string, directory: string],
+  'design:relocated': [] as unknown as [
+    projectId: string,
+    moves: Array<{ from: string; to: string }>
+  ],
   /** One app call for the renderer to perform on the agent's behalf. The
    *  renderer answers on the `appControl:respond` invoke with the request id. */
   'appControl:request': [] as unknown as [request: AppControlRequest],
@@ -103,11 +107,12 @@ export const IPC_EVENT_CONTRACT = {
   ],
   /** Branch association changed for a thread. */
   'thread:branchUpdated': [] as unknown as [projectId: string, threadId: string, branch: string],
-  /** Authored-work session changed for a thread (its design/video marker). */
+  /** Authored-work sessions changed for a thread (its design/video markers). */
   'thread:authoredWorkUpdated': [] as unknown as [
     projectId: string,
     threadId: string,
-    kind: import('./design').AuthoredWorkKind
+    kind: import('./design').AuthoredWorkKind,
+    kinds: import('./design').AuthoredWorkKind[]
   ],
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [] as unknown as [projectId: string, threadId: string, hasNote: boolean],
@@ -400,6 +405,19 @@ export const IPC_EVENT_CONTRACT = {
    * mirrors this so a long download and a background reindex both report live.
    */
   'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
+  /**
+   * The semantic half of a spotlight thread search, delivered after its keyword
+   * rows so the panel replaces them instead of waiting on the local model. The
+   * `requestId` and `query` are the ones the invoke carried, and a panel that has
+   * moved on drops the payload.
+   */
+  'threads:searchIntent': [] as unknown as [
+    payload: {
+      query: string
+      requestId: number
+      results: import('../types').ThreadSearchResult[]
+    }
+  ],
   /**
    * The optional video pack's install state. The Design and video settings
    * block mirrors this so a long package install reports live progress.

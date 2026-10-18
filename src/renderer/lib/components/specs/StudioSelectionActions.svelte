@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { MessageCircleDashed, MessageSquareDashed } from '@lucide/svelte'
-
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
   interface Props {
     onExplain: () => void
     onQuickChat: () => void
@@ -16,7 +15,7 @@
     title="Explain this selection in a temporary read-only chat"
     onclick={onExplain}
   >
-    <MessageCircleDashed size={13} aria-hidden="true" />
+    <CioTemporaryChat size={13} aria-hidden="true" />
     Explain
   </button>
   <button
@@ -25,7 +24,7 @@
     title="Start a temporary read-only quick chat with this selection"
     onclick={onQuickChat}
   >
-    <MessageSquareDashed size={13} aria-hidden="true" />
+    <CioTemporaryChat size={13} aria-hidden="true" />
     Quick Chat
   </button>
 </div>

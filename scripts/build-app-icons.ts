@@ -1,16 +1,27 @@
 /**
- * Render every platform app-icon asset from the master SVG
- * (`src/renderer/static/icon.svg`) so all platforms ship one identical,
- * current brand mark:
+ * Render every platform app-icon and tray asset from the brand masters, so all
+ * platforms ship the same approved, optically centered mark:
  *
  *  - `icon.png`                       → electron-builder source for win/linux
  *  - `favicon.ico`                    → multi-size Windows/browser favicon
  *  - `favicon.png`                    → renderer favicon
  *  - `macos/AppIcon*.png` + `.icns`   → macOS Dock/Finder (via `iconutil`)
+ *  - `macos/tray*.png`                → macOS menu bar templates
+ *  - `windows/tray*.ico`              → Windows notification-area ICOs
  *  - `logo.png`                       → large opaque logo raster
  *  - `../build/appx/*.png`            → MSIX Store tile and taskbar logos
+ *  - `../build/icon.ico`              → Windows executable, taskbar, Explorer
  *
- * Rerun after editing the master SVG: `bun scripts/build-app-icons.ts`.
+ * Three full-color masters feed this. `icon.svg` and `icon-small.svg` carry the
+ * approved C/O Relay mark and auric endpoint on the square obsidian tile.
+ * `icon-macos.svg` keeps that exact centered mark on a restrained layered tile
+ * tuned for the macOS mask. App-icon entries below `SMALL_ART_MAX_PX` take the
+ * small master, everything from there up takes the primary master. Tray entries
+ * take the mono marks (`icon-mono-small.svg`
+ * and its attention sibling), because a tray glyph is drawn at roughly 16pt
+ * however many device pixels back it.
+ *
+ * Rerun after editing any master: `bun scripts/build-app-icons.ts`.
  * Requires macOS for the `.icns` step (`iconutil`); every other output is
  * platform-independent (pure `@resvg/resvg-js` + `png-to-ico`).
  */
@@ -21,18 +32,39 @@ import { Resvg } from '@resvg/resvg-js'
 import pngToIco from 'png-to-ico'
 import { Logger } from '../src/main/system/logger'
 import { buildWindowsTrayIcons } from './build-windows-tray-icons'
+import { buildMacTrayCountStrip } from './build-mac-tray-count-strip'
 
 const root = join(import.meta.dir, '..')
 const staticDir = join(root, 'src/renderer/static')
 const macosDir = join(staticDir, 'macos')
+const buildDir = join(root, 'build')
 /**
  * MSIX user assets. electron-builder's `appx` target reads its user asset
  * directory straight out of the build resources directory by this name
  * (`APPX_ASSETS_DIR_NAME`), and maps whatever it finds to `assets\` inside the
  * package, so the manifest references these exact file names.
  */
-const appxDir = join(root, 'build/appx')
+const appxDir = join(buildDir, 'appx')
 const master = readFileSync(join(staticDir, 'icon.svg'), 'utf8')
+const macMaster = readFileSync(join(staticDir, 'icon-macos.svg'), 'utf8')
+const monoSmall = readFileSync(join(staticDir, 'icon-mono-small.svg'), 'utf8')
+const monoSmallAttention = readFileSync(join(staticDir, 'icon-mono-small-attention.svg'), 'utf8')
+/** Small-size app tile: square obsidian tile, C/O geometry and gold endpoint. */
+const smallTile = readFileSync(join(staticDir, 'icon-small.svg'), 'utf8')
+/**
+ * Device-pixel size below which app-icon entries take the small optical master.
+ */
+const SMALL_ART_MAX_PX = 48
+
+/** The app-icon master for a device-pixel size: small tile first, primary up. */
+function appArt(size: number): string {
+  return size < SMALL_ART_MAX_PX ? smallTile : master
+}
+
+/** macOS gets its own background finish while keeping the shared mark master. */
+function macAppArt(): string {
+  return macMaster
+}
 
 /** Render an SVG string to a PNG buffer at the requested pixel size. */
 function renderPng(svg: string, size: number): Buffer {
@@ -41,15 +73,11 @@ function renderPng(svg: string, size: number): Buffer {
 }
 
 /**
- * Render the master mark centred on a wider transparent canvas.
+ * Render an app-icon master centred on a wider transparent canvas.
  *
- * MSIX tile art is landscape (a 310x150 wide tile), while the master is a square
- * squircle that already draws its own tile body. Rendering the square straight
- * into a landscape canvas would stretch it, so the master's inner content is
- * re-wrapped in an outer document and scaled to sit centred at `mark` pixels.
- * The squircle's own fill rules have to be repeated on the wrapping group: they
- * are set as attributes on the master's root element, and attributes do not
- * inherit through a child `<g>`.
+ * MSIX tile art is landscape (a 310x150 wide tile), while the master is square.
+ * Rendering it straight into a landscape canvas would stretch it, so the
+ * master's content is re-wrapped and scaled to sit centred at `mark` pixels.
  */
 function renderTile(svg: string, width: number, height: number, mark: number): Buffer {
   const scale = mark / 1024
@@ -76,11 +104,9 @@ function renderOpaque(svg: string, size: number, backdrop: string): Buffer {
 if (!Bun.argv.includes('--windows-tray-only')) {
   const outputs: Array<[string, Buffer]> = [
     ['icon.png', renderPng(master, 1024)],
-    ['favicon.png', renderPng(master, 180)],
+    ['favicon.png', renderPng(appArt(180), 180)],
     // Opaque rasters: Windows shows taskbar/window icons over arbitrary
-    // surfaces, and the historic flat black look came from a fully opaque
-    // square — keep those rasters opaque but let the squircle corners show the
-    // dark backdrop instead of pure black.
+    // surfaces, so retain a solid obsidian background at every size.
     ['logo.png', renderOpaque(master, 1254, '#0c0c10')]
   ]
 
@@ -89,18 +115,27 @@ if (!Bun.argv.includes('--windows-tray-only')) {
   }
   Logger.dev(`[build-app-icons] Wrote ${outputs.length} raster assets to ${staticDir}.`)
 
-  // Multi-size Windows favicon: PNG-compressed 16→256 entries in one .ico.
+  // Multi-size Windows favicon: 16→256 entries in one .ico, small tile first.
   const icoSizes = [16, 24, 32, 48, 64, 128, 256]
-  const ico = await pngToIco(icoSizes.map((size) => renderPng(master, size)))
+  const ico = await pngToIco(icoSizes.map((size) => renderPng(appArt(size), size)))
   writeFileSync(join(staticDir, 'favicon.ico'), ico)
   Logger.dev(`[build-app-icons] Wrote favicon.ico (${icoSizes.join('/')}px).`)
 
-  // macOS iconset → icns. Apple's own guidance: the artwork supplies the squircle
-  // shape with transparent margins; macOS composites its own drop shadow.
+  // The Windows executable, taskbar and Explorer icon. electron-builder reads
+  // this path directly (`win.icon`), and one entry per size keeps the shell from
+  // rescaling a neighbouring size: 20/24/40 are what 125%, 150% and 250% display
+  // scaling pick, and they are the entries a hand-held ICO most often misses.
+  const winIcoSizes = [16, 20, 24, 32, 40, 48, 64, 128, 256]
+  const winIco = await pngToIco(winIcoSizes.map((size) => renderPng(appArt(size), size)))
+  writeFileSync(join(buildDir, 'icon.ico'), winIco)
+  Logger.dev(`[build-app-icons] Wrote build/icon.ico (${winIcoSizes.join('/')}px).`)
+
+  // macOS iconset → icns. The native mask and shadow stay system-owned; the
+  // source tile uses a subtle tonal field and a centered, padded mark.
   const iconSizes = [16, 32, 64, 128, 256, 512, 1024]
   mkdirSync(macosDir, { recursive: true })
   for (const size of iconSizes) {
-    writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(master, size))
+    writeFileSync(join(macosDir, `AppIcon${size}.png`), renderPng(macAppArt(), size))
   }
   // MSIX tile and taskbar logos. The four base names are the ones the generated
   // manifest references: `Properties/Logo` (StoreLogo), both `VisualElements`
@@ -112,14 +147,17 @@ if (!Bun.argv.includes('--windows-tray-only')) {
   mkdirSync(appxDir, { recursive: true })
   const square44TargetSizes = [16, 24, 32, 48, 256]
   const appxOutputs: Array<[string, Buffer]> = [
-    ['StoreLogo.png', renderPng(master, 50)],
-    ['Square150x150Logo.png', renderPng(master, 150)],
-    ['Square44x44Logo.png', renderPng(master, 44)],
+    ['StoreLogo.png', renderPng(appArt(50), 50)],
+    ['Square150x150Logo.png', renderPng(appArt(150), 150)],
+    ['Square44x44Logo.png', renderPng(appArt(44), 44)],
     ...square44TargetSizes.map(
       (size) =>
-        [`Square44x44Logo.targetsize-${size}.png`, renderPng(master, size)] as [string, Buffer]
+        [`Square44x44Logo.targetsize-${size}.png`, renderPng(appArt(size), size)] as [
+          string,
+          Buffer
+        ]
     ),
-    ['Wide310x150Logo.png', renderTile(master, 310, 150, 120)]
+    ['Wide310x150Logo.png', renderTile(appArt(120), 310, 150, 120)]
   ]
   for (const [name, buffer] of appxOutputs) {
     writeFileSync(join(appxDir, name), buffer)
@@ -145,7 +183,7 @@ if (!Bun.argv.includes('--windows-tray-only')) {
       ['icon_512x512@2x.png', 1024]
     ]
     for (const [name, size] of entries) {
-      writeFileSync(join(setDir, name), renderPng(master, size))
+      writeFileSync(join(setDir, name), renderPng(macAppArt(), size))
     }
     execFileSync('iconutil', ['-c', 'icns', setDir, '-o', join(macosDir, 'AppIcon.icns')])
     rmSync(iconset, { recursive: true, force: true })
@@ -158,78 +196,42 @@ if (!Bun.argv.includes('--windows-tray-only')) {
 // macOS treats a `...Template.png` filename as a template image and derives its
 // own tint from the alpha channel, so the mark is rendered in solid black and a
 // matching `@2x` file is picked up automatically for Retina menu bars. The
-// artwork is the existing monochrome mark, recoloured to pure black. The
-// attention variant adds a bold exclamation mark beside the mark so the menu bar
-// can say "something needs you" without a second colour.
-//
-// The mark's own outline is a hairline at menu bar size, noticeably lighter than
-// the system glyphs it sits beside. Rendering it with a same-colour stroke adds
-// ink at the mark's own edges, which is what brings its weight up to match the
-// menu bar's own glyphs; the default stroke is tuned so the two templates read
-// as one weight beside the system clock. The attention variant scales the mark
-// down, so its stroke scales up by the same factor to keep that weight, and its
-// exclamation is drawn as a wide rounded bar over a dot so "something needs you"
-// survives at 16px instead of thinning into a speck.
-const monoBase = readFileSync(join(staticDir, 'icon-mono.svg'), 'utf8').replace(
-  'color:#a1a1aa',
-  'color:#000000'
-)
-const TRAY_STROKE_WIDTH = 24
-/**
- * The Windows notification area gets the same artwork at a lighter weight, and
- * the two must not be unified.
- *
- * Windows draws this mark at 16 device pixels on a 100% display. At that size
- * the artwork's own walls are a fraction of a pixel wide, so the macOS stroke
- * lands on top of them and closes the gaps that separate the oven's window,
- * handle, and code glyph: the mark reads as a smudge. Measured from the 16px
- * entry, the macOS weight inks 81% of the mark's bounding box and leaves 32
- * pixels of interior space, against 75% and 42 pixels at the weight below. The
- * macOS template survives it because the menu bar normally draws the `@2x` file,
- * where the extra ink resolves as legible thickness instead of clog.
- */
-const WINDOWS_TRAY_STROKE_WIDTH = 8
-const TRAY_ATTENTION_SCALE = 0.78
-
-/** Thicken a template's outline with a same-colour stroke. */
-function boldenTray(svg: string, strokeWidth: number): string {
-  return svg.replace(
-    'stroke-miterlimit:2;">',
-    `stroke-miterlimit:2;stroke:#000000;stroke-width:${strokeWidth};stroke-linejoin:round;stroke-linecap:round;">`
-  )
+// artwork is the small-size monochrome C/O Relay. It keeps the divider inside
+// the O and omits only the gold endpoint for platform template rendering. The
+// attention version adds a separate cue without changing the base mark.
+/** Render the menu mark within a square optical frame so the visible ink is
+ * centered in the native 16pt / 32px Retina slot rather than floating in its
+ * original roomy canvas. */
+function renderMacTray(svg: string, size: number): Buffer {
+  const viewBox = svg.match(/viewBox="([^"]*)"/)
+  if (!viewBox) throw new Error('macOS tray artwork has no viewBox')
+  const [, rawViewBox] = viewBox
+  const [x, y, width, height] = rawViewBox.split(/\s+/).map(Number)
+  const extent = Math.max(width, height)
+  const squareX = x + (width - extent) / 2
+  const squareY = y + (height - extent) / 2
+  const squareSvg = svg.replace(viewBox[0], `viewBox="${squareX} ${squareY} ${extent} ${extent}"`)
+  const png = new Resvg(squareSvg, { fitTo: { mode: 'width', value: size }, background: undefined })
+    .render()
+    .asPng()
+  return Buffer.from(png)
 }
-
-const monoMaster = boldenTray(monoBase, TRAY_STROKE_WIDTH)
-// The attention variant scales the mark down and sets a bold exclamation beside
-// it, so the two shapes stay legible at menu bar size instead of overlapping.
-// Held unweighted so each platform can apply its own stroke below.
-const attentionBase = monoBase
-  .replace(
-    '<g id="svg"',
-    `<g transform="matrix(${TRAY_ATTENTION_SCALE},0,0,${TRAY_ATTENTION_SCALE},6,120)"><g id="svg"`
-  )
-  .replace(
-    '</svg>',
-    '</g><g id="attention-badge"><rect x="1020" y="190" width="170" height="440" rx="85" fill="#000000"/><circle cx="1105" cy="800" r="100" fill="#000000"/></g></svg>'
-  )
-const attentionMaster = boldenTray(attentionBase, TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE)
-const trayOutputs: Array<[string, Buffer]> = [
-  ['trayTemplate.png', renderPng(monoMaster, 16)],
-  ['trayTemplate@2x.png', renderPng(monoMaster, 32)],
-  ['trayAttentionTemplate.png', renderPng(attentionMaster, 16)],
-  ['trayAttentionTemplate@2x.png', renderPng(attentionMaster, 32)]
-]
 if (!Bun.argv.includes('--windows-tray-only')) {
+  const trayOutputs: Array<[string, Buffer]> = [
+    ['trayTemplate.png', renderMacTray(monoSmall, 16)],
+    ['trayTemplate@2x.png', renderMacTray(monoSmall, 32)],
+    ['trayAttentionTemplate.png', renderMacTray(monoSmallAttention, 16)],
+    ['trayAttentionTemplate@2x.png', renderMacTray(monoSmallAttention, 32)]
+  ]
   for (const [name, buffer] of trayOutputs) {
     writeFileSync(join(macosDir, name), buffer)
   }
   Logger.dev(
     `[build-app-icons] Wrote ${trayOutputs.length} menu bar template assets to ${macosDir}.`
   )
+  // The working-thread figures, as one strip per resolution: the main process
+  // cuts the cell it needs instead of the repository carrying every count.
+  buildMacTrayCountStrip(monoSmall, macosDir)
 }
-await buildWindowsTrayIcons(
-  boldenTray(monoBase, WINDOWS_TRAY_STROKE_WIDTH),
-  boldenTray(attentionBase, WINDOWS_TRAY_STROKE_WIDTH / TRAY_ATTENTION_SCALE),
-  join(staticDir, 'windows')
-)
+await buildWindowsTrayIcons(monoSmall, monoSmallAttention, join(staticDir, 'windows'))
 Logger.dev('[build-app-icons] Done.')

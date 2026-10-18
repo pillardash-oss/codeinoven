@@ -1,19 +1,17 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    ExternalLink,
-    GitPullRequest,
-    Hammer,
-    Loader2,
-    MessageSquare,
-    Milestone,
-    RotateCcw,
-    Send,
-    Tag,
-    TriangleAlert,
-    UserPlus,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioHammer from '@pillardash-oss/cio-icon/CioHammer.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioMilestone from '@pillardash-oss/cio-icon/CioMilestone.svelte'
+  import CioPersonPlus from '@pillardash-oss/cio-icon/CioPersonPlus.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioSend from '@pillardash-oss/cio-icon/CioSend.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -373,7 +371,7 @@
           aria-label="Back to issues"
           onclick={onBack}
         >
-          <ChevronLeft size={13} />
+          <CioBack size={13} />
         </button>
       {/if}
       <span
@@ -393,7 +391,7 @@
         aria-label="Open this issue on GitHub"
         onclick={() => onOpenInBrowser(subject)}
       >
-        <ExternalLink size={12} />
+        <CioExternalLink size={12} />
       </button>
     </div>
     <p class="text-[0.75rem] font-semibold leading-snug text-foreground">{subject.title}</p>
@@ -404,7 +402,7 @@
         title="Open a new agent thread seeded with this issue"
         onclick={() => onWorkOn(subject)}
       >
-        <Hammer size={11} />
+        <CioHammer size={11} />
         Work on this issue
       </button>
       {#if onCreatePr}
@@ -414,7 +412,7 @@
           title="Open a pull request prefilled to close this issue"
           onclick={() => onCreatePr?.(subject)}
         >
-          <GitPullRequest size={11} />
+          <CioPullRequest size={11} />
           Create pull request
         </button>
       {/if}
@@ -425,7 +423,7 @@
           title="Close this issue"
           onclick={() => onRequestClose(subject)}
         >
-          <X size={11} />
+          <CioClose size={11} />
           Close
         </button>
       {:else}
@@ -435,7 +433,7 @@
           title="Reopen this issue"
           onclick={() => onReopen(subject)}
         >
-          <RotateCcw size={11} />
+          <CioUndo size={11} />
           Reopen
         </button>
       {/if}
@@ -445,7 +443,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
     {#if loading}
       <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Loading issue…
       </div>
     {:else}
@@ -468,7 +466,7 @@
           title="Edit labels"
           onclick={() => onEditMetadata('labels', subject)}
         >
-          <Tag size={9} />
+          <CioTag size={9} />
           Labels
         </button>
         <button
@@ -477,7 +475,7 @@
           title="Edit assignees"
           onclick={() => onEditMetadata('assignees', subject)}
         >
-          <UserPlus size={9} />
+          <CioPersonPlus size={9} />
           {#if subject.assignees && subject.assignees.length > 0}
             {subject.assignees.map((entry) => githubDisplayLogin(entry.login)).join(', ')}
           {:else}
@@ -490,7 +488,7 @@
           title="Set milestone"
           onclick={() => onEditMetadata('milestone', subject)}
         >
-          <Milestone size={9} />
+          <CioMilestone size={9} />
           {subject.milestone ? subject.milestone.title : 'Milestone'}
         </button>
         {#if reasonLabel}
@@ -553,7 +551,7 @@
 
       <!-- The conversation. -->
       <div class="mt-3 flex items-center gap-1.5">
-        <MessageSquare size={11} class="text-dimmed" />
+        <CioMessage size={11} class="text-dimmed" />
         <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
           {comments.length === 1 ? '1 comment' : `${comments.length} comments`}
         </span>
@@ -722,9 +720,9 @@
           onclick={() => void submitComment()}
         >
           {#if posting}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
-          <Send size={12} />
+          <CioSend size={12} />
           Comment
         </button>
       </div>
@@ -746,7 +744,7 @@
   </p>
   {#if confirmingDelete && (confirmingDelete.body ?? '').trim().length > 0}
     <p class="mt-2 flex items-start gap-1.5 text-[0.6875rem] leading-relaxed text-dimmed">
-      <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" />
+      <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" />
       <span class="line-clamp-4">{confirmingDelete.body.trim()}</span>
     </p>
   {/if}

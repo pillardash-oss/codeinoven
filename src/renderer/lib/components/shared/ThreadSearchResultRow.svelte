@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { Portal } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
@@ -19,7 +20,6 @@
   import { ovens } from '$lib/stores/ovens.svelte'
   import { type Thread, type ThreadSearchResult } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import { GitBranch } from '@lucide/svelte'
 
   interface Props {
     result: ThreadSearchResult
@@ -185,7 +185,7 @@
       {/if}
       {#if branch}
         <span class="flex min-w-0 items-center gap-1" title={`Branch: ${branch}`}>
-          <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+          <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
           <span class="font-mono">{threadBranchRowLabel(branch)}</span>
         </span>
       {/if}

@@ -1,16 +1,14 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    AppWindow,
-    ArrowRightLeft,
-    CalendarClock,
-    CalendarOff,
-    Loader2,
-    Pin
-  } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCalendarClock from '@pillardash-oss/cio-icon/CioCalendarClock.svelte'
+  import CioCalendarOff from '@pillardash-oss/cio-icon/CioCalendarOff.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSwap from '@pillardash-oss/cio-icon/CioSwap.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { Portal } from 'bits-ui'
   import { createSubscriber } from 'svelte/reactivity'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -201,7 +199,7 @@
         tone: 'working' as const,
         kind: undefined,
         variant: 'icon' as const,
-        icon: AppWindow,
+        icon: CioWindow,
         title: 'Running in another instance'
       }
     return {
@@ -366,7 +364,7 @@
             aria-label="Pinned task"
             title="Pinned"
           >
-            <Pin size={11} strokeWidth={1.8} class="text-accent" />
+            <CioPin size={11} strokeWidth={1.8} class="text-accent" />
           </span>
         {/if}
         {#if missed}
@@ -377,7 +375,7 @@
             aria-label="A scheduled run was missed"
             title="A scheduled run was missed"
           >
-            <AlertTriangle size={12} />
+            <CioAttention size={12} />
           </span>
         {/if}
       </span>
@@ -426,9 +424,9 @@
         onclick={transferForeignRun}
       >
         {#if foreignTransfer?.pending}
-          <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+          <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
         {:else}
-          <ArrowRightLeft size={13} aria-hidden="true" />
+          <CioSwap size={13} aria-hidden="true" />
         {/if}
       </button>
     {/if}
@@ -447,9 +445,9 @@
         onclick={() => onToggleScheduled?.(task)}
       >
         {#if scheduled}
-          <CalendarClock size={13} aria-hidden="true" />
+          <CioCalendarClock size={13} aria-hidden="true" />
         {:else}
-          <CalendarOff size={13} aria-hidden="true" />
+          <CioCalendarOff size={13} aria-hidden="true" />
         {/if}
       </button>
     {/if}

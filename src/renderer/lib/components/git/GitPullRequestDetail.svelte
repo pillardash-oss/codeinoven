@@ -1,21 +1,19 @@
 <script lang="ts">
-  import {
-    Bot,
-    Check,
-    ChevronDown,
-    CircleDot,
-    CircleSlash,
-    ExternalLink,
-    Loader2,
-    Maximize2,
-    MessageSquare,
-    Merge,
-    RefreshCw,
-    RotateCcw,
-    ThumbsUp,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioThumbsUp from '@pillardash-oss/cio-icon/CioThumbsUp.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, tick } from 'svelte'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -23,6 +21,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { roomAbove } from '$lib/popover-room'
   import { prReaderRailState } from '$lib/stores/pr-reader-rail.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -441,20 +440,6 @@
   }
 
   /**
-   * The top of the box an upward-opening popover is clipped by: the nearest
-   * ancestor with a non-visible overflow, which in the dock is the sidebar's
-   * content region and in full screen is the surface itself.
-   */
-  function clipTop(element: HTMLElement): number {
-    let node = element.parentElement
-    while (node) {
-      if (getComputedStyle(node).overflowY !== 'visible') return node.getBoundingClientRect().top
-      node = node.parentElement
-    }
-    return 0
-  }
-
-  /**
    * Cap the popover to the room above the composer, so a long candidate list in a
    * short sidebar scrolls inside the panel instead of having its first rows cut
    * off by the panel's own clipping.
@@ -464,9 +449,10 @@
       mentionMaxHeight = mentionMenuMaxHeight(Number.POSITIVE_INFINITY)
       return
     }
-    const anchorTop = mentionAnchor.getBoundingClientRect().top
     // 8px keeps the popover off the edge it is clipped at.
-    mentionMaxHeight = mentionMenuMaxHeight(anchorTop - clipTop(mentionAnchor) - 8)
+    mentionMaxHeight = mentionMenuMaxHeight(
+      roomAbove(mentionAnchor, mentionAnchor.getBoundingClientRect().top, 8)
+    )
   }
 
   function closeMentions(): void {
@@ -746,7 +732,7 @@
             aria-label="Open in full screen"
             onclick={onFullscreen}
           >
-            <Maximize2 size={13} />
+            <CioMaximize size={13} />
           </button>
         {/if}
         <button
@@ -757,7 +743,7 @@
           disabled={gitState.isBusy('pr-detail')}
           onclick={() => void refresh()}
         >
-          <RefreshCw size={12} class={gitState.isBusy('pr-detail') ? 'animate-spin' : ''} />
+          <CioRefresh size={12} class={gitState.isBusy('pr-detail') ? 'animate-spin' : ''} />
         </button>
         <button
           type="button"
@@ -767,7 +753,7 @@
           data-external-url={summary.url}
           onclick={() => void openInBrowser(summary.url)}
         >
-          <ExternalLink size={13} />
+          <CioExternalLink size={13} />
         </button>
       </div>
       <p class="mt-1.5 text-[0.75rem] font-medium leading-snug text-foreground">{summary.title}</p>
@@ -813,7 +799,7 @@
       {/if}
       {#if open && gitState.hasPrIssue(identity.owner, identity.repo, number)}
         <span class="flex shrink-0 items-center gap-1 text-warning">
-          <TriangleAlert size={10} />
+          <CioAttention size={10} />
           conflicts
         </span>
       {/if}
@@ -824,7 +810,7 @@
     <p
       class="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1 text-[0.625rem] text-success"
     >
-      <Check size={12} />
+      <CioCheck size={12} />
       {notice}
     </p>
   {/if}
@@ -835,7 +821,7 @@
       class="flex shrink-0 items-center gap-1 border-b border-danger/30 bg-danger/10 px-3 py-1 text-[0.625rem] text-danger"
       role="alert"
     >
-      <TriangleAlert size={12} class="shrink-0" />
+      <CioAttention size={12} class="shrink-0" />
       <p class="min-w-0 flex-1 break-words">{gitState.error}</p>
       <button
         type="button"
@@ -844,7 +830,7 @@
         aria-label="Dismiss Git error"
         onclick={() => (gitState.error = null)}
       >
-        <X size={13} />
+        <CioClose size={13} />
       </button>
     </div>
   {/if}
@@ -902,7 +888,7 @@
       title={composerOpen ? 'Hide the comment box' : 'Write a comment or review'}
       onclick={() => (composerOpen = !composerOpen)}
     >
-      <MessageSquare size={12} class="shrink-0" />
+      <CioMessage size={12} class="shrink-0" />
       <span class="shrink-0">Comment</span>
     </button>
   {/if}
@@ -926,9 +912,9 @@
     onclick={() => (closeConfirm = true)}
   >
     {#if closing}
-      <Loader2 size={12} class="shrink-0 animate-spin" />
+      <CioSpinner size={12} class="shrink-0 animate-spin" />
     {:else}
-      <X size={12} class="shrink-0" />
+      <CioClose size={12} class="shrink-0" />
     {/if}
     <span class="min-w-0 truncate">Close without merging</span>
   </button>
@@ -947,9 +933,9 @@
       onclick={() => void markReadyForReview()}
     >
       {#if markingReady}
-        <Loader2 size={12} class="shrink-0 animate-spin" />
+        <CioSpinner size={12} class="shrink-0 animate-spin" />
       {:else}
-        <Check size={12} class="shrink-0" />
+        <CioCheck size={12} class="shrink-0" />
       {/if}
       <span class="min-w-0 truncate">Ready for review</span>
     </button>
@@ -981,9 +967,9 @@
         onclick={openMergeConfirm}
       >
         {#if merging}
-          <Loader2 size={12} class="animate-spin" />
+          <CioSpinner size={12} class="animate-spin" />
         {:else}
-          <Merge size={12} class="shrink-0" />
+          <CioMerge size={12} class="shrink-0" />
         {/if}
         <!-- Truncates rather than pushing the row off the panel: a long base
              ref is the one thing here that can outgrow the sidebar. -->
@@ -996,7 +982,7 @@
           aria-label="Choose a merge method"
           disabled={merging}
         >
-          <ChevronDown size={12} />
+          <CioChevronDown size={12} />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
@@ -1017,7 +1003,7 @@
               >
                 {option.label}
                 {#if method === option.id}
-                  <Check size={13} class="shrink-0 text-primary" />
+                  <CioCheck size={13} class="shrink-0 text-primary" />
                 {/if}
               </DropdownMenu.Item>
             {/each}
@@ -1032,7 +1018,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if loading}
       <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Loading pull request…
       </div>
     {:else if tab === 'conversation'}
@@ -1156,7 +1142,7 @@
           disabled={!open || reviewing}
           onclick={() => void submitReview('APPROVE')}
         >
-          <ThumbsUp size={12} class="shrink-0" />
+          <CioThumbsUp size={12} class="shrink-0" />
           <span class="min-w-0 truncate">Approve</span>
         </button>
         <button
@@ -1170,7 +1156,7 @@
           disabled={!open || reviewing || !hasBody}
           onclick={() => void submitReview('REQUEST_CHANGES')}
         >
-          <TriangleAlert size={12} class="shrink-0" />
+          <CioAttention size={12} class="shrink-0" />
           <span class="min-w-0 truncate">Request changes</span>
         </button>
       </div>
@@ -1183,9 +1169,9 @@
         onclick={() => void postComment()}
       >
         {#if posting}
-          <Loader2 size={12} class="shrink-0 animate-spin" />
+          <CioSpinner size={12} class="shrink-0 animate-spin" />
         {:else}
-          <MessageSquare size={12} class="shrink-0" />
+          <CioMessage size={12} class="shrink-0" />
         {/if}
         <span class="min-w-0 truncate">Comment</span>
       </button>
@@ -1205,7 +1191,7 @@
     {#if open && detail?.mergeable === false}
       <div class="mb-2 border border-warning/30 bg-warning/10 px-3 py-2.5">
         <div class="flex items-center gap-1.5">
-          <TriangleAlert size={13} class="shrink-0 text-warning" />
+          <CioAttention size={13} class="shrink-0 text-warning" />
           <p class="text-[0.625rem] font-semibold text-warning">
             This pull request has merge conflicts
           </p>
@@ -1223,9 +1209,9 @@
             onclick={() => (resolveConfirm = true)}
           >
             {#if resolving}
-              <Loader2 size={12} class="shrink-0 animate-spin" />
+              <CioSpinner size={12} class="shrink-0 animate-spin" />
             {:else}
-              <Merge size={12} class="shrink-0" />
+              <CioMerge size={12} class="shrink-0" />
             {/if}
             <span class="min-w-0 truncate">Resolve locally</span>
           </button>
@@ -1235,7 +1221,7 @@
             title="Have an agent resolve the conflicts and push the fix"
             onclick={() => onResolveWithAgent?.(summary)}
           >
-            <Bot size={12} class="shrink-0" />
+            <CioSubagent size={12} class="shrink-0" />
             <span class="min-w-0 truncate">Resolve with agent</span>
           </button>
         </div>
@@ -1248,12 +1234,12 @@
       -->
       {#if draft}
         <p class="mb-1.5 flex items-center gap-1 text-[0.5625rem] text-warning">
-          <CircleDot size={10} class="shrink-0" />
+          <CioDot size={10} class="shrink-0" />
           Draft pull request
         </p>
       {:else if mergeBlocker}
         <p class="mb-1.5 flex items-center gap-1 text-[0.5625rem] text-warning">
-          <TriangleAlert size={10} class="shrink-0" />
+          <CioAttention size={10} class="shrink-0" />
           {mergeBlocker}
         </p>
       {/if}
@@ -1278,7 +1264,7 @@
       <div class="flex items-center gap-1.5">
         {@render commentToggle()}
         <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
-          <CircleSlash size={10} class="shrink-0" />
+          <CioBan size={10} class="shrink-0" />
           <span class="truncate">Closed without merging</span>
         </span>
         <span class="flex-1"></span>
@@ -1290,9 +1276,9 @@
           onclick={() => void reopen()}
         >
           {#if reopening}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <RotateCcw size={12} />
+            <CioUndo size={12} />
           {/if}
           Reopen
         </button>
@@ -1301,7 +1287,7 @@
       <div class="flex items-center gap-1.5">
         {@render commentToggle()}
         <span class="flex min-w-0 items-center gap-1 text-[0.5625rem] text-dimmed">
-          <Merge size={10} class="shrink-0" />
+          <CioMerge size={10} class="shrink-0" />
           <span class="truncate">Merged nothing more to do</span>
         </span>
       </div>

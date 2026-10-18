@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ChevronDown, FolderKanban, Search } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
@@ -86,13 +88,13 @@
         {#if project?.iconUrl}
           <img src={project.iconUrl} alt="" class="h-4 w-4 object-contain" />
         {:else}
-          <FolderKanban size={13} />
+          <CioProjects size={13} />
         {/if}
       </span>
       <span class="min-w-0 flex-1 truncate {selectedThread ? 'text-foreground' : 'text-dimmed'}">
         {selectedThread?.title ?? placeholder}
       </span>
-      <ChevronDown size={14} class="shrink-0 text-dimmed" />
+      <CioChevronDown size={14} class="shrink-0 text-dimmed" />
     {/if}
   </DropdownMenu.Trigger>
 
@@ -105,7 +107,7 @@
       class="z-60 min-w-72 overflow-hidden border bg-surface shadow-lg"
     >
       <div class="relative border-b p-2">
-        <Search
+        <CioSearch
           size={13}
           class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-dimmed"
         />

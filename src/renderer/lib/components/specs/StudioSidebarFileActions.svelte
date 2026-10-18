@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { AppWindow, FileText } from '@lucide/svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
 
   type CallbackResult = void | Promise<void>
@@ -24,7 +25,7 @@
     title={viewTitle}
     onclick={() => void onReveal?.()}
   >
-    <FileText size={13} />
+    <CioFileText size={13} />
     View
   </button>
 {/if}
@@ -38,7 +39,7 @@
     {#if preferredIcon}
       <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
     {:else}
-      <AppWindow size={14} class="shrink-0" />
+      <CioWindow size={14} class="shrink-0" />
     {/if}
     Open
   </button>

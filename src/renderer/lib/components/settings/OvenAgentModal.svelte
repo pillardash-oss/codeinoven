@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Cable,
-    CheckCircle2,
-    ClipboardCopy,
-    Loader2,
-    ShieldCheck
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCable from '@pillardash-oss/cio-icon/CioCable.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -203,11 +201,8 @@
   onClose={close}
 >
   {#if error}
-    <p
-      class="mb-4 flex items-start gap-2 bg-danger/10 px-3 py-2 text-xs text-danger"
-      role="alert"
-    >
-      <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+    <p class="mb-4 flex items-start gap-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      <CioAttention size={14} class="mt-0.5 shrink-0" />
       <span>{error}</span>
     </p>
   {/if}
@@ -234,7 +229,7 @@
           disabled={copying}
           onclick={() => void copyCommand()}
         >
-          {#if copying}<Loader2 size={14} class="animate-spin" />{:else}<ClipboardCopy
+          {#if copying}<CioSpinner size={14} class="animate-spin" />{:else}<CioCopy
               size={14}
             />{/if}
           Copy
@@ -284,7 +279,7 @@
         disabled={!code.trim() || previewing}
         onclick={() => void checkCode()}
       >
-        {#if previewing}<Loader2 size={14} class="animate-spin" />{:else}<ShieldCheck
+        {#if previewing}<CioSpinner size={14} class="animate-spin" />{:else}<CioShieldCheck
             size={14}
           />{/if}
         Check code
@@ -294,9 +289,9 @@
         <div class="space-y-3 border bg-elevated/40 p-3 text-xs">
           <div class="flex items-center gap-2">
             {#if preview.identityPresent}
-              <CheckCircle2 size={14} class="text-success" />
+              <CioCheckCircle size={14} class="text-success" />
             {:else}
-              <AlertTriangle size={14} class="text-warning" />
+              <CioAttention size={14} class="text-warning" />
             {/if}
             <span class="font-medium">{preview.name}</span>
           </div>
@@ -344,12 +339,12 @@
 
           {#if detecting}
             <span class="flex items-center gap-1.5 text-muted" role="status">
-              <Loader2 size={12} class="animate-spin" /> Reaching the machine on the addresses and port
-              it reported…
+              <CioSpinner size={12} class="animate-spin" /> Reaching the machine on the addresses and
+              port it reported…
             </span>
           {:else if detected}
             <span class="flex items-center gap-1.5 text-success">
-              <CheckCircle2 size={12} />
+              <CioCheckCircle size={12} />
               SSH answered on {detected.host}:{detected.port}, so that is where the Oven will
               connect.
             </span>
@@ -438,7 +433,9 @@
             disabled={testing}
             onclick={() => void testConnection()}
           >
-            {#if testing}<Loader2 size={14} class="animate-spin" />{:else}<Cable size={14} />{/if}
+            {#if testing}<CioSpinner size={14} class="animate-spin" />{:else}<CioCable
+                size={14}
+              />{/if}
             Test connection
           </button>
         {/if}
@@ -457,7 +454,7 @@
             disabled={registering || testing}
             onclick={() => void register()}
           >
-            {#if registering}<Loader2 size={14} class="animate-spin" />{/if} Register Oven
+            {#if registering}<CioSpinner size={14} class="animate-spin" />{/if} Register Oven
           </button>
         {/if}
       </div>

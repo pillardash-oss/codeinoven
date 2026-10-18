@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   /**
    * A colour picker built only from controls the native dock can carry.
    *
@@ -10,7 +11,6 @@
    * handler a drag in the app window reaches.
    */
   import { PROJECT_COLORS } from '$lib/project-colors'
-  import { X } from '@lucide/svelte'
 
   interface Props {
     value?: string
@@ -187,7 +187,7 @@
       title="Close"
       onclick={onclose}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
 
@@ -237,8 +237,7 @@
     {#each PROJECT_COLORS as option (option.value)}
       <button
         type="button"
-        class="h-5 w-5 border-2 transition-transform hover:scale-110 {option.value ===
-        current
+        class="h-5 w-5 border-2 transition-transform hover:scale-110 {option.value === current
           ? 'border-foreground'
           : 'border-transparent'}"
         style="background-color: {option.value}"

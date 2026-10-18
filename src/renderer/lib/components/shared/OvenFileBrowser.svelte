@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronRight, Folder, FolderPlus, Home, Loader2 } from '@lucide/svelte'
+  import CioFolderPlus from '@pillardash-oss/cio-icon/CioFolderPlus.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioHome from '@pillardash-oss/cio-icon/CioHome.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenFile } from '$shared/ovens'
 
@@ -69,7 +73,7 @@
   /** The create row is open only while the user is still in the directory it opened in. */
   let creating = $derived(Boolean(createAt) && createAt === current)
 
-  /** Drop a trailing separator so `/home/user/` and `/home/user` compare equal. */
+  /** Drop a trailing separator so `/Home/user/` and `/Home/user` compare equal. */
   function trimTrailingSeparator(path: string): string {
     return path.replace(/[\\/]+$/u, '') || path
   }
@@ -83,7 +87,7 @@
   /**
    * The directory one level up, or null when already at a filesystem root.
    *
-   * `/home` climbs to `/`   the root is a real listing, not a dead end   and a
+   * `/Home` climbs to `/`   the root is a real listing, not a dead end   and a
    * Windows drive root (`C:\`) is the only place with nowhere above it.
    */
   function parentDirectory(path: string): string | null {
@@ -204,7 +208,7 @@
       disabled={disabled || !root}
       onclick={() => void open(root)}
     >
-      <Home size={14} />
+      <CioHome size={14} />
     </button>
     <button
       type="button"
@@ -217,7 +221,7 @@
         if (parent) void open(parent)
       }}
     >
-      <ChevronRight size={14} class="rotate-[-90deg]" />
+      <CioForward size={14} class="rotate-[-90deg]" />
     </button>
     <input
       type="text"
@@ -304,7 +308,7 @@
         disabled={disabled || loading || !current}
         onclick={startCreate}
       >
-        <FolderPlus size={13} />
+        <CioFolderPlus size={13} />
         New folder
       </button>
     </div>
@@ -321,7 +325,7 @@
   >
     {#if loading}
       <p class="flex items-center gap-2 px-3 py-3 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Reading folders…
       </p>
     {:else if error}
@@ -337,7 +341,7 @@
           {disabled}
           onclick={() => void open(joinPath(current, entry.path, separator))}
         >
-          <Folder size={14} class="shrink-0 text-muted" />
+          <CioFolder size={14} class="shrink-0 text-muted" />
           <span class="min-w-0 flex-1 truncate">{entry.path}</span>
         </button>
       {/each}

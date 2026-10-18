@@ -1,3 +1,4 @@
+import { isCodeModeToolName } from '../../../lib/agent-interactions'
 import type { AgentMessage, AgentPart, SessionAgentEvent } from '../../../lib/types'
 import { Logger } from '../../system/logger'
 import type {
@@ -51,7 +52,7 @@ export function parseItem(
       sessionId,
       stringValue(item['tool']) ?? stringValue(item['name']) ?? 'mcp_tool_call'
     )
-  if (itemType === 'function_call') {
+  if (itemType === 'function_call' || itemType === 'custom_tool_call') {
     // Codex's collaboration mode (native sub-agents) surfaces as plain
     // function calls (`send_message`, `wait_agent`, ...) instead of the
     // richer `collab_tool_call` item type. Route those to the collaboration
@@ -283,12 +284,16 @@ function parseTool(
 ): CliLineParseResult {
   const providerStatus = stringValue(item['status'])
   const failed = completed && (providerStatus === 'failed' || providerStatus === 'error')
+  const output = toolOutput(item)
   const toolPart = {
     type: 'tool' as const,
     id: `${itemId}:tool`,
     messageID: itemId,
     callID: itemId,
     tool: providerTool,
+    ...(isCodeModeToolName(providerTool) || item['codeMode'] === true || item['code_mode'] === true
+      ? { codeMode: true }
+      : {}),
     state: {
       status: !completed
         ? ('running' as const)
@@ -297,7 +302,18 @@ function parseTool(
           : ('completed' as const),
       input: toolInput(item),
       title: command,
-      output: toolOutput(item)
+      output,
+      ...(output === undefined
+        ? {}
+        : {
+            metadata: {
+              outputBudget: {
+                transcriptCharacters: output.length,
+                modelFacingCharacters: null,
+                historyTokenBudget: 3000
+              }
+            }
+          })
     }
   }
   const events: SessionAgentEvent[] = [{ type: 'message.part.updated', sessionId, part: toolPart }]

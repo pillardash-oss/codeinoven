@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ArrowLeftRight, Info } from '@lucide/svelte'
+  import CioSwap from '@pillardash-oss/cio-icon/CioSwap.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 
@@ -41,7 +42,7 @@
     role="status"
     data-instance-role="secondary"
   >
-    <Info size={12} class="shrink-0" aria-hidden="true" />
+    <CioTabInfo size={12} class="shrink-0" aria-hidden="true" />
     <span class="min-w-0 flex-1 truncate">
       CodeInOven is running in another instance{ownerPid > 0 ? ` (pid ${ownerPid})` : ''}. Scheduled
       work continues there.
@@ -52,7 +53,7 @@
       title="Make this the main instance: scheduled work runs here and keeps running here after a restart"
       onclick={onTakeOver}
     >
-      <ArrowLeftRight size={12} aria-hidden="true" />
+      <CioSwap size={12} aria-hidden="true" />
       Make this the main instance
     </button>
     <button

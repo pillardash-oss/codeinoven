@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { LoaderCircle, CheckCircle2, AlertCircle, Info } from '@lucide/svelte'
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import type { ModelPathValidationResult, ParsedModelIdentity } from '../../../../lib/speech/types'
   import {
     buildParsedIdentityForValidation,
@@ -177,7 +180,7 @@
 
     {#if showNormalizedHint}
       <p class="flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
-        <Info size={12} aria-hidden="true" />
+        <CioTabInfo size={12} aria-hidden="true" />
         Trimmed surrounding quotes and whitespace before validation.
       </p>
     {/if}
@@ -201,22 +204,22 @@
     >
       {#if validating}
         <span class="inline-flex items-center gap-1.5">
-          <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+          <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
           Validating path…
         </span>
       {:else if validation?.ok}
         <span class="inline-flex items-center gap-1.5">
-          <CheckCircle2 size={12} aria-hidden="true" />
+          <CioCheckCircle size={12} aria-hidden="true" />
           {validation.reason}
         </span>
       {:else if validation !== null && validation.code === 'empty'}
         <span class="inline-flex items-center gap-1.5">
-          <Info size={12} aria-hidden="true" />
+          <CioTabInfo size={12} aria-hidden="true" />
           {validation.reason}
         </span>
       {:else if validation !== null}
         <span class="inline-flex items-center gap-1.5">
-          <AlertCircle size={12} aria-hidden="true" />
+          <CioAlertCircle size={12} aria-hidden="true" />
           {validation.reason}
         </span>
       {:else}
@@ -310,7 +313,7 @@
       onclick={() => void handleImport()}
     >
       {#if importing}
-        <LoaderCircle size={13} class="mr-1 inline animate-spin" aria-hidden="true" />
+        <CioSpinner size={13} class="mr-1 inline animate-spin" aria-hidden="true" />
       {/if}
       Import
     </button>

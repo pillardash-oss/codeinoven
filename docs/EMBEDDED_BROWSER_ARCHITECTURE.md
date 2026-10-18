@@ -70,8 +70,9 @@ material way, and the difference is deliberate.
     renderer refuses its `thread:updated` broadcasts too
     (`src/renderer/lib/stores/scope-threads.svelte.ts`), so a browser chat can never
     surface as a phantom row in the thread timeline or the switcher.
-  - Its turns do not notify: the answer is delivered beside the page it is about, which
-    is the rule the side chat it replaced already followed.
+  - Its turns notify like any other thread's: a finished turn, a parked question and a
+    failure each raise the usual card, even though the answer itself is delivered beside
+    the page it is about.
 - **The page a tab is on is attached to its assistant conversation for reading.** The
   app records the pair when the rail resolves the conversation
   (`browser:bindAssistantPage`), and main points the agent's browser capability

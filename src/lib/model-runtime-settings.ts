@@ -1,5 +1,23 @@
 import type { ModelRuntimeSettings, ProviderModel } from './types'
 
+/**
+ * Sanity bounds for a stored context window. Which windows a model can actually
+ * run with is the harness's own catalog's business (Codex states its windows
+ * through `codex debug models`), so these bounds only reject values no harness
+ * could mean: a picked window is never re-derived, rounded, or replaced here.
+ */
+export const MIN_CONTEXT_WINDOW = 100_000
+export const MAX_CONTEXT_WINDOW = 4_000_000
+
+export function isPlausibleContextWindow(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= MIN_CONTEXT_WINDOW &&
+    value <= MAX_CONTEXT_WINDOW
+  )
+}
+
 /** Shared validation for persisted role selections and thread overrides. */
 export function validateModelRuntimeSettings(
   input: { inferenceMode?: unknown; contextWindow?: unknown },
@@ -15,12 +33,7 @@ export function validateModelRuntimeSettings(
   ) {
     throw new TypeError(`${label} speed is invalid`)
   }
-  if (
-    contextWindow !== undefined &&
-    contextWindow !== 200_000 &&
-    contextWindow !== 272_000 &&
-    contextWindow !== 1_000_000
-  ) {
+  if (contextWindow !== undefined && !isPlausibleContextWindow(contextWindow)) {
     throw new TypeError(`${label} context window is invalid`)
   }
   return {
@@ -59,14 +72,8 @@ export function resolveModelRuntimeDefaults(
       model?.ultrafastSupported === true)
       ? speed
       : 'normal'
-  const harnessDefaultWindow =
-    harnessId === 'codex' && providerId === 'openai'
-      ? model?.contextWindows?.[0]
-      : (model?.contextWindow ?? model?.contextWindows?.[0])
   const contextWindow =
-    defaults.contextWindow !== undefined &&
-    model?.contextWindows?.includes(defaults.contextWindow) &&
-    defaults.contextWindow !== harnessDefaultWindow
+    defaults.contextWindow !== undefined && model?.contextWindows?.includes(defaults.contextWindow)
       ? defaults.contextWindow
       : undefined
   return { inferenceMode, contextWindow }

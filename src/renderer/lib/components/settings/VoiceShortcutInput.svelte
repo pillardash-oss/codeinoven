@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RotateCcw } from '@lucide/svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import {
     DEFAULT_VOICE_RECORDING_SHORTCUT,
     MODIFIER_KEY_CODES,
@@ -120,7 +120,7 @@
       aria-label="Reset voice recording shortcut to default"
       onclick={() => onchange(DEFAULT_VOICE_RECORDING_SHORTCUT)}
     >
-      <RotateCcw size={13} aria-hidden="true" />
+      <CioUndo size={13} aria-hidden="true" />
     </button>
   {/if}
 </div>

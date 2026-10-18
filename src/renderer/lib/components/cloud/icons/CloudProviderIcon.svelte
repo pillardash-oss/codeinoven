@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Server } from '@lucide/svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
   import type { CloudDeploymentProviderKind } from '$shared/types'
   import CoolifyIcon from './CoolifyIcon.svelte'
   import NetlifyIcon from './NetlifyIcon.svelte'
@@ -38,5 +38,5 @@
 {:else if providerKind === 'dokploy'}
   <DokployIcon {size} {color} {title} class={className} />
 {:else}
-  <Server {size} class={className} {color} />
+  <CioServer {size} class={className} {color} />
 {/if}

@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    ClipboardPaste,
-    Download,
-    ExternalLink,
-    LoaderCircle,
-    Trash2,
-    Upload
-  } from '@lucide/svelte'
+  import CioClipboardPaste from '@pillardash-oss/cio-icon/CioClipboardPaste.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { listRowMove } from '$lib/motion'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
@@ -170,8 +168,7 @@
         type="button"
         role="tab"
         aria-selected={activeModelSubTab === sub.id}
-        class="flex-1 px-3 py-2 text-sm font-medium transition-colors {activeModelSubTab ===
-        sub.id
+        class="flex-1 px-3 py-2 text-sm font-medium transition-colors {activeModelSubTab === sub.id
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:text-foreground'}"
         onclick={() => {
@@ -221,7 +218,7 @@
           aria-label="Paste a {activeSubTab.label} model path"
           onclick={() => (pasteOpen = true)}
         >
-          <ClipboardPaste size={12} aria-hidden="true" />
+          <CioClipboardPaste size={12} aria-hidden="true" />
           Paste path
         </button>
         <button
@@ -233,9 +230,9 @@
           onclick={() => void pickImport()}
         >
           {#if importing}
-            <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
           {:else}
-            <Upload size={12} aria-hidden="true" />
+            <CioUpload size={12} aria-hidden="true" />
           {/if}
           Import
         </button>
@@ -281,21 +278,21 @@
   {@const label = artifact?.label ?? parsedImport?.displayName ?? row.installed.artifactId}
   {@const byteSize = artifact?.byteSize ?? row.installed.byteSize ?? 0}
   <span
-    class="size-1.5 shrink-0 {isActive
-      ? 'bg-primary'
-      : row.installed.available
-        ? 'bg-border-strong'
-        : 'bg-danger'}"
+    class="size-1.5 shrink-0 {!row.installed.available
+      ? 'bg-danger'
+      : isActive
+        ? 'bg-primary'
+        : 'bg-border-strong'}"
     aria-hidden="true"
   ></span>
   <div class="min-w-0 flex-1">
     <p class="truncate text-sm font-medium" title={label}>{label}</p>
-    <p class="truncate text-xs text-dimmed">
+    <p class="truncate text-xs text-dimmed" title={row.installed.unavailableReason}>
       {runtimeBadge(row.installed.runtime)}{#if byteSize}
         · {formatBytes(byteSize)}{/if}{#if artifact}
         · {artifact.license}{/if}{#if artifact?.languages.length}
         · {artifact.languages.join(', ')}{/if}{#if !row.installed.available}
-        · Not found{/if}
+        · {row.installed.unavailableReason ?? 'Unavailable'}{/if}
     </p>
     {#if !artifact && row.installed.importPath}
       <p class="truncate font-mono text-[0.6875rem] text-dimmed" title={row.installed.importPath}>
@@ -303,7 +300,7 @@
       </p>
     {/if}
   </div>
-  {#if isActive}
+  {#if isActive && row.installed.available}
     <span
       class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
       >Active</span
@@ -330,7 +327,7 @@
     aria-label="Remove {label}"
     onclick={() => removeInstalled(row)}
   >
-    <Trash2 size={13} aria-hidden="true" />
+    <CioTrash size={13} aria-hidden="true" />
   </button>
 {/snippet}
 
@@ -363,7 +360,7 @@
             rel="noreferrer"
             class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
           >
-            Hugging Face <ExternalLink size={10} aria-hidden="true" />
+            Hugging Face <CioExternalLink size={10} aria-hidden="true" />
           </a>
         {/if}
       </div>
@@ -376,7 +373,7 @@
           disabled={isRetired}
           onclick={() => void downloadAndActivate(artifact)}
         >
-          <Download size={12} aria-hidden="true" />
+          <CioDownload size={12} aria-hidden="true" />
           {download?.state === 'failed' ? 'Retry' : 'Download'}
         </button>
       {/if}

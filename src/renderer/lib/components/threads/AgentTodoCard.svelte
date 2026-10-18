@@ -1,7 +1,10 @@
 <script lang="ts">
-  import { ListChecks, TriangleAlert, X } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioListChecks from '@pillardash-oss/cio-icon/CioListChecks.svelte'
   import { fly } from 'svelte/transition'
   import CardStack from '../shared/CardStack.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { rowArrive } from '../shared/card-motion'
   import { activeAgentTodoIndex, agentTodoCounter, type AgentTodoItem } from '$lib/agent-todos'
 
@@ -20,6 +23,8 @@
     /** Another card sits directly above the list, so its top rule is the broken
      *  line that separates two stacked surfaces. */
     stackedAbove?: boolean
+    /** Thread the task list belongs to, so the reader's fold choice is remembered. */
+    threadId: string
     /** Dismiss the card after the thread stopped working. */
     onClose: () => void
   }
@@ -31,11 +36,18 @@
     stopped,
     foreign = false,
     stackedAbove = false,
+    threadId,
     onClose
   }: Props = $props()
 
-  let open = $state(false)
-  let userPinnedOpen = $state(false)
+  /** The reader's own fold choice for this thread's task list, if they made one.
+   *  Without it the card keeps its transient behaviour: it opens on new activity
+   *  and folds itself again after a moment. */
+  // svelte-ignore state_referenced_locally
+  const foldPreference = threadCardFold.preferenceFor(threadId, 'todo')
+  let open = $state(foldPreference === undefined ? false : !foldPreference)
+  let userPinnedOpen = $state(foldPreference === false)
+  let userPinnedClosed = $state(foldPreference === true)
   let lastSignature = $state('')
 
   /**
@@ -78,6 +90,8 @@
     set folded(value: boolean) {
       open = !value
       userPinnedOpen = !value
+      userPinnedClosed = value
+      threadCardFold.setFolded(threadId, 'todo', value)
     }
   }
 
@@ -85,6 +99,10 @@
     const currentSignature = signature
     if (currentSignature === lastSignature) return
     lastSignature = currentSignature
+    if (userPinnedClosed) {
+      open = false
+      return
+    }
     if (userPinnedOpen) {
       open = true
       return
@@ -99,7 +117,7 @@
 
 <CardStack
   label="Agent task progress"
-  icon={ListChecks}
+  icon={CioListChecks}
   title="Tasks"
   {chip}
   warn={stoppedUnfinished}
@@ -117,7 +135,7 @@
     <span class="sr-only">{counter.meaning}</span>
     {#if stoppedUnfinished}
       <span class="flex shrink-0 items-center gap-1 text-[0.6875rem] font-medium text-warning">
-        <TriangleAlert size={12} class="shrink-0" />
+        <CioAttention size={12} class="shrink-0" />
         Agent did not finish their turn
       </span>
     {/if}
@@ -134,7 +152,7 @@
         title="Close task list"
         onclick={onClose}
       >
-        <X size={13} />
+        <CioClose size={13} />
       </button>
     {/if}
   {/snippet}

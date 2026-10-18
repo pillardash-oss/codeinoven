@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, Loader2, RefreshCw, RotateCcw } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import { showToastError } from '$lib/stores/app-errors.svelte'
@@ -75,14 +78,14 @@
       disabled={busy}
     >
       {#if busy}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <RefreshCw size={11} />
+        <CioRefresh size={11} />
       {/if}
       {#if !compact}
         <span>Re-run</span>
       {/if}
-      <ChevronDown size={10} class="text-dimmed" />
+      <CioChevronDown size={10} class="text-dimmed" />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -100,7 +103,7 @@
           class="flex cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
           onSelect={() => void rerun('all')}
         >
-          <RefreshCw size={12} class="shrink-0 text-dimmed" />
+          <CioRefresh size={12} class="shrink-0 text-dimmed" />
           Re-run all jobs
         </DropdownMenu.Item>
         <DropdownMenu.Item
@@ -108,7 +111,7 @@
           disabled={!hasFailedJobs}
           onSelect={() => void rerun('failed')}
         >
-          <RotateCcw size={12} class="shrink-0 text-dimmed" />
+          <CioUndo size={12} class="shrink-0 text-dimmed" />
           Re-run failed jobs only
         </DropdownMenu.Item>
       </DropdownMenu.Content>

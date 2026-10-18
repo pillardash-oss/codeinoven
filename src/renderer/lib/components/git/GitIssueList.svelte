@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    ChevronRight,
-    CircleDot,
-    Loader2,
-    MessageSquare,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
@@ -189,7 +187,7 @@
           aria-label="Refresh issues"
           onclick={() => void load(true)}
         >
-          <Loader2 size={11} class={loading ? 'animate-spin' : ''} />
+          <CioSpinner size={11} class={loading ? 'animate-spin' : ''} />
         </button>
         <button
           type="button"
@@ -205,7 +203,7 @@
       <div
         class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
       >
-        <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" />
+        <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" />
         <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
       </div>
     {/if}
@@ -213,7 +211,7 @@
       <div
         class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
       >
-        <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" />
+        <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" />
         <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
       </div>
     {/if}
@@ -221,12 +219,12 @@
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if loading && items.length === 0}
         <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading issues…
         </div>
       {:else if accessError && items.length === 0}
         <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
-          <TriangleAlert size={18} class="text-danger" />
+          <CioAttention size={18} class="text-danger" />
           <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
           <button
             type="button"
@@ -238,12 +236,12 @@
         </div>
       {:else if transientError && items.length === 0}
         <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-          <TriangleAlert size={18} class="text-warning" />
+          <CioAttention size={18} class="text-warning" />
           <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
         </div>
       {:else if items.length === 0}
         <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-          <CircleDot size={18} class="text-dimmed" />
+          <CioDot size={18} class="text-dimmed" />
           <p class="text-[0.6875rem] leading-relaxed text-dimmed">
             No {state === 'all' ? '' : state} issues.
           </p>
@@ -337,7 +335,7 @@
                     class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
                     title={commentLabel(issue.comments)}
                   >
-                    <MessageSquare size={10} />
+                    <CioMessage size={10} />
                     {issue.comments}
                   </span>
                 {/if}
@@ -358,7 +356,7 @@
           disabled={page <= 1}
           onclick={() => onPageChange(page - 1)}
         >
-          <ChevronLeft size={11} />
+          <CioBack size={11} />
           Previous
         </button>
         <span class="text-[0.5625rem] tabular-nums text-dimmed">Page {page}</span>
@@ -370,7 +368,7 @@
           onclick={() => onPageChange(page + 1)}
         >
           Next
-          <ChevronRight size={11} />
+          <CioForward size={11} />
         </button>
       </div>
     {/if}

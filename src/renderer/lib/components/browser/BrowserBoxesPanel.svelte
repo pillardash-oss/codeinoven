@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, ChevronLeft, Plus, Star } from '@lucide/svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
   import { fly, slide } from 'svelte/transition'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { jarIdForBox, type GlobalBrowserBox } from '$lib/stores/global-browser-types'
@@ -68,7 +71,7 @@
         aria-label="Back to boxes"
         onclick={() => (creating = false)}
       >
-        <ChevronLeft size={15} />
+        <CioBack size={15} />
       </button>
       <p class="text-xs font-medium text-foreground">New box</p>
     </div>
@@ -93,7 +96,7 @@
         title="Create a box"
         onclick={openCreate}
       >
-        <Plus size={13} />
+        <CioPlus size={13} />
         New box
       </button>
     </div>
@@ -149,7 +152,7 @@
               aria-pressed={isDefault}
               onclick={() => globalBrowser.setDefaultBox(box.id)}
             >
-              <Star size={13} class={isDefault ? 'fill-current' : ''} />
+              <CioStar size={13} class={isDefault ? 'fill-current' : ''} />
             </button>
             <button
               type="button"
@@ -163,7 +166,7 @@
               aria-controls="box-settings-{box.id}"
               onclick={() => toggleExpanded(box.id)}
             >
-              <ChevronDown size={13} class={expanded ? 'rotate-180' : ''} />
+              <CioChevronDown size={13} class={expanded ? 'rotate-180' : ''} />
             </button>
           </div>
 

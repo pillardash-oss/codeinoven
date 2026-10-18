@@ -1,4 +1,5 @@
 <script module lang="ts">
+  import { ICON_SIZE, RAIL_ICON_STROKE } from '$lib/components/icons/cio/scale'
   import type { Component, Snippet } from 'svelte'
   import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
@@ -8,6 +9,11 @@
     color: string
     /** The identity's own mark as an image data URL, when it has one. */
     iconUrl?: string | null
+  }
+
+  export interface ContextDockCountText {
+    text: string
+    tone: 'neutral' | 'success' | 'danger'
   }
 
   export interface ContextDockItem {
@@ -25,6 +31,8 @@
     /** Renders as plain text instead of `icon`   e.g. the message-history count. */
     countLabel?: string
     active: boolean
+    /** The work behind this item is emitting sound. */
+    playing?: boolean
     /** Renders a small status dot on the icon   e.g. pending memory proposals.
      *  Colours and variants flow through the global `ThreadStatusTone` palette
      *  (same vocabulary as thread rows and `StatusBadge`), so the rail can
@@ -35,6 +43,13 @@
     /** Renders a compact neutral count badge above the tool icon. */
     countBadge?: string
     countBadgeTone?: 'working'
+    /**
+     * A single row of small, plain coloured counts at the icon's top-right, each
+     * with its own tone and no frame around it. Used where one count cannot
+     * carry the whole story, e.g. a live turn's insertions and deletions
+     * ("+128/-24").
+     */
+    countText?: ContextDockCountText[]
     /** Coloured emphasis: amber for attention-worthy tools (e.g. a thread note),
      *  and nothing else   blue on the rail means work in progress, never the
      *  kind of tool an icon stands for. */
@@ -47,6 +62,13 @@
      * positioning (typically `right-full` to dock to the left of the rail).
      */
     menu?: Snippet
+    /**
+     * Preview shown to the left of the item after a short hover, e.g. the
+     * Changes summary. It is informational only   it never captures the click
+     * and it hides as soon as the pointer leaves the icon (its own wrapper is
+     * `pointer-events-none`), so it can never get stuck open.
+     */
+    flyout?: Snippet
     onSelect: () => void
     onContextMenu?: (event: MouseEvent) => void
   }
@@ -54,7 +76,9 @@
 
 <script lang="ts">
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { onDestroy } from 'svelte'
   import RailHighlight from './RailHighlight.svelte'
+  import RailAudioBadge from './RailAudioBadge.svelte'
 
   interface Props {
     /** Ordered groups. Empty groups are dropped so no stray hairline renders. */
@@ -64,6 +88,39 @@
   let { groups }: Props = $props()
 
   let visibleGroups = $derived(groups.filter((group) => group.length > 0))
+
+  /**
+   * The item whose hover preview is showing, or null.
+   *
+   * A short delay before showing keeps a pointer crossing the rail on its way
+   * somewhere else from flashing a preview on every icon it passes. Hiding is
+   * immediate: the preview is not interactive, so there is nothing to keep it
+   * open for.
+   */
+  let hoveredId = $state<string | null>(null)
+  let hoverTimer: ReturnType<typeof setTimeout> | null = null
+
+  function showFlyout(id: string): void {
+    cancelHoverTimer()
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null
+      hoveredId = id
+    }, 220)
+  }
+
+  function hideFlyout(id: string): void {
+    cancelHoverTimer()
+    if (hoveredId === id) hoveredId = null
+  }
+
+  function cancelHoverTimer(): void {
+    if (hoverTimer) {
+      clearTimeout(hoverTimer)
+      hoverTimer = null
+    }
+  }
+
+  onDestroy(cancelHoverTimer)
 
   /** Identity of every item and which one is current, both of which move the
    *  shared highlight. The dock's own box never resizes when a tool takes over,
@@ -81,6 +138,13 @@
   function toneClass(item: ContextDockItem): string {
     if (item.tone === 'warning') return 'text-warning hover:bg-elevated'
     return item.active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
+  }
+
+  /** Text colour for one token of a `countText` row. */
+  function countTextClass(tone: ContextDockCountText['tone']): string {
+    if (tone === 'success') return 'text-success'
+    if (tone === 'danger') return 'text-danger'
+    return 'text-muted'
   }
 </script>
 
@@ -112,6 +176,8 @@
           aria-label={item.label}
           aria-current={item.active ? 'true' : undefined}
           title={item.label}
+          onpointerenter={item.flyout ? () => showFlyout(item.id) : undefined}
+          onpointerleave={item.flyout ? () => hideFlyout(item.id) : undefined}
           onclick={item.onSelect}
           oncontextmenu={item.onContextMenu}
         >
@@ -121,13 +187,13 @@
             {#if item.appearance.iconUrl}
               <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 object-contain" />
             {:else}
-              <span
-                class="h-3.5 w-3.5"
-                style="background-color: {item.appearance.color}"
-              ></span>
+              <span class="h-3.5 w-3.5" style="background-color: {item.appearance.color}"></span>
             {/if}
           {:else if Icon}
-            <Icon size={16} strokeWidth={1.8} />
+            <Icon size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
+          {/if}
+          {#if item.playing}
+            <RailAudioBadge label={item.label} />
           {/if}
           {#if item.badge}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">
@@ -153,7 +219,22 @@
               {item.countBadge}
             </span>
           {/if}
+          {#if item.countText && item.countText.length > 0}
+            <span
+              class="absolute -top-1 right-1 flex items-center text-[0.5625rem] font-semibold leading-none tabular-nums whitespace-nowrap"
+              aria-hidden="true"
+            >
+              {#each item.countText as token, tokenIndex (tokenIndex)}
+                <span class={countTextClass(token.tone)}>{token.text}</span>
+              {/each}
+            </span>
+          {/if}
         </button>
+        {#if item.flyout && hoveredId === item.id}
+          <div class="pointer-events-none absolute top-1/2 right-full z-50 mr-1.5 -translate-y-1/2">
+            {@render item.flyout()}
+          </div>
+        {/if}
         {@render item.menu?.()}
       </div>
     {/each}

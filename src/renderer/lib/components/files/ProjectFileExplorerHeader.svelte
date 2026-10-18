@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { ChevronsDown, ChevronsUp, FolderOpen, RefreshCw, Search, Target } from '@lucide/svelte'
+  import CioChevronsDown from '@pillardash-oss/cio-icon/CioChevronsDown.svelte'
+  import CioChevronsUp from '@pillardash-oss/cio-icon/CioChevronsUp.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {
@@ -108,7 +113,7 @@
         style="color: {projectAccentColor ?? 'var(--color-primary)'}"
       />
     {:else}
-      <FolderOpen size={13} style="color: {projectAccentColor ?? 'var(--color-primary)'}" />
+      <CioFolderOpen size={13} style="color: {projectAccentColor ?? 'var(--color-primary)'}" />
     {/if}
   </span>
   <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground"
@@ -123,9 +128,9 @@
     onclick={onToggleExpandAll}
   >
     {#if anyDirExpanded}
-      <ChevronsUp size={12} />
+      <CioChevronsUp size={12} />
     {:else}
-      <ChevronsDown size={12} />
+      <CioChevronsDown size={12} />
     {/if}
   </button>
   <button
@@ -139,7 +144,7 @@
     aria-pressed={filterOpen}
     onclick={onToggleFilter}
   >
-    <Search size={12} />
+    <CioSearch size={12} />
   </button>
   <button
     type="button"
@@ -149,7 +154,7 @@
     disabled={!canRevealActiveFile}
     onclick={onRevealActiveFile}
   >
-    <Target size={12} />
+    <CioTarget size={12} />
   </button>
   <button
     type="button"
@@ -159,6 +164,6 @@
     disabled={rootLoading}
     onclick={onRefresh}
   >
-    <RefreshCw size={12} class={rootLoading ? 'animate-spin' : ''} />
+    <CioRefresh size={12} class={rootLoading ? 'animate-spin' : ''} />
   </button>
 </div>

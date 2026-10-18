@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft } from '@lucide/svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
   import type { PullRequestChecks, PullRequestDetail, PullRequestSummary } from '$shared/types'
   import {
     prChecksBadgeClass,
@@ -42,7 +42,7 @@
   aria-label="Back to pull requests"
   onclick={onBack}
 >
-  <ArrowLeft size={13} />
+  <CioArrowLeft size={13} />
 </button>
 <span class="shrink-0 font-mono text-[0.625rem] text-dimmed">#{summary.number}</span>
 <span

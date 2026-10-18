@@ -17,6 +17,7 @@ import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { ChatEngine } from '../../src/main/chat/chat-engine'
 import { AssistantAuthoringCheckpoints } from '../../src/main/chat/assistant-authoring-checkpoints'
 import { ASSISTANT_SPACE_ID } from '../../src/lib/types'
+import { ASSISTANT_BRIEF_REPLY_INSTRUCTION } from '../../src/lib/assistant-voice'
 import type { AgentMessage, CreateThreadInput, Assistant, Thread } from '../../src/lib/types'
 
 /**
@@ -161,6 +162,7 @@ describe('assistant run threads', () => {
     const contract = internals(engine).assistantRunHiddenContext(run)
     expect(contract).toContain('Slack latest info')
     expect(contract).toContain('Its knowledge is your instruction set')
+    expect(contract?.includes(ASSISTANT_BRIEF_REPLY_INSTRUCTION)).toBe(true)
     // A run is never an authoring turn: the interview contract must not apply.
     expect(
       await internals(engine).assistantAuthoringInstruction(ASSISTANT_SPACE_ID, run.id, run)

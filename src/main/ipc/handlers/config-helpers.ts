@@ -1,3 +1,4 @@
+import { APP_FONT_OPTIONS } from '../../../lib/app-fonts'
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../../lib/agent-behavior'
 import {
@@ -5,11 +6,6 @@ import {
   normalizeVoiceRecordingShortcut
 } from '../../../lib/speech/types'
 import { THINKING_LEVEL_ORDER } from '../../../lib/thinking-presets'
-import {
-  normalizeWorkRoot,
-  workRootsConflict,
-  type WorkRoots
-} from '../../../lib/design/work-roots'
 import {
   MAX_PROTOTYPE_CDN_ORIGINS,
   normalizePrototypeCdnOrigin
@@ -65,6 +61,7 @@ import {
   normalizeCioCleanupExcludedCategories
 } from '../../../lib/types'
 import { validateBoundedString, validateEntityId, validateMergeMethod } from '../ipc-validation'
+import { isContrastLevel } from '../../../lib/types'
 import { isRecord, requireString } from './shared'
 import type {
   AgentDefaultsConfig,
@@ -182,10 +179,14 @@ const CONFIG_PATCH_FIELDS = new Set([
   'fontFamily',
   'appFontSize',
   'fontWeight',
+  'contrastLevel',
   'zoomLevel',
   'onboardingCompleted',
   'shareAnonymousUsage',
   'threadLimit',
+  'switcherTerminalTabs',
+  'switcherFileTabs',
+  'switcherThreadBrowserTabs',
   'questionTimeoutMs',
   'agentQuestionCap',
   'slashCommandMode',
@@ -195,7 +196,6 @@ const CONFIG_PATCH_FIELDS = new Set([
   'auxiliaryAgents',
   'design',
   'modelProfiles',
-  'workRoots',
   'mediaGeneration',
   'rankingJudge',
   'agentBehaviorPrompt',
@@ -365,44 +365,6 @@ const DESIGN_ASSIGNMENT_FIELDS = new Set([
  * Ids are unique because an agent resolves an assignment by id, and two rows
  * sharing one would make the call ambiguous.
  */
-/**
- * The two authored-work folders, stored normalized.
- *
- * Normalized here rather than at every reader so one spelling reaches the file:
- * `designs/`, `./designs` and `designs///` are one setting, and the relocation
- * that follows a change compares two strings that are already canonical. A pair
- * where one root is the other, or sits inside it, is refused outright, because a
- * folder under both would be classified as whichever kind is tested first and the
- * user would see a design listed as a composition.
- */
-function validateWorkRoots(value: unknown): WorkRoots {
-  if (!isRecord(value)) throw new TypeError('Work folders must be an object')
-  for (const field of Object.keys(value)) {
-    if (field !== 'design' && field !== 'video') {
-      throw new TypeError(`Unsupported work folders field: ${field}`)
-    }
-  }
-  const design = normalizeWorkRoot(value.design)
-  if (!design) {
-    throw new TypeError(
-      'The design folder must be a project-relative path such as ".cio/designs" or "designs"'
-    )
-  }
-  const video = normalizeWorkRoot(value.video)
-  if (!video) {
-    throw new TypeError(
-      'The video folder must be a project-relative path such as ".cio/videos" or "videos"'
-    )
-  }
-  const roots: WorkRoots = { design, video }
-  if (workRootsConflict(roots)) {
-    throw new TypeError(
-      'The design and video folders must differ, and neither may sit inside the other'
-    )
-  }
-  return roots
-}
-
 /** Fields one model profile may carry, and no others. */
 const MODEL_PROFILE_FIELDS = new Set([
   'id',
@@ -644,15 +606,7 @@ export function validateRankingJudge(value: unknown): RankingJudgeConfig {
   return { kind: 'model', ...validateAgentModelSelection(selection, 'Ranking judge') }
 }
 
-const FONT_FAMILIES = new Set([
-  'jetbrains-mono',
-  'satoshi',
-  'system',
-  'sf-mono',
-  'menlo',
-  'monaco',
-  'fira-code'
-])
+const FONT_FAMILIES = new Set(APP_FONT_OPTIONS.map((font) => font.id))
 
 /** Validate a user-authored search engine list, rejecting the whole patch on
  *  the first bad entry so a half-applied list can never reach the config. */
@@ -743,6 +697,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.fontWeight = value.fontWeight
   }
 
+  if ('contrastLevel' in value) {
+    if (!isContrastLevel(value.contrastLevel)) {
+      throw new TypeError('Contrast level must be normal, more, or intense')
+    }
+    patch.contrastLevel = value.contrastLevel
+  }
+
   if ('zoomLevel' in value) {
     if (
       typeof value.zoomLevel !== 'number' ||
@@ -779,6 +740,19 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Thread limit must be an integer between 1 and 1000')
     }
     patch.threadLimit = value.threadLimit
+  }
+
+  for (const field of [
+    'switcherTerminalTabs',
+    'switcherFileTabs',
+    'switcherThreadBrowserTabs'
+  ] as const) {
+    if (field in value) {
+      if (typeof value[field] !== 'boolean') {
+        throw new TypeError(`${field} must be a boolean`)
+      }
+      patch[field] = value[field]
+    }
   }
 
   if ('questionTimeoutMs' in value) {
@@ -1092,10 +1066,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('modelProfiles' in value) {
     patch.modelProfiles = validateModelProfiles(value.modelProfiles)
-  }
-
-  if ('workRoots' in value) {
-    patch.workRoots = validateWorkRoots(value.workRoots)
   }
 
   if ('mediaGeneration' in value) {

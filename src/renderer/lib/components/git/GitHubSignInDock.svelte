@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Loader2, TimerOff, TriangleAlert, X } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTimerOff from '@pillardash-oss/cio-icon/CioTimerOff.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -79,13 +83,13 @@
             </span>
           </span>
           {#if githubSignIn.waiting}
-            <Loader2 size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
           {:else if githubSignIn.phase === 'authorized'}
-            <Check size={11} class="shrink-0 text-success" aria-hidden="true" />
+            <CioCheck size={11} class="shrink-0 text-success" aria-hidden="true" />
           {:else if githubSignIn.phase === 'expired'}
-            <TimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
+            <CioTimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
           {:else}
-            <TriangleAlert size={11} class="shrink-0 text-danger" aria-hidden="true" />
+            <CioAttention size={11} class="shrink-0 text-danger" aria-hidden="true" />
           {/if}
         </button>
         <span class="h-5 w-px bg-border"></span>
@@ -96,7 +100,7 @@
           title={dismissLabel}
           onclick={() => githubSignIn.close()}
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       </div>
     </DockRow>

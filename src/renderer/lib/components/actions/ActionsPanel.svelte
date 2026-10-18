@@ -1,17 +1,16 @@
 <script lang="ts">
-  import {
-    Copy,
-    Maximize2,
-    MonitorCog,
-    Pencil,
-    Play,
-    Plus,
-    Square,
-    SquareTerminal,
-    Trash2,
-    Variable,
-    X
-  } from '@lucide/svelte'
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioStop from '@pillardash-oss/cio-icon/CioStop.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioVariable from '@pillardash-oss/cio-icon/CioVariable.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { createSubscriber } from 'svelte/reactivity'
   import Modal from '$lib/components/ui/Modal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
@@ -301,7 +300,7 @@
   <StalePanelNotice stale={scopeStale} reason="run" />
   <header class="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
     <div class="flex items-center gap-2">
-      <MonitorCog size={15} />
+      <CioActions size={15} />
       <h2 class="text-xs font-semibold">Actions</h2>
     </div>
     <button
@@ -309,13 +308,13 @@
       class="flex h-7 w-7 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
       title="Add action"
       aria-label="Add action"
-      onclick={() => openEditor()}><Plus size={15} /></button
+      onclick={() => openEditor()}><CioPlus size={15} /></button
     >
   </header>
   <div bind:this={scrollArea} class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if actions.length === 0}
       <div class="flex h-full min-h-48 flex-col items-center justify-center px-6 text-center">
-        <MonitorCog size={24} class="text-dimmed" />
+        <CioActions size={24} class="text-dimmed" />
         <p class="mt-3 text-sm font-semibold">No actions yet</p>
         <p class="mt-1 text-xs text-muted">
           Save a command you run often, then launch it without opening a terminal.
@@ -401,7 +400,7 @@
                       requestRun(action)
                     }
                   }}
-                  >{#if run?.running}<Square size={13} fill="currentColor" />{:else}<Play
+                  >{#if run?.running}<CioStop size={ICON_SIZE.inline} />{:else}<CioPlay
                       size={13}
                       fill="currentColor"
                     />{/if}</button
@@ -415,7 +414,7 @@
                     onclick={(event) => {
                       event.stopPropagation()
                       fullscreenActionId = action.id
-                    }}><Maximize2 size={13} /></button
+                    }}><CioMaximize size={13} /></button
                   >
                 {/if}
                 <button
@@ -426,7 +425,7 @@
                   onclick={(event) => {
                     event.stopPropagation()
                     openEditor(action)
-                  }}><Pencil size={13} /></button
+                  }}><CioPencil size={13} /></button
                 >
                 <button
                   type="button"
@@ -436,7 +435,7 @@
                   onclick={(event) => {
                     event.stopPropagation()
                     duplicate(action)
-                  }}><Copy size={13} /></button
+                  }}><CioCopy size={13} /></button
                 >
                 <button
                   type="button"
@@ -446,7 +445,7 @@
                   onclick={(event) => {
                     event.stopPropagation()
                     deleteTarget = action
-                  }}><Trash2 size={13} /></button
+                  }}><CioTrash size={13} /></button
                 >
               </div>
             </div>
@@ -492,7 +491,7 @@
     onSelect={(id) => (fullscreenActionId = id)}
   >
     {#snippet icon()}
-      <SquareTerminal size={11} class="shrink-0" />
+      <CioTerminal size={11} class="shrink-0" />
     {/snippet}
     <div class="min-h-0 flex-1">
       {#key fullscreenRun.terminalId}<ActionTerminal
@@ -559,7 +558,7 @@
         <button
           type="button"
           class="flex h-8 items-center gap-1.5 border border-border px-2.5 text-xs font-semibold hover:bg-elevated"
-          onclick={addVariable}><Variable size={13} /> Add variable</button
+          onclick={addVariable}><CioVariable size={ICON_SIZE.inline} /> Add variable</button
         >
       </div>
       <div class="mt-2 space-y-2">
@@ -591,7 +590,7 @@
               class="flex h-8 w-8 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
               title="Remove variable"
               aria-label="Remove variable"
-              onclick={() => removeVariable(index)}><X size={13} /></button
+              onclick={() => removeVariable(index)}><CioClose size={13} /></button
             >
           </div>{/each}
       </div>

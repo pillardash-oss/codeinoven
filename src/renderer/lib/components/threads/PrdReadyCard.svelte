@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, ExternalLink, FileText } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
   import { slide } from 'svelte/transition'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
   import CardButton from '../shared/CardButton.svelte'
@@ -56,7 +58,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="PRD ready for review">
     <CardHead
-      icon={FileText}
+      icon={CioFileText}
       title="PRD ready for review"
       {chip}
       bind:folded
@@ -87,14 +89,14 @@
             <CardButton
               label="Review PRD"
               title="Open the PRD for review"
-              icon={ExternalLink}
+              icon={CioExternalLink}
               variant="secondary"
               onclick={onReview}
             />
             <CardButton
               label="Finalize PRD"
               title="Approve the PRD"
-              icon={Check}
+              icon={CioCheck}
               variant="primary"
               disabled={busy}
               loading={busy}

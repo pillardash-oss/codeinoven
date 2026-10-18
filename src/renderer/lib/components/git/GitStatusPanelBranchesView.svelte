@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { FolderTree, GitBranch, MoreHorizontal } from '@lucide/svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import type { GitBranchInfo } from '$shared/types'
   import { gitState } from '$lib/stores/git.svelte'
@@ -95,7 +97,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if branches.length === 0}
       <div class="flex flex-col items-center justify-center py-12 text-center">
-        <GitBranch size={22} class="mx-auto mb-2 text-dimmed" />
+        <CioTabGit size={22} class="mx-auto mb-2 text-dimmed" />
         <p class="text-xs font-medium text-muted">No branches</p>
       </div>
     {:else}
@@ -148,9 +150,9 @@
                     ]}
                   >
                     {#if inWorktree}
-                      <FolderTree size={11} />
+                      <CioFiles size={11} />
                     {:else}
-                      <GitBranch size={11} />
+                      <CioTabGit size={11} />
                     {/if}
                   </span>
                   <span class="min-w-0 flex-1">
@@ -209,7 +211,7 @@
                         aria-label={`More actions for branch ${branch.ref}`}
                         title={`More actions for branch ${branch.ref}`}
                       >
-                        <MoreHorizontal size={13} />
+                        <CioEllipsis size={13} />
                       </DropdownMenu.Trigger>
                       <DropdownMenu.Portal>
                         <DropdownMenu.Content

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import AnnotationCommentForm from './AnnotationCommentForm.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -45,8 +45,6 @@
     placeholder?: string
     removeTitle?: string
     doneTitle?: string
-    /** Keep Remove available with an empty comment. See the form. */
-    allowEmptyRemove?: boolean
   }
 
   let {
@@ -64,8 +62,7 @@
     attach,
     placeholder,
     removeTitle,
-    doneTitle,
-    allowEmptyRemove
+    doneTitle
   }: Props = $props()
 </script>
 
@@ -91,7 +88,7 @@
       aria-label="Close comment"
       onclick={onClose}
     >
-      <X size={13} />
+      <CioClose size={13} />
     </button>
   </div>
   <AnnotationCommentForm
@@ -105,6 +102,5 @@
     {placeholder}
     {removeTitle}
     {doneTitle}
-    {allowEmptyRemove}
   />
 </div>

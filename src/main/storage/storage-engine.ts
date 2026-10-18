@@ -1,3 +1,4 @@
+import { DEFAULT_APP_FONT_FAMILY, normalizeAppFontFamily } from '../../lib/app-fonts'
 import { join } from 'path'
 import { randomInt } from 'crypto'
 import { readFile, appendFile, unlink, open, stat, rename, type FileHandle } from 'fs/promises'
@@ -29,10 +30,11 @@ import {
   MIN_CIO_CLEANUP_RETENTION_DAYS,
   MAX_CIO_CLEANUP_RETENTION_DAYS,
   DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES,
+  DEFAULT_CONTRAST_LEVEL,
+  isContrastLevel,
   normalizeCioCleanupExcludedCategories
 } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
-import { DEFAULT_WORK_ROOTS, workRootsFromConfig } from '../../lib/design/work-roots'
 import {
   CIO_PROMPT_DEFINITIONS,
   CIO_PROMPT_MAX_LENGTH,
@@ -78,13 +80,17 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
-  fontFamily: 'jetbrains-mono',
+  fontFamily: DEFAULT_APP_FONT_FAMILY,
   appFontSize: 15,
   fontWeight: 200,
+  contrastLevel: DEFAULT_CONTRAST_LEVEL,
   zoomLevel: 1,
   onboardingCompleted: false,
   shareAnonymousUsage: true,
   threadLimit: 70,
+  switcherTerminalTabs: true,
+  switcherFileTabs: true,
+  switcherThreadBrowserTabs: true,
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
@@ -95,7 +101,6 @@ const DEFAULT_CONFIG: AppConfig = {
   auxiliaryAgents: {},
   design: { assignments: [] },
   modelProfiles: [],
-  workRoots: { ...DEFAULT_WORK_ROOTS },
   mediaGeneration: { providerId: null },
   rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -222,9 +227,16 @@ export class StorageEngine {
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
+      fontFamily: normalizeAppFontFamily(config?.fontFamily),
       // Analytics is on by default: only an explicit opt-out in the stored
       // config turns it off, and a missing field keeps the default.
       shareAnonymousUsage: config?.shareAnonymousUsage !== false,
+      // A level a future version wrote is dropped back to the shipped one rather
+      // than reaching the window as a `data-contrast` value no rule matches,
+      // which would paint the default palette while the picker claims otherwise.
+      contrastLevel: isContrastLevel(config?.contrastLevel)
+        ? config.contrastLevel
+        : DEFAULT_CONFIG.contrastLevel,
       agentDefaults: {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})
@@ -249,10 +261,8 @@ export class StorageEngine {
       mediaGeneration: {
         providerId: config?.mediaGeneration?.providerId ?? DEFAULT_CONFIG.mediaGeneration.providerId
       },
-      // Read tolerantly: a value a future version wrote, a hand-edited path, or a
-      // pair where one root sits inside the other arrives as a working app with
-      // the defaults rather than as a failed start.
-      workRoots: workRootsFromConfig(config ?? {}),
+      // Read tolerantly, so a hand-edited entry list arrives as a working app
+      // rather than as a failed start.
       memory: {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
@@ -272,6 +282,12 @@ export class StorageEngine {
           ? config.browserSearchEngine
           : DEFAULT_CONFIG.browserSearchEngine,
       browserCustomSearchEngines: sanitizeCustomSearchEngines(config?.browserCustomSearchEngines),
+      // The switcher's panel-tab sources are on by default: only an explicit
+      // `false` in the stored config turns one off, and a missing field keeps
+      // the shipped default.
+      switcherTerminalTabs: config?.switcherTerminalTabs !== false,
+      switcherFileTabs: config?.switcherFileTabs !== false,
+      switcherThreadBrowserTabs: config?.switcherThreadBrowserTabs !== false,
       // Background settings are read tolerantly: a hand-edited value outside the
       // closed set or the bounds falls back instead of disabling the feature
       // silently, and `launchAtLogin` follows the mode when it is off.

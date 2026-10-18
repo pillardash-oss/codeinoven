@@ -1,13 +1,11 @@
 <script lang="ts">
-  import {
-    AudioLines,
-    Clapperboard,
-    Maximize2,
-    Palette,
-    PencilRuler,
-    Settings2,
-    Users
-  } from '@lucide/svelte'
+  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioDesign from '@pillardash-oss/cio-icon/CioDesign.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+  import type { Component } from 'svelte'
   import Modal from '../ui/Modal.svelte'
   import { slide } from 'svelte/transition'
   import CardHead from '../shared/CardHead.svelte'
@@ -63,11 +61,11 @@
   let folded = $state(false)
 
   /** The craft's own icon, so a row reads as work rather than as a file type. */
-  const CRAFT_ICON: Record<DesignAssignmentOutput, typeof PencilRuler> = {
-    text: PencilRuler,
-    image: Palette,
-    video: Clapperboard,
-    audio: AudioLines
+  const CRAFT_ICON: Record<DesignAssignmentOutput, Component> = {
+    text: CioDesign,
+    image: CioPalette,
+    video: CioClapper,
+    audio: CioAudioLines
   }
 
   const owners = $derived(expertState.experts.length)
@@ -93,7 +91,7 @@ are the shared card shape. -->
   aria-label="Your experts can do this work"
 >
   <CardHead
-    icon={Users}
+    icon={CioDesign}
     title="Your experts can do this work"
     chip={{ text: 'Live' }}
     bind:folded
@@ -107,7 +105,7 @@ are the shared card shape. -->
         aria-label="Open the expert list full screen"
         onclick={() => (fullscreen = true)}
       >
-        <Maximize2 size={13} />
+        <CioMaximize size={13} />
       </button>
     {/snippet}
   </CardHead>
@@ -169,7 +167,7 @@ are the shared card shape. -->
             variant="secondary"
             label="Manage experts"
             title="Open Settings, Design to change who does each craft"
-            icon={Settings2}
+            icon={CioTabSettings}
             onclick={onOpenSettings}
           />
           <span {@attach focusPrimary}>
@@ -177,7 +175,7 @@ are the shared card shape. -->
               variant="primary"
               label="Let experts delegate"
               title="Let this session delegate its craft work to every expert you staffed"
-              icon={Users}
+              icon={CioDesign}
               onclick={onUse}
             />
           </span>
@@ -216,7 +214,7 @@ are the shared card shape. -->
           variant="secondary"
           label="Manage experts"
           title="Open Settings, Design to change who does each craft"
-          icon={Settings2}
+          icon={CioTabSettings}
           class="ml-auto"
           onclick={onOpenSettings}
         />
@@ -224,7 +222,7 @@ are the shared card shape. -->
           variant="primary"
           label="Let experts delegate"
           title="Let this session delegate its craft work to every expert you staffed"
-          icon={Users}
+          icon={CioDesign}
           onclick={() => {
             fullscreen = false
             onUse()

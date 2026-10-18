@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { FolderKanban, FolderOpen, GitBranch, GitFork, Pencil, Pin, PinOff } from '@lucide/svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioPinOff from '@pillardash-oss/cio-icon/CioPinOff.svelte'
+  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -87,7 +93,7 @@
               onerror={projectIconOnError(project)}
             />
           {:else}
-            <FolderKanban size={13} />
+            <CioProjects size={13} />
           {/if}
         </span>
         <span class="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
@@ -100,9 +106,9 @@
           onclick={() => void togglePin()}
         >
           {#if pinned}
-            <PinOff size={14} />
+            <CioPinOff size={14} />
           {:else}
-            <Pin size={14} />
+            <CioPin size={14} />
           {/if}
         </button>
       </div>
@@ -111,7 +117,7 @@
         <div class="space-y-1 px-2.5 py-2">
           {#if repoLabel}
             <div class="flex min-w-0 items-center gap-2">
-              <GitFork size={13} class="shrink-0 text-dimmed" />
+              <CioFork size={13} class="shrink-0 text-dimmed" />
               <span
                 class="min-w-0 flex-1 truncate text-xs text-muted"
                 title={remoteOriginUrl ?? repoLabel}
@@ -123,7 +129,7 @@
                   class="flex shrink-0 items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
                   title={branch}
                 >
-                  <GitBranch size={10} class="shrink-0" />
+                  <CioTabGit size={10} class="shrink-0" />
                   <span class="max-w-24 truncate">{branch}</span>
                 </span>
               {/if}
@@ -131,7 +137,7 @@
           {/if}
           {#if location}
             <div class="flex min-w-0 items-center gap-2">
-              <FolderOpen size={13} class="shrink-0 text-dimmed" />
+              <CioFolderOpen size={13} class="shrink-0 text-dimmed" />
               <span class="truncate text-xs text-muted" title={project.path}>
                 {location}
               </span>
@@ -146,7 +152,7 @@
         class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
         onSelect={() => onEdit(project.id)}
       >
-        <Pencil size={14} class="text-muted" />
+        <CioPencil size={14} class="text-muted" />
         Edit Project
       </DropdownMenu.Item>
     </DropdownMenu.Content>

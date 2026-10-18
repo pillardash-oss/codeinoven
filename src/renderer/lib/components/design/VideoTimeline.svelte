@@ -1,12 +1,10 @@
 <script lang="ts">
-  import {
-    Clapperboard,
-    MessageSquarePlus,
-    Pause,
-    Play,
-    SkipBack,
-    SkipForward
-  } from '@lucide/svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioPause from '@pillardash-oss/cio-icon/CioPause.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioSkipBack from '@pillardash-oss/cio-icon/CioSkipBack.svelte'
+  import CioSkipForward from '@pillardash-oss/cio-icon/CioSkipForward.svelte'
   import { onMount } from 'svelte'
   import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -378,7 +376,7 @@
 >
   <div class="flex items-center justify-between gap-2">
     <div class="flex items-center gap-1.5">
-      <Clapperboard size={13} class="text-accent" aria-hidden="true" />
+      <CioClapper size={13} class="text-accent" aria-hidden="true" />
       <span class="text-xs font-semibold text-foreground">Timeline</span>
       <span class="text-[0.6875rem] text-muted tabular-nums">
         {videoTimecode(shown)} / {videoTimecode(duration)}
@@ -393,7 +391,7 @@
         disabled={!tab}
         onclick={() => step(-1)}
       >
-        <SkipBack size={13} />
+        <CioSkipBack size={13} />
       </button>
       <button
         type="button"
@@ -404,9 +402,9 @@
         onclick={() => void command('toggle')}
       >
         {#if playing}
-          <Pause size={13} />
+          <CioPause size={13} />
         {:else}
-          <Play size={13} />
+          <CioPlay size={13} />
         {/if}
       </button>
       <button
@@ -417,7 +415,7 @@
         disabled={!tab}
         onclick={() => step(1)}
       >
-        <SkipForward size={13} />
+        <CioSkipForward size={13} />
       </button>
       <button
         type="button"
@@ -427,7 +425,7 @@
         disabled={!manifest}
         onclick={startNote}
       >
-        <MessageSquarePlus size={13} />
+        <CioMessagePlus size={13} />
       </button>
     </div>
   </div>
@@ -529,7 +527,7 @@
               aria-label={`Edit video note ${note.number}`}
               onclick={() => openNote(note.reference.id, seconds)}
             >
-              <Clapperboard size={9} aria-hidden="true" />
+              <CioClapper size={9} aria-hidden="true" />
               {note.number}
             </button>
           {/each}
@@ -543,7 +541,7 @@
       </div>
 
       <p class="mt-2 flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
-        <MessageSquarePlus size={11} aria-hidden="true" />
+        <CioMessagePlus size={11} aria-hidden="true" />
         {notes.length === 0
           ? 'No comments on this composition yet.'
           : `${notes.length} comment${notes.length === 1 ? '' : 's'} on this composition`}

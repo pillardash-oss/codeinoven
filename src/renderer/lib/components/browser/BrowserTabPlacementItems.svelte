@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Boxes, ChevronRight, Folder, Globe, Layers } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
   import { ContextMenu } from 'bits-ui'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserAppearanceAccent, browserGroupAccent } from './browser-group-appearance'
@@ -32,9 +36,9 @@
 
 <ContextMenu.Sub>
   <ContextMenu.SubTrigger class={itemClass}>
-    <Boxes size={13} class="shrink-0 text-muted" />
+    <CioTabBoxes size={13} class="shrink-0 text-muted" />
     New tab in box
-    <ChevronRight size={13} class="ml-auto text-muted" />
+    <CioForward size={13} class="ml-auto text-muted" />
   </ContextMenu.SubTrigger>
   <ContextMenu.Portal>
     <ContextMenu.SubContent
@@ -44,14 +48,12 @@
       class={subContentClass}
     >
       <ContextMenu.Item class={itemClass} onSelect={() => onCreate({ boxId: null })}>
-        <Globe size={13} class="shrink-0 text-muted" />
+        <CioBrowser size={13} class="shrink-0 text-muted" />
         No box
       </ContextMenu.Item>
       {#each globalBrowser.boxes as box (box.id)}
         <ContextMenu.Item class={itemClass} onSelect={() => onCreate({ boxId: box.id })}>
-          <span
-            class="h-2 w-2 shrink-0"
-            style="background-color: {browserAppearanceAccent(box)}"
+          <span class="h-2 w-2 shrink-0" style="background-color: {browserAppearanceAccent(box)}"
           ></span>
           <span class="truncate">{box.name}</span>
         </ContextMenu.Item>
@@ -62,9 +64,9 @@
 
 <ContextMenu.Sub>
   <ContextMenu.SubTrigger class={itemClass}>
-    <Folder size={13} class="shrink-0 text-muted" />
+    <CioFolder size={13} class="shrink-0 text-muted" />
     New tab in group
-    <ChevronRight size={13} class="ml-auto text-muted" />
+    <CioForward size={13} class="ml-auto text-muted" />
   </ContextMenu.SubTrigger>
   <ContextMenu.Portal>
     <ContextMenu.SubContent
@@ -74,14 +76,12 @@
       class={subContentClass}
     >
       <ContextMenu.Item class={itemClass} onSelect={() => onCreate({ groupId: null })}>
-        <Layers size={13} class="shrink-0 text-muted" />
+        <CioLayers size={13} class="shrink-0 text-muted" />
         Ungrouped
       </ContextMenu.Item>
       {#each globalBrowser.orderedGroups as group (group.id)}
         <ContextMenu.Item class={itemClass} onSelect={() => onCreate({ groupId: group.id })}>
-          <span
-            class="h-2 w-2 shrink-0"
-            style="background-color: {browserGroupAccent(group)}"
+          <span class="h-2 w-2 shrink-0" style="background-color: {browserGroupAccent(group)}"
           ></span>
           <span class="truncate">{group.name}</span>
         </ContextMenu.Item>

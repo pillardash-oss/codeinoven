@@ -1,5 +1,5 @@
 <script lang="ts">
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import type { NewAssistantDraft } from './assistant-create'
@@ -208,10 +208,11 @@
           </button>
         {/if}
         <button
-          type="submit"
+          type="button"
           data-modal-primary
           class="bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={!canSubmit}
+          onclick={() => void submit()}
         >
           Create assistant
         </button>

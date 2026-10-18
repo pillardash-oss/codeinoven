@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
   import { slide } from 'svelte/transition'
   import type { Component, Snippet } from 'svelte'
   import ThreadRow from './ThreadRow.svelte'
@@ -139,7 +139,7 @@
       <!-- The fold control is one column wide only for a keyed group, so the
            glyph that follows it starts where a row's content starts. -->
       <span class="flex shrink-0 justify-center {headerOnly ? 'w-[1.125rem]' : ''}">
-        <ChevronDown
+        <CioChevronDown
           size={12}
           class="text-dimmed transition-transform {folded ? '-rotate-90' : ''}"
         />

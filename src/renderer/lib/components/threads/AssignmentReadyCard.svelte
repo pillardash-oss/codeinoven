@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, Maximize2, Network, Save } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
   import { slide } from 'svelte/transition'
   import AssignmentReviewContent from '../specs/AssignmentReviewContent.svelte'
   import CardButton from '../shared/CardButton.svelte'
@@ -94,7 +97,13 @@
 
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Assignment ready">
-    <CardHead icon={Network} title="Assignment is ready" {chip} bind:folded foldLabel="assignment">
+    <CardHead
+      icon={CioNetwork}
+      title="Assignment is ready"
+      {chip}
+      bind:folded
+      foldLabel="assignment"
+    >
       {#snippet meta()}
         <span class="min-w-0 truncate text-[0.6875rem] text-dimmed">
           Review assignment · Sr. Engineer execution graph · v{assignment.version}
@@ -141,7 +150,7 @@
             <CardButton
               label="Save draft"
               title="Save the assignment draft"
-              icon={Save}
+              icon={CioSave}
               variant="secondary"
               disabled={busy}
               onclick={() => onSave($state.snapshot(draft))}
@@ -151,14 +160,14 @@
             <CardButton
               label="Full screen"
               title="Open the assignment full screen"
-              icon={Maximize2}
+              icon={CioMaximize}
               variant="secondary"
               onclick={onOpenFullscreen}
             />
             <CardButton
               label="Sign off & assign"
               title="Sign off the assignment and run it"
-              icon={busy ? undefined : Check}
+              icon={busy ? undefined : CioCheck}
               variant="primary"
               disabled={busy}
               loading={busy}

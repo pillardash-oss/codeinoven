@@ -1,3 +1,5 @@
+import { deliverWithWorkPathNotices } from '../design/work-path-notices'
+import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { validateModelRuntimeSettings } from '../../lib/model-runtime-settings'
 import { BrowserWindow, net, powerMonitor } from 'electron'
 import { readdir, readFile, rm, stat } from 'fs/promises'
@@ -18,7 +20,10 @@ import {
 import { BrainstormAlignmentNotes } from './brainstorm-alignment-notes'
 import type { BrainstormAlignmentRound } from './brainstorm-alignment-notes'
 import { AssistantAuthoringCheckpoints } from './assistant-authoring-checkpoints'
-import { broadcastAssistantCheckpointChanged } from '../scheduler/assistant-events'
+import {
+  broadcastAssistantCheckpointChanged,
+  broadcastAssistantsChanged
+} from '../scheduler/assistant-events'
 import {
   BRAINSTORM_ALIGNMENT_UTILITY_ID,
   BRAINSTORM_CREATE_DOCUMENT_ANSWER,
@@ -158,6 +163,7 @@ import {
 } from '../speech/lesson-protocol'
 import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { ConnectivitySource } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
 import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
@@ -177,14 +183,14 @@ import {
   isCioUtilityRequest
 } from '../utilities/cio-utility-prompt'
 import {
-  CIO_DESIGN_CONTINUE_PROMPT,
-  CIO_DESIGN_TURN_PROMPT,
+  designSessionBriefing,
+  designSessionContinuation,
   isCioDesignRequest,
   type DesignSessionMode
 } from '../utilities/cio-design-prompt'
 import {
-  CIO_VIDEO_CONTINUE_PROMPT,
-  CIO_VIDEO_TURN_PROMPT,
+  videoSessionBriefing,
+  videoSessionContinuation,
   isCioVideoRequest,
   type VideoSessionMode
 } from '../utilities/cio-video-prompt'
@@ -209,6 +215,7 @@ import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
+import { currentWorkRoot } from '../design/work-roots-state'
 import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
 import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
@@ -260,6 +267,7 @@ import {
   type UtilitySuggestionResolution
 } from '../../lib/utility-suggestion'
 import {
+  IMAGE_DESCRIPTOR_PROMPT,
   imageDescriptorInactivityTimeoutMs,
   resolveVisionAttachment
 } from '../providers/image-descriptor-provider'
@@ -377,6 +385,7 @@ import {
   DEFAULT_SCOPE_BUCKET_ID,
   ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
+  MAX_PROMPT_ATTACHMENTS,
   isAssistantSetupThread,
   isAssistantThread,
   isOrchestrationChildThread,
@@ -470,7 +479,7 @@ import {
 } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../lib/ipc/browser'
-import { GenerationClock, generatedTokens } from '../../lib/usage-rate'
+import { GenerationClock, generatedTokens, windowCoversOutput } from '../../lib/usage-rate'
 import {
   LEGACY_CHAT_ARTIFACTS_DIRECTORY,
   LEGACY_CHATS_ARTIFACTS_DIRECTORY,
@@ -592,11 +601,14 @@ import {
   mermaidValidationFailureMessage,
   mermaidValidationNotice,
   rejectedMermaidMessage,
+  terminalAssistantMessage,
   textForMessage,
   titleAttemptsFromDriver
 } from './chat-engine/chat-engine-message-text'
 import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
+  CONNECTION_LOSS_GRACE_MS,
+  CONNECTION_WAIT_MESSAGE,
   CONTINUATION_REQUEST_PAGE_MESSAGES,
   COORDINATOR_HANDOFF_QUEUE_DIR,
   CURRENT_SPEC_GENERATION_VERSION,
@@ -1313,6 +1325,8 @@ export class ChatEngine {
 
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
+  /** Verified device connectivity; null only before boot attaches it. */
+  private connectivity: ConnectivitySource | null = null
 
   /**
    * Resolves the model set an assistant task's assistant runs on. Attached by the
@@ -1751,6 +1765,17 @@ export class ChatEngine {
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
+    // An agent can enter a design or a video session without the user typing the
+    // tag for it, by picking up the capability itself, and the session that opens
+    // is the same session: the memo the tag sets is set here, and the thread's row
+    // is written, which is what docks the coordinator board while the work is
+    // being made and what keeps the thread's later turns carrying the session's
+    // contract instead of leaving each turn to rediscover the tool mid-flight.
+    this.utilityOrchestration.setAuthoredWorkSessionRecorder(({ projectId, threadId, kind }) => {
+      if (kind === 'design') this.cioDesignThreads.set(threadId, true)
+      else this.cioVideoThreads.set(threadId, true)
+      void this.rememberAuthoredWorkKind(projectId, threadId, kind)
+    })
     // Design work the user routed to a model of their own choosing. The config
     // is read per call, so re-assigning a model applies to the next delegation
     // rather than the next app run, and the app never substitutes a model.
@@ -3785,6 +3810,7 @@ export class ChatEngine {
     await this.utilityRuntime.dispose()
     this.retryScheduler?.dispose()
     this.retryScheduler = null
+    this.connectivity = null
     this.sessionRegistry.clear()
     this.childSessionOwners.clear()
     this.childCaptureTasks.clear()
@@ -3860,14 +3886,24 @@ export class ChatEngine {
    * whether this turn is the one that opened it. The same memo-and-rescan shape
    * as the utility tag, so an edit or rollback that removes the tag takes the
    * session with it.
+   *
+   * The thread's row answers before the scan does, because the row is the durable
+   * record of the session and it is already in hand. A session the agent opened
+   * itself   it picked the capability up and the row was written then   is still
+   * that thread's session, and a thread that has ever designed something keeps
+   * designing: without this, both would be handed turns with no design contract
+   * and no active capability, which is exactly the state a model hand-rolls the
+   * markup in and never checks it.
    */
   private async designSessionFor(
     projectId: string,
     threadId: string,
-    requestedThisTurn: boolean
+    requestedThisTurn: boolean,
+    recordedKind?: AuthoredWorkKind
   ): Promise<DesignSessionMode> {
     if (requestedThisTurn) return 'start'
     if (this.cioDesignThreads.has(threadId)) return 'continue'
+    if (recordedKind === 'design') return 'continue'
     const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
     const opened = userMessages.some((message) => isCioDesignRequest(message.content))
     if (opened) this.cioDesignThreads.set(threadId, true)
@@ -3896,16 +3932,18 @@ export class ChatEngine {
   /**
    * Whether a video session was opened in this thread, now or earlier, and
    * whether this turn is the one that opened it. The same memo-and-rescan shape
-   * as the design tag, so an edit or rollback that removes the tag takes the
-   * session with it.
+   * as the design tag, and the same durable record behind it: the row answers
+   * first, so a composition the agent started on its own keeps its session.
    */
   private async videoSessionFor(
     projectId: string,
     threadId: string,
-    requestedThisTurn: boolean
+    requestedThisTurn: boolean,
+    recordedKind?: AuthoredWorkKind
   ): Promise<VideoSessionMode> {
     if (requestedThisTurn) return 'start'
     if (this.cioVideoThreads.has(threadId)) return 'continue'
+    if (recordedKind === 'video') return 'continue'
     const userMessages = await this.threadManager.loadUserMessages(projectId, threadId)
     const opened = userMessages.some((message) => isCioVideoRequest(message.content))
     if (opened) this.cioVideoThreads.set(threadId, true)
@@ -3919,19 +3957,26 @@ export class ChatEngine {
    * scanning every listed thread's persisted messages for the session tag, which
    * read the whole `parts` column through a LIKE on every sidebar render. The
    * thread knows the moment it enters a session, so the kind is written here and
-   * the existing `thread:updated` broadcast carries it to the row. Guarded on the
-   * current value so an unchanged kind never re-broadcasts, and best-effort: the
-   * marker is cosmetic and a failed write must never fail a turn.
+   * the existing `thread:updated` broadcast carries it to the row.
+   *
+   * The row draws one marker per session the thread has entered, so this records
+   * the kind in the durable set as well as naming the session it is in now: a
+   * thread that designed something and later cut a video about it keeps both
+   * marks. The manager writes nothing for a kind the thread already holds.
+   *
+   * The row is also the session's durable record: the coordinator board reads it
+   * to dock, and the next turn reads it to keep carrying the session's contract,
+   * so a session the agent opened by picking the capability up is the same fact
+   * to every reader as one the user opened with the tag. Best-effort: the work
+   * itself is already happening and a failed write must never fail a turn.
    */
   private async rememberAuthoredWorkKind(
     projectId: string,
     threadId: string,
-    kind: AuthoredWorkKind,
-    current: AuthoredWorkKind | undefined
+    kind: AuthoredWorkKind
   ): Promise<void> {
-    if (current === kind) return
     try {
-      await this.threadManager.updateThread(projectId, threadId, { authoredWorkKind: kind })
+      await this.threadManager.recordAuthoredWorkKind(projectId, threadId, kind)
     } catch (error) {
       Logger.dev('Authored-work kind persist failed:', error)
     }
@@ -4159,7 +4204,11 @@ export class ChatEngine {
         ...(authoringAssistantId
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
-                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantReporting: (reporting: AssistantReportingPatch) =>
+                this.saveAssistantReporting(authoringAssistantId, reporting),
+              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+                this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
         budgetContext,
@@ -4189,20 +4238,22 @@ export class ChatEngine {
               : CIO_UTILITY_REUSE_PROMPT
       // The design contract is separate from the utility contract because it is
       // not a setup grant: the capability it activates arrives with the turn
-      // request, and what this adds is how to run the session the user opened.
+      // request, and what this adds is how to run the session the user opened,
+      // under the folder the project is pointed at right now rather than the one
+      // the playbook's default would name.
       const designContract =
         designSession === 'start'
-          ? CIO_DESIGN_TURN_PROMPT
+          ? designSessionBriefing('tag', currentWorkRoot('design', projectId))
           : designSession === 'continue'
-            ? CIO_DESIGN_CONTINUE_PROMPT
+            ? designSessionContinuation(currentWorkRoot('design', projectId))
             : ''
       // The video contract is the same shape as the design one, for the same
       // reason: the capability it activates arrives with the turn request.
       const videoContract =
         videoSession === 'start'
-          ? CIO_VIDEO_TURN_PROMPT
+          ? videoSessionBriefing('tag', currentWorkRoot('video', projectId))
           : videoSession === 'continue'
-            ? CIO_VIDEO_CONTINUE_PROMPT
+            ? videoSessionContinuation(currentWorkRoot('video', projectId))
             : ''
       // The orchestration contract is the gate for the workstation tools: it is
       // what tells the agent the tools exist and how to resolve a request to a
@@ -4491,7 +4542,11 @@ export class ChatEngine {
         ...(authoringAssistantId
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
-                this.saveAssistantCheckpoint(authoringAssistantId, markdown)
+                this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantReporting: (reporting: AssistantReportingPatch) =>
+                this.saveAssistantReporting(authoringAssistantId, reporting),
+              saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
+                this.saveAssistantIdentity(authoringAssistantId, identity)
             }
           : {}),
         budgetContext,
@@ -8119,6 +8174,39 @@ export class ChatEngine {
       .join('\n\n')
   }
 
+  /** Save settled reporting fields and publish the live panel state. */
+  private async saveAssistantReporting(
+    assistantId: string,
+    reporting: AssistantReportingPatch
+  ): Promise<void> {
+    if (!(await this.assistantRepo.getViaWorker(assistantId))) {
+      throw new Error('The assistant no longer exists')
+    }
+    this.assistantRepo.updateReporting(assistantId, reporting, Date.now())
+    broadcastAssistantsChanged(await this.assistantRepo.listViaWorker())
+  }
+
+  /**
+   * Record who the assistant is, the moment the conversation settles it.
+   *
+   * The user names their assistant in the first answer of the setup conversation,
+   * and waiting for the recap to save would leave every surface calling it "New
+   * assistant" for the whole interview. This writes the name, and the personality
+   * once they have described how they want it to behave, straight onto the row and
+   * broadcasts the assistant list, so the sidebar, the panel, the tab and the
+   * thread's own head start rename themselves as the answer lands. The capability
+   * that calls it is bound to the live authoring turn, so the write is app-owned
+   * and the agent never names an id.
+   */
+  private async saveAssistantIdentity(
+    assistantId: string,
+    identity: { name?: string; personality?: string }
+  ): Promise<void> {
+    const updated = this.assistantRepo.updateIdentity(assistantId, identity, Date.now())
+    if (!updated) return
+    broadcastAssistantsChanged(this.assistantRepo.list())
+  }
+
   /**
    * Replace an assistant's Getting started checkpoint. The capability that calls
    * this is bound to the live authoring turn, so the write is app-owned and the
@@ -8942,7 +9030,7 @@ export class ChatEngine {
         ? 'design'
         : null
     if (steeredKind) {
-      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind, thread.authoredWorkKind)
+      await this.rememberAuthoredWorkKind(projectId, threadId, steeredKind)
     }
     await this.rearmSteerUtilities(
       driver,
@@ -8964,10 +9052,44 @@ export class ChatEngine {
       isolated?: IsolatedSessionHandle
     ) => Promise<void>
     const deliverNow = async (): Promise<void> => {
-      if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
-        await steer(projectPath, steerOptions, activeBrainstorm.isolated)
-      } else {
-        await steer(projectPath, steerOptions)
+      try {
+        await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+          const options = { ...steerOptions, text }
+          if (activeBrainstorm?.isolated && supportsIsolatedSessions(driver)) {
+            await steer(projectPath, options, activeBrainstorm.isolated)
+          } else {
+            await steer(projectPath, options)
+          }
+        })
+      } catch (error) {
+        if (error instanceof SteerDeliveryFailedError) throw error
+        // The turn can settle inside the race window between the working check
+        // above and this delivery (auto-compaction, silent continue, retry)
+        // pi considers compaction part of the working trace but the driver's
+        // registered turn is already gone. A settled trace must never reject the
+        // user's message: deliver it as the next regular turn instead. The
+        // driver's own registered-turn probe is authoritative over the cached
+        // status, which can lag a compaction or process exit by seconds.
+        const state = this.sessionStatuses.get(activeSessionId)?.state
+        const turnStillLive = driver.hasActiveTurn
+          ? driver.hasActiveTurn(activeSessionId)
+          : state === 'working' || state === 'waiting'
+        if (turnStillLive) throw error
+        Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
+          projectId,
+          threadId,
+          sessionId: activeSessionId,
+          error: rawErrorMessage(error)
+        })
+        if (previousPendingMemoryDecision) {
+          this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
+        } else {
+          this.pendingMemoryDecisions.delete(activeSessionId)
+        }
+        this.sessionStatuses.set(activeSessionId, { state: 'idle' })
+        this.handleSessionIdleSignal(activeSessionId)
+        await this.awaitSessionIdleFinalization(activeSessionId)
+        await deliverAsRegularSend()
       }
     }
     // CodeInOven owns steer delivery timing for every harness: while the turn
@@ -9012,38 +9134,7 @@ export class ChatEngine {
       })
       return withoutTransportParts(userMessage)
     }
-    try {
-      await deliverNow()
-    } catch (error) {
-      if (error instanceof SteerDeliveryFailedError) throw error
-      // The turn can settle inside the race window between the working check
-      // above and this delivery (auto-compaction, silent continue, retry)
-      // pi considers compaction part of the working trace but the driver's
-      // registered turn is already gone. A settled trace must never reject the
-      // user's message: deliver it as the next regular turn instead. The
-      // driver's own registered-turn probe is authoritative over the cached
-      // status, which can lag a compaction or process exit by seconds.
-      const state = this.sessionStatuses.get(activeSessionId)?.state
-      const turnStillLive = driver.hasActiveTurn
-        ? driver.hasActiveTurn(activeSessionId)
-        : state === 'working' || state === 'waiting'
-      if (turnStillLive) throw error
-      Logger.info('Steer landed on a settled turn   delivering as a regular send:', {
-        projectId,
-        threadId,
-        sessionId: activeSessionId,
-        error: rawErrorMessage(error)
-      })
-      if (previousPendingMemoryDecision) {
-        this.pendingMemoryDecisions.set(activeSessionId, previousPendingMemoryDecision)
-      } else {
-        this.pendingMemoryDecisions.delete(activeSessionId)
-      }
-      this.sessionStatuses.set(activeSessionId, { state: 'idle' })
-      this.handleSessionIdleSignal(activeSessionId)
-      await this.awaitSessionIdleFinalization(activeSessionId)
-      return deliverAsRegularSend()
-    }
+    await deliverNow()
     return withoutTransportParts(userMessage)
   }
 
@@ -9921,12 +10012,20 @@ export class ChatEngine {
       const deliverFallbackSteer = (): Promise<void> => {
         const steer = driver.steerPrompt
         if (!steer) return Promise.reject(new Error('steer unavailable'))
-        return steer.call(driver, projectPath, {
-          sessionId,
-          text: driverText,
-          attachments,
-          userMessageId: messageId
-        })
+        return this.deliverWorkPrompt(
+          projectId,
+          threadId,
+          userMessage,
+          driverText,
+          async (text) => {
+            await steer.call(driver, projectPath, {
+              sessionId,
+              text,
+              attachments,
+              userMessageId: messageId
+            })
+          }
+        )
       }
       // Same undo window as steerPrompt: hold while a tool call is in flight.
       if (this.hasInFlightTool(sessionId)) {
@@ -10016,20 +10115,33 @@ export class ChatEngine {
     }
     const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     if (utilitySetupRequested) this.cioUtilityThreads.set(threadId, true)
-    // A design session is user-started too, and it lasts for the thread: the
-    // turn that types @cio-design gets the session briefing and promotes the
-    // design capability to an active one, and every later turn keeps the
-    // capability and gets the continuation instead.
+    // A design session lasts for the thread, and it opens two ways: the turn that
+    // types @cio-design gets the session briefing here and promotes the design
+    // capability to an active one, and a turn where the agent activates the
+    // capability itself opens the same session, whose briefing rides the
+    // activation payload. Every later turn keeps the capability and gets the
+    // continuation instead.
     const designRequested = origin === 'user' && isCioDesignRequest(text)
     if (designRequested) this.cioDesignThreads.set(threadId, true)
-    const designSession = await this.designSessionFor(projectId, threadId, designRequested)
-    // A video session is user-started the same way, and it lasts for the thread:
-    // the turn that types @cio-video gets the session briefing and promotes the
-    // video capability to an active one, and every later turn keeps the
-    // capability and gets the continuation instead.
+    const designSession = await this.designSessionFor(
+      projectId,
+      threadId,
+      designRequested,
+      targetThread?.authoredWorkKind
+    )
+    // A video session opens the same two ways and lasts for the thread just as
+    // long: the turn that types @cio-video gets the session briefing here and
+    // promotes the video capability to an active one, and an agent activating the
+    // capability opens the session from the activation payload. Every later turn
+    // keeps the capability and gets the continuation instead.
     const videoRequested = origin === 'user' && isCioVideoRequest(text)
     if (videoRequested) this.cioVideoThreads.set(threadId, true)
-    const videoSession = await this.videoSessionFor(projectId, threadId, videoRequested)
+    const videoSession = await this.videoSessionFor(
+      projectId,
+      threadId,
+      videoRequested,
+      targetThread?.authoredWorkKind
+    )
     // An orchestration session is user-started on the same terms. It is what
     // grants the workstation tools, so the turn that types @cio-hey
     // gets the dispatch contract and every later turn of the thread keeps the
@@ -10052,12 +10164,7 @@ export class ChatEngine {
           ? 'design'
           : null
     if (authoredWorkKind) {
-      await this.rememberAuthoredWorkKind(
-        projectId,
-        threadId,
-        authoredWorkKind,
-        targetThread?.authoredWorkKind
-      )
+      await this.rememberAuthoredWorkKind(projectId, threadId, authoredWorkKind)
     }
     // The assistant knowledge authoring thread carries the utility gateway from the
     // start: the agent has to research and install the skills, MCPs and plugins
@@ -10460,7 +10567,9 @@ export class ChatEngine {
           ...(historyRecap ? { historyRecap } : {}),
           userMessageId: messageId
         }
-        await driver.sendPrompt(projectPath, prompt)
+        await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+          await driver.sendPrompt(projectPath, { ...prompt, text })
+        })
         this.sessionModelIds.set(sessionId, {
           providerId: settings.providerId,
           modelId: settings.modelId,
@@ -10526,44 +10635,46 @@ export class ChatEngine {
       // browser chatbot: no file-system tools, internet-first answers. File
       // operations are granted only when the user explicitly enables the
       // File System mode for the thread.
-      await driver.sendPrompt(projectPath, {
-        sessionId,
-        settings,
-        text: driverText,
-        attachments,
-        readOnly: isChatThread && !chatFileSystemEnabled,
-        systemPrompt:
-          composeTurnSystemPrompt({
-            chatPrompt: chatSystemPrompt,
-            memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
-            imageDescriptorNote,
-            assignmentCoordinatorSystemPrompt,
-            behaviorPrompt,
-            utilityInstructions,
-            assistantInstruction,
-            behaviorMode
-          }) || undefined,
-        allowedTools:
-          isChatThread &&
-          !chatFileSystemEnabled &&
-          (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
-            ? [
-                ...CHAT_WEB_ONLY_TOOLS,
-                ...chatGatewayAllowedTools(driverId),
-                ...(projectId === GLOBAL_BROWSER_PROJECT_ID
-                  ? ['read', 'write', 'edit', 'glob', 'grep']
-                  : [])
-              ]
-            : undefined,
-        agent: utilitySetupRequested
-          ? leanAgentNameForMode('utility-setup')
-          : isAssistantTask
-            ? leanAgentNameForMode('assistant')
-            : isChatThread
-              ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+      await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+        await driver.sendPrompt(projectPath, {
+          sessionId,
+          settings,
+          text,
+          attachments,
+          readOnly: isChatThread && !chatFileSystemEnabled,
+          systemPrompt:
+            composeTurnSystemPrompt({
+              chatPrompt: chatSystemPrompt,
+              memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
+              imageDescriptorNote,
+              assignmentCoordinatorSystemPrompt,
+              behaviorPrompt,
+              utilityInstructions,
+              assistantInstruction,
+              behaviorMode
+            }) || undefined,
+          allowedTools:
+            isChatThread &&
+            !chatFileSystemEnabled &&
+            (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
+              ? [
+                  ...CHAT_WEB_ONLY_TOOLS,
+                  ...chatGatewayAllowedTools(driverId),
+                  ...(projectId === GLOBAL_BROWSER_PROJECT_ID
+                    ? ['read', 'write', 'edit', 'glob', 'grep']
+                    : [])
+                ]
               : undefined,
-        ...(historyRecap ? { historyRecap } : {}),
-        userMessageId: messageId
+          agent: utilitySetupRequested
+            ? leanAgentNameForMode('utility-setup')
+            : isAssistantTask
+              ? leanAgentNameForMode('assistant')
+              : isChatThread
+                ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+                : undefined,
+          ...(historyRecap ? { historyRecap } : {}),
+          userMessageId: messageId
+        })
       })
       if (utilitySetupRequested || isChatThread || isAssistantTask) {
         traceLeanAgent(
@@ -10651,6 +10762,9 @@ export class ChatEngine {
     await this.ensureGlobalBrowserScope(projectId)
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
+    }
+    if (attachments.length > MAX_PROMPT_ATTACHMENTS) {
+      throw new TypeError(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files per message`)
     }
     let validatedAttachments = attachments.map((attachment) => {
       const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)
@@ -11105,6 +11219,9 @@ export class ChatEngine {
       : text
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
+    }
+    if (attachments.length > MAX_PROMPT_ATTACHMENTS) {
+      throw new TypeError(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files per message`)
     }
     const validatedAttachments = attachments.map((attachment) => {
       const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)
@@ -12292,7 +12409,10 @@ export class ChatEngine {
         'Image upload or vision-model response',
         () => new ImageDescriptorInactivityError(timeoutMs, attempt, nextTimeoutMs)
       )
-      const imageDescriptionPrompt = await this.cioPrompt('image-description')
+      // The descriptor prompt is app-owned wiring, not a template: it is the
+      // instruction every vision call is dispatched with, and a text-only model
+      // reading the result depends on its shape.
+      const imageDescriptionPrompt = IMAGE_DESCRIPTOR_PROMPT
       const request: SendPromptOptions = {
         sessionId,
         settings,
@@ -12355,7 +12475,7 @@ export class ChatEngine {
           attempt: attempt + 1,
           harnessId: selection.harnessId,
           settings,
-          inputText: await this.cioPrompt('image-description'),
+          inputText: IMAGE_DESCRIPTOR_PROMPT,
           response,
           failure
         })
@@ -12376,6 +12496,30 @@ export class ChatEngine {
         }
       }
     }
+  }
+
+  /** Add pending relocation updates only when a message reaches its harness. */
+  private async deliverWorkPrompt(
+    projectId: string,
+    threadId: string,
+    userMessage: AgentMessage,
+    text: string,
+    deliver: (text: string) => Promise<void>
+  ): Promise<void> {
+    await deliverWithWorkPathNotices({
+      database: this.database,
+      projectId,
+      threadId,
+      text,
+      deliver,
+      recordTransport: async (transportText) => {
+        const part = userMessage.transportParts?.find((part) => part.type === 'text')
+        if (part?.type !== 'text') throw new Error('Outbound message has no transport text')
+        part.text = transportText
+        userMessage.transportOrigin = 'orchestrator'
+        await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
+      }
+    })
   }
 
   /**
@@ -12538,6 +12682,11 @@ export class ChatEngine {
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
+    // The first-message fallback is already visible, and it must never be the
+    // only title a thread gets. An auxiliary assignment is a preference, not a
+    // precondition: `generateTitleWithModel` tries the assigned model first and
+    // falls back to the harness's own cheap model, so an unassigned app still
+    // refines the fallback instead of keeping a truncated first line forever.
     Logger.dev('Thread auto-title generation started', { projectId, threadId, driverId })
 
     let generated: string | null
@@ -18588,6 +18737,16 @@ export class ChatEngine {
         await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
           read: false
         })
+        // Park the coordinator on `spec` while the report is under review: the
+        // same settle the implementation and Achievement audits end on, because
+        // a ready report is a finished artifact waiting on the user. Landing on
+        // `completed` instead read as done, so the audited thread stayed in the
+        // Done group with no spec mark and no review-ready count on its project
+        // strip. `setStatus` also advances the thread's activity and clears its
+        // manual sort anchor, so the report bubbling up is the same write.
+        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
+          read: false
+        })
         await this.loadMessages(projectId, auditorThread.id)
         await this.notifyIndependentAuditCompletion(projectId, coordinatorThreadId, 'completed')
         return {
@@ -18662,6 +18821,11 @@ export class ChatEngine {
         version: report.version
       })
       await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+        read: false
+      })
+      // Same settle as the validated path above: a partial report is still a
+      // report the user has to read, so its thread parks on `spec` too.
+      await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
       await this.loadMessages(projectId, auditorThread.id)
@@ -23158,6 +23322,12 @@ export class ChatEngine {
       // reported by the thread's current harness and provider, so an
       // unattributed row is invisible to it for the whole run.
       event.harnessId ??= driverId
+      // What one reported count covers, declared by the owning driver. A count
+      // that spans a turn or the whole harness session must never be divided by
+      // one message's generation window, so consumers need to know its scope.
+      event.tokenUsageScope ??=
+        this.driverForRuntime(driverId, eventOwner.accountId)?.capabilities.tokenUsageScope ??
+        'message'
       if (selection) event.providerId ??= selection.providerId
       if (event.contextWindow === undefined && selection) {
         const contextWindow = this.modelContextWindow(
@@ -23217,6 +23387,17 @@ export class ChatEngine {
         Date.now(),
         event.partId,
         event.delta.length
+      )
+    }
+    // A harness that reports accounting before its turn closes (opencode's
+    // per-step totals) teaches the clock the same way the renderer already
+    // learns it, so the two processes keep one view of the message.
+    if (event.type === 'usage.updated' && generatedTokens(event.tokens) > 0) {
+      this.generationClock.noteReported(
+        GenerationClock.key(event.sessionId, event.messageId),
+        generatedTokens(event.tokens),
+        Date.now(),
+        event.tokenUsageScope ?? 'message'
       )
     }
     if (
@@ -23377,11 +23558,9 @@ export class ChatEngine {
         // harnesses that schedule their own retry (OpenCode). Their native
         // resume emits `working` and clears the record; the recorded wait keeps
         // the thread retryable after an app restart.
-        void (
-          event.status.issue.kind === 'network' && event.status.issue.retryAt === undefined
-            ? Promise.resolve(false)
-            : this.scheduleAutomaticRetry(event.sessionId, event.status.issue)
-        ).catch((error) => Logger.dev('Retry scheduling failed for waiting session:', error))
+        void this.scheduleAutomaticRetry(event.sessionId, event.status.issue).catch((error) =>
+          Logger.dev('Retry scheduling failed for waiting session:', error)
+        )
       }
       if (event.status.state === 'working' || event.status.state === 'idle') {
         updateRetryWakeWindow(event.sessionId, null)
@@ -23566,7 +23745,12 @@ export class ChatEngine {
       if (event.type === 'message.completed') {
         const clockKey = GenerationClock.key(event.sessionId, event.messageId)
         if ((event.tokens?.output ?? 0) > 0) {
-          this.generationClock.noteReported(clockKey, generatedTokens(event.tokens), now)
+          this.generationClock.noteReported(
+            clockKey,
+            generatedTokens(event.tokens),
+            now,
+            event.tokenUsageScope ?? 'message'
+          )
         }
         this.generationClock.completeRequest(clockKey, now)
       } else {
@@ -25044,13 +25228,40 @@ export class ChatEngine {
   }
 
   /**
+   * Register the verified connectivity tracker, and drain the resume queue on
+   * every transition into a verified online state.
+   *
+   * A wait parked on the device's connection is resumed from here rather than
+   * from the renderer's own event. The renderer relays what the operating
+   * system believes, and that belief can stay wrong in both directions (an
+   * associated access point with no uplink still reports online); only a probe
+   * that actually reached the network may start a harness turn again.
+   */
+  attachConnectivity(connectivity: ConnectivitySource): () => void {
+    this.connectivity = connectivity
+    return connectivity.onRestored(() => this.connectionRestored())
+  }
+
+  /**
+   * Whether the device can reach the outside right now.
+   *
+   * The verified answer once boot has attached the tracker, the Chromium hint
+   * as the floor before that. Failing towards "online" is deliberate: a resume
+   * fired against a dead link costs one attempt and a cooldown, while a resume
+   * that never fires strands the thread and the promise its card made.
+   */
+  private deviceOnline(): boolean {
+    return this.connectivity ? this.connectivity.isOnline() : net.isOnline()
+  }
+
+  /**
    * Register the auto-resume scheduler. Its resume callback routes back into
    * this engine so a timed retry flows through the same sendPrompt pipeline as
    * a manual Retry.
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
-    scheduler.attachNetworkTest(() => net.isOnline())
+    scheduler.attachNetworkTest(() => this.deviceOnline())
     scheduler.attachStoppedThreadTest((projectId, threadId) =>
       this.threadManager.wasStoppedByUser(projectId, threadId)
     )
@@ -25576,10 +25787,18 @@ export class ChatEngine {
       return false
     }
     const driver = this.driverForRuntime(info.driverId, info.accountId)
-    if (!driver) return false
+    // A device connection failure outlives the driver it killed: that is
+    // exactly what a Wi-Fi drop leaves behind, and refusing the record here is
+    // what stranded the thread on an error card nothing was listening to. The
+    // wait is the device's connectivity and the resume goes through the
+    // thread's own settings like any other send, so no driver is needed to arm
+    // it. Every other kind still needs its driver: both the reset time it
+    // waits on and the resume come from it.
+    if (!driver && issue.kind !== 'network') return false
     // Allow the failed turn to finish tearing down before admitting a continuation.
     let retryAt = issue.kind === 'network' ? Date.now() + 3_000 : issue.retryAt
     if (retryAt === undefined) {
+      if (!driver) return false
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
       // its account endpoint)   ask the provider-scoped account telemetry for
@@ -25798,6 +26017,15 @@ export class ChatEngine {
     issue: AgentProviderIssue,
     error?: string
   ): Promise<void> {
+    const connectionWait = this.asConnectionWaitIssue(issue)
+    if (connectionWait !== issue) {
+      // The device explains this failure, so it is the connection wait it is:
+      // the same card, the same ledger entry, and the same automatic resume a
+      // transport failure gets. Parking the thread here is what keeps the
+      // reconnection worth anything.
+      this.enterRetryWait(sessionId, connectionWait, error ?? issue.message)
+      return
+    }
     const retryScheduled = await this.scheduleAutomaticRetry(sessionId, issue)
     // Fallback: if scheduling did not produce a pending retry but the issue is
     // a retryable usage reset, still treat as paused so the thread does not
@@ -25807,10 +26035,15 @@ export class ChatEngine {
     // A user-stopped thread is exempt: schedule refused the record, and the
     // fallback here must not re-persist working-paused (or a later launch's
     // orphan-repair scan would re-arm a timer for the stopped thread).
+    //
+    // A connection wait is paused here for the same reason and with a stronger
+    // one: its resume is not a clock the thread can wait out, it is the device
+    // coming back, and a terminal error card is what stops the app from
+    // listening for that. The wait never requires the failed turn to have been
+    // retryable   the device, not the provider, owns whether it can run.
     const shouldStayPaused =
       !retryScheduled &&
-      isUsageResetWaitIssue(issue) &&
-      issue.retryable &&
+      (issue.kind === 'network' || (isUsageResetWaitIssue(issue) && issue.retryable)) &&
       !(await this.threadManager.wasStoppedByUser(
         this.sessionRegistry.get(sessionId)?.projectId ?? '',
         this.sessionRegistry.get(sessionId)?.threadId ?? ''
@@ -25834,6 +26067,37 @@ export class ChatEngine {
   }
 
   /**
+   * A provider failure the device itself explains.
+   *
+   * A turn that dies while the device has no connectivity did not fail because
+   * of the provider, and it was not the provider's verdict that surfaced: it is
+   * the connection. Harnesses report that loss in their own words (a process
+   * exit, an empty stream, a transport reset inside a driver-specific string)
+   * and most of those classify as `unknown`, which used to end the thread on a
+   * terminal error card with nothing listening for the reconnection. Any
+   * `unknown` failure landing inside the connection-loss window is therefore
+   * re-read as the connection wait it is.
+   *
+   * Only `unknown` is re-read. A provider that stated a verdict (sign-in
+   * required, billing, a usage window) keeps it: those need the user, not the
+   * network, and masking them behind a connection card would hide the one
+   * action that fixes them.
+   */
+  private asConnectionWaitIssue(issue: AgentProviderIssue): AgentProviderIssue {
+    const connectivity = this.connectivity
+    if (!connectivity || issue.kind !== 'unknown') return issue
+    if (!connectivity.isOffline() && !connectivity.wasOfflineWithin(CONNECTION_LOSS_GRACE_MS))
+      return issue
+    return {
+      ...issue,
+      kind: 'network',
+      retryable: true,
+      retryAt: undefined,
+      message: CONNECTION_WAIT_MESSAGE
+    }
+  }
+
+  /**
    * Re-surface a terminal usage/rate-limit outcome as the unified waiting card
    * with a retry time. Also schedules the auto-resume for every harness (native
    * retry harnesses included) so the wait survives an app restart, and routes
@@ -25847,8 +26111,7 @@ export class ChatEngine {
         retryable: true,
         retryAt: undefined,
         rawError: issue.rawError ?? error ?? issue.message,
-        message:
-          'Connection interrupted. This thread will resume automatically when the device reconnects.'
+        message: CONNECTION_WAIT_MESSAGE
       }
     }
     this.sessionStatuses.set(sessionId, { state: 'waiting', issue })
@@ -25998,11 +26261,26 @@ export class ChatEngine {
     const threadId = validateEntityId(record.threadId, 'Thread ID')
     const { sessionId } = record
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
+    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) {
+      // The thread moved on (a newer session, an archive, a delete). This wait
+      // can never be admitted, and leaving it in the ledger turns every tick
+      // into a no-op attempt for a thread that is no longer waiting.
+      if (this.retryScheduler?.getPendingRetry(sessionId) === record) {
+        this.retryScheduler.clear(sessionId)
+      }
+      this.retryScheduler?.resumed(sessionId)
+      return
+    }
     const current = this.sessionStatuses.get(sessionId)
     if (current?.state === 'working') return
     if (record.issueKind === 'network') {
-      if (!net.isOnline()) throw new Error('Device disconnected before thread recovery')
+      if (!this.deviceOnline()) {
+        // The link the resume was armed on is gone again. Keep the wait and
+        // re-verify connectivity: firing the rest of a reconnect queue against
+        // a flapping network is what turns a recovery into a stampede.
+        this.connectivity?.invalidate('connection wait resume attempted offline')
+        throw new Error('Device disconnected before thread recovery')
+      }
       const info = this.sessionRegistry.get(sessionId)
       const driver = info ? this.driverForRuntime(info.driverId, info.accountId) : undefined
       if (
@@ -26628,6 +26906,11 @@ export class ChatEngine {
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
         .find((message) => message.role === 'assistant')
+      // The turn's answer is the last assistant message that actually carries one.
+      // A turn whose final assistant message is only a task-list publication (the
+      // reconcile continuation that corrects a lagging list and, as instructed,
+      // adds no prose) must still be read as the answer the agent gave before it.
+      const terminalAssistant = terminalAssistantMessage(messages, turnAssistant)
       const turnSelection = this.sessionModelIds.get(sessionId)
       const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
       if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
@@ -26714,7 +26997,7 @@ export class ChatEngine {
       }
       const awaitingUser = this.sessionAwaitsUserInput(sessionId)
       const engineeringContractActive = this.engineeringImplementationSessions.has(sessionId)
-      const contractResponse = turnAssistant ? assistantText(turnAssistant).trim() : ''
+      const contractResponse = terminalAssistant ? assistantText(terminalAssistant).trim() : ''
       const contractBlocked =
         engineeringContractActive &&
         hasTerminalSpecContractMarker(contractResponse, SPEC_CONTRACT_BLOCKED_MARKER)
@@ -26727,8 +27010,9 @@ export class ChatEngine {
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
-        (!turnAssistant ||
-          (!assistantText(turnAssistant).trim() && turnAssistant.structuredOutput === undefined))
+        (!terminalAssistant ||
+          (!assistantText(terminalAssistant).trim() &&
+            terminalAssistant.structuredOutput === undefined))
       const contractContinuationRequired =
         engineeringContractActive &&
         !failure &&
@@ -26745,14 +27029,14 @@ export class ChatEngine {
         failure = INCOMPLETE_TURN_MESSAGE
       }
       let mermaidFailures: MermaidValidationFailure[] = []
-      if (!failure && !awaitingUser && !suppressTerminalAnswer && turnAssistant) {
-        const validation = await validateMermaidOutput(assistantText(turnAssistant))
+      if (!failure && !awaitingUser && !suppressTerminalAnswer && terminalAssistant) {
+        const validation = await validateMermaidOutput(assistantText(terminalAssistant))
         mermaidFailures = validation.failures
         if (mermaidFailures.length === 0) {
           this.mermaidRepairAttempts.delete(sessionId)
         } else {
           const rejectionReason = mermaidValidationFailureMessage(mermaidFailures)
-          const rejected = rejectedMermaidMessage(turnAssistant, rejectionReason)
+          const rejected = rejectedMermaidMessage(terminalAssistant, rejectionReason)
           classifiedMessages = classifiedMessages.map((message) =>
             message.id === rejected.id ? rejected : message
           )
@@ -26763,7 +27047,7 @@ export class ChatEngine {
           if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !liveThread?.settings) {
             failure = rejectionReason
             merged = mergeAgentMessages(merged, [
-              mermaidValidationNotice(turnAssistant, rejectionReason)
+              mermaidValidationNotice(terminalAssistant, rejectionReason)
             ])
           }
         }
@@ -27344,7 +27628,7 @@ export class ChatEngine {
       // the assistant's workspace, so the report outlives the evicted thread. The
       // in-app report and its notification are unchanged.
       if (finishedThread && isAssistantThread(finishedThread)) {
-        this.captureAssistantReport(finishedThread, turnAssistant, finalStatus)
+        this.captureAssistantReport(finishedThread, terminalAssistant, finalStatus)
       }
       if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {
@@ -27445,8 +27729,8 @@ export class ChatEngine {
           }
         }
       }
-      if (!failure && !contractBlocked && turnAssistant) {
-        assistantResponse = assistantMemoryDecisionContext(turnAssistant)
+      if (!failure && !contractBlocked && terminalAssistant) {
+        assistantResponse = assistantMemoryDecisionContext(terminalAssistant)
       }
     } catch (error) {
       Logger.error('history mirror failed:', error)
@@ -29144,12 +29428,19 @@ export class ChatEngine {
   /**
    * Apply the accumulated generation window to loaded assistant messages,
    * persisting the model-active duration as `generationMs`.
+   *
+   * A message whose output mostly arrived as buffered flushes is left without a
+   * window: the clock measured no generation to divide its tokens by, and a
+   * stamped window would outlive this process as a rate nobody can read
+   * correctly. The renderer withholds a rate for exactly the same samples, so the
+   * live figure and the reopened figure agree.
    */
   private applyGenerationStamps(sessionId: string, messages: AgentMessage[]): void {
     for (const msg of messages) {
       if (msg.role !== 'assistant' || msg.generationMs !== undefined) continue
       const sample = this.generationClock.sample(GenerationClock.key(sessionId, msg.id))
       if (!sample || sample.activeMs <= 0) continue
+      if (!windowCoversOutput(sample)) continue
       msg.generationMs = Math.round(sample.activeMs)
     }
   }

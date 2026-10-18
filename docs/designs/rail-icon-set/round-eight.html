@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · round eight</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .chrome { margin-top: 1rem; border: 1px solid var(--color-border); background: var(--color-surface); overflow: hidden; }
+      .chrome > header { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--color-border); background: var(--color-overlay); font-size: 0.5625rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-dimmed); }
+      .chrome > header .where { margin-left: auto; letter-spacing: 0; text-transform: none; font-weight: 400; }
+      .chrome .body { padding: 0.75rem; background: var(--color-app); }
+      .two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; margin-top: 1rem; }
+      @media (max-width: 60rem) { .two-up { grid-template-columns: 1fr; } }
+      .heroes { display: flex; gap: 3.5rem; align-items: flex-start; margin-top: 1.25rem; flex-wrap: wrap; }
+      .hero { display: flex; flex-direction: column; gap: 0.75rem; }
+      .hero .art { color: var(--color-foreground); }
+      .hero .art svg { display: block; }
+      .hero h3 { margin: 0; font-size: 0.8125rem; font-weight: 600; color: var(--color-foreground); }
+      .hero p { margin: 0; max-width: 20rem; font-size: 0.6875rem; line-height: 1.6; color: var(--color-dimmed); }
+      .hero code { font-size: 0.625rem; }
+      .ladder { display: flex; align-items: flex-end; gap: 2rem; flex-wrap: wrap; margin-top: 1rem; color: var(--color-foreground); }
+      .ladder figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 0.625rem; }
+      .ladder figcaption { font-size: 0.5625rem; color: var(--color-dimmed); font-variant-numeric: tabular-nums; text-align: center; }
+      .pair { display: flex; align-items: flex-end; gap: 1.25rem; padding: 0.75rem 0 0; color: var(--color-foreground); }
+      .tabs { display: flex; align-items: flex-end; gap: 0.25rem; background: var(--color-app); padding: 0.5rem 0.5rem 0; }
+      .tab { display: flex; align-items: center; gap: 0.4375rem; flex: 1; min-width: 0; padding: 0.375rem 0.5rem; border: 1px solid transparent; border-bottom: 0; font-size: 0.6875rem; color: var(--color-muted); background: transparent; }
+      .tab[data-current] { background: var(--color-surface); border-color: var(--color-border); color: var(--color-foreground); }
+      .tab svg { flex: none; display: block; }
+      .tab .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dock { display: flex; flex-direction: column; align-items: center; gap: 0.125rem; width: 2.25rem; padding: 0.4375rem 0; background: var(--color-surface); border: 1px solid var(--color-border); }
+      .dock .it { width: 1.75rem; height: 1.75rem; display: flex; align-items: center; justify-content: center; color: var(--color-muted); }
+      .dock .it[data-current] { background: var(--color-elevated); color: var(--color-foreground); }
+      .dock .it svg { display: block; }
+      .drops { display: flex; gap: 3.5rem; align-items: flex-start; margin-top: 1.25rem; flex-wrap: wrap; }
+      .drop { display: flex; flex-direction: column; gap: 0.75rem; width: 15rem; }
+      .drop .art { color: var(--color-dimmed); }
+      .drop h3 { margin: 0; font-size: 0.8125rem; font-weight: 600; color: var(--color-muted); }
+      .drop p { margin: 0; font-size: 0.6875rem; line-height: 1.6; color: var(--color-dimmed); }
+      .ledger td.num { font-variant-numeric: tabular-nums; text-align: right; }
+      ul.notes { margin: 1rem 0 0; padding-left: 1.125rem; font-size: 0.75rem; line-height: 1.7; color: var(--color-dimmed); }
+      ul.notes li + li { margin-top: 0.5rem; }
+      ul.notes b { color: var(--color-muted); font-weight: 500; }
+      .px { image-rendering: pixelated; display: block; }
+      .pxrow { display: flex; gap: 2rem; align-items: flex-end; margin-top: 1rem; }
+      .pxrow figure { margin: 0; display: flex; flex-direction: column; gap: 0.5rem; align-items: center; }
+      .pxrow figcaption { font-size: 0.5625rem; color: var(--color-dimmed); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="masthead">
+        <span class="eyebrow">CodeInOven · brand work · round eight</span>
+        <h1>A browser mark and a thread browser mark</h1>
+        <p class="lede">
+          Drawn as SVG, shown here as SVG. The browser mark is the one you picked, redrawn
+          from arcs rather than the sampled polygon round five shipped. The thread browser
+          keeps that planet and ring and puts them inside a square conversation bubble.
+        </p>
+      </div>
+
+      <section class="section" id="s1">
+        <div class="section-head">
+          <h2>1 · The two marks</h2>
+          <span class="note">vector, so these are the real curves at 128px</span>
+        </div>
+        <div class="heroes">
+          <div class="hero">
+            <div class="art">
+              <svg width="128" height="128" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+            </div>
+            <h3>Global browser &nbsp;<code>x-browser</code></h3>
+            <p>
+              A planet and its ring. The disc is the outer boundary, the ring is a tilted gap
+              cut out of it, and the planet is what the gap leaves in the middle. This is the
+              arrangement your reference picture uses.
+            </p>
+          </div>
+          <div class="hero">
+            <div class="art">
+              <svg width="128" height="128" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-thread-browser" /></svg>
+            </div>
+            <h3>Thread browser &nbsp;<code>x-thread-browser</code></h3>
+            <p>
+              The same ring and planet inside a square conversation bubble with a tail. The
+              square is the thread reading, the ring inside is the browser reading.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="s2">
+        <div class="section-head">
+          <h2>2 · Every size the app draws</h2>
+          <span class="note">1:1, so this is what lands in the chrome, not a blow-up</span>
+        </div>
+        <div class="ladder"></div>
+      </section>
+
+      <section class="section" id="s3">
+        <div class="section-head">
+          <h2>3 · Side by side in the real chrome</h2>
+          <span class="note">the dock at 16px, the tab strips at 12 and 11px</span>
+        </div>
+        <div class="two-up">
+          <div>
+            <div class="chrome" style="margin-top: 0">
+              <header>Thread browser <span class="where">a panel on the conversation</span></header>
+              <div class="body" style="display: flex; gap: 1.25rem; align-items: flex-start">
+                <div class="dock">
+                  <span class="it" title="History">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v4h4" /><path d="M12 8v4l3 2" /></svg>
+                  </span>
+                  <span class="it" title="Notepad">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16" /><path d="M4 11h16" /><path d="M4 16h10" /></svg>
+                  </span>
+                  <span class="it" data-current title="Browser">
+                    <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-thread-browser" /></svg>
+                  </span>
+                  <span class="it" title="Terminal">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14" /><path d="M5 12h14" /><path d="M5 18h8" /></svg>
+                  </span>
+                </div>
+                <div>
+                  <div class="tabs" style="padding: 0 0 0.5rem">
+                    <span class="tab" data-current>
+                      <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-thread-browser" /></svg>
+                      <span class="label">docs codeinoven</span>
+                    </span>
+                    <span class="tab">
+                      <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-thread-browser" /></svg>
+                      <span class="label">localhost:3000</span>
+                    </span>
+                  </div>
+                  <div class="tabs" style="padding: 0.5rem 0">
+                    <span class="tab">
+                      <svg width="11" height="11" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-thread-browser" /></svg>
+                      <span class="label">the fullscreen strip, 11px</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <div class="chrome" style="margin-top: 0">
+              <header>Global browser <span class="where">the whole window</span></header>
+              <div class="body" style="padding: 0">
+                <div class="tabs" style="padding: 0.5rem 0.5rem 0">
+                  <span class="tab" data-current>
+                    <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+                    <span class="label">docs.codeinoven.app</span>
+                  </span>
+                  <span class="tab">
+                    <svg width="12" height="12" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+                    <span class="label">localhost:3000</span>
+                  </span>
+                </div>
+                <div class="body">
+                  <div class="ladder" style="margin-top: 0; gap: 1.75rem">
+                    <figure>
+                      <svg width="11" height="11" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+                      <figcaption>11</figcaption>
+                    </figure>
+                    <figure>
+                      <svg width="13" height="13" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+                      <figcaption>13 titlebar</figcaption>
+                    </figure>
+                    <figure>
+                      <svg width="15" height="15" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+                      <figcaption>15 address</figcaption>
+                    </figure>
+                    <figure>
+                      <svg width="16" height="16" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+                      <figcaption>16 rail</figcaption>
+                    </figure>
+                    <figure>
+                      <svg width="20" height="20" viewBox="0 0 24 24"><use href="./browser-mark.svg#x-browser" /></svg>
+                      <figcaption>20 empty</figcaption>
+                    </figure>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p class="lede" style="margin-top: 0.625rem">
+              The thread browser replaces Lucide's <code>GlobeCode</code> at
+              <code>Workspace.svelte:1431</code>,
+              <code>ContextSidebar.svelte:457</code>,
+              <code>WorkspaceFullscreenBrowser.svelte:116</code> and
+              <code>TaskManagerModal.svelte:1049</code>.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="s4">
+        <div class="section-head">
+          <h2>4 · Two shapes that were dropped</h2>
+          <span class="note">both were drawn, rendered at 11px, and killed by what they looked like there</span>
+        </div>
+        <div class="drops"></div>
+      </section>
+
+      <section class="section" id="s5">
+        <div class="section-head">
+          <h2>5 · The pixels, for reference</h2>
+          <span class="note">this is the checking tool, not the drawing: 11px magnified is 11 pixels</span>
+        </div>
+        <p class="lede">
+          Each glyph rasterised at its true pixel size and then blown up with smoothing off.
+          It is here because a renderer I had been measuring with turned out to drop the ring
+          gap below 20px, so the sizes above needed checking against Chromium directly. Read
+          section 2 to see the marks, and this only to see the pixels they become.
+        </p>
+        <div class="pxrow" id="px"></div>
+      </section>
+
+      <section class="section" id="s6">
+        <div class="section-head">
+          <h2>6 · Measured</h2>
+        </div>
+        <table class="ledger">
+          <thead>
+            <tr><th>Measured</th><th class="num">Browser</th><th class="num">Thread browser</th><th>Note</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Footprint</td><td class="num">23.0 × 23.0</td><td class="num">23.0 × 23.4</td><td>Lucide draws inside 22.0</td></tr>
+            <tr><td>Ink mass</td><td class="num">59%</td><td class="num">68%</td><td>a filled disc is mostly ink, so this is the cost of the construction you picked</td></tr>
+            <tr><td>Ring gap at 16px</td><td class="num">1.4px</td><td class="num">1.4px</td><td>the feature that reads as the ring</td></tr>
+            <tr><td>Ring gap at 11px</td><td class="num">0.96px</td><td class="num">0.96px</td><td>still a ring once rasterised</td></tr>
+            <tr><td>Tail at 11px</td><td class="num">none</td><td class="num">1.2px</td><td>the square, not the tail, is what separates the two at that size</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section" id="s7">
+        <div class="section-head">
+          <h2>7 · Still open</h2>
+        </div>
+        <ul class="notes">
+          <li><b>The weight.</b> A filled disc with a ring cut out of it measures 59% ink, against a set that runs 17 to 44 and an assistant mark at 24.9. It is the heaviest mark in the app by a wide margin. Shrinking the disc to r10.2 brings it to about 44 and keeps the same drawing, at a 20.4 footprint instead of 22.6.</li>
+          <li><b>The rose.</b> Untouched since round five, still available if the global browser should keep it.</li>
+          <li><b>The update button.</b> One control cycling six states, still waiting on what that control is rather than how it is drawn.</li>
+        </ul>
+        <p class="footnote">
+          Earlier rounds: <a href="./index.html">one</a>, <a href="./round-two.html">two</a>,
+          <a href="./round-three.html">three</a>, <a href="./round-four.html">four</a>,
+          <a href="./round-five.html">five</a>, <a href="./round-six.html">six</a>,
+          <a href="./round-seven.html">seven</a>. Both marks are generated and measured by
+          <code>.cio/tmp/marks/build.ts</code>.
+        </p>
+      </section>
+    </div>
+
+    <script>
+      const SIZES = [11, 12, 13, 15, 16, 20, 32, 64];
+      const LADDER = document.querySelector('.ladder');
+      for (const id of ['x-browser', 'x-thread-browser']) {
+        const wrap = document.createElement('div');
+        wrap.style.display = 'flex';
+        wrap.style.alignItems = 'flex-end';
+        wrap.style.gap = '2rem';
+        const label = document.createElement('div');
+        label.textContent = id === 'x-browser' ? 'Global browser' : 'Thread browser';
+        label.style.cssText = 'font-size:0.6875rem;color:var(--color-dimmed);width:7.5rem;padding-bottom:0.25rem';
+        wrap.appendChild(label);
+        for (const s of SIZES) {
+          const fig = document.createElement('figure');
+          const holder = document.createElement('div');
+          holder.style.color = 'var(--color-foreground)';
+          holder.innerHTML = '<svg width="' + s + '" height="' + s + '" viewBox="0 0 24 24"><use href="./browser-mark.svg#' + id + '"></use></svg>';
+          const cap = document.createElement('figcaption');
+          cap.textContent = s + 'px';
+          fig.appendChild(holder);
+          fig.appendChild(cap);
+          wrap.appendChild(fig);
+        }
+        wrap.style.marginBottom = '1.25rem';
+        LADDER.appendChild(wrap);
+      }
+
+      const DROPS = [{"label":"A tail on the disc","note":"drawn as a narrow tail at the lower left. Below 16px the bump reads as an uneven edge rather than a bubble, and a tail cannot protrude from a disc that already spends the full width","d":"M2.632,18.319L2.405,17.969L2.192,17.612L1.992,17.246L1.805,16.874L1.632,16.495L1.474,16.109L1.329,15.719L1.200,15.323L1.084,14.922L0.984,14.518L0.899,14.110L0.829,13.699L0.773,13.287L0.734,12.872L0.709,12.456L0.700,12.039L0.706,11.623L0.728,11.207L0.765,10.792L0.817,10.379L0.884,9.967L0.967,9.559L1.064,9.154L1.177,8.753L1.304,8.356L1.445,7.964L1.601,7.578L1.771,7.198L1.955,6.824L2.153,6.457L2.364,6.098L2.588,5.747L2.825,5.404L3.074,5.070L3.336,4.746L3.609,4.431L3.894,4.127L4.189,3.834L4.496,3.552L4.812,3.281L5.139,3.022L5.474,2.775L5.819,2.541L6.172,2.319L6.532,2.111L6.901,1.916L7.276,1.735L7.657,1.568L8.045,1.415L8.438,1.276L8.836,1.152L9.238,1.043L9.643,0.948L10.052,0.869L10.464,0.805L10.878,0.756L11.293,0.722L11.709,0.704L12.126,0.701L12.542,0.713L12.958,0.741L13.372,0.784L13.785,0.842L14.195,0.915L14.602,1.004L15.006,1.107L15.405,1.225L15.800,1.358L16.190,1.505L16.574,1.667L16.951,1.843L17.322,2.032L17.686,2.235L18.042,2.451L18.390,2.680L18.729,2.922L19.059,3.177L19.380,3.443L19.690,3.721L19.990,4.010L20.279,4.310L20.557,4.620L20.823,4.941L21.078,5.271L21.320,5.610L21.549,5.958L21.765,6.314L21.968,6.678L22.157,7.049L22.333,7.426L22.495,7.810L22.642,8.200L22.775,8.595L22.893,8.994L22.996,9.398L23.085,9.805L23.158,10.215L23.216,10.628L23.259,11.042L23.287,11.458L23.299,11.874L23.296,12.291L23.278,12.707L23.244,13.122L23.195,13.536L23.131,13.948L23.052,14.357L22.957,14.762L22.848,15.164L22.724,15.562L22.585,15.955L22.432,16.343L22.265,16.724L22.084,17.099L21.889,17.468L21.681,17.828L21.459,18.181L21.225,18.526L20.978,18.861L20.719,19.188L20.448,19.504L20.166,19.811L19.873,20.106L19.569,20.391L19.254,20.664L18.930,20.926L18.596,21.175L18.253,21.412L17.902,21.636L17.543,21.847L17.176,22.045L16.802,22.229L16.422,22.399L16.036,22.555L15.644,22.696L15.247,22.823L14.846,22.936L14.441,23.033L14.033,23.116L13.621,23.183L13.208,23.235L12.793,23.272L12.377,23.294L11.961,23.300L11.544,23.291L11.128,23.266L10.713,23.227L10.301,23.171L9.890,23.101L9.482,23.016L9.078,22.916L8.677,22.800L8.281,22.671L7.891,22.526L7.505,22.368L7.126,22.195L6.754,22.008L6.388,21.808L6.031,21.595L5.681,21.368L1.111,22.889ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.422,9.071A7.200,5.419 24 0 0 18.578,14.929A7.200,5.419 24 0 0 5.422,9.071Z"},{"label":"A bubble for the planet","note":"the planet inside the ring carries the tail instead. The interior is too small to hold a second shape, so it flattens into a plain disc below 16px","d":"M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.570,8.782L5.648,8.655L5.733,8.532L5.824,8.412L5.921,8.296L6.024,8.183L6.133,8.075L6.248,7.970L6.369,7.870L6.496,7.773L6.628,7.681L6.766,7.593L6.909,7.510L7.058,7.431L7.211,7.357L7.369,7.288L7.532,7.223L7.699,7.164L7.871,7.109L8.047,7.059L8.227,7.014L8.410,6.975L8.598,6.940L8.789,6.910L8.983,6.886L9.180,6.867L9.380,6.853L9.583,6.844L9.788,6.840L9.995,6.842L10.205,6.849L10.416,6.861L10.629,6.879L10.843,6.901L11.058,6.929L11.275,6.962L11.492,7.000L11.709,7.043L11.927,7.091L12.145,7.144L12.363,7.202L12.581,7.265L12.798,7.333L13.014,7.405L13.229,7.482L13.442,7.564L13.655,7.650L13.865,7.741L14.074,7.835L14.281,7.935L14.485,8.038L14.687,8.145L14.886,8.256L15.082,8.371L15.275,8.490L15.465,8.612L15.651,8.738L15.834,8.867L16.012,8.999L16.187,9.134L16.357,9.272L16.523,9.413L16.684,9.556L16.841,9.702L16.993,9.851L17.139,10.001L17.280,10.154L17.416,10.308L17.547,10.464L17.672,10.622L17.791,10.781L17.904,10.941L18.011,11.102L18.113,11.265L18.207,11.428L18.296,11.591L18.378,11.755L18.454,11.920L18.523,12.084L18.586,12.248L18.642,12.412L18.691,12.576L18.734,12.739L18.769,12.901L18.798,13.062L18.820,13.223L18.835,13.382L18.843,13.539L18.844,13.695L18.838,13.850L18.825,14.002L18.805,14.152L18.778,14.301L18.745,14.447L18.704,14.590L18.657,14.731L18.603,14.869L18.543,15.004L18.475,15.136L18.401,15.265L18.321,15.391L18.234,15.513L18.141,15.631L18.042,15.746L17.937,15.857L17.825,15.964L17.708,16.068L17.584,16.167L17.456,16.261L17.321,16.352L17.182,16.438L17.036,16.520L16.886,16.596L16.731,16.669L16.571,16.736L16.407,16.799L16.238,16.857L16.065,16.910L15.887,16.958L15.706,17.001L15.521,17.039L15.332,17.072L15.140,17.099L14.945,17.122L14.746,17.139L14.545,17.151L14.342,17.158L14.136,17.160L13.928,17.156L13.717,17.147L13.506,17.133L13.292,17.114L13.077,17.089L12.862,17.059L12.645,17.025L12.428,16.985L12.210,16.940L11.992,16.890L11.774,16.835L11.556,16.775L11.339,16.711L11.122,16.641L10.907,16.567L10.692,16.488L10.479,16.405L10.267,16.317L10.057,16.225L9.849,16.128L9.643,16.028L9.440,15.923L9.239,15.814L9.041,15.702L8.846,15.585L8.654,15.465L8.466,15.342L8.281,15.215L8.100,15.085L7.923,14.952L7.750,14.815L7.581,14.676L7.417,14.534L1.420,11.343Z"}];
+      const drops = document.querySelector('.drops');
+      for (const d of DROPS) {
+        const box = document.createElement('div');
+        box.className = 'drop';
+        box.innerHTML = '<div class="art"><svg width="96" height="96" viewBox="0 0 24 24" fill="none"><path fill="currentColor" fill-rule="evenodd" d="' + d.d + '"></path></svg></div><h3>' + d.label + '</h3><p>' + d.note + '</p>';
+        drops.appendChild(box);
+      }
+
+      const MARKS = [{"id":"x-browser","label":"Global browser","note":"a planet and its ring","d":"M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.422,9.071A7.200,5.419 24 0 0 18.578,14.929A7.200,5.419 24 0 0 5.422,9.071Z"},{"id":"x-thread-browser","label":"Thread browser","note":"the same, inside a square conversation bubble","d":"M23.300,2.700L23.300,21.300L14.800,21.300L10.600,23.400L7.600,21.300L0.700,21.300L0.700,2.700ZM4.144,8.502A8.600,5.900 24 0 0 19.856,15.498A8.600,5.900 24 0 0 4.144,8.502ZM6.062,9.356A6.500,4.459 24 0 0 17.938,14.644A6.500,4.459 24 0 0 6.062,9.356Z"},{"id":"r1","label":"A tail on the disc","note":"drawn as a narrow tail at the lower left. Below 16px the bump reads as an uneven edge rather than a bubble, and a tail cannot protrude from a disc that already spends the full width","d":"M2.632,18.319L2.405,17.969L2.192,17.612L1.992,17.246L1.805,16.874L1.632,16.495L1.474,16.109L1.329,15.719L1.200,15.323L1.084,14.922L0.984,14.518L0.899,14.110L0.829,13.699L0.773,13.287L0.734,12.872L0.709,12.456L0.700,12.039L0.706,11.623L0.728,11.207L0.765,10.792L0.817,10.379L0.884,9.967L0.967,9.559L1.064,9.154L1.177,8.753L1.304,8.356L1.445,7.964L1.601,7.578L1.771,7.198L1.955,6.824L2.153,6.457L2.364,6.098L2.588,5.747L2.825,5.404L3.074,5.070L3.336,4.746L3.609,4.431L3.894,4.127L4.189,3.834L4.496,3.552L4.812,3.281L5.139,3.022L5.474,2.775L5.819,2.541L6.172,2.319L6.532,2.111L6.901,1.916L7.276,1.735L7.657,1.568L8.045,1.415L8.438,1.276L8.836,1.152L9.238,1.043L9.643,0.948L10.052,0.869L10.464,0.805L10.878,0.756L11.293,0.722L11.709,0.704L12.126,0.701L12.542,0.713L12.958,0.741L13.372,0.784L13.785,0.842L14.195,0.915L14.602,1.004L15.006,1.107L15.405,1.225L15.800,1.358L16.190,1.505L16.574,1.667L16.951,1.843L17.322,2.032L17.686,2.235L18.042,2.451L18.390,2.680L18.729,2.922L19.059,3.177L19.380,3.443L19.690,3.721L19.990,4.010L20.279,4.310L20.557,4.620L20.823,4.941L21.078,5.271L21.320,5.610L21.549,5.958L21.765,6.314L21.968,6.678L22.157,7.049L22.333,7.426L22.495,7.810L22.642,8.200L22.775,8.595L22.893,8.994L22.996,9.398L23.085,9.805L23.158,10.215L23.216,10.628L23.259,11.042L23.287,11.458L23.299,11.874L23.296,12.291L23.278,12.707L23.244,13.122L23.195,13.536L23.131,13.948L23.052,14.357L22.957,14.762L22.848,15.164L22.724,15.562L22.585,15.955L22.432,16.343L22.265,16.724L22.084,17.099L21.889,17.468L21.681,17.828L21.459,18.181L21.225,18.526L20.978,18.861L20.719,19.188L20.448,19.504L20.166,19.811L19.873,20.106L19.569,20.391L19.254,20.664L18.930,20.926L18.596,21.175L18.253,21.412L17.902,21.636L17.543,21.847L17.176,22.045L16.802,22.229L16.422,22.399L16.036,22.555L15.644,22.696L15.247,22.823L14.846,22.936L14.441,23.033L14.033,23.116L13.621,23.183L13.208,23.235L12.793,23.272L12.377,23.294L11.961,23.300L11.544,23.291L11.128,23.266L10.713,23.227L10.301,23.171L9.890,23.101L9.482,23.016L9.078,22.916L8.677,22.800L8.281,22.671L7.891,22.526L7.505,22.368L7.126,22.195L6.754,22.008L6.388,21.808L6.031,21.595L5.681,21.368L1.111,22.889ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.422,9.071A7.200,5.419 24 0 0 18.578,14.929A7.200,5.419 24 0 0 5.422,9.071Z"},{"id":"r2","label":"A bubble for the planet","note":"the planet inside the ring carries the tail instead. The interior is too small to hold a second shape, so it flattens into a plain disc below 16px","d":"M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.570,8.782L5.648,8.655L5.733,8.532L5.824,8.412L5.921,8.296L6.024,8.183L6.133,8.075L6.248,7.970L6.369,7.870L6.496,7.773L6.628,7.681L6.766,7.593L6.909,7.510L7.058,7.431L7.211,7.357L7.369,7.288L7.532,7.223L7.699,7.164L7.871,7.109L8.047,7.059L8.227,7.014L8.410,6.975L8.598,6.940L8.789,6.910L8.983,6.886L9.180,6.867L9.380,6.853L9.583,6.844L9.788,6.840L9.995,6.842L10.205,6.849L10.416,6.861L10.629,6.879L10.843,6.901L11.058,6.929L11.275,6.962L11.492,7.000L11.709,7.043L11.927,7.091L12.145,7.144L12.363,7.202L12.581,7.265L12.798,7.333L13.014,7.405L13.229,7.482L13.442,7.564L13.655,7.650L13.865,7.741L14.074,7.835L14.281,7.935L14.485,8.038L14.687,8.145L14.886,8.256L15.082,8.371L15.275,8.490L15.465,8.612L15.651,8.738L15.834,8.867L16.012,8.999L16.187,9.134L16.357,9.272L16.523,9.413L16.684,9.556L16.841,9.702L16.993,9.851L17.139,10.001L17.280,10.154L17.416,10.308L17.547,10.464L17.672,10.622L17.791,10.781L17.904,10.941L18.011,11.102L18.113,11.265L18.207,11.428L18.296,11.591L18.378,11.755L18.454,11.920L18.523,12.084L18.586,12.248L18.642,12.412L18.691,12.576L18.734,12.739L18.769,12.901L18.798,13.062L18.820,13.223L18.835,13.382L18.843,13.539L18.844,13.695L18.838,13.850L18.825,14.002L18.805,14.152L18.778,14.301L18.745,14.447L18.704,14.590L18.657,14.731L18.603,14.869L18.543,15.004L18.475,15.136L18.401,15.265L18.321,15.391L18.234,15.513L18.141,15.631L18.042,15.746L17.937,15.857L17.825,15.964L17.708,16.068L17.584,16.167L17.456,16.261L17.321,16.352L17.182,16.438L17.036,16.520L16.886,16.596L16.731,16.669L16.571,16.736L16.407,16.799L16.238,16.857L16.065,16.910L15.887,16.958L15.706,17.001L15.521,17.039L15.332,17.072L15.140,17.099L14.945,17.122L14.746,17.139L14.545,17.151L14.342,17.158L14.136,17.160L13.928,17.156L13.717,17.147L13.506,17.133L13.292,17.114L13.077,17.089L12.862,17.059L12.645,17.025L12.428,16.985L12.210,16.940L11.992,16.890L11.774,16.835L11.556,16.775L11.339,16.711L11.122,16.641L10.907,16.567L10.692,16.488L10.479,16.405L10.267,16.317L10.057,16.225L9.849,16.128L9.643,16.028L9.440,15.923L9.239,15.814L9.041,15.702L8.846,15.585L8.654,15.465L8.466,15.342L8.281,15.215L8.100,15.085L7.923,14.952L7.750,14.815L7.581,14.676L7.417,14.534L1.420,11.343Z"}];
+      const ZOOM = 6;
+      function svg(d, size) {
+        return '<svg xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 24 24"><path fill="#000" fill-rule="evenodd" d="' + d + '"/></svg>';
+      }
+      function raster(d, size) {
+        return new Promise((res) => {
+          const img = new Image();
+          img.onload = () => {
+            const c = document.createElement('canvas');
+            c.width = size; c.height = size;
+            c.getContext('2d').drawImage(img, 0, 0, size, size);
+            res(c);
+          };
+          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg(d, size));
+        });
+      }
+      function magnify(src) {
+        const c = document.createElement('canvas');
+        c.width = src.width * ZOOM; c.height = src.height * ZOOM;
+        const ctx = c.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(src, 0, 0, c.width, c.height);
+        c.className = 'px';
+        return c;
+      }
+      (async () => {
+        const px = document.getElementById('px');
+        for (const m of MARKS.slice(0, 2)) {
+          for (const size of [11, 16]) {
+            const fig = document.createElement('figure');
+            fig.appendChild(magnify(await raster(m.d, size)));
+            const cap = document.createElement('figcaption');
+            cap.textContent = m.label + ' at ' + size + 'px, ×' + ZOOM;
+            fig.appendChild(cap);
+            px.appendChild(fig);
+          }
+        }
+      })();
+    </script>
+  </body>
+</html>

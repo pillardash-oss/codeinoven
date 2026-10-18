@@ -1,4 +1,10 @@
 <script lang="ts">
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   /**
    * One inline review thread: the file it is about, the code the comment was
    * written against, the comments in the thread, and the box that answers them.
@@ -13,14 +19,7 @@
    * this component owns is the tree inside it, where a reply steps in under the
    * comment it answers.
    */
-  import {
-    CheckCircle2,
-    ChevronDown,
-    ExternalLink,
-    Loader2,
-    MessageSquareReply,
-    RotateCcw
-  } from '@lucide/svelte'
+
   import { gitState } from '$lib/stores/git.svelte'
   import { prThreadResolveBusyKey } from '$lib/stores/git-store-helpers'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -190,7 +189,7 @@
       title={collapsed ? 'Show this thread' : 'Fold this thread'}
       onclick={() => (foldChoice = !collapsed)}
     >
-      <ChevronDown size={11} class={['shrink-0', collapsed && '-rotate-90']} />
+      <CioChevronDown size={11} class={['shrink-0', collapsed && '-rotate-90']} />
     </button>
     <!--
       The file is the way back to the code the thread is about: the diff here
@@ -222,7 +221,7 @@
         class="flex shrink-0 items-center gap-1 bg-success/10 px-1.5 py-px text-[0.5625rem] font-medium text-success"
         title="This thread is resolved"
       >
-        <CheckCircle2 size={10} class="shrink-0" />
+        <CioCheckCircle size={10} class="shrink-0" />
         Resolved
       </span>
     {/if}
@@ -238,7 +237,7 @@
       aria-label="Open the thread on {thread.path} on GitHub"
       onclick={openOnGitHub}
     >
-      <ExternalLink size={11} />
+      <CioExternalLink size={11} />
     </button>
   </div>
 
@@ -312,7 +311,7 @@
             title="Reply to this thread"
             onclick={() => openReply()}
           >
-            <MessageSquareReply size={12} class="shrink-0 text-dimmed" />
+            <CioMessage size={12} class="shrink-0 text-dimmed" />
             Reply
           </button>
         {/if}
@@ -328,13 +327,13 @@
           onclick={() => void toggleResolved()}
         >
           {#if resolving}
-            <Loader2 size={12} class="shrink-0 animate-spin" />
+            <CioSpinner size={12} class="shrink-0 animate-spin" />
             Saving…
           {:else if thread.resolved}
-            <RotateCcw size={12} class="shrink-0" />
+            <CioUndo size={12} class="shrink-0" />
             Reopen
           {:else}
-            <CheckCircle2 size={12} class="shrink-0" />
+            <CioCheckCircle size={12} class="shrink-0" />
             Resolve
           {/if}
         </button>

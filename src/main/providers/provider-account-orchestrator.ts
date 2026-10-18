@@ -10,7 +10,8 @@ import { atomicWrite } from '../../lib/utils'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
 import {
   cachedOpenCodeInstallation,
-  detectOpenCodeInstallation
+  detectOpenCodeInstallation,
+  resolvedOpenCodeCommand
 } from '../agents/opencode-installation'
 import type {
   HarnessAuthAccount,
@@ -22,8 +23,10 @@ import type {
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import {
   readOpenCodeV2ActiveCredentialIds,
-  readOpenCodeV2StoredCredentials
+  readOpenCodeV2StoredCredentials,
+  openCodeCredentialDatabasePaths
 } from '../drivers/opencode-account-usage'
+import { openCodeAuthPaths } from '../drivers/opencode/opencode-values'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
 import {
   HarnessCommandError,
@@ -55,6 +58,31 @@ const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.js
 /** OpenCode's credential store; its keys are the real provider ids the CLI expects. */
 const OPENCODE_AUTH_PATH = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
 const OPENCODE_AUTH_RELATIVE_PATH = '.local/share/opencode/auth.json'
+/** Integrations OpenCode renamed; rows pinned before the rename name an id the CLI no longer knows. */
+export const OPENCODE_RENAMED_INTEGRATIONS: Record<string, string> = {
+  'opencode-zen': 'opencode',
+  'opencode-console': 'opencode'
+}
+
+/** Canonical integration id for a possibly stale OpenCode provider id. */
+export function canonicalOpenCodeIntegrationId(providerId: string): string {
+  const canonical = OPENCODE_RENAMED_INTEGRATIONS[providerId.toLowerCase()]
+  return canonical ?? providerId
+}
+
+/** Whether a CLI failure means the integration itself is unknown (stale rename). */
+export function isUnknownOpenCodeIntegrationError(detail: string): boolean {
+  return /integration not found|unknown integration|no such integration|integration.+not .*(found|recognised|recognized|known)/iu.test(
+    detail
+  )
+}
+
+/** Whether a CLI failure only reports an already-absent credential (idempotent). */
+export function isBenignOpenCodeLogoutError(detail: string): boolean {
+  return /no .*credentials?|not logged in|not authenticated|already logged out|no auth/i.test(
+    detail
+  )
+}
 const OPENCODE_CONFIG_FORMAT = { tabSize: 2, insertSpaces: true, eol: '\n' }
 /** Muse Code stores OAuth credentials here (or $XDG_CONFIG_HOME/muse/auth.json). */
 const MUSE_AUTH_PATH = join(homedir(), '.config', 'muse', 'auth.json')
@@ -69,7 +97,7 @@ interface AuthDefinition {
   readStatus?(projectPath?: string, environment?: NodeJS.ProcessEnv): Promise<HarnessAuthStatus>
   loginArgs(options: HarnessLoginOptions): string[]
   /** CLI arguments that remove a provider's stored credentials. */
-  logoutArgs?(providerId?: string): string[]
+  logoutArgs?(providerId?: string, credential?: string): string[]
   /** Confirm that a CLI logout actually removed the account rather than returning a no-op. */
   verifyLogout?(environment: NodeJS.ProcessEnv): Promise<void>
   /**
@@ -84,6 +112,38 @@ interface AuthDefinition {
    * credential identifier the harness CLI actually accepts at logout time.
    */
   resolveLogoutTarget?(providerId: string, providerHint?: string): Promise<string | undefined>
+  /**
+   * Resolve the integration id the harness CLI currently uses for an account,
+   * read from that account's own credential store.
+   *
+   * A managed row's provider id is pinned when its container is created, so a
+   * release that renames an integration leaves the row naming a provider the
+   * CLI no longer knows. OpenCode's `opencode-zen` became `opencode`, and every
+   * command built from the stale id ends with "Integration not found:
+   * opencode-zen". The account's store is the authority for the integration a
+   * command names, so login, logout and switch all resolve through it.
+   */
+  resolveStoredIntegration?(
+    providerId: string,
+    environment: NodeJS.ProcessEnv
+  ): Promise<string | undefined>
+  /**
+   * Resolves the credential selector a multi-account CLI needs as the second
+   * positional logout argument.
+   *
+   * OpenCode V2's `auth logout <integration> [<credential>]` opens an account
+   * picker when the credential is omitted, which ends the command with "Pass a
+   * credential ID or label when running without an interactive terminal". The
+   * account the user picked is known, so it is resolved to its stored
+   * credential id here instead of letting the CLI guess. `credentialHint` is the
+   * account's own credential id when the registry kept one, else its display
+   * name.
+   */
+  resolveLogoutCredential?(
+    providerId: string,
+    credentialHint: string | undefined,
+    environment: NodeJS.ProcessEnv
+  ): Promise<string | undefined>
   /**
    * Version line whose credential store holds the account state, for harnesses
    * that keep several credentials in their own store. Only V2 OpenCode does, and
@@ -258,6 +318,9 @@ async function readOpencodeCredentialKeys(): Promise<string[]> {
  * ('Z.AI' -> 'z-ai'), while the CLI accepts only real credential keys
  * ('zai') or catalog names. Resolve through the auth store first, then
  * fall back to the display name, which the CLI resolves itself.
+ *
+ * A renamed integration maps to its canonical id first: `opencode-zen`
+ * became `opencode`, so a stale row resolves against the key the CLI knows.
  */
 async function resolveOpencodeLogoutTarget(
   providerId: string,
@@ -266,11 +329,82 @@ async function resolveOpencodeLogoutTarget(
   const keys = await readOpencodeCredentialKeys()
   const lowered = providerId.toLowerCase()
   const exact = keys.find((key) => key.toLowerCase() === lowered)
-  if (exact) return exact
+  if (exact) return canonicalOpenCodeIntegrationId(exact)
   const slugged = keys.find((key) => accountId(key) === lowered)
-  if (slugged) return slugged
+  if (slugged) return canonicalOpenCodeIntegrationId(slugged)
+  const canonical = canonicalOpenCodeIntegrationId(providerId)
+  if (canonical.toLowerCase() !== lowered) {
+    const canonicalExact = keys.find((key) => key.toLowerCase() === canonical.toLowerCase())
+    if (canonicalExact) return canonicalExact
+  }
   const hint = providerHint?.trim()
+  return hint ? canonicalOpenCodeIntegrationId(hint) : undefined
+}
+
+/**
+ * Resolve the credential selector OpenCode V2's logout requires.
+ *
+ * V2 holds several credentials per integration and refuses to run
+ * non-interactively without one, so the integration id alone is not enough.
+ * The account's own store is read to turn the hint (the account's credential id
+ * when the registry kept one, else its store label) into a credential the CLI
+ * accepts. A single stored credential for the integration is unambiguous and is
+ * used when the hint matches nothing.
+ */
+async function resolveOpenCodeV2LogoutCredential(
+  providerId: string,
+  credentialHint: string | undefined,
+  environment: NodeJS.ProcessEnv
+): Promise<string | undefined> {
+  const stored = await readOpenCodeV2StoredCredentials(environment)
+  const forIntegration = stored.filter((credential) => credential.integrationId === providerId)
+  const hint = credentialHint?.trim()
+  if (hint) {
+    const byId = forIntegration.find((credential) => credential.id === hint)
+    if (byId) return byId.id
+    const lowered = hint.toLowerCase()
+    const byLabel = forIntegration.find((credential) => credential.label?.toLowerCase() === lowered)
+    if (byLabel) return byLabel.id
+  }
+  if (forIntegration.length === 1) return forIntegration[0]?.id
   return hint || undefined
+}
+
+async function resolveOpenCodeV2StoredIntegration(
+  providerId: string,
+  environment: NodeJS.ProcessEnv
+): Promise<string | undefined> {
+  const stored = await readOpenCodeV2StoredCredentials(environment)
+  const integrations = [...new Set(stored.map((credential) => credential.integrationId))]
+  const lowered = providerId.toLowerCase()
+  const exact = integrations.find((integration) => integration.toLowerCase() === lowered)
+  if (exact) return canonicalOpenCodeIntegrationId(exact)
+  const slugged = integrations.find((integration) => accountId(integration) === lowered)
+  if (slugged) return canonicalOpenCodeIntegrationId(slugged)
+  // A renamed integration maps to its canonical id even when the store holds
+  // several integrations: `opencode-zen` became `opencode`, so a stale row
+  // must target the id the CLI knows instead of failing with
+  // "Integration not found: opencode-zen".
+  const canonical = canonicalOpenCodeIntegrationId(providerId)
+  if (canonical.toLowerCase() !== lowered) {
+    const canonicalExact = integrations.find(
+      (integration) => integration.toLowerCase() === canonical.toLowerCase()
+    )
+    if (canonicalExact) return canonicalExact
+    // The store may hold nothing under either name (a V1-only key, or an
+    // already-removed credential). Target the canonical id anyway so the CLI
+    // reports the credential state instead of an unknown integration.
+    return canonical
+  }
+  // A renamed integration is the one case left: the store holds a single
+  // integration that shares the stale id's stem. Matching on a shared stem
+  // keeps the resolution off an unrelated provider, so a command can never land
+  // on an integration the user did not name; anything else stays unresolved and
+  // the CLI's own error is reported instead.
+  if (integrations.length !== 1) return undefined
+  const only = integrations[0] as string
+  const onlyLowered = only.toLowerCase()
+  return lowered.startsWith(onlyLowered) || onlyLowered.startsWith(lowered) ? only : undefined
 }
 
 function parseCodexStatus(output: string, succeeded: boolean): HarnessAuthStatus {
@@ -825,23 +959,249 @@ async function readFileOrEmpty(filePath: string): Promise<string> {
 }
 
 /**
+ * Candidate integration ids for a stale OpenCode logout: the requested id, the
+ * resolved CLI target, and every known rename alias, so a V1 `auth.json` key
+ * and a V2 SQLite row are both matched however the rename left them stored.
+ */
+function openCodeLogoutCandidates(requested?: string, resolved?: string): Set<string> {
+  const candidates = new Set<string>()
+  for (const value of [requested, resolved]) {
+    const trimmed = value?.trim()
+    if (!trimmed) continue
+    candidates.add(trimmed.toLowerCase())
+    const canonical = canonicalOpenCodeIntegrationId(trimmed)
+    candidates.add(canonical.toLowerCase())
+    for (const [stale, current] of Object.entries(OPENCODE_RENAMED_INTEGRATIONS)) {
+      if (current.toLowerCase() === canonical.toLowerCase()) candidates.add(stale.toLowerCase())
+    }
+  }
+  return candidates
+}
+
+/**
+ * Remove matching keys from OpenCode V1 `auth.json` stores. Returns how many
+ * keys were removed. Scoped to the account container when the environment
+ * isolates one; otherwise every default-home store is cleaned.
+ */
+async function removeOpenCodeV1CredentialsFor(
+  environment: NodeJS.ProcessEnv,
+  candidates: Set<string>
+): Promise<number> {
+  if (candidates.size === 0) return 0
+  const scoped = Boolean(environment['XDG_DATA_HOME'])
+  const paths = openCodeAuthPaths(environment, { scopedToDataHome: scoped })
+  // WSL harnesses own their files; the host filesystem has no authority there.
+  const wslRaw = await readHarnessHomeFile('opencode', OPENCODE_AUTH_RELATIVE_PATH)
+  if (wslRaw !== undefined) {
+    if (wslRaw === null) return 0
+    const removed = removeMatchingAuthKeys(wslRaw, candidates)
+    if (removed === null) return 0
+    if (removed.keys.length === 0) return 0
+    const content = removed.content.endsWith('\n') ? removed.content : `${removed.content}\n`
+    if (!(await writeHarnessHomeFile('opencode', OPENCODE_AUTH_RELATIVE_PATH, content))) return 0
+    return removed.keys.length
+  }
+  let removed = 0
+  for (const filePath of paths) {
+    let raw: string
+    try {
+      raw = await readFile(filePath, 'utf8')
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue
+      throw error
+    }
+    const result = removeMatchingAuthKeys(raw, candidates)
+    if (!result || result.keys.length === 0) continue
+    const content = result.content.endsWith('\n') ? result.content : `${result.content}\n`
+    await atomicWrite(filePath, content)
+    removed += result.keys.length
+  }
+  return removed
+}
+
+/** Drop matching top-level keys from an `auth.json` document, or null when invalid. */
+function removeMatchingAuthKeys(
+  raw: string,
+  candidates: Set<string>
+): { content: string; keys: string[] } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const record = parsed as Record<string, unknown>
+  const matched = Object.keys(record).filter(
+    (key) => candidates.has(key.toLowerCase()) || candidates.has(accountId(key))
+  )
+  if (matched.length === 0) return { content: raw, keys: [] }
+  for (const key of matched) delete record[key]
+  return { content: JSON.stringify(record, null, 2), keys: matched }
+}
+
+/** Open a credential database for writing, or undefined when unavailable. */
+async function openCredentialStoreWritable(
+  databasePath: string
+): Promise<
+  | {
+      prepare(sql: string): { all(...params: unknown[]): unknown; run(...params: unknown[]): unknown }
+      close(): void
+    }
+  | undefined
+> {
+  let constructor: new (
+    path: string,
+    options?: { readonly?: boolean; fileMustExist?: boolean }
+  ) => {
+    prepare(sql: string): { all(...params: unknown[]): unknown; run(...params: unknown[]): unknown }
+    close(): void
+  }
+  try {
+    const module = (await import('better-sqlite3')) as unknown
+    const candidate =
+      module !== null && typeof module === 'object' && 'default' in module
+        ? (module as { default: unknown }).default
+        : module
+    if (typeof candidate !== 'function') return undefined
+    constructor = candidate as typeof constructor
+  } catch {
+    return undefined
+  }
+  try {
+    return new constructor(databasePath, { fileMustExist: true })
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Delete V2 credential rows whose integration matches a stale logout target.
+ * Scoped to the account container when the environment isolates one, so a
+ * managed disconnect can never delete the default home's credentials.
+ */
+async function deleteOpenCodeV2CredentialsFor(
+  environment: NodeJS.ProcessEnv,
+  candidates: Set<string>
+): Promise<number> {
+  if (candidates.size === 0) return 0
+  // WSL stores live behind the harness runtime; the host cannot open them.
+  const wslProbe = await readHarnessHomeFile('opencode', OPENCODE_AUTH_RELATIVE_PATH)
+  if (wslProbe !== undefined) return 0
+  const scopedRoot = environment['XDG_DATA_HOME']
+    ? `${environment['XDG_DATA_HOME']}/opencode`
+    : undefined
+  const databasePaths = (await openCodeCredentialDatabasePaths(environment)).filter(
+    (path) => !scopedRoot || path.startsWith(`${scopedRoot}/`) || path.startsWith(scopedRoot)
+  )
+  let deleted = 0
+  for (const databasePath of databasePaths) {
+    const database = await openCredentialStoreWritable(databasePath)
+    if (!database) continue
+    try {
+      // better-sqlite3 is synchronous; candidate sets are tiny (rename aliases).
+      const placeholders = [...candidates].map(() => 'LOWER(integration_id) = LOWER(?)').join(' OR ')
+      if (!placeholders) continue
+      // Count first so the caller can report; the delete is the same predicate.
+      let matching = 0
+      try {
+        const rows = database.prepare(`SELECT id FROM credential WHERE ${placeholders}`).all(...[...candidates])
+        matching = Array.isArray(rows) ? rows.length : 0
+      } catch {
+        continue
+      }
+      if (matching === 0) continue
+      database.prepare(`DELETE FROM credential WHERE ${placeholders}`).run(...[...candidates])
+      deleted += matching
+    } catch {
+      // A store written by a different schema is not a reason to fail logout.
+    } finally {
+      database.close()
+    }
+  }
+  return deleted
+}
+
+/** Whether any credential remains for the candidate integrations in either store. */
+async function hasRemainingOpenCodeCredentials(
+  environment: NodeJS.ProcessEnv,
+  candidates: Set<string>
+): Promise<boolean> {
+  if (candidates.size === 0) return false
+  try {
+    const wslRaw = await readHarnessHomeFile('opencode', OPENCODE_AUTH_RELATIVE_PATH)
+    if (typeof wslRaw === 'string') {
+      try {
+        const parsed = JSON.parse(wslRaw) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          if (
+            Object.keys(parsed as Record<string, unknown>).some(
+              (key) => candidates.has(key.toLowerCase()) || candidates.has(accountId(key))
+            )
+          )
+            return true
+        }
+      } catch {
+        // Fall through to the V2 store check.
+      }
+    } else if (wslRaw === undefined) {
+      const scoped = Boolean(environment['XDG_DATA_HOME'])
+      for (const filePath of openCodeAuthPaths(environment, { scopedToDataHome: scoped })) {
+        try {
+          const parsed = JSON.parse(await readFile(filePath, 'utf8')) as unknown
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+          if (
+            Object.keys(parsed as Record<string, unknown>).some(
+              (key) => candidates.has(key.toLowerCase()) || candidates.has(accountId(key))
+            )
+          )
+            return true
+        } catch (error) {
+          if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue
+        }
+      }
+    }
+  } catch {
+    // A store read failure must not block an explicit disconnect.
+  }
+  try {
+    for (const credential of await readOpenCodeV2StoredCredentials(environment)) {
+      if (
+        candidates.has(credential.integrationId.toLowerCase()) ||
+        candidates.has(accountId(credential.integrationId))
+      )
+        return true
+    }
+  } catch {
+    // Same: logout stays idempotent when the store cannot be read.
+  }
+  return false
+}
+
+/**
  * OpenCode V1 auth: `opencode auth list`, with a `--provider` login target and
  * a credential store CodeInOven can edit directly (`~/.local/share/opencode`).
+ *
+ * The command is the canonical install the app assessed, so a v1 binary answers
+ * the probe and the login from the same copy rather than from whichever one PATH
+ * resolves for that particular spawn.
  */
-const OPENCODE_V1_AUTH: AuthDefinition = {
-  id: 'opencode',
-  name: 'OpenCode',
-  command: 'opencode',
-  statusArgs: ['auth', 'list'],
-  parseStatus: parseOpenCodeStatus,
-  loginArgs: (options) => [
-    'auth',
-    'login',
-    ...(options.providerId ? ['--provider', options.providerId] : [])
-  ],
-  logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
-  resolveLogoutTarget: resolveOpencodeLogoutTarget,
-  pickerLogin: true
+function openCodeV1Auth(command: string): AuthDefinition {
+  return {
+    id: 'opencode',
+    name: 'OpenCode',
+    command,
+    statusArgs: ['auth', 'list'],
+    parseStatus: parseOpenCodeStatus,
+    loginArgs: (options) => [
+      'auth',
+      'login',
+      ...(options.providerId ? ['--provider', options.providerId] : [])
+    ],
+    logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+    resolveLogoutTarget: resolveOpencodeLogoutTarget,
+    pickerLogin: true
+  }
 }
 
 /**
@@ -871,6 +1231,16 @@ async function readOpenCodeV2Status(
 /**
  * OpenCode V2 auth: credentials live in its own SQLite store, while login and
  * logout take a positional provider id.
+ *
+ * Every client subcommand drives OpenCode's own managed daemon
+ * (`opencode serve --service`), which binds one fixed default port per install.
+ * A managed account is a separate install (its container owns XDG_CONFIG_HOME,
+ * XDG_DATA_HOME and friends), so the CLI cannot bind that port while any other
+ * OpenCode install's daemon already holds it, and it dies with
+ * "Server process exited with code 1   Managed service port <port> on 127.0.0.1
+ * is already in use by another process". `--standalone` runs the command on a
+ * private server instead, which is the rule the rest of the app already
+ * follows: it never talks to OpenCode's managed service.
  */
 function openCodeV2Auth(command: string): AuthDefinition {
   return {
@@ -878,11 +1248,30 @@ function openCodeV2Auth(command: string): AuthDefinition {
     name: 'OpenCode',
     command,
     readStatus: readOpenCodeV2Status,
-    loginArgs: (options) => ['auth', 'login', ...(options.providerId ? [options.providerId] : [])],
-    logoutArgs: (providerId) => ['auth', 'logout', ...(providerId ? [providerId] : [])],
+    loginArgs: (options) => [
+      'auth',
+      'login',
+      ...(options.providerId ? [options.providerId] : []),
+      '--standalone'
+    ],
+    resolveStoredIntegration: resolveOpenCodeV2StoredIntegration,
+    logoutArgs: (providerId, credential) => [
+      'auth',
+      'logout',
+      ...(providerId ? [providerId] : []),
+      ...(credential ? [credential] : []),
+      '--standalone'
+    ],
+    resolveLogoutCredential: resolveOpenCodeV2LogoutCredential,
     // V2 keeps several credentials per integration and switches the active one
     // by id or label (`opencode auth switch <integration> <credential>`).
-    activateArgs: (providerId, credentialId) => ['auth', 'switch', providerId, credentialId],
+    activateArgs: (providerId, credentialId) => [
+      'auth',
+      'switch',
+      providerId,
+      credentialId,
+      '--standalone'
+    ],
     // The active credential lives in V2's own store, and `auth list` does not
     // report it, so account state is read from the store itself.
     nativeStore: 'v2',
@@ -901,7 +1290,7 @@ async function openCodeAuthDefinition(): Promise<AuthDefinition> {
   if (installation && isOpenCodeV2Version(installation.version)) {
     return openCodeV2Auth(installation.command)
   }
-  return OPENCODE_V1_AUTH
+  return openCodeV1Auth(resolvedOpenCodeCommand())
 }
 
 /** Version-aware definition without spawning a probe (for existence checks). */
@@ -910,7 +1299,7 @@ function openCodeAuthDefinitionCached(): AuthDefinition {
   if (installation && isOpenCodeV2Version(installation.version)) {
     return openCodeV2Auth(installation.command)
   }
-  return OPENCODE_V1_AUTH
+  return openCodeV1Auth(resolvedOpenCodeCommand())
 }
 
 const AUTH_DEFINITIONS: AuthDefinition[] = [
@@ -1030,6 +1419,32 @@ export class ProviderAccountOrchestrator {
       apiKeyEntry: definition.apiKeyEntry === true,
       inAppLogin: definition.inAppLogin === true
     }
+  }
+
+  /**
+   * The integration a managed account's own credential store reports, for
+   * harnesses whose store CodeInOven reads locally (OpenCode V2). Undefined for
+   * every other harness, which would need a CLI probe, and when the store does
+   * not name exactly one integration.
+   *
+   * A managed row's provider id is fixed when its container is created, so a
+   * release that renames an integration leaves the row naming a provider the
+   * command line no longer knows. OpenCode's `OpenCode Zen` became
+   * `OpenCode Console` while the id stayed `opencode`, and the row kept the V1
+   * slug `opencode-zen`, which `auth login` rejects with "Integration not
+   * found". Reading the container's store is what lets the row be repaired
+   * without running the harness.
+   */
+  async storedProviderFor(
+    harnessId: string,
+    environment: NodeJS.ProcessEnv
+  ): Promise<string | undefined> {
+    const definition = await this.resolveDefinitionOrUndefined(harnessId)
+    if (!definition || definition.nativeStore !== 'v2') return undefined
+    const stored = await readOpenCodeV2StoredCredentials(environment)
+    const integrations = [...new Set(stored.map((credential) => credential.integrationId))]
+    if (integrations.length !== 1) return undefined
+    return canonicalOpenCodeIntegrationId(integrations[0] as string)
   }
 
   /** Store an API key for one catalog provider in a file-backed auth store. */
@@ -1203,6 +1618,15 @@ export class ProviderAccountOrchestrator {
     ) {
       delete loginOptions.providerId
     }
+    // The account's own store names the integration, so a row whose provider id
+    // went stale still signs in against the integration the CLI knows.
+    if (loginOptions.providerId !== undefined && definition.resolveStoredIntegration) {
+      const resolved = await definition.resolveStoredIntegration(
+        loginOptions.providerId,
+        environment
+      )
+      if (resolved) loginOptions.providerId = resolved
+    }
     const prepared = await prepareHarnessTerminalHandoff(
       definition.command,
       definition.loginArgs(loginOptions)
@@ -1225,7 +1649,8 @@ export class ProviderAccountOrchestrator {
     harnessId: string,
     providerId?: string,
     environment: NodeJS.ProcessEnv = {},
-    providerHint?: string
+    providerHint?: string,
+    credentialHint?: string
   ): Promise<void> {
     const definition = await this.resolveDefinition(harnessId)
     const piAgentDir = environment['PI_CODING_AGENT_DIR']
@@ -1245,12 +1670,31 @@ export class ProviderAccountOrchestrator {
       )
     }
     let target = providerId
-    if (definition.resolveLogoutTarget && providerId !== undefined) {
-      target = (await definition.resolveLogoutTarget(providerId, providerHint)) ?? providerId
+    if (harnessId === 'opencode' && target !== undefined) {
+      // A renamed integration must never reach the CLI under its stale id:
+      // `opencode-zen` became `opencode`, and every command built from the
+      // stale id ends with "Integration not found: opencode-zen".
+      target = canonicalOpenCodeIntegrationId(target)
     }
+    if (target !== undefined && definition.resolveStoredIntegration) {
+      target = (await definition.resolveStoredIntegration(target, environment)) ?? target
+      if (harnessId === 'opencode') target = canonicalOpenCodeIntegrationId(target)
+    }
+    if (definition.resolveLogoutTarget && target !== undefined) {
+      target = (await definition.resolveLogoutTarget(target, providerHint)) ?? target
+      if (harnessId === 'opencode') target = canonicalOpenCodeIntegrationId(target)
+    }
+    const credential =
+      definition.resolveLogoutCredential && target !== undefined
+        ? await definition.resolveLogoutCredential(
+            target,
+            credentialHint ?? providerHint,
+            environment
+          )
+        : undefined
     const result = await this.run(
       definition.command,
-      definition.logoutArgs(target),
+      definition.logoutArgs(target, credential),
       homedir(),
       environment
     )
@@ -1260,6 +1704,23 @@ export class ProviderAccountOrchestrator {
           ? (result.error ?? 'unknown error')
           : result.stderr.trim() || result.stdout.trim()
       )
+      // A stale rename leaves credentials the CLI no longer names: the store
+      // still holds `opencode-zen` while the binary only knows `opencode`, so
+      // its logout dies with "Integration not found". Those legacy keys can
+      // never be removed through the CLI. Logout is idempotent, so clean both
+      // stores directly and treat it as done once nothing remains for the
+      // requested integration, which unblocks removing the account row.
+      if (
+        harnessId === 'opencode' &&
+        (isUnknownOpenCodeIntegrationError(detail) || isBenignOpenCodeLogoutError(detail))
+      ) {
+        const candidates = openCodeLogoutCandidates(providerId, target)
+        if (candidates.size > 0) {
+          await removeOpenCodeV1CredentialsFor(environment, candidates)
+          await deleteOpenCodeV2CredentialsFor(environment, candidates)
+          if (!(await hasRemainingOpenCodeCredentials(environment, candidates))) return
+        }
+      }
       throw new Error(
         result.exitCode === undefined
           ? `Logout failed: ${detail || 'unknown error'}`
@@ -1267,6 +1728,20 @@ export class ProviderAccountOrchestrator {
       )
     }
     await definition.verifyLogout?.(environment)
+    if (harnessId === 'opencode') {
+      // The CLI removed the canonical integration; a pre-rename alias row
+      // (`opencode-zen`) is unknown to the binary and survives. Sweep it
+      // best-effort so a successful disconnect leaves no legacy key behind.
+      try {
+        const candidates = openCodeLogoutCandidates(providerId, target)
+        if (candidates.size > 0) {
+          await removeOpenCodeV1CredentialsFor(environment, candidates)
+          await deleteOpenCodeV2CredentialsFor(environment, candidates)
+        }
+      } catch (error) {
+        Logger.dev('OpenCode stale alias sweep failed:', error)
+      }
+    }
   }
 
   /**
@@ -1284,9 +1759,15 @@ export class ProviderAccountOrchestrator {
     if (!definition.activateArgs) {
       throw new Error(`${harnessId} does not support switching its active account.`)
     }
+    // The stored integration is what the CLI's switch command names, so a row
+    // whose provider id went stale still switches the credential it holds.
+    const resolved =
+      (await definition.resolveStoredIntegration?.(providerId, environment)) ?? providerId
+    const target =
+      harnessId === 'opencode' ? canonicalOpenCodeIntegrationId(resolved) : resolved
     const result = await this.run(
       definition.command,
-      definition.activateArgs(providerId, credentialId),
+      definition.activateArgs(target, credentialId),
       homedir(),
       environment
     )

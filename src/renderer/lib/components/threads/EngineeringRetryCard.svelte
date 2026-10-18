@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { RefreshCw, TriangleAlert, X } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -106,7 +108,7 @@
 <div out:slide={dismissSlide()}>
   <CardFrame placement="replace" label="Retry failed Engineering stage">
     <CardHead
-      icon={TriangleAlert}
+      icon={CioAttention}
       title="{stageLabel} failed"
       {chip}
       tone="warn"
@@ -131,7 +133,7 @@
             <CardButton
               label="Cancel"
               title="Stop the Engineering lifecycle and return to the stage card"
-              icon={X}
+              icon={CioClose}
               variant="ghost-danger"
               disabled={busy}
               onclick={() => void onCancel()}
@@ -171,7 +173,7 @@
             <CardButton
               label={busy ? 'Retrying…' : 'Retry stage'}
               title="Retry the failed {stageLabel} stage with the selected model"
-              icon={busy ? undefined : RefreshCw}
+              icon={busy ? undefined : CioRefresh}
               variant="primary"
               disabled={busy}
               loading={busy}

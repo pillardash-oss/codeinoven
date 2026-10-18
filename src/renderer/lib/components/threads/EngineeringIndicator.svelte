@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { Toolbox } from '@lucide/svelte'
-
+  import CioTools from '@pillardash-oss/cio-icon/CioTools.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label: string
@@ -19,7 +18,7 @@
   aria-label={label}
   title={label}
 >
-  <Toolbox
+  <CioTools
     {size}
     class="text-thread-spec"
     fill="var(--color-thread-spec)"

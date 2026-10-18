@@ -1,17 +1,15 @@
 <script lang="ts">
+  import CioArrowUpCircle from '@pillardash-oss/cio-icon/CioArrowUpCircle.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCode from '@pillardash-oss/cio-icon/CioCode.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    ArrowUpCircle,
-    CheckCircle2,
-    CodeXml,
-    Download,
-    ExternalLink,
-    Loader2,
-    RefreshCw,
-    ShieldCheck,
-    SquareTerminal
-  } from '@lucide/svelte'
   import type {
     CuaBridgeStatus,
     CuaInstallationSource,
@@ -235,7 +233,7 @@
 
       {#if loading && !status}
         <span class="flex items-center gap-2 text-xs text-muted">
-          <Loader2 size={14} class="animate-spin" /> Inspecting
+          <CioSpinner size={14} class="animate-spin" /> Inspecting
         </span>
       {:else if status}
         <div class="flex shrink-0 items-center gap-2">
@@ -300,7 +298,7 @@
         <div
           class="mt-4 flex items-start gap-2 border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
         >
-          <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+          <CioAttention size={14} class="mt-0.5 shrink-0" />
           <span>{status.detail}</span>
         </div>
       {/if}
@@ -313,7 +311,7 @@
             title={status.downloadLabel}
             onclick={() => openStatusUrl('installUrl')}
           >
-            <Download size={14} />
+            <CioDownload size={14} />
             {status.downloadLabel}
           </button>
         {/if}
@@ -324,7 +322,7 @@
           title="Refresh Cua Driver status"
           onclick={() => void loadStatus()}
         >
-          <RefreshCw size={14} class={loading ? 'animate-spin' : ''} /> Refresh status
+          <CioRefresh size={14} class={loading ? 'animate-spin' : ''} /> Refresh status
         </button>
         <button
           type="button"
@@ -332,7 +330,7 @@
           title="Open the Cua Driver setup guide"
           onclick={() => openStatusUrl('documentationUrl')}
         >
-          <ShieldCheck size={14} /> Setup guide
+          <CioShieldCheck size={14} /> Setup guide
         </button>
         <button
           type="button"
@@ -340,7 +338,7 @@
           title="Open the Cua source repository"
           onclick={() => openStatusUrl('repositoryUrl')}
         >
-          <CodeXml size={14} /> GitHub
+          <CioCode size={14} /> GitHub
         </button>
       </div>
     {/if}
@@ -364,7 +362,7 @@
           title="Check Cua releases again"
           onclick={() => void checkForUpdates(true)}
         >
-          <RefreshCw size={14} class={checkingUpdate ? 'animate-spin' : ''} /> Check again
+          <CioRefresh size={14} class={checkingUpdate ? 'animate-spin' : ''} /> Check again
         </button>
       </div>
 
@@ -380,7 +378,7 @@
         </div>
       {:else if updateProgress?.state === 'installed'}
         <div class="mt-4 flex items-start gap-2 bg-success/10 px-3 py-2 text-xs text-success">
-          <CheckCircle2 size={14} class="mt-0.5 shrink-0" />
+          <CioCheckCircle size={14} class="mt-0.5 shrink-0" />
           <span>
             {updatedVersion
               ? `Cua Driver ${updatedVersion} is installed.`
@@ -391,7 +389,7 @@
       {:else if updateProgress?.state === 'failed' || updateError}
         <div class="mt-4 bg-warning/10 px-3 py-2 text-xs text-warning" role="alert">
           <div class="flex items-start gap-2">
-            <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+            <CioAttention size={14} class="mt-0.5 shrink-0" />
             <span class="whitespace-pre-line break-words">
               {updateProgress?.state === 'failed' ? updateProgress.error : updateError}
             </span>
@@ -403,7 +401,7 @@
               title="Check Cua releases again"
               onclick={() => void checkForUpdates(true)}
             >
-              <RefreshCw size={13} /> Check again
+              <CioRefresh size={13} /> Check again
             </button>
             {#if update?.updateAvailable}
               <button
@@ -412,7 +410,7 @@
                 title={`Try updating Cua Driver to ${update.latestVersion} again`}
                 onclick={() => (confirmingUpdate = true)}
               >
-                <ArrowUpCircle size={13} /> Try the update again
+                <CioArrowUpCircle size={13} /> Try the update again
               </button>
             {/if}
           </div>
@@ -436,7 +434,7 @@
               title={`Update Cua Driver to ${update.latestVersion}`}
               onclick={() => (confirmingUpdate = true)}
             >
-              <ArrowUpCircle size={14} /> Update to {update.latestVersion}
+              <CioArrowUpCircle size={14} /> Update to {update.latestVersion}
             </button>
             {#if update.releaseNotesUrl}
               <button
@@ -445,14 +443,14 @@
                 title={`Read the Cua ${update.latestVersion} release notes`}
                 onclick={openUpdateReleaseNotes}
               >
-                Release notes <ExternalLink size={12} />
+                Release notes <CioExternalLink size={12} />
               </button>
             {/if}
           </div>
         </div>
       {:else if checkingUpdate}
         <p class="mt-4 flex items-center gap-2 text-xs text-muted">
-          <Loader2 size={14} class="animate-spin" /> Checking Cua for a newer release…
+          <CioSpinner size={14} class="animate-spin" /> Checking Cua for a newer release…
         </p>
       {:else if update}
         <p class="mt-4 text-xs text-muted">
@@ -465,7 +463,7 @@
       {#if status.updateCommand}
         <div class="mt-4 border-t pt-4">
           <div class="flex items-start gap-2">
-            <SquareTerminal size={15} class="mt-0.5 shrink-0 text-muted" />
+            <CioTerminal size={15} class="mt-0.5 shrink-0 text-muted" />
             <div>
               <p class="text-xs font-semibold">Prefer a terminal?</p>
               <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
@@ -482,7 +480,7 @@
             title="Open Cua Driver update instructions"
             onclick={() => openStatusUrl('updateUrl')}
           >
-            Read update instructions <ExternalLink size={12} />
+            Read update instructions <CioExternalLink size={12} />
           </button>
         </div>
       {/if}
@@ -575,7 +573,7 @@
         title="Open macOS permission instructions"
         onclick={() => openStatusUrl('permissionsUrl')}
       >
-        Review macOS permissions <ExternalLink size={12} />
+        Review macOS permissions <CioExternalLink size={12} />
       </button>
     {/if}
   </section>

@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Shield, ShieldAlert, ShieldCheck } from '@lucide/svelte'
+  import CioShield from '@pillardash-oss/cio-icon/CioShield.svelte'
+  import CioShieldAlert from '@pillardash-oss/cio-icon/CioShieldAlert.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
   import { PERMISSION_LEVELS, permissionLevelLabel } from '$lib/actions'
   import type { PermissionLevel } from '$shared/types'
 
@@ -34,7 +36,7 @@
     class="flex h-8 shrink-0 items-center gap-1 overflow-hidden bg-raised px-2 text-[0.6875rem] whitespace-nowrap text-muted"
     title="Temporary chats can inspect context but cannot modify files or run commands"
   >
-    <Shield size={12} class="shrink-0" />
+    <CioShield size={12} class="shrink-0" />
     <span class="composer-control-label min-w-0 truncate">Read only</span>
   </span>
 {:else if !hidePermissionSelector || fileSystemMode === true}
@@ -54,9 +56,9 @@
       onclick={onToggle}
     >
       {#if permissionLevel === 'full_access'}
-        <ShieldAlert size={12} strokeWidth={2.75} class="shrink-0" />
+        <CioShieldAlert size={12} strokeWidth={2.75} class="shrink-0" />
       {:else}
-        <Shield size={12} class="shrink-0" />
+        <CioShield size={12} class="shrink-0" />
       {/if}
       <span class="composer-control-label min-w-0 truncate"
         >{permissionLevelLabel(permissionLevel)}</span
@@ -82,9 +84,9 @@
             onclick={() => onSelect(level.id)}
           >
             {#if level.id === 'full_access'}
-              <ShieldAlert size={12} strokeWidth={2.75} class="text-warning" />
+              <CioShieldAlert size={12} strokeWidth={2.75} class="text-warning" />
             {:else}
-              <ShieldCheck size={12} class="text-info" />
+              <CioShieldCheck size={12} class="text-info" />
             {/if}
             {level.label}
           </button>

@@ -1,11 +1,16 @@
 <script lang="ts">
-  import { ChevronLeft, Loader2 } from '@lucide/svelte'
-
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   interface Props {
     setupPreset: string | null
     isNative: boolean
     hasDraftId: boolean
     isAppOwned: boolean
+    /**
+     * The draft has nothing an editor may change, so the footer offers no save:
+     * a built-in utility's section is shown for reading, not for editing.
+     */
+    readOnly?: boolean
     saving: boolean
     canImportPlugin: boolean
     onBack: () => void
@@ -19,6 +24,7 @@
     isNative,
     hasDraftId,
     isAppOwned,
+    readOnly = false,
     saving,
     canImportPlugin,
     onBack,
@@ -39,7 +45,7 @@
         data-modal-dismiss
         onclick={onBack}
       >
-        <ChevronLeft size={14} /> Back
+        <CioBack size={14} /> Back
       </button>
     {/if}
   </div>
@@ -60,7 +66,7 @@
         disabled={saving || !canImportPlugin}
         onclick={onImportPlugin}
       >
-        {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+        {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
         Install plugin
       </button>
     {:else}
@@ -70,7 +76,7 @@
         data-modal-dismiss
         onclick={onClose}
       >
-        {hasDraftId || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
+        {hasDraftId || isNative || setupPreset !== null ? (readOnly ? 'Close' : 'Cancel') : 'Close'}
       </button>
       {#if (hasDraftId || isNative) && !isAppOwned}
         <button
@@ -79,11 +85,11 @@
           disabled={saving}
           onclick={onRequestDelete}
         >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
           Delete
         </button>
       {/if}
-      {#if hasDraftId || isNative || setupPreset !== null}
+      {#if (hasDraftId || isNative || setupPreset !== null) && !readOnly}
         <button
           class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
@@ -91,7 +97,7 @@
           data-modal-primary
           disabled={saving}
         >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
           {isNative ? 'Save changes' : 'Save utility'}
         </button>
       {/if}

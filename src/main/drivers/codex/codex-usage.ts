@@ -7,6 +7,30 @@ import type {
 } from '../../../lib/types'
 import { numberValue, recordValue, stringValue } from './codex-values'
 
+/** Session counters can recover requests whose final notification was coalesced. */
+export function mapCodexTotalUsage(value: unknown): AgentTokenUsage | undefined {
+  const outer = recordValue(value)
+  if (!outer) return undefined
+  const usage = recordValue(outer['tokenUsage']) ?? recordValue(outer['token_usage']) ?? outer
+  const total =
+    recordValue(usage['total']) ??
+    recordValue(usage['totalUsage']) ??
+    recordValue(usage['total_usage']) ??
+    recordValue(usage['totalTokenUsage']) ??
+    recordValue(usage['total_token_usage'])
+  if (!total) return undefined
+  const mapped = mapCodexTokenRecord(total)
+  const normalized = mapped.normalizedUsage
+  if (
+    !normalized ||
+    normalized.uncachedInput === null ||
+    normalized.cachedInput === null ||
+    normalized.output === null
+  )
+    return undefined
+  return mapped.aggregateTokens
+}
+
 /** Codex token accounting and account rate-limit normalization. */
 
 /** Map Codex accounting into the canonical normalized contract and display aggregates. */
@@ -110,10 +134,7 @@ export function mapCodexUsage(value: unknown):
     numberValue(last['input_tokens']) ??
     numberValue(last['input']) ??
     numberValue(tokenUsage['contextUsed']) ??
-    numberValue(tokenUsage['context_used']) ??
-    totalRecord?.aggregateTokens?.total ??
-    numberValue(tokenUsage['totalTokens']) ??
-    numberValue(tokenUsage['total_tokens'])
+    numberValue(tokenUsage['context_used'])
   const contextWindow =
     numberValue(tokenUsage['modelContextWindow']) ??
     numberValue(tokenUsage['model_context_window']) ??

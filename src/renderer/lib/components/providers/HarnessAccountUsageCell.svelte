@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { BatteryCharging, Loader2, LogIn, RefreshCw } from '@lucide/svelte'
+  import CioBatteryCharging from '@pillardash-oss/cio-icon/CioBatteryCharging.svelte'
+  import CioLogIn from '@pillardash-oss/cio-icon/CioLogIn.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import { bankedResetSummary, creditsLabel, formatExpiry } from '$lib/format/usage'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
@@ -64,7 +67,7 @@
       {/if}
       {#if bankedResets}
         <p class="flex items-center gap-1.5 text-[0.625rem] text-muted" title={bankedDetail}>
-          <BatteryCharging size={11} class="shrink-0 text-info" aria-hidden="true" />
+          <CioBatteryCharging size={11} class="shrink-0 text-info" aria-hidden="true" />
           <span class="truncate">{bankedResets}</span>
         </p>
       {/if}
@@ -81,7 +84,7 @@
             aria-label={`Sign in again to ${account.label}`}
             onclick={() => (signInOpen = true)}
           >
-            <LogIn size={10} aria-hidden="true" />
+            <CioLogIn size={10} aria-hidden="true" />
             Sign in again
           </button>
         {:else}
@@ -94,10 +97,10 @@
             onclick={() => harnessAccountUsageCache.schedule([account], { force: true })}
           >
             {#if probing}
-              <Loader2 size={10} class="animate-spin" aria-hidden="true" />
+              <CioSpinner size={10} class="animate-spin" aria-hidden="true" />
               Retrying…
             {:else}
-              <RefreshCw size={10} aria-hidden="true" />
+              <CioRefresh size={10} aria-hidden="true" />
               Retry
             {/if}
           </button>

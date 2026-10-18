@@ -253,8 +253,13 @@ export function validatePromptReferences(
   references: PromptReference[] | undefined
 ): PromptReference[] {
   if (references === undefined) return []
-  if (!Array.isArray(references) || references.length > 20) {
-    throw new TypeError('Prompt references must be an array of at most 20 selections')
+  // A conversation carries as many references as the user attached: no count
+  // ceiling, because the user's own gestures decide that, and a carry between
+  // chats must never be refused for arriving at a number. The payload stays
+  // bounded where it matters instead: each reference's own text, its comment, and
+  // the total text the prompt can carry below.
+  if (!Array.isArray(references)) {
+    throw new TypeError('Prompt references must be an array of selections')
   }
   let totalTextLength = 0
   return references.map((reference, index) => {

@@ -240,6 +240,58 @@ export class AssistantRepo {
     return row ? rowToAssistant(row) : null
   }
 
+  /** Patch only settled reporting columns, preserving concurrent panel edits. */
+  updateReporting(
+    id: string,
+    reporting: Partial<Pick<Assistant, 'delivery' | 'priority'>>,
+    updatedAt: number
+  ): void {
+    const fields: string[] = []
+    const values: (string | number)[] = []
+    if (reporting.delivery !== undefined) {
+      fields.push('delivery = ?')
+      values.push(JSON.stringify(reporting.delivery))
+    }
+    if (reporting.priority !== undefined) {
+      fields.push('priority = ?')
+      values.push(JSON.stringify(reporting.priority))
+    }
+    if (fields.length === 0) return
+    fields.push('updated_at = ?')
+    this.db.run(`UPDATE assistants SET ${fields.join(', ')} WHERE id = ?`, [
+      ...values,
+      updatedAt,
+      id
+    ])
+  }
+
+  /**
+   * Write the two fields the setup conversation settles before the knowledge
+   * exists: the name the user gives their assistant and the personality they
+   * described.
+   *
+   * Narrower than `upsert` on purpose. The capability that calls this may only
+   * rename the assistant and record how it should behave, so it can never clobber
+   * a schedule, a connection set or a knowledge that the panel is editing in the
+   * same window. Only the fields the caller passes are touched.
+   */
+  updateIdentity(
+    id: string,
+    identity: { name?: string; personality?: string },
+    updatedAt: number
+  ): Assistant | null {
+    const existing = this.get(id)
+    if (!existing) return null
+    const next: Assistant = {
+      ...existing,
+      ...(identity.name !== undefined ? { name: identity.name } : {}),
+      ...(identity.personality !== undefined ? { personality: identity.personality } : {}),
+      updatedAt
+    }
+    this.upsert(next)
+    return next
+  }
+
   /**
    * One assistant, read on the worker's connection. Interaction paths (a settled
    * run's notification naming its assistant, say) use this instead of `get`, so a

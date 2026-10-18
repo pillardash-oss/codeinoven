@@ -570,9 +570,14 @@ class ScopeState {
     this.threads.updateThread(updated)
   }
 
-  /** Patch one thread's authored-work kind in place (light broadcast). */
-  patchAuthoredWorkKind(projectId: string, threadId: string, kind: AuthoredWorkKind): void {
-    this.threads.patchAuthoredWorkKind(projectId, threadId, kind)
+  /** Patch one thread's authored-work kinds in place (light broadcast). */
+  patchAuthoredWorkKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    kinds: readonly AuthoredWorkKind[]
+  ): void {
+    this.threads.patchAuthoredWorkKind(projectId, threadId, kind, kinds)
   }
 
   /** Fold a list of thread snapshots into the scope store in one pass. See

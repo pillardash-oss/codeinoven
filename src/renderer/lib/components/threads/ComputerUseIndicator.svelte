@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { MousePointer2 } from '@lucide/svelte'
-
+  import CioCursor from '@pillardash-oss/cio-icon/CioCursor.svelte'
   interface Props {
     /** Action-specific description, used for both `title` and `aria-label`. */
     label: string
@@ -18,5 +17,5 @@
   aria-label={label}
   title={label}
 >
-  <MousePointer2 {size} strokeWidth={2.5} class="text-accent" aria-hidden="true" />
+  <CioCursor {size} strokeWidth={2.5} class="text-accent" aria-hidden="true" />
 </span>

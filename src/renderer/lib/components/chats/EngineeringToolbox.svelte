@@ -1,7 +1,9 @@
 <script lang="ts">
+  import CioTools from '@pillardash-oss/cio-icon/CioTools.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
+  import { roomAbove } from '$lib/popover-room'
   import { tick } from 'svelte'
-  import { Toolbox } from '@lucide/svelte'
   import Switch from '../ui/Switch.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -22,7 +24,27 @@
 
   let { lifecycleState, active = false, disabled = false, onselect, onclose }: Props = $props()
   let open = $state(false)
-  let panel: HTMLDivElement | undefined = $state(undefined)
+
+  /** The panel while it is open, so focus can be moved into it. */
+  let panel: HTMLDivElement | undefined
+
+  /**
+   * Ceiling for the open panel, in pixels: the five stages plus Auto Pilot need about
+   * this much at the default font size, so it only binds on a surface too short to hold
+   * the whole list   which is exactly when the rows have to scroll instead.
+   */
+  const PANEL_MAX_HEIGHT = 480
+
+  /** Clearance the panel keeps from the edge it would otherwise be clipped at. */
+  const PANEL_EDGE_GAP = 8
+
+  /**
+   * Measured ceiling for the panel. The panel opens upward from the composer, so on a
+   * short surface a full-height panel has its title clipped away by the surface it lives
+   * in: the ceiling keeps it complete and lets the rows scroll instead.
+   */
+  let panelMaxHeight = $state(PANEL_MAX_HEIGHT)
+
   /** Position within [rows, autopilot] reached by arrow-key navigation. */
   let navIndex = $state(0)
 
@@ -113,6 +135,26 @@
     if (open) await focusPanel()
   }
 
+  /**
+   * Cap the panel to the room above it while it is on screen, and re-measure whenever the
+   * window resizes, since that is what changes the room. The attachment is also where the
+   * panel element is held for focus management: both belong to the panel's own lifetime,
+   * so it runs on every open and cleans up on every close with nothing left behind.
+   */
+  function attachPanel(node: HTMLDivElement): () => void {
+    const measure = (): void => {
+      const edge = node.getBoundingClientRect().bottom
+      panelMaxHeight = Math.min(PANEL_MAX_HEIGHT, roomAbove(node, edge, PANEL_EDGE_GAP))
+    }
+    panel = node
+    measure()
+    window.addEventListener('resize', measure)
+    return () => {
+      panel = undefined
+      window.removeEventListener('resize', measure)
+    }
+  }
+
   function closeViaKeyboard(): void {
     open = false
     onclose?.()
@@ -163,8 +205,8 @@
     {disabled}
     onclick={() => void toggle()}
   >
-    <Toolbox
-      size={15}
+    <CioTools
+      size={ICON_SIZE.control}
       class={filled ? 'text-thread-spec' : ''}
       fill={filled ? 'var(--color-thread-spec)' : 'none'}
       fill-opacity={filled ? 0.18 : undefined}
@@ -178,51 +220,60 @@
       aria-label="Close Engineering Toolbox"
       onclick={() => (open = false)}
     ></button>
+    <!--
+      Compact layouts pin the panel to the bottom of the window, so there the ceiling is
+      the viewport; from `sm` up it opens upward from the trigger and takes the measured
+      room above it. Either way the title stays put and the rows scroll under it.
+    -->
     <div
-      bind:this={panel}
-      class="fixed inset-x-3 bottom-3 z-40 border bg-surface p-2 shadow-lg sm:absolute sm:inset-x-auto sm:bottom-9 sm:left-0 sm:w-80"
+      {@attach attachPanel}
+      class="fixed inset-x-3 bottom-3 z-40 flex max-h-[calc(100dvh-1.5rem)] flex-col border bg-surface p-2 shadow-lg sm:absolute sm:inset-x-auto sm:bottom-9 sm:left-0 sm:w-80 sm:max-h-[var(--engineering-toolbox-max-height)]"
+      style="--engineering-toolbox-max-height: {panelMaxHeight}px"
       role="menu"
       tabindex="-1"
       aria-label="Engineering lifecycle"
       onkeydown={handleKeydown}
     >
-      <div class="px-2.5 pb-2 pt-1">
+      <div class="shrink-0 px-2.5 pb-2 pt-1">
         <p class="text-xs font-semibold text-foreground">Engineering Toolbox</p>
       </div>
-      {#each rows as row (row.stage)}
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        {#each rows as row (row.stage)}
+          <Switch
+            checked={hasSelectedStage(lifecycleState, row.stage)}
+            disabled={disabled || autopilot}
+            onchange={(enabled) => void choose(row.stage, enabled)}
+            title={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
+            aria-label={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
+            class="w-full items-start justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
+            activeClass="bg-thread-spec"
+          >
+            <span class="min-w-0 flex-1 pr-3">
+              <span class="block text-xs font-medium text-foreground">{row.label}</span>
+              <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted"
+                >{row.description}</span
+              >
+            </span>
+          </Switch>
+        {/each}
+        <div class="mx-2 my-1 border-t"></div>
         <Switch
-          checked={hasSelectedStage(lifecycleState, row.stage)}
-          disabled={disabled || autopilot}
-          onchange={(enabled) => void choose(row.stage, enabled)}
-          title={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
-          aria-label={`${hasSelectedStage(lifecycleState, row.stage) ? 'Turn off' : 'Turn on'} ${row.label}`}
+          checked={autopilot}
+          {disabled}
+          onchange={(enabled) => void chooseAutopilot(enabled)}
+          title={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
+          aria-label={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
           class="w-full items-start justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
           activeClass="bg-thread-spec"
         >
           <span class="min-w-0 flex-1 pr-3">
-            <span class="block text-xs font-medium text-foreground">{row.label}</span>
-            <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted">{row.description}</span
-            >
+            <span class="block text-xs font-medium text-foreground">Auto Pilot</span>
+            <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted">
+              Brainstorm through Achievement on full autonomy, reworking until complete.
+            </span>
           </span>
         </Switch>
-      {/each}
-      <div class="mx-2 my-1 border-t"></div>
-      <Switch
-        checked={autopilot}
-        {disabled}
-        onchange={(enabled) => void chooseAutopilot(enabled)}
-        title={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
-        aria-label={autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot'}
-        class="w-full items-start justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
-        activeClass="bg-thread-spec"
-      >
-        <span class="min-w-0 flex-1 pr-3">
-          <span class="block text-xs font-medium text-foreground">Auto Pilot</span>
-          <span class="mt-0.5 block text-[0.6875rem] leading-4 text-muted">
-            Brainstorm through Achievement on full autonomy, reworking until complete.
-          </span>
-        </span>
-      </Switch>
+      </div>
     </div>
   {/if}
 </div>

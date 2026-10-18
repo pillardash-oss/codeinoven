@@ -60,7 +60,15 @@ export function mergeSessionMessages(
     // Keep the same protection used by the renderer and durable turn stream.
     const existingParts = new Map(session.messages[index].parts.map((part) => [part.id, part]))
     session.messages[index] = {
+      ...session.messages[index],
       ...message,
+      tokens: message.tokens ?? session.messages[index].tokens,
+      normalizedUsage: message.normalizedUsage ?? session.messages[index].normalizedUsage,
+      cost: message.cost ?? session.messages[index].cost,
+      costProvenance:
+        typeof message.cost === 'number'
+          ? message.costProvenance
+          : (message.costProvenance ?? session.messages[index].costProvenance),
       parts: message.parts.map((part) => {
         const existing = existingParts.get(part.id)
         return existing ? mergeStreamedPart(existing, part) : part
@@ -82,7 +90,13 @@ export function mergeSessionMessages(
  * feed moves on instead of only being readable.
  */
 export function estimateMissingCost(message: AgentMessage): void {
-  if (typeof message.cost === 'number') return
+  if (typeof message.cost === 'number' && message.costProvenance?.source !== 'model_catalog') return
+  // Late final token snapshots replace provisional catalog estimates.
+  // Provider-reported charges remain authoritative.
+  if (message.costProvenance?.source === 'model_catalog') {
+    delete message.cost
+    delete message.costProvenance
+  }
   const completedAt = message.completedAt ?? message.createdAt ?? Date.now()
   const estimate = estimateModelCost(
     // A harness records the id it was handed, which may be an alias (`haiku`,

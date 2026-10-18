@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Layers } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitHubNotificationGroup } from '$shared/types'
 
@@ -33,7 +34,7 @@
     title="Group notifications by {activeLabel.toLowerCase()}"
     aria-label="Group notifications, currently by {activeLabel.toLowerCase()}"
   >
-    <Layers size={11} class="shrink-0" />
+    <CioLayers size={11} class="shrink-0" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
@@ -52,7 +53,7 @@
         {#each options as option (option.id)}
           <DropdownMenu.RadioItem value={option.id} class={itemClass}>
             <span class="min-w-0 flex-1 truncate">{option.label}</span>
-            <Check
+            <CioCheck
               size={12}
               class={['shrink-0', option.id === group ? 'text-primary' : 'invisible']}
               aria-hidden="true"

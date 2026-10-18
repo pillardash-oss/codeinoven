@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { AppWindow, Monitor } from '@lucide/svelte'
+  import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
 
@@ -70,11 +71,11 @@
                       class="h-full w-full object-contain"
                     />
                   {:else}
-                    <Monitor size={28} class="text-dimmed" aria-hidden="true" />
+                    <CioDisplay size={28} class="text-dimmed" aria-hidden="true" />
                   {/if}
                 </span>
                 <span class="flex items-center gap-1.5 px-2 py-1.5">
-                  <Monitor size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+                  <CioDisplay size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
                   <span class="min-w-0 truncate text-xs text-foreground">{source.name}</span>
                 </span>
               </button>
@@ -106,11 +107,11 @@
                       class="h-full w-full object-contain"
                     />
                   {:else}
-                    <AppWindow size={28} class="text-dimmed" aria-hidden="true" />
+                    <CioWindow size={28} class="text-dimmed" aria-hidden="true" />
                   {/if}
                 </span>
                 <span class="flex items-center gap-1.5 px-2 py-1.5">
-                  <AppWindow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
+                  <CioWindow size={12} class="shrink-0 text-dimmed" aria-hidden="true" />
                   <span class="min-w-0 truncate text-xs text-foreground">{source.name}</span>
                 </span>
               </button>

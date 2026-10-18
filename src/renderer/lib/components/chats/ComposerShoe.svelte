@@ -36,6 +36,9 @@
    */
   export interface ComposerUsage {
     usage?: AgentContextUsage
+    previewContextWindow?: number
+    generationRate?: number | null
+    generationDetails?: import('$lib/generation-details').GenerationDetails
     efficiencyKpis?: UsageEfficiencyKpis
     harnessUsage?: AgentHarnessUsage[]
     canCompact?: boolean
@@ -72,8 +75,14 @@
 </script>
 
 <script lang="ts">
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClipboardCheck from '@pillardash-oss/cio-icon/CioClipboardCheck.svelte'
+  import CioClipboardX from '@pillardash-oss/cio-icon/CioClipboardX.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
-  import { ChevronDown, ClipboardCheck, ClipboardX, FolderTree, GitBranch } from '@lucide/svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -82,6 +91,11 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
+  import { formatTokenRate, formatTokenRateExact } from '$lib/token-rate.svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { vendorMatches } from '$lib/components/shared/model-picker-helpers'
+  import type { GenerationFact } from '$lib/generation-details'
   import type { ScopeBucket, ScopeChoice, ScopeEnvironmentMode } from '$shared/types'
   import type { AgentContextUsage, AgentHarnessUsage, UsageEfficiencyKpis } from '$shared/types'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
@@ -108,7 +122,6 @@
   }
 
   let { shoe, usage, onScopeMenuClosed }: Props = $props()
-
   /** The project this thread belongs to, whichever way the shoe learned it. */
   let projectId = $derived(
     shoe.identity.kind === 'project' ? shoe.identity.activeProjectId : (shoe.scope?.projectId ?? '')
@@ -135,6 +148,10 @@
   /** The worker reporting dropdown, and the confirmation that guards turning it off. */
   let reportMenuOpen = $state(false)
   let reportConfirmOpen = $state(false)
+  /** The breakdown's folded groups: how the app measured, and what the harness
+   *  itself reported. Both stay folded until a reader asks for them. */
+  let measurementOpen = $state(false)
+  let rawReportOpen = $state(false)
 
   trackEscapeMenu(() => menuOpen, closeMenu)
   trackEscapeMenu(
@@ -332,7 +349,7 @@
             aria-label="Managed Git worktree scope on {bucket.root.branch}"
             title="Managed Git worktree scope on {bucket.root.branch}"
           >
-            <FolderTree size={12} class="text-warning" />
+            <CioFiles size={12} class="text-warning" />
           </span>
         {/if}
         <ScopeBadge {bucket} size="sm" variant="mark" />
@@ -340,7 +357,7 @@
           <span
             class="shrink-0 text-dimmed transition-transform duration-200 group-hover:text-foreground group-aria-expanded:rotate-180 group-aria-expanded:text-foreground"
           >
-            <ChevronDown size={11} />
+            <CioChevronDown size={11} />
           </span>
         {/if}
       </button>
@@ -400,7 +417,7 @@
       class="flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted"
       title={branchTitle}
     >
-      <GitBranch size={11} class="shrink-0 text-dimmed" />
+      <CioTabGit size={11} class="shrink-0 text-dimmed" />
       <span class="shoe-branch-label truncate">{project.branch}</span>
     </span>
   {/if}
@@ -425,9 +442,9 @@
         onclick={toggleReportMenu}
       >
         {#if report.enabled}
-          <ClipboardCheck size={12} class="shrink-0" />
+          <CioClipboardCheck size={12} class="shrink-0" />
         {:else}
-          <ClipboardX size={12} strokeWidth={2.75} class="shrink-0" />
+          <CioClipboardX size={12} strokeWidth={2.75} class="shrink-0" />
         {/if}
         <span class="shoe-report-label min-w-0 truncate"
           >{report.enabled ? 'Reporting' : 'Not reporting'}</span
@@ -464,7 +481,7 @@
             aria-checked={report.enabled}
             onclick={() => selectReport(true)}
           >
-            <ClipboardCheck size={12} class="shrink-0 text-success" />
+            <CioClipboardCheck size={12} class="shrink-0 text-success" />
             Report
           </button>
           <button
@@ -478,7 +495,7 @@
             aria-checked={!report.enabled}
             onclick={() => selectReport(false)}
           >
-            <ClipboardX size={12} strokeWidth={2.75} class="shrink-0 text-warning" />
+            <CioClipboardX size={12} strokeWidth={2.75} class="shrink-0 text-warning" />
             Don't report
           </button>
         </div>
@@ -493,6 +510,7 @@
        the composer it belongs to. -->
   <ContextUsageIndicator
     usage={usage.usage}
+    previewContextWindow={usage.previewContextWindow}
     efficiencyKpis={usage.efficiencyKpis}
     harnessUsage={usage.harnessUsage ?? []}
     canCompact={usage.canCompact ?? false}
@@ -503,6 +521,159 @@
     onHide={usage.onHide}
     refreshing={usage.refreshing ?? false}
   />
+
+  <!-- One generation fact: a quiet label, a right-aligned value, and where the
+       value came from on the row's own title. No rules between rows, and one
+       weight only, so the figures carry the reading and the labels stay quiet. -->
+  {#snippet generationFactRow(fact: GenerationFact)}
+    <div class="flex items-baseline justify-between gap-3 text-[0.625rem] leading-5">
+      <dt class="text-dimmed" title={fact.source}>{fact.label}</dt>
+      <dd class="shrink-0 text-foreground tabular-nums">{fact.value}</dd>
+    </div>
+  {/snippet}
+
+  <!-- The generation speed: the reading beside the battery, and the facts behind
+       it on hover. The panel is opened by hover alone, without a popover
+       primitive, so nothing delays it and nothing lingers: it appears with the
+       pointer and leaves with it. Its upward offset is the wrapper's own bottom
+       padding, part of the hover target, so the gap the user aims across is not
+       a dead band that closes the panel under their hand. -->
+  {#if isWorking || usage.generationRate != null}
+    {@const details = usage.generationDetails}
+    {@const attribution = details?.attribution}
+    {@const providerName = attribution?.providerName ?? attribution?.providerId}
+    {@const modelLabel = attribution?.modelLabel}
+    <!-- The harness and the vendor it ran through: two marks that would be the
+         same artwork twice when the provider is the harness's own vendor, so the
+         vendor mark only joins in when it says something the harness mark does
+         not. A model has no mark of its own in this app, so it is named under the
+         figure instead of drawn with a mark borrowed from its vendor. -->
+    {@const vendorMarkShown =
+      providerName !== undefined &&
+      (attribution?.harnessId === undefined || !vendorMatches(attribution.harnessId, providerName))}
+    <div
+      class="group relative flex h-6 min-w-0 shrink items-center"
+      role="group"
+      aria-label="Generation speed"
+    >
+      <button
+        type="button"
+        class="flex h-6 min-w-0 shrink items-center gap-1 px-2 text-[0.625rem] text-muted tabular-nums transition-colors hover:bg-elevated hover:text-foreground"
+        title="Generation speed details"
+        aria-label="Generation speed details"
+      >
+        <CioActions size={12} class="shrink-0" />
+        <!-- The rate keeps a column of its own: a fixed width, so a reading that
+             grows never widens the shoe or shifts what sits after it, and it can
+             still give room back when the row itself runs out. The exact figure
+             is the panel's own header. -->
+        <span class="w-[4.5rem] min-w-0 shrink truncate">
+          {usage.generationRate != null ? `~${formatTokenRate(usage.generationRate)}` : '… tok/s'}
+        </span>
+      </button>
+
+      <div
+        class="invisible absolute bottom-full right-0 z-40 w-72 pb-1.5 opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+        role="dialog"
+        aria-label="Generation speed details"
+      >
+        <div
+          class="max-h-[min(26rem,60vh)] overflow-y-auto border border-border bg-surface p-3 shadow-lg"
+        >
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-sm font-medium text-foreground tabular-nums">
+              {usage.generationRate != null
+                ? `~${formatTokenRateExact(usage.generationRate)}`
+                : 'Measuring'}
+            </span>
+            <span class="flex shrink-0 items-center gap-1.5">
+              {#if attribution?.harnessId}
+                <AgentIcon
+                  agentId={attribution.harnessId}
+                  size={14}
+                  label={`Harness: ${attribution.harnessName ?? attribution.harnessId}`}
+                />
+              {/if}
+              {#if vendorMarkShown && providerName}
+                <span
+                  class="flex shrink-0 items-center"
+                  role="img"
+                  title={`Provider: ${providerName}`}
+                  aria-label={`Provider: ${providerName}`}
+                >
+                  <VendorIcon name={providerName} id={attribution?.providerId} size={12} />
+                </span>
+              {/if}
+            </span>
+          </div>
+          <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.625rem]">
+            {#if modelLabel}
+              <span class="min-w-0 truncate text-muted" title={modelLabel}>{modelLabel}</span>
+              <span class="shrink-0 text-dimmed" aria-hidden="true">&middot;</span>
+            {/if}
+            <span class="shrink-0 text-dimmed">{isWorking ? 'streaming now' : 'last message'}</span>
+          </p>
+
+          <dl class="mt-2.5">
+            {#each details?.facts ?? [] as fact (fact.label)}
+              {@render generationFactRow(fact)}
+            {/each}
+          </dl>
+
+          {#if details?.measurement.length}
+            <button
+              type="button"
+              class="mt-1.5 flex h-6 w-full items-center gap-1 text-[0.625rem] text-dimmed transition-colors hover:text-foreground"
+              aria-expanded={measurementOpen}
+              title="How the app timed the generation window"
+              onclick={() => (measurementOpen = !measurementOpen)}
+            >
+              {#if measurementOpen}
+                <CioChevronDown size={11} />
+              {:else}
+                <CioForward size={11} />
+              {/if}
+              Measurement
+            </button>
+            {#if measurementOpen}
+              <dl>
+                {#each details.measurement as fact (fact.label)}
+                  {@render generationFactRow(fact)}
+                {/each}
+              </dl>
+            {/if}
+          {/if}
+
+          {#if details?.raw.length}
+            <button
+              type="button"
+              class="flex h-6 w-full items-center gap-1 text-[0.625rem] text-dimmed transition-colors hover:text-foreground"
+              aria-expanded={rawReportOpen}
+              title="Numeric fields the harness reported for this message"
+              onclick={() => (rawReportOpen = !rawReportOpen)}
+            >
+              {#if rawReportOpen}
+                <CioChevronDown size={11} />
+              {:else}
+                <CioForward size={11} />
+              {/if}
+              Harness report
+            </button>
+            {#if rawReportOpen}
+              <dl>
+                {#each details.raw as fact (fact.label)}
+                  <div class="flex items-baseline justify-between gap-3 text-[0.625rem] leading-5">
+                    <dt class="min-w-0 truncate text-dimmed" title={fact.label}>{fact.label}</dt>
+                    <dd class="shrink-0 text-foreground tabular-nums">{fact.value}</dd>
+                  </div>
+                {/each}
+              </dl>
+            {/if}
+          {/if}
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <!-- The tips: the keys that end a message, there only to be read. Nothing here
        lights up, because there is nothing to pick, and they are the first thing

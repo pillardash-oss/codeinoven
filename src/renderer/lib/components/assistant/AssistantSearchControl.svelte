@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { AlertTriangle, Search, X } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { Popover } from 'bits-ui'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
-  import AssistantIcon from '$lib/components/icons/AssistantIcon.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { assistantIsScheduled, type Assistant, type Thread } from '$shared/types'
   import { assistantGap } from './assistant-view'
@@ -88,7 +90,7 @@
     aria-label="Search assistants, tasks and runs"
     title="Search assistants, tasks and runs"
   >
-    <Search size={15} strokeWidth={1.8} />
+    <CioSearch size={15} strokeWidth={1.8} />
   </Popover.Trigger>
 
   <Popover.Portal>
@@ -101,7 +103,7 @@
       aria-label="Search assistants, tasks and runs"
     >
       <div class="flex items-center gap-1.5">
-        <Search size={14} class="shrink-0 text-dimmed" />
+        <CioSearch size={14} class="shrink-0 text-dimmed" />
         <input
           {@attach focusInput}
           type="text"
@@ -120,7 +122,7 @@
               inputEl?.focus()
             }}
           >
-            <X size={13} />
+            <CioClose size={13} />
           </button>
         {/if}
       </div>
@@ -173,7 +175,7 @@
                     aria-label={assistantGap(assistant) ?? ''}
                     title={assistantGap(assistant) ?? ''}
                   >
-                    <AlertTriangle size={11} />
+                    <CioAttention size={11} />
                   </span>
                 {/if}
               </button>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Pin } from '@lucide/svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import type { ScopeBucket } from '$shared/types'
 
@@ -46,7 +46,7 @@
         aria-label="Pinned scope: threads never auto-clean and do not count toward the thread limit"
         title="Pinned scope: threads never auto-clean and do not count toward the thread limit"
       >
-        <Pin size={size === 'xs' ? 9 : 11} />
+        <CioPin size={size === 'xs' ? 9 : 11} />
       </span>
     {/if}
     <span class="scope-badge-label min-w-0 max-w-40 truncate">{label}</span>
@@ -67,7 +67,7 @@
         aria-label="Pinned scope: threads never auto-clean and do not count toward the thread limit"
         title="Pinned scope: threads never auto-clean and do not count toward the thread limit"
       >
-        <Pin size={size === 'xs' ? 9 : 11} />
+        <CioPin size={size === 'xs' ? 9 : 11} />
       </span>
     {/if}
     <span class="scope-badge-label min-w-0 max-w-40 truncate">{label}</span>

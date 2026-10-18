@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
   import { onMount, onDestroy } from 'svelte'
-  import { Mic, TriangleAlert } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import RecordingIndicator from './RecordingIndicator.svelte'
@@ -52,9 +54,9 @@
   let buttonEl = $state<HTMLElement | null>(null)
   let preparedTarget: SpeechEditorTarget | null = null
   let preparedSnapshot: SpeechEditorSnapshot | null = null
-  let fetchedHasInstalledAsr = $state(false)
   let fetchedVoiceRecordingEnabled = $state(false)
-  let visibilityKnown = $state(false)
+  let availabilityRefresh: Promise<void> | null = null
+  let soundRevision = 0
 
   let storeHasInstalledAsr = $derived.by(() => {
     const caps = speechSettingsStore.capabilities
@@ -72,16 +74,18 @@
     })
   })
 
-  let hasInstalledAsr = $derived(storeHasInstalledAsr ?? fetchedHasInstalledAsr)
+  let hasInstalledAsr = $derived(storeHasInstalledAsr ?? false)
   let voiceRecordingEnabled = $derived(fetchedVoiceRecordingEnabled)
 
-  // Mic is hidden only when we know the state and neither a local ASR nor the
-  // opt-in audio-to-LLM fallback is available. Store-derived ASR makes this
-  // reactive across the app without a restart   import/activate in Sound
-  // immediately flows to every mounted composer, edit and comment editor.
-  let hidden = $derived(visibilityKnown && !hasInstalledAsr && !voiceRecordingEnabled)
+  function refreshFetchedState(): Promise<void> {
+    availabilityRefresh ??= fetchAvailability().finally(() => {
+      availabilityRefresh = null
+    })
+    return availabilityRefresh
+  }
 
-  async function refreshFetchedState(): Promise<void> {
+  async function fetchAvailability(): Promise<void> {
+    const revision = soundRevision
     try {
       const [capabilities, catalog, config] = await Promise.all([
         invoke('speech:getCapabilities'),
@@ -89,41 +93,32 @@
         invoke('config:get')
       ])
       if (capabilities.ok && catalog.ok) {
-        fetchedHasInstalledAsr = capabilities.value.installedArtifacts.some((artifact) => {
-          if (!artifact.available) return false
-          if (artifact.capability) return artifact.capability === 'asr'
-          const catalogEntry = catalog.value.artifacts.find((c) => c.id === artifact.artifactId)
-          return (
-            catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
-          )
-        })
+        // Update the same snapshot used by the derived gate. Otherwise an old
+        // settings-page snapshot overrides a newer successful availability probe.
+        speechSettingsStore.capabilities = capabilities.value
+        speechSettingsStore.catalog = catalog.value
       }
-      fetchedVoiceRecordingEnabled = Boolean(
-        (config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound
-          ?.voiceRecordingEnabled
-      )
+      // A settings event can arrive while the IPC request is in flight.
+      // Its newer value must win over the older config snapshot.
+      if (revision === soundRevision) {
+        fetchedVoiceRecordingEnabled = config.sound.voiceRecordingEnabled
+      }
     } catch {
-      // keep mic visible on probe failure
-    } finally {
-      visibilityKnown = true
+      // Preserve the last confirmed availability on transient probe failure.
     }
   }
 
   onMount(() => {
     void refreshFetchedState()
-    // If Sound settings loads after us, the store-derived ASR flips visibility
-    // without waiting for this component to remount. Count store readiness as
-    // known as well so hidden recomputes as soon as store populates.
+    // Model changes refresh availability without loading unrelated speech history.
     const unsubProgress = subscribe('speech:progress', () => {
       void refreshFetchedState()
-      // also ensure the shared store reloads for other consumers
-      void speechSettingsStore.load()
     })
     const onSoundChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ voiceRecordingEnabled?: boolean }>).detail
       if (detail && typeof detail.voiceRecordingEnabled === 'boolean') {
+        soundRevision += 1
         fetchedVoiceRecordingEnabled = detail.voiceRecordingEnabled
-        visibilityKnown = true
       } else {
         void refreshFetchedState()
       }
@@ -142,6 +137,19 @@
 
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
   const transcribingHere = $derived(speechController.isTranscribingTarget(targetId))
+  // Unknown availability stays hidden. Keep a live recording/transcription's
+  // control available even if a capability refresh arrives while it finishes.
+  let hidden = $derived(
+    !hasInstalledAsr &&
+      !voiceRecordingEnabled &&
+      !(
+        belongsHere &&
+        speechController.state.state !== 'idle' &&
+        speechController.state.state !== 'failed'
+      ) &&
+      !transcribingHere
+  )
+
   /** Armed delivery stage of the transcription in flight, if the user armed it. */
   const voiceSendStage = $derived(speechController.voiceSendStageForTarget(targetId))
   const canAutoSendVoice = $derived(speechController.canAutoSendVoice(targetId))
@@ -435,7 +443,7 @@
     {#if action === 'stop'}
       <RecordingIndicator decorative />
     {:else if action === 'retry'}
-      <TriangleAlert size={14} aria-hidden="true" />
+      <CioAttention size={14} aria-hidden="true" />
     {:else if voiceSendStage && (transcribingHere || stoppingHere)}
       <!-- Armed while the dictation is still being produced, including the
            window where the capture is finalising and the row already shows
@@ -446,7 +454,7 @@
     {:else if transcribingHere}
       <WaveBars decorative label="Transcribing your last recording" />
     {:else}
-      <Mic size={14} aria-hidden="true" />
+      <CioMic size={14} aria-hidden="true" />
     {/if}
   </button>
 

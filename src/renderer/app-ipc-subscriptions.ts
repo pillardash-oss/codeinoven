@@ -11,6 +11,7 @@ import {
 import { clearDraftLabelCookie } from '$lib/stores/draft-label'
 import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
 import { pipState } from '$lib/stores/pip.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
@@ -29,7 +30,8 @@ import {
   type InstanceRole,
   type OpenedPath,
   type Project,
-  type Thread
+  type Thread,
+  type ThreadSearchResult
 } from '$shared/types'
 import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
@@ -58,6 +60,16 @@ export interface AppIpcSubscriptionDeps {
   goBack: () => Promise<void>
   goForward: () => Promise<void>
   handleOpenedPaths: (paths: OpenedPath[]) => Promise<void>
+  /**
+   * Fold the semantic half of a spotlight thread search into the panel that
+   * asked for it. Delivered after the keyword rows so the panel replaces rows
+   * instead of waiting on the local embedding model.
+   */
+  applyThreadSearchIntent: (payload: {
+    query: string
+    requestId: number
+    results: ThreadSearchResult[]
+  }) => void
 }
 
 async function openNotificationThread(
@@ -98,7 +110,12 @@ function showAgentNotification(
   appFocused: boolean,
   deps: AppIpcSubscriptionDeps
 ): void {
+  // The user is only "on" a thread while the workspace shell is actually showing
+  // it. A full-page surface (the global browser, the Scope view, a Settings page)
+  // keeps the shell mounted but hidden, so a thread left behind there must still
+  // announce itself rather than being treated as already on screen.
   const onSelectedThread =
+    !isWorkspaceCovered() &&
     workspaceState.selectedThread?.id === payload.threadId &&
     workspaceState.selectedThread?.projectId === payload.projectId
   if (
@@ -234,19 +251,27 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     notificationPanelState.reconcileThread(thread)
     deps.settleCloseConfirmationThread(thread)
   })
-  // The authored-work marker is pushed on its own light event (see
+  // The authored-work markers are pushed on their own light event (see
   // `broadcastThreadAuthoredWorkUpdated`) so the design-capability path can open
-  // a session without the full `thread:updated` reconcile. Patch the one field in
+  // a session without the full `thread:updated` reconcile. Patch the fields in
   // place on the scope threads and the open thread, exactly as the branch update
-  // does, so the row's marker appears the moment the agent enters a session.
+  // does, so the row's markers appear the moment the agent enters a session. The
+  // set is what the row draws, so it travels with the session kind and never
+  // without it.
   const unsubscribeThreadAuthoredWorkUpdated = subscribeGuarded(
     'thread:authoredWorkUpdated',
     (...args: unknown[]) => {
-      const [projectId, threadId, kind] = args as [string, string, AuthoredWorkKind]
-      scopeState.patchAuthoredWorkKind(projectId, threadId, kind)
+      const [projectId, threadId, kind, kinds] = args as [
+        string,
+        string,
+        AuthoredWorkKind,
+        AuthoredWorkKind[]
+      ]
+      scopeState.patchAuthoredWorkKind(projectId, threadId, kind, kinds)
       const selected = workspaceState.selectedThread
       if (selected?.projectId === projectId && selected.id === threadId) {
         selected.authoredWorkKind = kind
+        selected.authoredWorkKinds = [...kinds]
       }
     }
   )
@@ -255,6 +280,11 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     notificationPanelState.dismissForThread(projectId, threadId)
     temporaryChatUnread.clearThread(projectId, threadId)
     if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+  })
+  // The spotlight's ranking by meaning is computed after its keyword rows land;
+  // the open panel takes the merged ranking from here.
+  const unsubscribeThreadSearchIntent = subscribeGuarded('threads:searchIntent', (payload) => {
+    deps.applyThreadSearchIntent(payload)
   })
   // An agent created, renamed, archived, deleted, synced or merged a scope:
   // reload the board it changed so the user sees the worktree it made instead
@@ -320,6 +350,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeThreadUpdated()
     unsubscribeThreadAuthoredWorkUpdated()
     unsubscribeThreadDeleted()
+    unsubscribeThreadSearchIntent()
     unsubscribeScopeBoardChanged()
     unsubscribeScopeConfirmation()
     unsubscribeCloseShortcut()

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { MessageSquare, MessageSquarePlus } from '@lucide/svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
   import { onDestroy, onMount } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -770,7 +771,7 @@
         style:top={`${marker.y}px`}
         title={`Open annotation: ${marker.annotation.body}`}
         aria-label={`Open annotation: ${marker.annotation.body}`}
-        onclick={() => void openAnnotation(marker.annotation)}><MessageSquare size={13} /></button
+        onclick={() => void openAnnotation(marker.annotation)}><CioMessage size={13} /></button
       >
     {/each}
   {/snippet}
@@ -818,7 +819,7 @@
                 openSectionAnnotation(section.id, section.title, event)}
             >
               <span class="text-xl font-semibold tracking-tight">{section.title}</span>
-              <MessageSquarePlus
+              <CioMessagePlus
                 size={14}
                 class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
               />

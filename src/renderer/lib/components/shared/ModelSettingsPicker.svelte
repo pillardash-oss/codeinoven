@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Check, Gauge, Settings2, Snail, Star, Zap } from '@lucide/svelte'
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioSnail from '@pillardash-oss/cio-icon/CioSnail.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { modelRuntimeDefaults } from '$lib/stores/model-runtime-defaults.svelte'
   import type { InferenceMode } from '$shared/types'
@@ -9,13 +14,16 @@
     fastSupported: boolean
     ultrafastSupported: boolean
     fastMultiplier: number
+    /** The windows this model can run with, exactly as its harness states them. */
     contextWindows: number[]
+    /** The window stored for this thread; undefined means the harness default. */
     contextWindow?: number
+    /** The window the harness uses when nothing is stored, so it can be labelled. */
     defaultContextWindow?: number
     disabled?: boolean
     menuOpen: boolean
     onSelect: (mode: InferenceMode) => void
-    onSelectContext: (tokens?: number) => void
+    onSelectContext: (tokens: number) => void
   }
 
   let {
@@ -33,10 +41,10 @@
   }: Props = $props()
 
   const speeds = [
-    { id: 'normal', label: 'Standard', icon: Snail },
-    { id: 'fast', label: 'Fast', icon: Gauge },
-    { id: 'ultrafast', label: 'Ultrafast', icon: Zap }
-  ] satisfies { id: InferenceMode; label: string; icon: typeof Snail }[]
+    { id: 'normal', label: 'Standard', icon: CioSnail },
+    { id: 'fast', label: 'Fast', icon: CioActions },
+    { id: 'ultrafast', label: 'Ultrafast', icon: CioZap }
+  ] satisfies { id: InferenceMode; label: string; icon: typeof CioSnail }[]
   let availableSpeeds = $derived(
     speeds.filter(
       (speed) => speed.id === 'normal' || (speed.id === 'fast' ? fastSupported : ultrafastSupported)
@@ -65,7 +73,7 @@
     title={`Model settings: ${summary}`}
     aria-label={`Model settings: ${summary}`}
   >
-    <Settings2 size={10} class="shrink-0" />
+    <CioTabSettings size={10} class="shrink-0" />
     <currentSpeed.icon size={10} class="shrink-0" />
     {#if displayedContextWindow}<span aria-hidden="true">·</span><span
         >{contextLabel(displayedContextWindow)}</span
@@ -92,7 +100,10 @@
           {#if speed.id === 'fast'}<span class="text-[0.625rem] text-muted"
               >~{fastMultiplier}× usage</span
             >{/if}
-          {#if currentSpeed.id === speed.id}<Check size={11} class="shrink-0 text-primary" />{/if}
+          {#if currentSpeed.id === speed.id}<CioCheck
+              size={11}
+              class="shrink-0 text-primary"
+            />{/if}
           <button
             type="button"
             class="flex size-5 shrink-0 items-center justify-center text-dimmed hover:bg-overlay hover:text-primary"
@@ -111,7 +122,7 @@
               modelRuntimeDefaults.toggleSpeed(speed.id)
             }}
           >
-            <Star
+            <CioStar
               size={11}
               class={modelRuntimeDefaults.settings.inferenceMode === speed.id
                 ? 'fill-primary text-primary'
@@ -127,10 +138,10 @@
           <DropdownMenu.Item
             class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-xs text-foreground outline-none hover:bg-elevated focus:bg-elevated"
             title={`Use ${contextLabel(tokens)} context window`}
-            onSelect={() => onSelectContext(tokens === defaultContextWindow ? undefined : tokens)}
+            onSelect={() => onSelectContext(tokens)}
           >
             <span class="flex-1">{contextLabel(tokens)}</span>
-            {#if tokens === displayedContextWindow}<Check
+            {#if tokens === displayedContextWindow}<CioCheck
                 size={11}
                 class="shrink-0 text-primary"
               />{/if}
@@ -152,7 +163,7 @@
                 modelRuntimeDefaults.toggleContext(tokens)
               }}
             >
-              <Star
+              <CioStar
                 size={11}
                 class={modelRuntimeDefaults.settings.contextWindow === tokens
                   ? 'fill-primary text-primary'

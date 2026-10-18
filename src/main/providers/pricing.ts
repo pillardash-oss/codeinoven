@@ -375,7 +375,8 @@ export function estimateModelCost(
     (uncachedInput / 1_000_000) * rates.inputUsdPer1M +
     (clampNonNegative(tokens.cacheRead ?? 0) / 1_000_000) * rates.cacheReadUsdPer1M +
     (clampNonNegative(tokens.cacheWrite ?? 0) / 1_000_000) * rates.cacheWriteUsdPer1M +
-    (clampNonNegative(tokens.output ?? 0) / 1_000_000) * rates.outputUsdPer1M +
+    (clampNonNegative((tokens.output ?? 0) - (tokens.reasoning ?? 0)) / 1_000_000) *
+      rates.outputUsdPer1M +
     (clampNonNegative(tokens.reasoning ?? 0) / 1_000_000) * rates.reasoningUsdPer1M
   return {
     costUsd: Math.round(costUsd * 1_000_000) / 1_000_000,
