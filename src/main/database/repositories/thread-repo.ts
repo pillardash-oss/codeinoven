@@ -1488,8 +1488,8 @@ export function threadSearchMessageLimit(limit: number): number {
  * Build the title + FTS search SQL from free-form input.
  *
  * `useSearchMeta` selects the fast message query: it ranks and filters against
- * the narrow `agent_message_search_meta` mirror and touches `agent_messages`
- * only for the rows that return a snippet. Without it (the mirror is still
+ * the narrow `agent_message_search_meta` mirror and extracts matching excerpts
+ * through FTS. Without it (the mirror is still
  * being backfilled, or the database predates it) the legacy query joins
  * `agent_messages` directly, which is correct but reads the whole messages
  * table in FTS index order. See schema.ts for the mirror's rationale.
@@ -1497,7 +1497,8 @@ export function threadSearchMessageLimit(limit: number): number {
 export function buildThreadSearchSql(
   raw: string,
   options: ThreadSearchOptions = {},
-  useSearchMeta = false
+  useSearchMeta = false,
+  messageQuery?: string
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
   const trimmed = raw.trim()
@@ -1509,7 +1510,7 @@ export function buildThreadSearchSql(
       ORDER BY t.last_activity DESC`,
     params: [...titleScope.params, `%${escapeLike(trimmed)}%`, trimmed]
   }
-  const ftsQuery = toFtsQuery(trimmed)
+  const ftsQuery = messageQuery ?? toFtsQuery(trimmed)
   const messageLimit = threadSearchMessageLimit(limit)
   const metaScope = threadSearchScopeClause('st', options)
   const legacyScope = threadSearchScopeClause('t', options)
@@ -1517,11 +1518,12 @@ export function buildThreadSearchSql(
     ? useSearchMeta
       ? {
           sql: `SELECT t.*, meta.role AS match_role,
-              substr(am.search_text, 1, 2000) AS snippet_text,
+              meta.snippet_text AS snippet_text,
               meta.created_at AS snippet_timestamp, meta.fts_rank AS fts_rank
         FROM (
           SELECT m.rowid AS msg_rowid, m.thread_id AS msg_thread_id, m.role AS role,
-                 m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank
+                 m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank,
+                 snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text
           FROM agent_messages_fts
           JOIN agent_message_search_meta m ON m.rowid = agent_messages_fts.rowid
           JOIN threads st ON st.id = m.thread_id
@@ -1532,13 +1534,13 @@ export function buildThreadSearchSql(
           ORDER BY bm25(agent_messages_fts), m.created_at DESC
           LIMIT ?
         ) meta
-        JOIN agent_messages am ON am.rowid = meta.msg_rowid
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
           params: [ftsQuery, ...metaScope.params, messageLimit]
         }
       : {
-          sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
+          sql: `SELECT t.*, am.role AS match_role,
+              snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text,
               am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
         FROM agent_messages_fts
         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
