@@ -74,7 +74,11 @@ app.setName(APP_NAME)
 // Naming the app is not enough on its own: Chromium still advertises
 // `Electron/<version>` to every site, so the fallback every web contents
 // inherits is rewritten here, before the first window exists.
-app.userAgentFallback = brandUserAgent(app.userAgentFallback, __CODEINOVEN_APP_VERSION__)
+app.userAgentFallback = brandUserAgent(
+  app.userAgentFallback,
+  __CODEINOVEN_APP_VERSION__,
+  process.versions.chrome
+)
 
 configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
