@@ -1,14 +1,13 @@
 <script lang="ts">
   import CioAttention from '@codeinoven/icons/CioAttention.svelte'
   import CioMic from '@codeinoven/icons/CioMic.svelte'
-  import { onMount, onDestroy } from 'svelte'
+  import { onDestroy } from 'svelte'
 
   import { toast } from 'svelte-sonner'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import RecordingIndicator from './RecordingIndicator.svelte'
   import VoiceSendIndicator from './VoiceSendIndicator.svelte'
   import WaveBars from './WaveBars.svelte'
-  import { speechSettingsStore } from '$lib/stores/speech.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { isMacPlatform } from '$lib/keymap/keymap'
   import { logRendererError } from '$lib/system/renderer-logger'
@@ -54,94 +53,6 @@
   let buttonEl = $state<HTMLElement | null>(null)
   let preparedTarget: SpeechEditorTarget | null = null
   let preparedSnapshot: SpeechEditorSnapshot | null = null
-  let fetchedHasInstalledAsr = $state(false)
-  let fetchedVoiceRecordingEnabled = $state(false)
-  let visibilityKnown = $state(false)
-
-  let storeHasInstalledAsr = $derived.by(() => {
-    const caps = speechSettingsStore.capabilities
-    const catalog = speechSettingsStore.catalog
-    if (!caps || !catalog) return undefined as boolean | undefined
-    // Imported artifacts carry their own `capability` tag and have no catalog
-    // entry (synthetic `imported-<hash>` ids), so they can't be matched by id.
-    // Downloaded artifacts don't set `capability`, so those fall back to the
-    // catalog lookup (also gated on non-retired qualification).
-    return caps.installedArtifacts.some((a) => {
-      if (!a.available) return false
-      if (a.capability) return a.capability === 'asr'
-      const catalogEntry = catalog.artifacts.find((c) => c.id === a.artifactId)
-      return catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
-    })
-  })
-
-  let hasInstalledAsr = $derived(storeHasInstalledAsr ?? fetchedHasInstalledAsr)
-  let voiceRecordingEnabled = $derived(fetchedVoiceRecordingEnabled)
-
-  // Mic is hidden only when we know the state and neither a local ASR nor the
-  // opt-in audio-to-LLM fallback is available. Store-derived ASR makes this
-  // reactive across the app without a restart   import/activate in Sound
-  // immediately flows to every mounted composer, edit and comment editor.
-  let hidden = $derived(visibilityKnown && !hasInstalledAsr && !voiceRecordingEnabled)
-
-  async function refreshFetchedState(): Promise<void> {
-    try {
-      const [capabilities, catalog, config] = await Promise.all([
-        invoke('speech:getCapabilities'),
-        invoke('speech:getCatalog'),
-        invoke('config:get')
-      ])
-      if (capabilities.ok && catalog.ok) {
-        fetchedHasInstalledAsr = capabilities.value.installedArtifacts.some((artifact) => {
-          if (!artifact.available) return false
-          if (artifact.capability) return artifact.capability === 'asr'
-          const catalogEntry = catalog.value.artifacts.find((c) => c.id === artifact.artifactId)
-          return (
-            catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
-          )
-        })
-      }
-      fetchedVoiceRecordingEnabled = Boolean(
-        (config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound
-          ?.voiceRecordingEnabled
-      )
-    } catch {
-      // keep mic visible on probe failure
-    } finally {
-      visibilityKnown = true
-    }
-  }
-
-  onMount(() => {
-    void refreshFetchedState()
-    // If Sound settings loads after us, the store-derived ASR flips visibility
-    // without waiting for this component to remount. Count store readiness as
-    // known as well so hidden recomputes as soon as store populates.
-    const unsubProgress = subscribe('speech:progress', () => {
-      void refreshFetchedState()
-      // also ensure the shared store reloads for other consumers
-      void speechSettingsStore.load()
-    })
-    const onSoundChanged = (event: Event) => {
-      const detail = (event as CustomEvent<{ voiceRecordingEnabled?: boolean }>).detail
-      if (detail && typeof detail.voiceRecordingEnabled === 'boolean') {
-        fetchedVoiceRecordingEnabled = detail.voiceRecordingEnabled
-        visibilityKnown = true
-      } else {
-        void refreshFetchedState()
-      }
-    }
-    const onFocus = (): void => {
-      void refreshFetchedState()
-    }
-    window.addEventListener('cio:soundChanged', onSoundChanged)
-    window.addEventListener('focus', onFocus)
-    return () => {
-      unsubProgress()
-      window.removeEventListener('cio:soundChanged', onSoundChanged)
-      window.removeEventListener('focus', onFocus)
-    }
-  })
-
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
   const transcribingHere = $derived(speechController.isTranscribingTarget(targetId))
   /** Armed delivery stage of the transcription in flight, if the user armed it. */
@@ -396,63 +307,59 @@
 
   // Expose this mic input to the global voice shortcut so double-press Left Alt
   // (or the user's remapped binding) drives whichever recorder is on view.
-  // Hidden buttons (no installed ASR model and voice recording not enabled)
-  // stay registered but ineligible: the shortcut can then tell the user why
-  // recording did not start instead of claiming there is no input on screen.
+  // Keep the control available regardless of model discovery. The recording
+  // pipeline reports setup failures without removing the user's mic control.
   $effect(() => {
     if (disabled || !buttonEl) return
     return registerVoiceTriggerHost({
       targetId,
       priority: triggerPriority,
-      eligible: () => !hidden && !disabled,
+      eligible: () => !disabled,
       element: () => buttonEl,
       activate: () => void activate()
     })
   })
 </script>
 
-{#if !hidden}
-  <button
-    bind:this={buttonEl}
-    type="button"
-    class="relative flex h-8 w-8 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action ===
-    'blocked'
-      ? 'opacity-60'
-      : ''} {className}"
-    title={label}
-    aria-label={label}
-    aria-pressed={action === 'stop'}
-    disabled={disabled || (action === 'wait' && !stoppingHere)}
-    onpointerdown={(event) => {
-      // Keep the editor focused while the pointer activates recording. The
-      // target still captures its value and caret before the click is handled.
-      event.preventDefault()
-      prepareTarget()
-    }}
-    onkeydown={(event) => {
-      if (event.key === 'Enter' || event.key === ' ') prepareTarget()
-    }}
-    onclick={activateFromClick}
-  >
-    {#if action === 'stop'}
-      <RecordingIndicator decorative />
-    {:else if action === 'retry'}
-      <CioAttention size={14} aria-hidden="true" />
-    {:else if voiceSendStage && (transcribingHere || stoppingHere)}
-      <!-- Armed while the dictation is still being produced, including the
+<button
+  bind:this={buttonEl}
+  type="button"
+  class="relative flex h-8 w-8 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action ===
+  'blocked'
+    ? 'opacity-60'
+    : ''} {className}"
+  title={label}
+  aria-label={label}
+  aria-pressed={action === 'stop'}
+  disabled={disabled || (action === 'wait' && !stoppingHere)}
+  onpointerdown={(event) => {
+    // Keep the editor focused while the pointer activates recording. The
+    // target still captures its value and caret before the click is handled.
+    event.preventDefault()
+    prepareTarget()
+  }}
+  onkeydown={(event) => {
+    if (event.key === 'Enter' || event.key === ' ') prepareTarget()
+  }}
+  onclick={activateFromClick}
+>
+  {#if action === 'stop'}
+    <RecordingIndicator decorative />
+  {:else if action === 'retry'}
+    <CioAttention size={14} aria-hidden="true" />
+  {:else if voiceSendStage && (transcribingHere || stoppingHere)}
+    <!-- Armed while the dictation is still being produced, including the
            window where the capture is finalising and the row already shows
            the same armed state. -->
-      <VoiceSendIndicator stage={voiceSendStage} decorative />
-    {:else if action === 'wait'}
-      <WaveBars decorative label="Transcribing voice recording" />
-    {:else if transcribingHere}
-      <WaveBars decorative label="Transcribing your last recording" />
-    {:else}
-      <CioMic size={14} aria-hidden="true" />
-    {/if}
-  </button>
+    <VoiceSendIndicator stage={voiceSendStage} decorative />
+  {:else if action === 'wait'}
+    <WaveBars decorative label="Transcribing voice recording" />
+  {:else if transcribingHere}
+    <WaveBars decorative label="Transcribing your last recording" />
+  {:else}
+    <CioMic size={14} aria-hidden="true" />
+  {/if}
+</button>
 
-  <span class="sr-only" aria-live="polite"
-    >{action !== 'start' || transcribingHere ? label : ''}</span
-  >
-{/if}
+<span class="sr-only" aria-live="polite">{action !== 'start' || transcribingHere ? label : ''}</span
+>
