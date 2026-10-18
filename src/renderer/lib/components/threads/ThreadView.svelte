@@ -397,7 +397,11 @@
     specActionLabel,
     tracePreviewByUserMessage
   } from './thread-message-presentation'
-  import { mergeContextUsage, providerReportedWindows } from './thread-usage-merge'
+  import {
+    composerContextUsage,
+    mergeContextUsage,
+    providerReportedWindows
+  } from './thread-usage-merge'
   import {
     HISTORY_WINDOW_SIZE,
     mergedUserMessageSummaries,
@@ -2555,6 +2559,13 @@
   /** Snapshot of usage actually rendered   it settles at the end of a turn or
    *  after a quiet period, and flushes to the latest value on hover. */
   let contextUsageDisplay = $state<AgentContextUsage | undefined>(undefined)
+  const composerUsage = $derived(
+    composerContextUsage(contextUsageDisplay, messages, thread.contextUsage, {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      contextWindow: configuredContextWindow
+    })
+  )
   let contextUsageCommittedAt = 0
   let contextUsageSettleTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -14798,7 +14809,7 @@
                       onActionSelect={handleActionSelection}
                       onSlashCommand={executeHarnessCommand}
                       usageCreditsCommandId={usageCreditsCommand?.id}
-                      contextUsage={contextUsageDisplay}
+                      contextUsage={composerUsage}
                       generationRate={composerGenerationRate}
                       generationDetails={composerGenerationDetails}
                       efficiencyKpis={storedEfficiencyKpis}

@@ -405,7 +405,8 @@
     {/if}
     {#if usage?.contextEstimated}
       <p class="mt-1.5 text-[0.5625rem] text-dimmed">
-        Estimated from the composed request because this harness does not report context telemetry.
+        Approximate context usage. The selected harness may adjust it when preparing the next
+        request.
       </p>
     {/if}
     <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.5625rem] text-dimmed">
