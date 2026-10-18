@@ -29,8 +29,8 @@ import {
   UtilityRegistryService
 } from './utility-registry-service'
 import { CuaBridgeService, isCuaDaemonTransportFailure } from './cua-bridge-service'
-import { CIO_DESIGN_ACTIVATION_PROMPT, type DesignSessionMode } from './cio-design-prompt'
-import { CIO_VIDEO_ACTIVATION_PROMPT, type VideoSessionMode } from './cio-video-prompt'
+import { designSessionBriefing, type DesignSessionMode } from './cio-design-prompt'
+import { videoSessionBriefing, type VideoSessionMode } from './cio-video-prompt'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
@@ -72,7 +72,7 @@ import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/
 import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/video-skill'
 import { NO_EXPERTS, type EffectiveExperts } from '../../lib/experts'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
-import { currentWorkRoots } from '../design/work-roots-state'
+import { currentWorkRoot, currentWorkRoots } from '../design/work-roots-state'
 import { gatewayStructuredResult } from '../../lib/image-payload'
 import {
   budgetGatewayOutput,
@@ -2261,18 +2261,26 @@ export class UtilityOrchestrationService {
    * A turn the user tagged carries its contract in the prompt, which was composed
    * before the agent read anything. A turn where the agent reaches for the
    * capability itself has no such prompt, so the briefing travels with the
-   * activation and the session opens the same way. Empty when the turn already
-   * carries the session, because the prompt is then the copy in hand and a second
-   * one would say the same thing twice.
+   * activation and the session opens the same way, naming the folder the project is
+   * pointed at right now. That folder is read live rather than left to the playbook,
+   * because by the time an agent activates the capability it may already have written
+   * files somewhere else, and the briefing is the one place it is certain to read
+   * before it writes more. Empty when the turn already carries the session, because
+   * the prompt is then the copy in hand and a second one would say the same thing
+   * twice.
    */
   private sessionOpeningFor(state: TurnState, utilityId: string): string {
     if (utilityId === APP_DESIGN_UTILITY_ID) {
       const session = state.request.designSession
-      return session === undefined || session === 'off' ? CIO_DESIGN_ACTIVATION_PROMPT : ''
+      return session === undefined || session === 'off'
+        ? designSessionBriefing('activation', currentWorkRoot('design', state.request.projectId))
+        : ''
     }
     if (utilityId === APP_VIDEO_UTILITY_ID) {
       const session = state.request.videoSession
-      return session === undefined || session === 'off' ? CIO_VIDEO_ACTIVATION_PROMPT : ''
+      return session === undefined || session === 'off'
+        ? videoSessionBriefing('activation', currentWorkRoot('video', state.request.projectId))
+        : ''
     }
     return ''
   }

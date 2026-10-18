@@ -87,7 +87,7 @@ Write one composition per folder under \`${videoRoot}/<name>/\`:
 
 ${workRootGuidance(videoRoot)} Do not write into \`.cio/specs/<feature>/prototypes/\`, which belongs to the engineering prototype phase.
 
-That folder is the composition's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a composition written there is one the user cannot find, because the board lists the folders under \`${videoRoot}\` and nothing else. A composition belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a composition is neither.
+That folder is the composition's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a composition written there is one the user cannot find, because the board lists the folders under \`${videoRoot}\` and nothing else. A composition belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a composition is neither. If part of this composition already sits somewhere else, move it under \`${videoRoot}/<name>/\` before you continue, because work left in another folder is work the user cannot find.
 
 ## Start from a shipped film
 

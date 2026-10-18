@@ -88,44 +88,47 @@ const DESIGN_SESSION_STEPS = `How to run the session:
 
 Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
 
-/** The briefing for the turn the user opened with the tag. */
-export const CIO_DESIGN_TURN_PROMPT = `CodeInOven design session
-
-The user opened this turn with @cio-design, so this is a design session. The
-app-owned design capability is already active for it: its playbook is in your
-context and its preview operation is callable now. Design is the work of this
-turn, not a preliminary to it.
-
-${DESIGN_SESSION_STEPS}`
-
 /**
- * The briefing for the turn an agent opened itself.
+ * The briefing that opens a design session.
  *
- * Activating `cio:design` from the utility gateway opens the session the tag
- * opens, so the activation hands back the same instructions the tag's turn
- * carries. This is the only way the turn that opened a session can receive its
- * contract after the fact: the prompt was composed before the agent reached for
- * the tool, and the activation result is the turn's next place to read.
+ * Two turns can open one: the turn the user tagged with `@cio-design`, and the turn
+ * an agent opened by activating the design capability. The folder is a parameter
+ * rather than a constant because the project's own record decides it and the user
+ * can move it, so the line that names it is the live one. It is stated in the
+ * briefing itself, and not only in the playbook, because this is the message an
+ * agent reads at the moment it reaches for the tool: work can already exist by
+ * then, and the app can see the mistake coming (it is almost always a design
+ * written into the agent's own scratch folder, see `workFolderNote` in
+ * `src/lib/design/work-roots.ts`).
+ *
+ * The same paragraph ends the ambiguity the general scratch rule leaves: that rule
+ * is about notes and reports, and a design is neither.
  */
-export const CIO_DESIGN_ACTIVATION_PROMPT = `CodeInOven design session
+export function designSessionBriefing(opened: 'tag' | 'activation', root: string): string {
+  const lead =
+    opened === 'tag'
+      ? 'The user opened this turn with @cio-design, so this is a design session.'
+      : 'You activated the app-owned design capability, and activating it opens a design session on this thread.'
+  return `CodeInOven design session
 
-You activated the app-owned design capability, and activating it opens a design
-session on this thread: the playbook you just received is the session's contract,
-its preview operation is callable now, the app records the session so this
-thread's later turns stay inside it, and the coordinator board shows the user the
-folder as you write into it. Design is the work of this turn, not a preliminary
-to it.
+${lead} The app-owned design capability is active: its playbook is in your context and its preview operation is callable now. Design is the work of this turn, not a preliminary to it.
+
+Where the design goes: \`${root}\`. Write it as \`${root}/<name>/\`, and if any of it already sits somewhere else (a scratch folder such as \`.cio/work\`, \`.cio/tmp\`, or the repository root), move it into \`${root}/<name>/\` now and continue there. The board lists the folders under \`${root}\` and nothing else, so a design left in another folder is one the user never sees. This is the folder for the rest of the session: it is the project's live record, a save-path change moves it, and it outranks any path named in an older message.
 
 ${DESIGN_SESSION_STEPS}`
+}
 
 /**
  * Every later turn of the same session, however it was opened.
  *
- * Deliberately silent about who opened it: the row is the record, and a turn
- * that was opened by an agent activating the capability is the same session as
- * one the user tagged, so naming the tag here would state something untrue about
- * half the threads that read it.
+ * Deliberately silent about who opened it: the row is the record, and a turn that
+ * was opened by an agent activating the capability is the same session as one the
+ * user tagged, so naming the tag here would state something untrue about half the
+ * threads that read it. The folder is named for the opposite reason: it is the
+ * project's live record, and a turn that reads it cannot move the work by accident.
  */
-export const CIO_DESIGN_CONTINUE_PROMPT = `This thread is in a design session, and the design capability stays active. Keep working in the design folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds. If the design has a Screen Canvas, keep it in step with the screens in the same pass, because the user reviews the design on it. Report what changed and what a viewer can now try.
+export function designSessionContinuation(root: string): string {
+  return `This thread is in a design session, and the design capability stays active. The design folder is \`${root}\`, and the work belongs there: move anything of this design that sits elsewhere into it, then keep working in the folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds. If the design has a Screen Canvas, keep it in step with the screens in the same pass, because the user reviews the design on it. Report what changed and what a viewer can now try.
 
 Save a baseline checkpoint before editing an existing screen, then call this capability's \`checkpoint\` with directory, entry and a short completed-step label after each major section, title, image or navbar change, before starting the next step.`
+}

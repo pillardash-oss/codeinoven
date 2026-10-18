@@ -183,14 +183,14 @@ import {
   isCioUtilityRequest
 } from '../utilities/cio-utility-prompt'
 import {
-  CIO_DESIGN_CONTINUE_PROMPT,
-  CIO_DESIGN_TURN_PROMPT,
+  designSessionBriefing,
+  designSessionContinuation,
   isCioDesignRequest,
   type DesignSessionMode
 } from '../utilities/cio-design-prompt'
 import {
-  CIO_VIDEO_CONTINUE_PROMPT,
-  CIO_VIDEO_TURN_PROMPT,
+  videoSessionBriefing,
+  videoSessionContinuation,
   isCioVideoRequest,
   type VideoSessionMode
 } from '../utilities/cio-video-prompt'
@@ -215,6 +215,7 @@ import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { effectiveExperts, type EffectiveExperts } from '../../lib/experts'
 import type { ExpertSettingsService } from '../design/expert-settings-service'
+import { currentWorkRoot } from '../design/work-roots-state'
 import { McpConnectionTestService } from '../utilities/mcp-connection-test-service'
 import { McpOAuthService } from '../utilities/mcp-oauth/mcp-oauth-service'
 import { validateMcpProbeTarget } from '../utilities/mcp-probe-input'
@@ -4237,20 +4238,22 @@ export class ChatEngine {
               : CIO_UTILITY_REUSE_PROMPT
       // The design contract is separate from the utility contract because it is
       // not a setup grant: the capability it activates arrives with the turn
-      // request, and what this adds is how to run the session the user opened.
+      // request, and what this adds is how to run the session the user opened,
+      // under the folder the project is pointed at right now rather than the one
+      // the playbook's default would name.
       const designContract =
         designSession === 'start'
-          ? CIO_DESIGN_TURN_PROMPT
+          ? designSessionBriefing('tag', currentWorkRoot('design', projectId))
           : designSession === 'continue'
-            ? CIO_DESIGN_CONTINUE_PROMPT
+            ? designSessionContinuation(currentWorkRoot('design', projectId))
             : ''
       // The video contract is the same shape as the design one, for the same
       // reason: the capability it activates arrives with the turn request.
       const videoContract =
         videoSession === 'start'
-          ? CIO_VIDEO_TURN_PROMPT
+          ? videoSessionBriefing('tag', currentWorkRoot('video', projectId))
           : videoSession === 'continue'
-            ? CIO_VIDEO_CONTINUE_PROMPT
+            ? videoSessionContinuation(currentWorkRoot('video', projectId))
             : ''
       // The orchestration contract is the gate for the workstation tools: it is
       // what tells the agent the tools exist and how to resolve a request to a

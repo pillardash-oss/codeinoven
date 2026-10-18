@@ -131,7 +131,7 @@ A project may hold no framework at all, sometimes not even a package.json. That 
 
 Write one design per folder under \`${designRoot}/<name>/\`, with \`index.html\` as the entry file. The folder is served as a static site, so \`styles.css\`, \`app.js\`, SVGs and images can sit beside the entry file, and both relative paths (\`./styles.css\`) and root-absolute paths (\`/styles.css\`) resolve inside the folder. ${workRootGuidance(designRoot)}
 
-That folder is the design's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a design written there is one the user cannot find, because the board lists the folders under \`${designRoot}\` and nothing else. A design belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a design is neither.
+That folder is the design's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a design written there is one the user cannot find, because the board lists the folders under \`${designRoot}\` and nothing else. A design belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a design is neither. If part of this design already sits somewhere else, move it under \`${designRoot}/<name>/\` before you continue, because work left in another folder is work the user cannot find.
 
 Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to the engineering prototype phase, which finalizes and registers whatever it finds there.
 
