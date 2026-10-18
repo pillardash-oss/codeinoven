@@ -317,3 +317,112 @@ export function releaseAnnotationHighlights(publisher: object, name: string): vo
   if (publishers.size === 0) highlightPublishers.delete(name)
   publishHighlights(name)
 }
+
+/**
+ * The rectangle shape a highlight hit test reads.
+ *
+ * A live `Range` satisfies it (its client rects are `DOMRect`s), and a test can
+ * stand in for one without a layout engine.
+ */
+export interface HighlightBox {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+/** A published range, as the hit test needs it. */
+export interface HighlightRange {
+  getClientRects(): ArrayLike<HighlightBox>
+}
+
+/** How far outside a highlight a click still counts as landing on it. */
+const HIGHLIGHT_HIT_PADDING_X = 4
+const HIGHLIGHT_HIT_PADDING_Y = 3
+
+/**
+ * The annotation whose highlight is under a viewport point, if any.
+ *
+ * A selection already on the chat is a highlight the reader cannot see the
+ * bounds of at a glance, so a right-click on one has to find it by geometry: the
+ * painted rects are the anchor, and a few pixels of slack around them cover the
+ * line box, which is taller than the glyphs and wider than the last word.
+ */
+export function annotationAtPoint(
+  ranges: ReadonlyMap<string, HighlightRange>,
+  x: number,
+  y: number
+): string | null {
+  for (const [id, range] of ranges) {
+    const rects = range.getClientRects()
+    for (let index = 0; index < rects.length; index += 1) {
+      const rect = rects[index]
+      if (x < rect.left - HIGHLIGHT_HIT_PADDING_X || x > rect.right + HIGHLIGHT_HIT_PADDING_X)
+        continue
+      if (y < rect.top - HIGHLIGHT_HIT_PADDING_Y || y > rect.bottom + HIGHLIGHT_HIT_PADDING_Y)
+        continue
+      return id
+    }
+  }
+  return null
+}
+
+/**
+ * Where a selection menu is asked to appear, before it is clamped on screen.
+ *
+ * The menu takes one of these from either trigger it serves: a highlight, whose
+ * selection it sits beside so it never covers the text it acts on, or a
+ * right-click, which anchors it at the cursor like any other context menu.
+ */
+export interface SelectionMenuAnchor {
+  /** Viewport x the menu prefers. */
+  x: number
+  /** Viewport y the menu falls back to when it cannot sit above the selection. */
+  y: number
+  /**
+   * Top edge of the selected passage. Present only for a highlight: it is what
+   * lets the menu open above the text it acts on, the way the toolbar it
+   * replaces did. A right-click leaves it out.
+   */
+  selectionTop?: number
+}
+
+/** The menu's measured size, or the estimate used on its first paint. */
+export interface SelectionMenuSize {
+  width: number
+  height: number
+}
+
+/** Gap between the menu and the selection it sits beside. */
+const SELECTION_MENU_GAP = 6
+/** Smallest distance the menu keeps from every viewport edge. */
+const SELECTION_MENU_MARGIN = 8
+
+function clampToViewport(value: number, limit: number): number {
+  return Math.max(SELECTION_MENU_MARGIN, Math.min(value, Math.max(SELECTION_MENU_MARGIN, limit)))
+}
+
+/**
+ * Place the selection menu inside the viewport.
+ *
+ * A selection opens the menu above itself, falling back below when the top of
+ * the screen is too close, so the text being acted on stays readable. A
+ * right-click point has no such preference and is simply clamped, which is what
+ * keeps a menu opened near an edge fully on screen instead of half outside it.
+ */
+export function placeSelectionMenu(
+  anchor: SelectionMenuAnchor,
+  size: SelectionMenuSize,
+  viewport: { width: number; height: number }
+): { left: number; top: number } {
+  const left = clampToViewport(anchor.x, viewport.width - size.width - SELECTION_MENU_MARGIN)
+  const above =
+    anchor.selectionTop === undefined
+      ? null
+      : anchor.selectionTop - size.height - SELECTION_MENU_GAP
+  const top =
+    above !== null && above >= SELECTION_MENU_MARGIN
+      ? above
+      : clampToViewport(anchor.y, viewport.height - size.height - SELECTION_MENU_MARGIN)
+  return { left, top }
+}

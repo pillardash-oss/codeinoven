@@ -55,7 +55,7 @@
     type ComposerRelocationItem,
     type ComposerRelocationMode
   } from '../chats/composer-relocation'
-  import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
+  import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
@@ -368,6 +368,7 @@
     type TranscriptIndex
   } from './thread-turn-parts'
   import {
+    annotationAtPoint,
     annotationFallbackAnchor,
     applyAnnotationHighlights,
     measureAnnotationBubbles,
@@ -376,6 +377,11 @@
     ANNOTATION_BUBBLE_SIZE,
     type AnnotationBubblePosition
   } from '$lib/selection-anchors'
+  import {
+    registerSelectionAnnotationClaim,
+    isEditingTarget,
+    trackLiveSelection
+  } from '$lib/selection-menu'
   import {
     captureResponseSelection,
     responseRangeFor,
@@ -2716,6 +2722,11 @@
   } | null>(null)
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
+  /** Whether the selection menu is on screen. Read as a flag rather than as the
+   *  candidate itself: the menu follows the text the user keeps highlighting, and
+   *  a tracker keyed on the candidate would re-register on every keystroke of
+   *  the selection instead of once while the menu is open. */
+  const selectionMenuOpen = $derived(Boolean(responseSelection))
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
   /** How many frames a range rebuild is retried for while its anchor has not
    *  mounted yet, before the annotation settles for the fallback anchor. */
@@ -2752,6 +2763,86 @@
   function handleResponsePointerUp(): void {
     responseSelection = captureResponseSelection()
   }
+
+  /**
+   * The candidate a right-click opens for an annotation already on the chat.
+   *
+   * Right-clicking a highlighted passage is a request to work on that passage
+   * again, so the candidate is rebuilt from the annotation rather than from the
+   * document selection, which is collapsed when the user right-clicks without
+   * selecting first.
+   */
+  function referenceSelectionCandidate(
+    referenceId: string,
+    x: number,
+    y: number
+  ): ResponseSelectionCandidate | null {
+    const reference = responseReferences.find((candidate) => candidate.id === referenceId)
+    const range = responseReferenceRanges.get(referenceId)
+    if (!reference || !range) return null
+    if (
+      reference.messageId === undefined ||
+      reference.startOffset === undefined ||
+      reference.endOffset === undefined
+    )
+      return null
+    return {
+      text: reference.text,
+      messageId: reference.messageId,
+      range,
+      startOffset: reference.startOffset,
+      endOffset: reference.endOffset,
+      anchor: { x, y },
+      referenceId
+    }
+  }
+
+  /**
+   * Take a right-click that landed in a response.
+   *
+   * The menu is the same one a highlight opens, at the cursor instead of beside
+   * the selection, so the two ways of reaching a passage's actions are one
+   * control. When the click landed on a passage the user has already commented
+   * on, that comment's bubble opens with the menu, which is how a comment is
+   * found again from the words it was written about.
+   */
+  function claimResponseSelectionMenu(event: MouseEvent): boolean {
+    const target = event.target
+    if (!(target instanceof Element)) return false
+    if (!target.closest('[data-assistant-response]')) return false
+    if (isEditingTarget(target)) return false
+    // A link and an external-address control answer for themselves, so their
+    // menu keeps the items that open them.
+    if (target.closest('a, [data-external-url]')) return false
+    const annotatedId = annotationAtPoint(responseReferenceRanges, event.clientX, event.clientY)
+    const live = annotatedId
+      ? referenceSelectionCandidate(annotatedId, event.clientX, event.clientY)
+      : captureResponseSelection()
+    if (!live) return false
+    event.preventDefault()
+    event.stopPropagation()
+    if (annotatedId) commentEditorReferenceId = annotatedId
+    responseSelection = live
+    return true
+  }
+
+  /**
+   * Follow the selection while the menu is open.
+   *
+   * Shift and an arrow key extend or trim a selection without any pointer event,
+   * and the menu has to describe the text highlighted now rather than the text
+   * that was highlighted when the pointer came up. A selection that collapses or
+   * leaves the responses closes the menu, which is what its absence means.
+   */
+  $effect(() => {
+    if (!selectionMenuOpen) return
+    return trackLiveSelection(captureResponseSelection, (candidate) => {
+      responseSelection = candidate
+    })
+  })
+
+  /** Own the right-click menu inside the responses while this view is mounted. */
+  $effect(() => registerSelectionAnnotationClaim(claimResponseSelectionMenu))
 
   /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
@@ -2884,6 +2975,22 @@
   function closeResponseSelection(): void {
     responseSelection = null
     document.getSelection()?.removeAllRanges()
+  }
+
+  /**
+   * What the menu's comment item does: write a comment on a fresh selection, or
+   * reopen the one a passage already carries.
+   */
+  function commentOnResponseSelection(): void {
+    const selection = responseSelection
+    if (!selection) return
+    const referenceId = selection.referenceId
+    if (referenceId) {
+      closeResponseSelection()
+      commentEditorReferenceId = referenceId
+      return
+    }
+    addResponseReference()
   }
 
   function addResponseReference(): void {
@@ -12749,11 +12856,11 @@
 {/if}
 
 {#if responseSelection}
-  <ResponseSelectionPopover
+  <SelectionActionMenu
     text={responseSelection.text}
-    x={responseSelection.x}
-    y={responseSelection.y}
-    onAdd={addResponseReference}
+    anchor={responseSelection.anchor}
+    annotated={Boolean(responseSelection.referenceId)}
+    onComment={commentOnResponseSelection}
     onElaborate={hasController ? undefined : () => openTemporarySelectionChat('elaborate')}
     onQuickChat={hasController ? undefined : () => openTemporarySelectionChat('quick')}
     onNewThread={openSelectionInNewThread}

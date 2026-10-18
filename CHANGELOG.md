@@ -301,7 +301,27 @@ All notable changes to CodeInOven are documented here. This project follows
   "why do you always" out of frustration, and the frustration itself, are no
   longer proposed for memory.
 
+- **The highlight toolbar is a real context menu, and a right-click opens the
+  same one.** Selecting a passage in an assistant response, an annotated
+  document or a studio document used to raise a single horizontal strip of
+  actions; the same actions now open as a top-to-bottom menu, once on the
+  highlight and once at the cursor on a right-click, with `Copy` as the last
+  item so the plain copy that used to live in the app's text menu is still one
+  click away. A right-click that lands on a passage already carrying a comment
+  also reopens that comment's bubble, and its first item edits that comment
+  instead of attaching a second one to the same words. Links and external
+  address controls keep their own menu, and fields keep cut, paste and select
+  all.
+
 ### Fixed
+
+- **A selection keeps up with shift and the arrow keys.** Highlighting a passage
+  and then extending or trimming it with shift and an arrow key left the action
+  menu, the comment popover and the quote they carry on the text the pointer had
+  first selected. All three now follow the live selection: the menu moves and
+  renames itself with the highlighted text, and the studio and document
+  annotation popovers re-read their quote, offsets and position on every step,
+  so the comment is anchored to what is highlighted when it is submitted.
 
 - **The design and video board never renders blank again.** The panel showed a
   design or a video composition, and at times its body came up empty and stayed

@@ -1,5 +1,6 @@
 import { tick } from 'svelte'
 import { rangeForAnnotation, waitForScrollSettle, type TextAnchor } from '$lib/selection-anchors'
+import { trackLiveSelection } from '$lib/selection-menu'
 
 /** Anchor fields shared by every studio annotation document type. */
 export interface OverlayAnnotation extends TextAnchor {
@@ -33,26 +34,23 @@ const PENDING_HEIGHT_MARGIN = 272
 const DETAIL_WIDTH = 320
 const DETAIL_HEIGHT_MARGIN = 288
 
-export function clampPendingPosition(rect: {
-  left: number
-  bottom: number
-}): { x: number; y: number } {
+export function clampPendingPosition(rect: { left: number; bottom: number }): {
+  x: number
+  y: number
+} {
   return {
     x: Math.max(12, Math.min(rect.left, window.innerWidth - PENDING_WIDTH)),
     y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - PENDING_HEIGHT_MARGIN))
   }
 }
 
-export function clampDetailPosition(rect: {
-  right: number
-  left: number
-  top: number
-}): { x: number; y: number } {
+export function clampDetailPosition(rect: { right: number; left: number; top: number }): {
+  x: number
+  y: number
+} {
   const preferredX = rect.right + 8
   const x =
-    preferredX + DETAIL_WIDTH <= window.innerWidth - 12
-      ? preferredX
-      : rect.left - DETAIL_WIDTH - 8
+    preferredX + DETAIL_WIDTH <= window.innerWidth - 12 ? preferredX : rect.left - DETAIL_WIDTH - 8
   return {
     x: Math.max(12, Math.min(x, window.innerWidth - DETAIL_WIDTH - 12)),
     y: Math.max(12, Math.min(rect.top, window.innerHeight - DETAIL_HEIGHT_MARGIN))
@@ -74,6 +72,8 @@ export class StudioAnnotationOverlay<A extends OverlayAnnotation> {
   markers = $state<OverlayMarker<A>[]>([])
 
   private readonly highlightName: string
+  /** The live-selection watcher of the open pending annotation, if any. */
+  private stopFollowing: (() => void) | null = null
 
   constructor(highlightName: string) {
     this.highlightName = highlightName
@@ -83,11 +83,30 @@ export class StudioAnnotationOverlay<A extends OverlayAnnotation> {
     CSS.highlights?.delete(this.highlightName)
   }
 
-  beginPending(anchor: PendingOverlayAnchor): void {
+  /**
+   * Open the pending annotation on a passage.
+   *
+   * `follow` is the same capture the studio ran on mouseup, and it is what keeps
+   * the popover on the passage the user is still shaping: shift and an arrow key
+   * extend or trim the selection without any pointer event, so the quote, the
+   * offsets and the position are re-read from the document until the selection
+   * leaves it. A collapsed selection keeps the last anchor rather than closing
+   * the popover, because the note being written is worth more than the
+   * highlight it started from.
+   */
+  beginPending(anchor: PendingOverlayAnchor, follow?: () => PendingOverlayAnchor | null): void {
     this.pending = anchor
+    this.stopFollowing?.()
+    this.stopFollowing = follow
+      ? trackLiveSelection(follow, (next) => {
+          if (next) this.pending = next
+        })
+      : null
   }
 
   closePending(): void {
+    this.stopFollowing?.()
+    this.stopFollowing = null
     this.pending = null
   }
 

@@ -24,6 +24,7 @@
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { claimSelectionAnnotationMenu } from '$lib/selection-menu'
 
   type MenuKind = 'text' | 'editable' | 'terminal'
 
@@ -222,6 +223,12 @@
   }
 
   function handleContextMenu(event: MouseEvent): void {
+    // An annotatable surface owns the menu for the text it annotates: a
+    // selection in an assistant response or in a rendered document opens the
+    // same action menu a highlight opens, which is where its annotation is
+    // written and where the plain copy item now lives. Asked first because this
+    // listener runs in the capture phase, ahead of any element handler.
+    if (claimSelectionAnnotationMenu(event)) return
     const resolved = resolveTarget(event)
     if (!resolved) return
     event.preventDefault()
