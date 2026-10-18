@@ -4991,6 +4991,12 @@
     if (msgIndex === 0) return null
     const lastAssistant = messages[msgIndex - 1]
     if (lastAssistant?.role !== 'assistant') return null
+    // A run that is still going and whose last assistant row is a mid-turn step
+    // (tool calls, no answer) has not completed: the message below only steers
+    // the live turn. Claiming "Previous turn completed" there told the reader
+    // the agent had answered and finished, which is what made a steered prompt
+    // read as unanswered.
+    if (busy && messageText(lastAssistant).trim().length === 0) return null
     let turnStartIndex = msgIndex - 2
     while (turnStartIndex >= 0 && messages[turnStartIndex]?.role === 'assistant') {
       turnStartIndex--

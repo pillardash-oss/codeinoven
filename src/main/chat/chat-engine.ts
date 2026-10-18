@@ -1387,6 +1387,14 @@ export class ChatEngine {
    *  tool call in flight   the undo window. Keyed by sessionId. */
   private heldSteers = new Map<string, HeldSteer>()
 
+  /** User messages the live turn already absorbed as a mid-turn steer, keyed by
+   *  sessionId. A steer is not a turn opener: folding the durable turn stream at
+   *  one sliced the live turn into an answerless "completed turn" that ended the
+   *  moment the next message was sent, so the reader saw their steered prompt
+   *  marked complete with no answer. Keeping the steer out of every turn
+   *  boundary keeps the harness turn whole until its session is retired. */
+  private absorbedSteers = new Map<string, { threadId: string; ids: Set<string> }>()
+
   /**
    * Per-session watchdog timers. Each timer is set after a prompt is sent and
    * reset on every SSE activity for that session. When the timer fires, provider
@@ -6119,6 +6127,7 @@ export class ChatEngine {
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
+    this.absorbedSteers.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.engineeringImplementationSessions.delete(sessionId)
@@ -8477,6 +8486,7 @@ export class ChatEngine {
         this.toolTimes.delete(sessionId)
         this.handledIdleSessions.delete(sessionId)
         this.outboundMessageIdsBySession.delete(sessionId)
+        this.absorbedSteers.delete(sessionId)
       }
     }
 
@@ -8608,6 +8618,7 @@ export class ChatEngine {
       this.planningSessions.delete(thread.sessionId)
       this.preparedImplementationSessions.delete(thread.sessionId)
       this.outboundMessageIdsBySession.delete(thread.sessionId)
+      this.absorbedSteers.delete(thread.sessionId)
       await this.threadManager.clearSessionId(projectId, threadId)
       // Destroy the stale driver record   and with it the native transcript
       // binding   so the pre-edit conversation can never be restored onto a
@@ -9101,6 +9112,9 @@ export class ChatEngine {
             await steer(projectPath, options)
           }
         })
+        // The live turn absorbed this message: it steers that turn instead of
+        // opening one, so it must never become a turn boundary.
+        this.markSteerAbsorbedMidTurn(activeSessionId, threadId, messageId)
       } catch (error) {
         if (error instanceof SteerDeliveryFailedError) throw error
         // The turn can settle inside the race window between the working check
@@ -10049,23 +10063,20 @@ export class ChatEngine {
       // Note: steering appends to the LIVE native turn, which still runs under
       // the model that started it. Do not record the new settings model here
       // that would mask a pending model switch until the following resume.
-      const deliverFallbackSteer = (): Promise<void> => {
+      const deliverFallbackSteer = async (): Promise<void> => {
         const steer = driver.steerPrompt
-        if (!steer) return Promise.reject(new Error('steer unavailable'))
-        return this.deliverWorkPrompt(
-          projectId,
-          threadId,
-          userMessage,
-          driverText,
-          async (text) => {
-            await steer.call(driver, projectPath, {
-              sessionId,
-              text,
-              attachments,
-              userMessageId: messageId
-            })
-          }
-        )
+        if (!steer) throw new Error('steer unavailable')
+        await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
+          await steer.call(driver, projectPath, {
+            sessionId,
+            text,
+            attachments,
+            userMessageId: messageId
+          })
+        })
+        // An accidental regular send that the live turn absorbed is a steer, not
+        // a turn opener, so it stays out of every turn boundary.
+        this.markSteerAbsorbedMidTurn(sessionId, threadId, messageId)
       }
       // Same undo window as steerPrompt: hold while a tool call is in flight.
       if (this.hasInFlightTool(sessionId)) {
@@ -11696,6 +11707,7 @@ export class ChatEngine {
     this.temporaryChats.delete(temporaryChatId)
     this.temporaryChatDisplayMessages.delete(temporaryChatId)
     this.outboundMessageIdsBySession.delete(temporary.sessionId)
+    this.absorbedSteers.delete(temporary.sessionId)
     // A closed side chat can never receive a reply for its blocking request, so
     // drop the gate instead of leaving an unanswerable request behind.
     this.clearPendingPermissionsForSession(temporary.sessionId)
@@ -24861,7 +24873,7 @@ export class ChatEngine {
   ): Promise<Array<{ startTs: number; endTs: number }>> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 120)
     const messages = page.messages
-    const heldSteerIds = this.heldSteerMessageIds(threadId)
+    const heldSteerIds = this.turnBoundaryExcludedMessageIds(threadId)
     const prompts: Array<{ index: number; ts: number }> = []
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index]
@@ -25108,7 +25120,7 @@ export class ChatEngine {
   ): Promise<number | undefined> {
     const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 80)
     const messages = page.messages
-    const heldSteerIds = this.heldSteerMessageIds(threadId)
+    const heldSteerIds = this.turnBoundaryExcludedMessageIds(threadId)
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i]
       if (!message || message.role !== 'user') continue
@@ -25125,6 +25137,26 @@ export class ChatEngine {
     const ids = new Set<string>()
     for (const steer of this.heldSteers.values()) {
       if (steer.conversationId === threadId) ids.add(steer.userMessageId)
+    }
+    return ids
+  }
+
+  /** Record that the live turn absorbed this message as a mid-turn steer. */
+  private markSteerAbsorbedMidTurn(sessionId: string, threadId: string, messageId: string): void {
+    const entry = this.absorbedSteers.get(sessionId) ?? { threadId, ids: new Set<string>() }
+    entry.threadId = threadId
+    entry.ids.add(messageId)
+    this.absorbedSteers.set(sessionId, entry)
+  }
+
+  /** User-message ids this thread must never treat as a turn boundary: steers
+   *  still held for their undo window, and steers the live turn has already
+   *  absorbed. Neither has opened a turn of its own. */
+  private turnBoundaryExcludedMessageIds(threadId: string): Set<string> {
+    const ids = this.heldSteerMessageIds(threadId)
+    for (const entry of this.absorbedSteers.values()) {
+      if (entry.threadId !== threadId) continue
+      for (const id of entry.ids) ids.add(id)
     }
     return ids
   }
