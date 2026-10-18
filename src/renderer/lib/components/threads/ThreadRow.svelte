@@ -52,6 +52,7 @@
   import { longPress } from '$lib/long-press.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
+  import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -179,6 +180,16 @@
   const DRAFT_GRACE_MS = 2000
 
   let effectivePinned = $derived(thread.pinned)
+
+  /** The row's last-activity stamp, measured against the shared clock rather
+   *  than the instant this row last happened to render. A quiet thread used to
+   *  keep claiming "Now" until something unrelated re-rendered the row. */
+  let lastActivityAge = $derived(formatCompactAge(thread.lastActivity, relativeTimeClock.now))
+
+  /** Keep the shared clock reading live while this row is on screen. It is one
+   *  timer for every row on the list, never one per thread, and it disarms as
+   *  soon as the last row unmounts. */
+  $effect(() => relativeTimeClock.hold())
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
 
@@ -1153,9 +1164,7 @@
             />
           </span>
         {:else}
-          <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-            {formatCompactAge(thread.lastActivity)}
-          </span>
+          <span class="whitespace-nowrap text-[0.625rem] text-dimmed">{lastActivityAge}</span>
         {/if}
       {:else if currentModelProviderName}
         <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
@@ -1235,9 +1244,7 @@
             <ThreadIndicatorSlot indicator={live} />
           {/each}
           {#if activeIndicators.length === 0}
-            <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
-              {formatCompactAge(thread.lastActivity)}
-            </span>
+            <span class="whitespace-nowrap text-[0.625rem] text-dimmed">{lastActivityAge}</span>
           {/if}
         </span>
       </span>
@@ -1461,10 +1468,8 @@
               class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                 ? 'opacity-0'
                 : 'opacity-100'}"
-              aria-hidden={hovered}
+              aria-hidden={hovered}>{lastActivityAge}</span
             >
-              {formatCompactAge(thread.lastActivity)}
-            </span>
           {/if}
         {:else}
           <!-- Current working / last worked model   provider icon alone -->
@@ -1555,10 +1560,8 @@
                 class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                   ? 'opacity-0'
                   : 'opacity-100'}"
-                aria-hidden={hovered}
+                aria-hidden={hovered}>{lastActivityAge}</span
               >
-                {formatCompactAge(thread.lastActivity)}
-              </span>
             {/if}
           </span>
         </span>
@@ -1657,8 +1660,7 @@
               ? 'opacity-0'
               : 'opacity-100'}"
             aria-hidden={hovered}
-            title={`Edited ${formatDateTime(thread.lastActivity)}`}
-            >{formatCompactAge(thread.lastActivity)}</span
+            title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span
           >
         {/if}
       </span>
@@ -1725,8 +1727,7 @@
             {@render authoredWorkMarker(authoredWorkKinds)}
             <span
               class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
-              title={`Edited ${formatDateTime(thread.lastActivity)}`}
-              >{formatCompactAge(thread.lastActivity)}</span
+              title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span
             >
           </span>
         </span>
