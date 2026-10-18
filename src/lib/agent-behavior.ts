@@ -103,6 +103,27 @@ Working rules
 - Keep temporary and non-source output inside the project's scratch folders, never the OS temp directory.
 - Do not ask the user questions: report a blocker in your final message instead.`
 
+/**
+ * The contract a pawn agent runs under.
+ *
+ * A pawn is the worker's job on a thread of its own, so it carries the worker
+ * rules verbatim and adds only what being a separate thread changes: nobody is
+ * reading it live, the thread that spawned it is the only channel out, and the
+ * work only becomes real when that thread commits it. It is appended to the
+ * pawn's prompt, never to the spawning agent's, which is what keeps a pawn's
+ * thousands of steps out of the spawner's context.
+ */
+export const PAWN_AGENT_CONTRACT = `You are a pawn agent working on your own thread.
+
+${WORKER_AGENT_BEHAVIOR_PROMPT}
+
+Reporting to the agent that spawned you
+- Your final message is the only thing that reaches that agent: lead with the outcome, then what changed, then what you could not do.
+- List every file you created or modified, relative to the project root, including files changed through shell commands.
+- Report the exact checks you ran and their results, scoped to your own files.
+- The agent that spawned you inspects your work and commits it, so leave the workspace in a state it can review: no half-applied edits, no orphaned files.
+- Nobody prompts you mid-task and no new instruction will arrive while you work: finish what you were asked for, or report why you stopped.`
+
 /** Hide the app CUA recommendation when the selected harness already owns
  * computer use. The exact app-owned clause keeps unrelated user edits intact. */
 export function gateCuaDriverBehaviorPrompt(prompt: string, hasNativeComputerUse: boolean): string {

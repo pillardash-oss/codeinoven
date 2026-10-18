@@ -36,6 +36,8 @@ import { RepositoryService } from '../git/repository-service'
 import { ProjectFilesService } from '../editor/project-files-service'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ThreadManager, remapCopiedMessages } from '../../lib/engines/thread-manager'
+import { PAWN_DEFAULT_THINKING_LEVEL } from '../../lib/pawn-tools'
+import { PAWN_AGENT_CONTRACT } from '../../lib/agent-behavior'
 import { SpecEngine } from '../../lib/engines/spec-engine'
 import { AuditEngine } from '../../lib/engines/audit-engine'
 import { AssignmentEngine, AssignmentEngineError } from '../../lib/engines/assignment-engine'
@@ -244,6 +246,7 @@ import type {
   BrowserUtilityExecutor,
   DesignCapabilityExecutor,
   EngineeringToolContext,
+  PawnToolContext,
   VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
@@ -837,6 +840,49 @@ interface UserTerminalWindow {
  * This mirrors the renderer's `isActivityOnlyUserMessage`, which keeps the same
  * messages transparent to turn grouping.
  */
+/**
+ * Read a pawn model override the way an agent would write it: `provider/model-id`
+ * or a bare model id. Only the fields it names are replaced, so a bare model id
+ * keeps the spawner's provider, account and harness.
+ */
+function pawnModelOverride(
+  value: unknown
+): { providerId: string; modelId: string } | { modelId: string } | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  const separator = trimmed.indexOf('/')
+  if (separator <= 0 || separator === trimmed.length - 1) return { modelId: trimmed }
+  return {
+    providerId: trimmed.slice(0, separator),
+    modelId: trimmed.slice(separator + 1)
+  }
+}
+
+/**
+ * The thinking levels a pawn may be asked for. `ultra` stays out deliberately: it
+ * is a model runtime level the pickers offer, not one an agent should hand a
+ * background worker by default.
+ */
+const PAWN_THINKING_LEVELS: ReadonlySet<string> = new Set([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max'
+])
+
+/**
+ * Read a pawn thinking-level override, rejecting anything the app does not model
+ * as a level rather than passing an unknown string to a harness.
+ */
+function pawnThinkingOverride(value: unknown): ThinkingLevel | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return PAWN_THINKING_LEVELS.has(trimmed) ? (trimmed as ThinkingLevel) : undefined
+}
+
 function isTurnBoundaryPrompt(message: AgentMessage): boolean {
   if (message.origin === 'orchestrator') return false
   return !(
@@ -1823,6 +1869,11 @@ export class ChatEngine {
     this.utilityOrchestration.setEngineeringExecutor((operation, input, context) =>
       this.runEngineeringTool(operation, input, context)
     )
+    // The pawn agent tool: spawning and continuing an independent worker thread
+    // that answers only to the agent that called the tool. The engine owns
+    // thread creation, sessions and turn completion, so it supplies this
+    // executor too.
+    this.utilityOrchestration.setPawnExecutor((input, context) => this.runPawnTool(input, context))
     if (this.computerUsePip) {
       const computerUsePip = this.computerUsePip
       this.utilityOrchestration.onCuaActivity((event) => computerUsePip.onActivity(event))
@@ -17696,6 +17747,305 @@ export class ChatEngine {
    * that decision. A request that cannot produce the artifact throws with a
    * plain reason the agent can relay or act on.
    */
+  /**
+   * How long a foreground pawn agent call waits inline for its thread to answer.
+   *
+   * A gateway call is carried by a harness transport that allows
+   * `gatewayHarnessTimeoutMs` for it (the app's human-decision deadline plus a
+   * margin, `src/lib/gateway-timeout.ts`), and a pawn runs whole tasks, so it can
+   * easily outlive that. The inline wait stays under the transport's allowance on
+   * purpose: a call that is still running when this budget expires answers
+   * `running` and reports back by steering the spawner, instead of holding a tool
+   * call open past the transport's deadline.
+   */
+  private static readonly PAWN_FOREGROUND_WAIT_MS = 5 * 60_000
+
+  /**
+   * How long the completion waiter for a pawn's thread stays armed, foreground
+   * or background. A pawn that outlives this is reported as failed rather than
+   * left silent.
+   */
+  private static readonly PAWN_RUN_TIMEOUT_MS = 60 * 60_000
+
+  /**
+   * Spawn or continue a pawn agent: an independent worker thread owned by the
+   * agent whose turn called the tool.
+   *
+   * The pawn is a real thread, not a nested session: it carries
+   * `coordinatorThreadId` (which hides it from the thread list and keeps it out
+   * of capacity accounting), `userInputLocked` (which refuses user-origin
+   * prompts while internal turns still run), and the spawner's own permission
+   * level, so a pawn can never do more than the agent that spawned it.
+   *
+   * Nothing here writes the user's pawn default: the configured selection is read
+   * once per spawn and never replaced, so only the settings page can change it.
+   */
+  private async runPawnTool(
+    input: Record<string, unknown>,
+    context: PawnToolContext
+  ): Promise<unknown> {
+    const { projectId, threadId } = context
+    const spawner = await this.threadManager.getThread(projectId, threadId)
+    if (!spawner?.settings) {
+      throw new Error('Select a model for this thread before spawning a pawn agent.')
+    }
+    if (spawner.userInputLocked === true || spawner.coordinatorThreadId) {
+      throw new Error(
+        'A pawn agent cannot spawn pawn agents. Report to the agent that spawned you instead.'
+      )
+    }
+    const spawnerSettings = validateThreadSettings(spawner.settings)
+    const rawInstructions = input['instructions']
+    const instructions = typeof rawInstructions === 'string' ? rawInstructions.trim() : ''
+    if (!instructions) {
+      throw new Error('Describe the complete task for the pawn agent in `instructions`.')
+    }
+    const rawPurpose = input['purpose']
+    const purpose = typeof rawPurpose === 'string' ? rawPurpose.trim() : ''
+    const rawPawnId = input['pawn_id']
+    const pawnId = typeof rawPawnId === 'string' ? rawPawnId.trim() : ''
+    const background = input['background'] === true
+
+    const pawn = pawnId
+      ? await this.requirePawnThread(projectId, threadId, pawnId)
+      : await this.spawnPawnThread(
+          projectId,
+          spawner,
+          spawnerSettings,
+          input,
+          purpose,
+          instructions
+        )
+    const settings = pawn.settings
+    if (!settings) throw new Error('The pawn agent has no model settings.')
+
+    const driverId = settings.harnessId || DEFAULT_HARNESS
+    const { driver, projectPath } = await this.resolve(
+      projectId,
+      driverId,
+      pawn.id,
+      settings.accountId
+    )
+    const sessionId = await this.ensureSession(projectId, pawn.id, driverId)
+    const prompt = [
+      `You are a CodeInOven pawn agent: an independent worker thread spawned by the agent working on thread ${threadId}, and you answer to that agent alone.`,
+      purpose ? `Purpose: ${purpose}.` : '',
+      'The user cannot prompt you and does not answer you. Work autonomously, do not ask the user questions, and do not commit: the agent that spawned you reviews your work and commits it.',
+      settings.permissionLevel === 'full_access'
+        ? 'You have full access to this project.'
+        : 'Destructive actions need approval, which is surfaced on the thread that spawned you.',
+      PAWN_AGENT_CONTRACT,
+      '',
+      'Instruction from the agent that spawned you:',
+      '',
+      instructions
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    const messageId = createMessageId()
+    const completion = this.waitForSessionCompletion(
+      sessionId,
+      ChatEngine.PAWN_RUN_TIMEOUT_MS,
+      'Pawn agent'
+    )
+    try {
+      await driver.sendPrompt(projectPath, {
+        sessionId,
+        settings,
+        text: prompt,
+        attachments: [],
+        userMessageId: messageId
+      })
+    } catch (error) {
+      // The turn never started, so nothing will ever resolve this waiter. Keep
+      // its rejection handled and let the original failure reach the agent.
+      void completion.catch(() => undefined)
+      throw error
+    }
+
+    if (!background) {
+      const verdict = await Promise.race([
+        completion.then(
+          () => 'completed' as const,
+          (error: unknown) =>
+            error instanceof Error ? error.message : 'The pawn agent session failed'
+        ),
+        new Promise<'running'>((resolve) => {
+          const timer = setTimeout(() => resolve('running'), ChatEngine.PAWN_FOREGROUND_WAIT_MS)
+          // Never let the budget timer hold the process open on its own.
+          timer.unref?.()
+        })
+      ])
+      if (verdict === 'completed') {
+        const output = await this.pawnFinalMessage(driver, projectPath, sessionId)
+        return {
+          pawnId: pawn.id,
+          threadId: pawn.id,
+          title: pawn.title,
+          status: 'completed',
+          model: { providerId: settings.providerId, modelId: settings.modelId },
+          thinkingLevel: settings.thinkingLevel,
+          output: output || 'The pawn agent returned no message.'
+        }
+      }
+      if (verdict !== 'running') throw new Error(`Pawn agent failed: ${verdict}`)
+    }
+
+    // Background, or a foreground call that outlived its inline budget: report
+    // once, when the pawn's thread actually finishes.
+    void completion
+      .then(
+        () => this.pawnFinalMessage(driver, projectPath, sessionId),
+        (error: unknown) =>
+          `The pawn agent failed: ${error instanceof Error ? error.message : String(error)}`
+      )
+      .then((output) =>
+        this.reportPawnCompletion(projectId, spawnerSettings, pawn, purpose, output)
+      )
+      .catch((error: unknown) =>
+        Logger.info('Pawn agent report could not reach its spawner', {
+          threadId: pawn.id,
+          spawnerThreadId: threadId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      )
+    return {
+      pawnId: pawn.id,
+      threadId: pawn.id,
+      title: pawn.title,
+      status: 'running',
+      model: { providerId: settings.providerId, modelId: settings.modelId },
+      thinkingLevel: settings.thinkingLevel,
+      note: 'The pawn is still working. Its final report will steer you when it finishes; continue with other work and do not end the turn with nothing to do while it runs.'
+    }
+  }
+
+  /**
+   * Create the pawn's thread. Hidden (owned by the spawner) and locked against
+   * user input, with the model resolved as: this call's override, then the
+   * user's pawn default, then the spawner's own model; and the thinking level as:
+   * this call's override, then the user's pawn default, then the lowest level.
+   */
+  private async spawnPawnThread(
+    projectId: string,
+    spawner: Thread,
+    spawnerSettings: ThreadSettings,
+    input: Record<string, unknown>,
+    purpose: string,
+    instructions: string
+  ): Promise<Thread> {
+    const configured = (await this.storage.getConfig()).agentDefaults.pawn
+    const modelOverride = pawnModelOverride(input['model'])
+    const thinkingOverride = pawnThinkingOverride(input['thinking_level'])
+    const settings: ThreadSettings = {
+      ...spawnerSettings,
+      ...(modelOverride ?? configured ?? {}),
+      thinkingLevel: thinkingOverride ?? configured?.thinkingLevel ?? PAWN_DEFAULT_THINKING_LEVEL,
+      // A pawn owns one task, so the Engineering planning modes and any audit
+      // loop never follow it in: they belong to the thread the user is watching.
+      assignmentMode: false,
+      loopMode: false,
+      loopAuditor: undefined,
+      reportToCoordinator: undefined
+    }
+    const names = await this.storage.getWorkerNames()
+    const name = names[randomInt(names.length)] ?? 'agent'
+    const label = purpose || instructions.split('\n')[0].slice(0, 60)
+    return this.threadManager.createThread({
+      projectId,
+      providerId: settings.providerId,
+      title: `pawn-${name}: ${label}`.slice(0, 120),
+      titleSource: 'manual',
+      settings,
+      featureSlug: spawner.featureSlug,
+      scopeBucketId: spawner.scopeBucketId,
+      workingDirectory: spawner.workingDirectory,
+      coordinatorThreadId: spawner.id,
+      userInputLocked: true
+    })
+  }
+
+  /**
+   * Resolve a pawn the caller already spawned. Ownership is enforced here and
+   * nowhere else: a thread is a pawn of this turn only when it is locked and
+   * points back at the calling thread, so one agent can never continue another's
+   * pawn.
+   */
+  private async requirePawnThread(
+    projectId: string,
+    spawnerThreadId: string,
+    pawnId: string
+  ): Promise<Thread> {
+    const pawn = await this.threadManager.getThread(projectId, pawnId)
+    if (
+      !pawn ||
+      pawn.coordinatorThreadId !== spawnerThreadId ||
+      pawn.userInputLocked !== true ||
+      pawn.auditorThreadId !== undefined
+    ) {
+      throw new Error(
+        'That id is not a pawn agent this thread spawned. Spawn one by calling this tool without `pawn_id`.'
+      )
+    }
+    return pawn
+  }
+
+  /** The pawn's own final message: the last assistant text on its thread. */
+  private async pawnFinalMessage(
+    driver: HarnessDriver,
+    projectPath: string,
+    sessionId: string
+  ): Promise<string> {
+    const messages = await driver.loadMessages(projectPath, sessionId)
+    const response = [...messages].reverse().find((message) => message.role === 'assistant')
+    if (!response) return ''
+    return response.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+      .trim()
+  }
+
+  /**
+   * Steer the spawning thread with a finished pawn's report, which is the whole
+   * point of a background pawn: its work lands in the agent's context as a short
+   * report instead of the thousands of steps that produced it.
+   */
+  private async reportPawnCompletion(
+    projectId: string,
+    spawnerSettings: ThreadSettings,
+    pawn: Thread,
+    purpose: string,
+    output: string
+  ): Promise<void> {
+    if (!pawn.coordinatorThreadId) return
+    await this.sendPrompt(
+      projectId,
+      pawn.coordinatorThreadId,
+      spawnerSettings,
+      [
+        `Pawn agent ${pawn.title} finished its task.`,
+        purpose ? `Purpose: ${purpose}.` : '',
+        'Read its report, inspect the files it touched, and commit the work you accept: a pawn never commits.',
+        output || 'The pawn agent returned no message.'
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'internal',
+      {
+        action: `Pawn finished · ${pawn.title}`.slice(0, 120),
+        body: output.slice(0, 20_000)
+      }
+    )
+  }
+
   private async runEngineeringTool(
     operation: EngineeringToolOperation,
     input: Record<string, unknown>,
