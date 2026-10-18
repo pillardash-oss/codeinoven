@@ -50,7 +50,7 @@ const PAWN_INPUT_SCHEMA: Record<string, unknown> = {
     pawn_id: {
       type: 'string',
       description:
-        'Continue a pawn you already spawned: its id, from a previous call. Omit it to spawn a new pawn.'
+        "Continue or steer a pawn you already spawned: its id, from a previous call. While the pawn is still working, the instruction reaches it as an update to the work in progress; once it has finished, the same call starts a new turn on the pawn's thread. Omit it to spawn a new pawn."
     },
     model: {
       type: 'string',
@@ -76,7 +76,7 @@ const PAWN_INPUT_SCHEMA: Record<string, unknown> = {
 export const PAWN_TOOLS: GatewayToolDefinition[] = [
   {
     name: PAWN_AGENT_TOOL_NAME,
-    description: `Spawn or continue a pawn agent for ${APP_NAME}: an independent worker thread that answers only to you, the agent that spawned it. The user cannot prompt it; they can watch it work. Use a pawn when the work needs the project's real tools and its own full context   long implementations, broad refactors, independent verification, research that would otherwise flood your context   and hand back only a final report. Choose between the three by ownership and power: ${PAWN_AGENT_TOOL_NAME} is a full thread you direct yourself, cio_spawn_agent is a lighter nested sub-agent with a small tool allowlist, and ${CREATE_ASSIGNMENT_TOOL_NAME} is for work the user wants to monitor and prompt personally. A pawn inherits the project rules: it must verify its own changes, it must list every file it touched, and it must not commit   committing stays with you, because you review its work before it lands.`,
+    description: `Spawn or continue a pawn agent for ${APP_NAME}: an independent worker thread that answers only to you, the agent that spawned it. The user cannot prompt it; they can watch it work. Use a pawn when the work needs the project's real tools and its own full context   long implementations, broad refactors, independent verification, research that would otherwise flood your context   and hand back only a final report. Choose between the three by ownership and power: ${PAWN_AGENT_TOOL_NAME} is a full thread you direct yourself, cio_spawn_agent is a lighter nested sub-agent with a small tool allowlist, and ${CREATE_ASSIGNMENT_TOOL_NAME} is for work the user wants to monitor and prompt personally. You direct a pawn for as long as it lives: when the user answers, corrects or redirects work a pawn is doing, call this tool again with that pawn's pawn_id and their instruction, and the pawn takes it into the work in progress   never spawn a second pawn because you want to change direction. A pawn inherits the project rules: it must verify its own changes, it must list every file it touched, and it must not commit   committing stays with you, because you review its work before it lands.`,
     inputSchema: PAWN_INPUT_SCHEMA,
     outputSchema: { type: 'object', additionalProperties: true },
     route: '/pawn/agent',

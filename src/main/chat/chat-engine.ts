@@ -18077,6 +18077,48 @@ export class ChatEngine {
       .join('\n')
 
     const messageId = createMessageId()
+    // Steering: an instruction for a pawn that is still working goes into the
+    // work in progress, because a harness takes a prompt sent to a live session
+    // into its running turn instead of refusing it. That is how a user who
+    // dislikes the direction reaches a pawn: they tell the agent that spawned it,
+    // and that agent calls this tool again with the same `pawn_id`.
+    //
+    // A steer must not arm a second completion waiter. There is exactly one per
+    // session, so replacing the one the spawn armed would strand it until its
+    // timer fired and then report a failure that never happened.
+    const pawnIsWorking =
+      this.childSessionActivityStatuses.get(sessionId) === 'running' ||
+      this.sessionStatuses.get(sessionId)?.state === 'working'
+    const steer = pawnId !== '' && pawnIsWorking
+    if (steer) {
+      await this.sendPrompt(
+        projectId,
+        pawn.id,
+        settings,
+        prompt,
+        [],
+        undefined,
+        messageId,
+        undefined,
+        undefined,
+        undefined,
+        'internal',
+        {
+          action: `Update from the agent that spawned you · ${pawn.title}`.slice(0, 120),
+          body: instructions.slice(0, 20_000)
+        }
+      )
+      return {
+        pawnId: pawn.id,
+        threadId: pawn.id,
+        title: pawn.title,
+        status: 'running',
+        steered: true,
+        model: { providerId: settings.providerId, modelId: settings.modelId },
+        thinkingLevel: settings.thinkingLevel,
+        note: 'The update reached the pawn while it works, so it applies to the work in progress. Its report will steer you when it finishes; do not end your turn with nothing to do while it runs.'
+      }
+    }
     const completion = this.waitForSessionCompletion(
       sessionId,
       ChatEngine.PAWN_RUN_TIMEOUT_MS,
