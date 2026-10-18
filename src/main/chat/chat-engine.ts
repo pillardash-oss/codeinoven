@@ -5172,6 +5172,7 @@ export class ChatEngine {
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
     const projectPath = await this.discoveryWorkingDirectory(projectId)
     const drivers = await this.catalogDrivers()
+    const previous = this.sharedProviderCatalog?.catalogs ?? this.providerCache.get(projectId) ?? []
     const results: DriverDiscovery[] = []
     for (let offset = 0; offset < drivers.length; offset += 4) {
       const batch = await Promise.all(
@@ -5183,17 +5184,21 @@ export class ChatEngine {
               driverId: driver.id,
               error: error instanceof Error ? error.message : String(error)
             })
-            return { catalogs: [], probe: Promise.resolve([]) }
+            const catalogs = previous.filter((catalog) => catalog.harnessId === driver.id)
+            return { catalogs, probe: Promise.resolve(catalogs) }
           }
         })
       )
       results.push(...batch)
     }
     const merged = mergeProviderCatalogs(
-      results
-        .filter((entry) => entry.catalogs !== undefined)
-        .map((entry) => entry.catalogs as ProviderCatalog[])
-        .flat()
+      results.flatMap((entry, index) => {
+        // A timeout is not an empty catalog. Keep this harness's last result
+        // until its in-flight probe supplies a replacement.
+        return (
+          entry.catalogs ?? previous.filter((catalog) => catalog.harnessId === drivers[index]?.id)
+        )
+      })
     )
     this.sharedProviderCatalog = { schemaVersion: 3, discoveredAt: Date.now(), catalogs: merged }
     // Discovery reflects the drivers' current catalog inputs; re-baseline so the
@@ -5204,7 +5209,10 @@ export class ChatEngine {
     // Drivers still probing when the budget expired keep working in the
     // background; await the same probe (never a second spawn) and broadcast the
     // enriched catalog once it lands.
-    const pending = results.filter((entry) => entry.catalogs === undefined)
+    const pending = results.flatMap((entry, index) => {
+      const driver = drivers[index]
+      return entry.catalogs === undefined && driver ? [{ ...entry, driverId: driver.id }] : []
+    })
     if (pending.length > 0) {
       void this.enrichProviders(projectId, pending)
     }
@@ -5350,22 +5358,31 @@ export class ChatEngine {
   }
 
   /** Await the still-running driver probes and broadcast a fresh catalog. */
-  private async enrichProviders(projectId: string, pending: DriverDiscovery[]): Promise<void> {
+  private async enrichProviders(
+    projectId: string,
+    pending: (DriverDiscovery & { driverId: string })[]
+  ): Promise<void> {
     const catalogs = await Promise.all(
       pending.map(async (entry) => {
         try {
-          return await entry.probe
+          return { driverId: entry.driverId, catalogs: await entry.probe }
         } catch (error) {
           Logger.info('Harness provider enrichment skipped', {
             error: error instanceof Error ? error.message : String(error)
           })
-          return []
+          return null
         }
       })
     )
+    // Successful probes replace their own harness, including a confirmed empty
+    // result. Failed probes keep the old entries so a retry cannot blank them.
+    const replacements = catalogs.filter((entry) => entry !== null)
+    const replacedHarnesses = new Set(replacements.map((entry) => entry.driverId))
     const refreshed = mergeProviderCatalogs([
-      ...(this.providerCache.get(projectId) ?? []),
-      ...catalogs.flat()
+      ...(this.providerCache.get(projectId) ?? []).filter(
+        (catalog) => !replacedHarnesses.has(catalog.harnessId)
+      ),
+      ...replacements.flatMap((entry) => entry.catalogs)
     ])
     this.sharedProviderCatalog = {
       schemaVersion: 3,
