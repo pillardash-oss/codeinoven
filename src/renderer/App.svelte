@@ -106,6 +106,7 @@
   import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { warmSidebarPanels } from '$lib/sidebar-panel-preload'
+  import { warmAppPanels } from '$lib/app-panel-preload'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import type { ActionSelection } from '$lib/actions'
   import { actionContext } from '$lib/stores/action-context.svelte'
@@ -1947,6 +1948,12 @@
     // open of the Git, files, diff or terminal panel instant instead of a cold
     // chunk fetch on the click.
     scheduleDeferredWork('sidebar:panels', warmSidebarPanels)
+    // The global panels (notifications, sticky notes) are dynamic imports in
+    // `AppPanelHost`, reached only from the rail's tab strip with no hover in
+    // front of the click. Warming their chunks here is what keeps the first
+    // open of the notification panel from painting blank while its module is
+    // fetched.
+    scheduleDeferredWork('app:panels', warmAppPanels)
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 
