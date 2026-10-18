@@ -74,6 +74,7 @@
   --font-app: 'Oven Mono', 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
   --font-mono: var(--font-app);
   --font-reference: 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
   /* The gold the mark's knob is drawn with, and the two plates type is proofed on. */
   --accent-gold: #d4af37;
   --plate-dark: #0b0b0d;
@@ -84,6 +85,15 @@
      correction, not a change to the app: tokens.css above stays a mirror. */
   --color-caption: #5f6b7a;
   color-scheme: light;
+}
+
+/* The cut in play. Every screen sets its type through --font-app, so one attribute on the
+   document switches the whole study rather than each screen carrying its own copy: the bar's
+   Mono and Box control writes it. Oven Box is the squared cut and carries JetBrains Mono's own
+   light end, so it answers at weight 200 where Oven Mono starts at 300. */
+:root[data-cut='box'] {
+  --font-app:
+    'Oven Box', 'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
 .dark {

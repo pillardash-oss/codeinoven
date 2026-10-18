@@ -16,7 +16,7 @@
 
       .ab-row {
         display: grid;
-        grid-template-columns: 4.5rem minmax(0, 1fr) 4.5rem minmax(0, 1fr);
+        grid-template-columns: 5.5rem minmax(0, 1fr) 4.5rem minmax(0, 1fr);
         gap: 1rem;
         padding: 0.75rem 1rem;
         background: var(--color-surface);
@@ -28,6 +28,7 @@
         letter-spacing: 0.1em;
         text-transform: uppercase;
         color: var(--color-caption);
+        line-height: 1.45;
       }
 
       .ab-row .set {
@@ -52,7 +53,6 @@
           font-size: 1rem;
         }
       }
-
       .punct {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
@@ -139,12 +139,15 @@
 
     <main class="shell">
       <section class="masthead">
-        <div class="kicker"><span class="dot"></span>Alphabet · Oven Mono v1.000</div>
+        <div class="kicker"><span class="dot"></span>Alphabet · <span data-cut-name>Oven Mono</span> v1.000</div>
         <h1 class="study-title">Every letter, both faces</h1>
         <p class="study-note">
           The alphabet is deliberately unchanged, because JetBrains Mono's letterforms are what
-          make four hours of reading comfortable. Each row sets Oven Mono above the same characters
-          in the face that ships today, so any difference you see is a difference I made on purpose.
+          make four hours of reading comfortable. Each row sets the cut in play above the same
+          characters in the face that ships today, so any difference you see is a difference I
+          made on purpose. Switch the cut in the bar: <strong>Oven Mono</strong> changes the marks
+          only, <strong>Oven Box</strong> changes the marks and squares every drawn corner with
+          them.
         </p>
       </section>
 
@@ -153,38 +156,39 @@
           <span class="index">01</span>
           <h2>The character sets</h2>
           <p>
-            Left pair is Oven Mono at 300, right pair is JetBrains Mono at 200. Lower case, upper
-            case, figures and the ASCII symbols a shell actually prints.
+            Left pair is the cut in play at 300, right pair is JetBrains Mono at 200. Lower case,
+            upper case, figures and the ASCII symbols a shell actually prints. Oven Box answers at
+            200 as well, so its ramp starts a stop lower.
           </p>
         </header>
         <div class="body">
           <div class="ab">
             <div class="ab-row">
-              <span class="lab">Oven</span>
+              <span class="lab" data-cut-name>Oven Mono</span>
               <span class="set">abcdefghijklmnopqrstuvwxyz</span>
               <span class="lab">Ships</span>
               <span class="set ref">abcdefghijklmnopqrstuvwxyz</span>
             </div>
             <div class="ab-row">
-              <span class="lab">Oven</span>
+              <span class="lab" data-cut-name>Oven Mono</span>
               <span class="set">ABCDEFGHIJKLMNOPQRSTUVWXYZ</span>
               <span class="lab">Ships</span>
               <span class="set ref">ABCDEFGHIJKLMNOPQRSTUVWXYZ</span>
             </div>
             <div class="ab-row">
-              <span class="lab">Oven</span>
+              <span class="lab" data-cut-name>Oven Mono</span>
               <span class="set">0123456789</span>
               <span class="lab">Ships</span>
               <span class="set ref">0123456789</span>
             </div>
             <div class="ab-row">
-              <span class="lab">Oven</span>
+              <span class="lab" data-cut-name>Oven Mono</span>
               <span class="set">!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\]^_`{|}~</span>
               <span class="lab">Ships</span>
               <span class="set ref">!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\]^_`{|}~</span>
             </div>
             <div class="ab-row">
-              <span class="lab">Oven</span>
+              <span class="lab" data-cut-name>Oven Mono</span>
               <span class="set">ñáéíóúüçßàèìòùâêîôûëïäö</span>
               <span class="lab">Ships</span>
               <span class="set ref">ñáéíóúüçßàèìòùâêîôûëïäö</span>
@@ -199,7 +203,10 @@
           <h2>Every mark I changed, one by one</h2>
           <p>
             The left glyph is what ships today and the right is Oven Mono. Only these change, and
-            each change is the same idea: the mark's flat cut replaces a round taper.
+            each change is the same idea: the mark's flat cut replaces a round taper. Under Oven
+            Box the same marks are cut, and the bowls, shoulders and diagonal vertices are squared
+            with them; the parenthesis is the one mark that stays round, so it cannot be read as a
+            bracket.
           </p>
         </header>
         <div class="body">
@@ -322,7 +329,8 @@
           <h2>Where each weight sits</h2>
           <p>
             The same sentence at every stop on the axis, so the ramp reads as one decision rather
-            than five unrelated fonts.
+            than five unrelated fonts. Oven Mono carries 300 to 800 and Oven Box 200 to 800, so the
+            heaviest and the lightest stops answer to the cut the bar has selected.
           </p>
         </header>
         <div class="body">

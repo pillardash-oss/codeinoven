@@ -266,7 +266,7 @@
           <div class="hero-plate">
             <div class="hero-lockup">
               <span class="word">CodeInOven</span>
-              <span class="weight">300 · 400 · 500 · 600 · 800</span>
+              <span class="weight" id="ramp">300 · 400 · 500 · 600 · 800</span>
             </div>
             <p class="specimen sm" style="margin: 1.25rem 0 0; color: var(--color-muted)">
               The agent writes the code. You read it, at nine in the morning, for four hours.
@@ -362,8 +362,9 @@
           <h2>Against what ships today, at the same size</h2>
           <p>
             Both faces are drawn on a 1000 unit em with a 600 advance, so a line occupies the same
-            box in either. Oven Mono wears the same letterforms by construction, so the difference
-            you are meant to see is the punctuation, not the alphabet.
+            box in either. The cut in play wears the same letterforms by construction, so the
+            difference you are meant to see is the finish, not the alphabet: the marks in Oven Mono,
+            the marks and the corners in Oven Box.
           </p>
         </header>
         <div class="body">
@@ -470,9 +471,10 @@
             <div>
               <span class="n">03</span>
               <span
-                ><b>The light end is legible.</b> Starting at 300 instead of 200 removes the
-                hairline that makes a dark plate fatiguing, which is a comfort change as much as a
-                brand one.</span
+                ><b>The light end is legible.</b> Oven Mono starts at 300 instead of 200, which
+                removes the hairline that makes a dark plate fatiguing, and Oven Box carries 200 to
+                800 because its squared corners spend a little more ink at the same stroke. Either
+                way the weight you pick is a comfort decision, not a brand one.</span
               >
             </div>
             <div>
@@ -505,6 +507,15 @@
     <script src="./_shell.js"></script>
     <script>
       window.CIOShell.render('index.html')
+      // The box cut carries JetBrains Mono's own light end, so the ramp on this plate follows
+      // whichever cut the bar has selected.
+      const RAMPS = { mono: '300 · 400 · 500 · 600 · 800', box: '200 · 300 · 400 · 600 · 800' }
+      const ramp = document.getElementById('ramp')
+      const setRamp = (cut) => {
+        ramp.textContent = RAMPS[cut] || RAMPS.mono
+      }
+      setRamp(window.CIOShell.cut())
+      window.addEventListener('cio:cut', (event) => setRamp(event.detail.cut))
     </script>
   </body>
 </html>

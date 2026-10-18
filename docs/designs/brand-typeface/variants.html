@@ -490,6 +490,12 @@
         for (const button of buttons) {
           button.setAttribute('aria-pressed', String(button.dataset.cut === cut))
         }
+        // The bar's cut control and this sampler are the same setting, so picking one of our
+        // cuts here moves the bar with it. JetBrains Mono is a reference, not a cut, so choosing
+        // it leaves the bar where it is.
+        if ((cut === 'mono' || cut === 'box') && window.CIOShell.cut() !== cut) {
+          window.CIOShell.applyCut(cut, true)
+        }
       }
 
       for (const button of buttons) {
@@ -501,6 +507,12 @@
       weight.addEventListener('input', apply)
       window.CIOShell.render('variants.html')
       apply()
+      window.addEventListener('cio:cut', (event) => {
+        if (event.detail.cut !== cut) {
+          cut = event.detail.cut
+          apply()
+        }
+      })
     </script>
   </body>
 </html>
