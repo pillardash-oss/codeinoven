@@ -1,19 +1,7 @@
 /**
- * The menu bar figure for working threads: its labels, the hand-drawn numerals
- * it is set in, and the exact grid the menu bar strip is cut on.
- *
- * The figure is not typeset. It is drawn in the mark's own language, read off
- * `src/renderer/static/icon-mono-small.svg`: one uniform heavy stroke, square
- * terminals, mitred corners, and a rectilinear skeleton, which is what the
- * squared C/O already is (a squared O frame with a divider bar inside it). A text
- * face next to that geometry reads as a second voice, so the numerals are the
- * same voice: every stroke is the same weight as the mark's, and every corner is
- * the same mitre.
- *
- * The glyph outlines live in `scripts/tray-count-digits.ts`, because they are
- * only needed to draw the strip; this module owns the grid, which both the
- * generator and the reader need, so the strip that is drawn and the cell that is
- * cut can never disagree.
+ * Labels and the shared crop grid for the menu bar's working-thread strip.
+ * Oven Box numeral outlines live in scripts/tray-count-digits.ts and are baked
+ * into template PNGs at build time. The runtime only crops those images.
  */
 
 /**
@@ -34,18 +22,11 @@ export const TRAY_COUNT_OVERFLOW_LABEL = '99+'
  */
 const FRAME = { x: 10, y: 7, extent: 82 } as const
 
-/**
- * The glyph box, in artwork units. The stroke is the weight the mark is drawn
- * at, so a figure stroke and a mark stroke are the same line: cap height sets the
- * figure's height, ink width its width, and the advance the daylight between two
- * glyphs. Shared with the drawings in `scripts/tray-count-digits.ts`, which is
- * why they live here rather than beside the outlines.
- */
+/** Oven Box outlines fit this artwork box using one uniform scale. */
 export const TRAY_COUNT_GLYPH = {
   capHeight: 40,
   width: 25,
-  advance: 33,
-  stroke: 6.5
+  advance: 33
 } as const
 
 /** Left edge of the figure, in artwork units, measured from the artwork's own
@@ -81,8 +62,6 @@ export interface TrayCountMetrics {
   readonly glyphWidth: number
   /** Step from one glyph's origin to the next, in artwork units. */
   readonly glyphAdvance: number
-  /** Stroke weight of the figure, in artwork units. */
-  readonly glyphStroke: number
   /** Dead space after the last glyph, in artwork units. */
   readonly rightPad: number
 }
@@ -122,7 +101,6 @@ export function trayCountMetrics(scale: TrayCountScale): TrayCountMetrics {
     figureTop: FRAME.y + FRAME.extent / 2 - TRAY_COUNT_GLYPH.capHeight / 2,
     glyphWidth: TRAY_COUNT_GLYPH.width,
     glyphAdvance: TRAY_COUNT_GLYPH.advance,
-    glyphStroke: TRAY_COUNT_GLYPH.stroke,
     rightPad: FIGURE_RIGHT_PAD
   }
 }

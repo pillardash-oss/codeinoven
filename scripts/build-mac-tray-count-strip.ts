@@ -12,15 +12,16 @@
  * artwork rather than a resampled 1x, which is what a menu bar figure needs: a
  * numeral is six or seven device pixels tall at 1x and every stroke edge shows.
  *
- * The figures are hand-drawn strokes (`scripts/tray-count-digits.ts`), not text
- * run through a shaper, so no font is involved in this generator at all.
+ * The figures are filled Oven Box outlines extracted into
+ * `scripts/tray-count-digits.ts`, so rasterization needs no system font.
  *
  * Only macOS gets the figure. The Windows notification area draws every icon
  * into a fixed small square, so an appended figure there would be scaled down
  * with the mark; Windows keeps its own two states.
  */
 import { Resvg } from '@resvg/resvg-js'
-import { writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Logger } from '../src/main/system/logger'
 import {
@@ -29,7 +30,7 @@ import {
   trayCountStripWidth,
   type TrayCountScale
 } from '../src/lib/tray-count-art'
-import { trayNumeralPaths } from './tray-count-digits'
+import { TRAY_COUNT_FONT_SHA256, trayNumeralPaths } from './tray-count-digits'
 
 /** The band inside an SVG that belongs to the document, not to its root tag. */
 function inner(svg: string): string {
@@ -57,8 +58,7 @@ function assertFrameMatches(mark: string, extent: number): void {
  * Cells are laid out on the shared grid, so a cell's left edge in the SVG is the
  * same number the reader crops on. The mark is placed by the frame transform and
  * the figure by a translate on the grid, both inside the same artwork coordinate
- * system, so a figure stroke is the mark's weight by construction rather than by
- * matching two numbers up.
+ * system. Filled glyphs retain the font's own stroke weight.
  */
 function buildStrip(mark: string, scale: TrayCountScale): Buffer {
   const metrics = trayCountMetrics(scale)
@@ -66,11 +66,7 @@ function buildStrip(mark: string, scale: TrayCountScale): Buffer {
   const width = trayCountStripWidth(scale)
   const unit = metrics.height / frame.extent
   const markGroup = `<g transform="scale(${unit}) translate(${-frame.x} ${-frame.y})">${inner(mark)}</g>`
-  // The figures are the only strokes this generator styles: the mark carries its
-  // own stroke attributes from its master.
-  const figureStyle =
-    `fill="none" stroke="#000000" stroke-width="${metrics.glyphStroke}" ` +
-    `stroke-linecap="square" stroke-linejoin="miter"`
+  const figureStyle = 'fill="#000000" stroke="none"'
 
   const cells = trayCountCells(scale)
     .map((cell) => {
@@ -114,6 +110,12 @@ function buildStrip(mark: string, scale: TrayCountScale): Buffer {
  * bar picks up, so both are generated at their own resolution.
  */
 export function buildMacTrayCountStrip(mark: string, outputDir: string): void {
+  const font = readFileSync(join(import.meta.dir, '../resources/fonts/oven/oven-box.woff2'))
+  if (createHash('sha256').update(font).digest('hex') !== TRAY_COUNT_FONT_SHA256) {
+    throw new Error(
+      'Oven Box changed: regenerate outlines with scripts/extract-tray-count-digits.py'
+    )
+  }
   assertFrameMatches(mark, trayCountMetrics(1).frame.extent)
   const outputs: Array<[string, Buffer]> = [
     ['trayCountTemplate.png', buildStrip(mark, 1)],

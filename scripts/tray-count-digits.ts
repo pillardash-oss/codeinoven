@@ -1,122 +1,50 @@
 /**
- * The menu bar numerals, drawn by hand.
- *
- * These are not typeset and not taken from a text face. They are drawn in the
- * mark's own vocabulary, read off `src/renderer/static/icon-mono-small.svg`: one
- * uniform heavy stroke, square terminals, mitred corners, and a rectilinear
- * skeleton. The mark is a squared C/O, so numerals built from bars that turn at
- * right angles are the same voice rather than a second one borrowed from a font.
- *
- * Two rules keep a figure reading as the same object as the mark at menu bar
- * size:
- *
- *   weight     every stroke is the mark's weight. Nothing is thinned to make a
- *              counter fit, because a thin stroke next to the mark reads as a
- *              different material.
- *   counter    the daylight inside a glyph is at least 1.5x the stroke. Below
- *              that the counters grey out at 16px and a 6, an 8 and a 9 start to
- *              look alike.
- *
- * A glyph is a skeleton drawn on a grid inset by half a stroke, so a mitred
- * corner lands exactly on the box corner and a square terminal lands exactly on
- * the box edge. Nothing is drawn outside the box, which is what lets the layout
- * compute a cell width from the glyph count alone.
- *
- * The box and the stroke come from `src/lib/tray-count-art.ts`, so the drawings
- * and the grid cannot disagree about the size they are drawn at.
+ * Generated from resources/fonts/oven/oven-box.woff2 at weight 600.
+ * Source SHA-256: d1d7ef6546bbe7351cc732408d4cd10e3cd63824d1da0c92fbc33d3d8c30a671
+ * Regenerate with scripts/extract-tray-count-digits.py. Outlines are filled,
+ * uniformly scaled to the existing 25 × 40 artwork box, never re-stroked.
+ * Font outlines retain the SIL OFL license in resources/fonts/oven/OFL.txt.
  */
-import { TRAY_COUNT_GLYPH } from '../src/lib/tray-count-art'
+export const TRAY_COUNT_FONT_SHA256 =
+  'd1d7ef6546bbe7351cc732408d4cd10e3cd63824d1da0c92fbc33d3d8c30a671'
 
-/** Half a stroke: the inset that puts ink exactly on the box edge. */
-const HALF = TRAY_COUNT_GLYPH.stroke / 2
-
-/** The skeleton grid: the centres of the outermost strokes, and the middle. */
-const LEFT = HALF
-const RIGHT = TRAY_COUNT_GLYPH.width - HALF
-const TOP = HALF
-const BOTTOM = TRAY_COUNT_GLYPH.capHeight - HALF
-const MIDDLE = TRAY_COUNT_GLYPH.capHeight / 2
-
-/**
- * The plus sign. Its arms are shorter than a digit and sit on the middle line,
- * so it reads as a sign rather than as another numeral, while its stroke stays
- * the mark's weight.
- */
-const PLUS_ARM = 22
-const PLUS_LEFT = (TRAY_COUNT_GLYPH.width - PLUS_ARM) / 2
-const PLUS_RIGHT = PLUS_LEFT + PLUS_ARM
-const PLUS_TOP = MIDDLE - PLUS_ARM / 2
-const PLUS_BOTTOM = MIDDLE + PLUS_ARM / 2
-
-/** One drawn glyph: what it is, and the strokes that make it. */
-interface DrawnNumeral {
-  note: string
-  /** Skeleton paths, drawn with no fill at the mark's weight. */
-  paths: readonly string[]
+export const TRAY_COUNT_NUMERALS: Readonly<Record<string, readonly string[]>> = {
+  '0': [
+    'M12.5 39.3698 6.3533 37.9752 2.2727 34.0496 0.8264 28.2128V11.7872L2.2727 5.8988L6.3017 2.0248L12.5 0.6302L18.75 2.0248L22.7789 5.8988L24.1736 11.7872V28.2128L22.7273 34.0496L18.6983 37.9752ZM12.5 34.5661H15.3926L17.1488 32.8099L18.8533 31.0537V28.2128V11.7872V8.9463L17.1488 7.1901L15.3926 5.4339H12.5H9.6074L7.9029 7.1901L6.1467 8.9463V11.7872V28.2128V31.0537L7.9029 32.8099L9.6074 34.5661ZM9.8657 22.531H15.1343V17.2624H9.8657Z'
+  ],
+  '1': [
+    'M0.6715 38.8533V33.7913H10.6921V6.312L0.6198 13.75V7.4483L9.2459 1.1467H16.2707V33.7913H24.3802V38.8533Z'
+  ],
+  '2': [
+    'M1.1105 38.8533V33.7913L14.1787 20.1033L17.3812 15.7645L18.311 11.8388V8.9979L16.7097 7.2934L15.0568 5.5888H12.3192H9.4783L7.8254 7.345L6.1209 9.1012V12.0455H0.5424L2.1436 6.0021L6.2758 2.0248L12.4225 0.6302L18.5692 1.9731L22.5981 5.8471L24.0444 11.6839L22.5981 17.4174L17.8461 23.7707L8.032 33.7913H24.4576V38.8533Z'
+  ],
+  '3': [
+    'M12.4467 39.3698H7.0638L3.9193 36.4256L0.7748 33.5331V28.5227H6.3533V31.2643L8.0089 32.8636L9.6645 34.4628H12.5027H15.3409L16.9938 32.8636L18.6467 31.2643V28.5227V25.8368V22.9959L16.9918 21.3946L15.3369 19.7934H12.5H8.1095V15.1446L17.0455 6.1054H1.9628V1.1467H23.2438V6.0537L12.3967 17.0041L12.5517 14.938H17.9752L21.0744 17.8822L24.2252 20.7748V25.7851V28.5227V33.5331L21.0807 36.4256L17.8829 39.3698Z'
+  ],
+  '4': [
+    'M18.1302 38.8533V31.0021H1.2913V22.6343L15.0826 1.1467H21.3326L6.7149 24.0062V25.9917H18.1302V17.1591H23.7087V38.8533Z'
+  ],
+  '5': [
+    'M12.4909 39.3698H7.1281L3.9514 36.4256L0.7748 33.5331V28.5227H6.3533V31.2603L8.032 32.8616L9.7107 34.4628H12.5489H15.3871L17.0427 32.8497L18.6983 31.2365V28.4711V26.0434V23.2025L17.0971 21.6012L15.4959 20H12.7066H2.0661V1.1467H22.8822V6.2087H7.3347L7.3864 15.0413H12.9649H18.3825L21.3326 17.9339L24.2252 20.7748V26.0434V28.4711V33.5053L21.0925 36.4116L17.9067 39.3698Z'
+  ],
+  '6': [
+    'M12.5517 39.3698 5.9917 37.8202 1.6012 33.5331 -0 27.1281 0.9814 22.0145 3.564 16.3843 11.9835 1.1467H18.2335L8.7293 17.5207L8.936 17.6756L11.0537 16.126L14.1529 15.5579L19.8347 17.0041L23.6054 21.0847L25 27.0764L23.3988 33.5331L19.0599 37.8202ZM12.5 34.5661 16.1674 33.6364 18.595 31.0537 19.4731 27.1798 18.595 23.3574 16.1674 20.7748 12.5 19.845 8.8843 20.7748 6.405 23.3574 5.5269 27.1798 6.405 31.0537 8.8843 33.6364Z'
+  ],
+  '7': ['M5.2686 38.8533 18.8533 6.1054H5.6818V12.2521H0.155V1.1467H24.845V6.157L11.3636 38.8533Z'],
+  '8': [
+    'M12.4992 39.3698 6.0434 37.9752 1.6566 34.0286 0.0517 28.2645 0.9814 23.9773 3.564 20.6715 7.3864 18.9714V18.812L4.5971 18.2438L2.8409 15.9711L1.1364 10.6508L2.5581 5.4339L6.5599 1.9215L12.5 0.6302L18.4401 1.9215L22.466 5.4339L23.9153 10.6508L22.1591 15.9711L20.4029 18.2438L17.6136 18.8314V18.9669L21.436 20.6715L24.0186 23.9549L24.9483 28.2645L23.3471 34.0496L19.0079 37.9752ZM12.5 34.5145H15.5762L17.4989 32.697L19.4215 30.9275V28.0579V25.1155L17.5103 23.2826L15.5992 21.4979H12.5098H9.4205L7.4897 23.3058L5.5785 25.1328V28.0656V30.9504L7.5011 32.7087L9.4238 34.5145ZM12.5 16.8492H15.1676L16.7872 15.2479L18.3884 13.6538V11.0934V8.5331L16.7872 6.9576L15.186 5.3822H12.5128H9.8874L8.2645 6.9835L6.6116 8.5654V11.106V13.6467L8.2736 15.2479L9.8882 16.8492Z'
+  ],
+  '9': [
+    'M6.5599 38.8533 15.7541 22.8926 15.6508 23.0475 14.6178 23.8223 13.1715 24.3905 11.1054 24.5971 5.4236 23.0992 1.4979 18.9669 -0 12.9236 1.6012 6.4669 5.9401 2.1798 12.4483 0.6302 19.0599 2.1798 23.3988 6.4669 25 12.8719 24.0186 17.9855 21.436 23.6157 13.0165 38.8533ZM12.5 20.155H15.6508L17.562 18.1405L19.4731 16.126V12.8202L18.595 8.9463L16.1674 6.3636L12.5 5.4339L8.8843 6.3636L6.405 8.9463L5.5269 12.8202L6.405 16.6426L8.8843 19.2252Z'
+  ],
+  '+': [
+    'M9.7624 32.1901V22.531H0.2066V17.469H9.7624V7.8099H15.2376V17.469H24.7934V22.531H15.2376V32.1901Z'
+  ]
 }
 
-/**
- * The numerals, 0 to 9, plus the overflow sign.
- *
- * Read the segments as a seven-segment skeleton: the shapes are the classic
- * segment sets, but each digit is one continuous path wherever its segments meet,
- * so the joins are mitred into a single slab instead of reading as bars stacked
- * on top of each other. A segment that ends in open space keeps a square
- * terminal, which is where a digit's shape comes from.
- */
-export const TRAY_COUNT_NUMERALS: Readonly<Record<string, DrawnNumeral>> = {
-  '0': {
-    note: 'The squared O of the mark, closed: four mitred corners and nothing else, so it can never be mistaken for the 8 with its middle bar.',
-    paths: [`M ${LEFT} ${TOP} H ${RIGHT} V ${BOTTOM} H ${LEFT} Z`]
-  },
-  '1': {
-    note: 'A stem with a short flag at the top-left. A bare stem is the exclamation mark the figure replaces, and a foot turns the glyph into a J at menu bar size, so the flag is the only mark that reads as a 1 without impersonating another glyph. It stays short on purpose: a full-width bar here is the 7.',
-    paths: [`M ${RIGHT} ${TOP} V ${BOTTOM}`, `M ${RIGHT - 8} ${TOP} H ${RIGHT}`]
-  },
-  '2': {
-    note: 'One path: top bar, right shoulder, middle bar, left leg, foot. The only glyph whose top-left is an open terminal.',
-    paths: [`M ${LEFT} ${TOP} H ${RIGHT} V ${MIDDLE} H ${LEFT} V ${BOTTOM} H ${RIGHT}`]
-  },
-  '3': {
-    note: 'The top, right and bottom bars as one mitred path, with the middle bar meeting the right bar as a T, which is what keeps the two right-hand corners sharp.',
-    paths: [`M ${LEFT} ${TOP} H ${RIGHT} V ${BOTTOM} H ${LEFT}`, `M ${RIGHT} ${MIDDLE} H ${LEFT}`]
-  },
-  '4': {
-    note: 'An open top-left corner, the middle bar, and a full-height stem. Every segment is square-terminated, which is what makes a 4 unmistakable.',
-    paths: [`M ${LEFT} ${TOP} V ${MIDDLE} H ${RIGHT}`, `M ${RIGHT} ${TOP} V ${BOTTOM}`]
-  },
-  '5': {
-    note: 'The 2 read from the other end, so the top-left corner is mitred and the foot is open.',
-    paths: [`M ${RIGHT} ${BOTTOM} V ${MIDDLE} H ${LEFT} V ${TOP} H ${RIGHT}`]
-  },
-  '6': {
-    note: 'A closed bowl below the middle line plus a top bar: the bowl is what separates it from the 5, which stays open on that side.',
-    paths: [`M ${RIGHT} ${TOP} H ${LEFT} V ${BOTTOM} H ${RIGHT} V ${MIDDLE} H ${LEFT}`]
-  },
-  '7': {
-    note: 'A full top bar and a stem, with no foot. The top bar is the whole difference from the 1.',
-    paths: [`M ${LEFT} ${TOP} H ${RIGHT} V ${BOTTOM}`]
-  },
-  '8': {
-    note: 'The 0 with a middle bar, so the two share a silhouette and the middle is the only thing that distinguishes them.',
-    paths: [`M ${LEFT} ${TOP} H ${RIGHT} V ${BOTTOM} H ${LEFT} Z`, `M ${LEFT} ${MIDDLE} H ${RIGHT}`]
-  },
-  '9': {
-    note: 'The 6 turned over: a closed bowl above the middle line, a full right stem, and a bottom bar that closes the foot.',
-    paths: [`M ${LEFT} ${BOTTOM} H ${RIGHT} V ${TOP} H ${LEFT} V ${MIDDLE} H ${RIGHT}`]
-  },
-  '+': {
-    note: 'A sign rather than a numeral: the same stroke at a shorter arm, centred on the middle line so 99+ reads as one number plus an overflow.',
-    paths: [
-      `M ${PLUS_LEFT} ${MIDDLE} H ${PLUS_RIGHT}`,
-      `M ${TRAY_COUNT_GLYPH.width / 2} ${PLUS_TOP} V ${PLUS_BOTTOM}`
-    ]
-  }
-}
-
-/** The strokes for one character of a figure, in the glyph's own box. */
+/** Filled Oven Box outlines for one count character. */
 export function trayNumeralPaths(character: string): readonly string[] {
-  const numeral = TRAY_COUNT_NUMERALS[character]
-  if (!numeral) throw new Error(`No menu bar numeral drawn for "${character}"`)
-  return numeral.paths
+  const paths = TRAY_COUNT_NUMERALS[character]
+  if (!paths) throw new Error(`No Oven Box menu bar numeral for "${character}"`)
+  return paths
 }
