@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioLock from '@pillardash-oss/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pillardash-oss/cio-icon/CioLockOpen.svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Globe, Lock, LockOpen } from '@lucide/svelte'
+
   import Modal from '$lib/components/ui/Modal.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { GlobalBrowserTab } from '$lib/stores/global-browser-types'
@@ -142,13 +145,13 @@
     return true
   }}
 >
-  <div class="flex items-center gap-2 rounded-lg bg-elevated px-3">
+  <div class="flex items-center gap-2 bg-elevated px-3">
     {#if secure}
-      <Lock size={13} class="shrink-0 text-success" />
+      <CioLock size={13} class="shrink-0 text-success" />
     {:else if initialValue !== ''}
-      <LockOpen size={13} class="shrink-0 text-dimmed" />
+      <CioLockOpen size={13} class="shrink-0 text-dimmed" />
     {:else}
-      <Globe size={15} class="shrink-0 text-dimmed" />
+      <CioBrowser size={15} class="shrink-0 text-dimmed" />
     {/if}
     <input
       {@attach captureAddress}
@@ -179,9 +182,9 @@
       >
         <span class="flex h-4 w-4 items-center justify-center" aria-hidden="true">
           {#if spotlightBoxIcon}
-            <img src={spotlightBoxIcon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+            <img src={spotlightBoxIcon} alt="" class="h-4 w-4 object-contain" />
           {:else}
-            <span class="h-2 w-2 rounded-full" style:background-color={spotlightBoxAccent}></span>
+            <span class="h-2 w-2" style:background-color={spotlightBoxAccent}></span>
           {/if}
         </span>
         <span class="max-w-24 truncate text-[0.6875rem] text-muted">{spotlightBox.name}</span>

@@ -1,17 +1,16 @@
 <script lang="ts">
-  import {
-    Copy,
-    Maximize2,
-    MonitorCog,
-    Pencil,
-    Play,
-    Plus,
-    Square,
-    SquareTerminal,
-    Trash2,
-    Variable,
-    X
-  } from '@lucide/svelte'
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioStop from '@pillardash-oss/cio-icon/CioStop.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioVariable from '@pillardash-oss/cio-icon/CioVariable.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { createSubscriber } from 'svelte/reactivity'
   import Modal from '$lib/components/ui/Modal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
@@ -293,7 +292,7 @@
     onpointercancel={(event) => finishResize(action.id, event)}
     onkeydown={(event) => resizeWithKeyboard(action.id, event)}
   >
-    <span class="h-0.5 w-8 rounded-full bg-border group-hover:bg-primary/60"></span>
+    <span class="h-0.5 w-8 bg-border group-hover:bg-primary/60"></span>
   </button>
 {/snippet}
 
@@ -301,28 +300,28 @@
   <StalePanelNotice stale={scopeStale} reason="run" />
   <header class="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
     <div class="flex items-center gap-2">
-      <MonitorCog size={15} />
+      <CioActions size={15} />
       <h2 class="text-xs font-semibold">Actions</h2>
     </div>
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
       title="Add action"
       aria-label="Add action"
-      onclick={() => openEditor()}><Plus size={15} /></button
+      onclick={() => openEditor()}><CioPlus size={15} /></button
     >
   </header>
   <div bind:this={scrollArea} class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if actions.length === 0}
       <div class="flex h-full min-h-48 flex-col items-center justify-center px-6 text-center">
-        <MonitorCog size={24} class="text-dimmed" />
+        <CioActions size={24} class="text-dimmed" />
         <p class="mt-3 text-sm font-semibold">No actions yet</p>
         <p class="mt-1 text-xs text-muted">
           Save a command you run often, then launch it without opening a terminal.
         </p>
         <button
           type="button"
-          class="mt-4 h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+          class="mt-4 h-8 bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary-hover"
           onclick={() => openEditor()}>Add action</button
         >
       </div>
@@ -331,7 +330,7 @@
         {#each actions as action (action.id)}
           {@const run = projectActionsState.run(action.id)}
           <article
-            class="group cursor-grab overflow-hidden rounded-lg border border-transparent bg-surface hover:border-border active:cursor-grabbing {draggingId ===
+            class="group cursor-grab overflow-hidden border border-transparent bg-surface hover:border-border active:cursor-grabbing {draggingId ===
             action.id
               ? 'opacity-50'
               : ''}"
@@ -359,9 +358,7 @@
               }}
             >
               <span
-                class="h-2 w-2 shrink-0 rounded-full {run?.running
-                  ? 'bg-thread-working'
-                  : 'bg-raised'}"
+                class="h-2 w-2 shrink-0 {run?.running ? 'bg-thread-working' : 'bg-raised'}"
                 title={run?.running ? 'Running' : 'Idle'}
               ></span>
               <div class="min-w-0 flex-1">
@@ -390,7 +387,7 @@
               >
                 <button
                   type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
+                  class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                   title={run?.running ? 'Stop action' : 'Run action'}
                   aria-label={run?.running
                     ? `Stop ${action.name || 'action'}`
@@ -403,7 +400,7 @@
                       requestRun(action)
                     }
                   }}
-                  >{#if run?.running}<Square size={13} fill="currentColor" />{:else}<Play
+                  >{#if run?.running}<CioStop size={ICON_SIZE.inline} />{:else}<CioPlay
                       size={13}
                       fill="currentColor"
                     />{/if}</button
@@ -411,44 +408,44 @@
                 {#if run}
                   <button
                     type="button"
-                    class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
+                    class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                     title="Expand action to fullscreen"
                     aria-label={`Expand ${action.name || 'action'} to fullscreen`}
                     onclick={(event) => {
                       event.stopPropagation()
                       fullscreenActionId = action.id
-                    }}><Maximize2 size={13} /></button
+                    }}><CioMaximize size={13} /></button
                   >
                 {/if}
                 <button
                   type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
+                  class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                   title="Edit action"
                   aria-label={`Edit ${action.name || 'action'}`}
                   onclick={(event) => {
                     event.stopPropagation()
                     openEditor(action)
-                  }}><Pencil size={13} /></button
+                  }}><CioPencil size={13} /></button
                 >
                 <button
                   type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
+                  class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                   title="Duplicate action"
                   aria-label={`Duplicate ${action.name || 'action'}`}
                   onclick={(event) => {
                     event.stopPropagation()
                     duplicate(action)
-                  }}><Copy size={13} /></button
+                  }}><CioCopy size={13} /></button
                 >
                 <button
                   type="button"
-                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-danger/10 hover:text-danger"
+                  class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
                   title="Delete action"
                   aria-label={`Delete ${action.name || 'action'}`}
                   onclick={(event) => {
                     event.stopPropagation()
                     deleteTarget = action
-                  }}><Trash2 size={13} /></button
+                  }}><CioTrash size={13} /></button
                 >
               </div>
             </div>
@@ -494,7 +491,7 @@
     onSelect={(id) => (fullscreenActionId = id)}
   >
     {#snippet icon()}
-      <SquareTerminal size={11} class="shrink-0" />
+      <CioTerminal size={11} class="shrink-0" />
     {/snippet}
     <div class="min-h-0 flex-1">
       {#key fullscreenRun.terminalId}<ActionTerminal
@@ -520,14 +517,14 @@
   <div class="space-y-4">
     <label class="block text-xs font-semibold"
       >Name <span class="font-normal text-muted">Optional</span><input
-        class="mt-1 h-9 w-full rounded-lg border border-border bg-elevated px-3 text-sm outline-none focus:border-primary"
+        class="mt-1 h-9 w-full border border-border bg-elevated px-3 text-sm outline-none focus:border-primary"
         bind:value={name}
         placeholder="Deploy OTA"
       /></label
     >
     <label class="block text-xs font-semibold"
       >Bash script<textarea
-        class="mt-1 min-h-32 w-full resize-y rounded-lg border border-border bg-terminal-background p-3 font-mono text-xs text-terminal-foreground outline-none focus:border-primary"
+        class="mt-1 min-h-32 w-full resize-y border border-border bg-terminal-background p-3 font-mono text-xs text-terminal-foreground outline-none focus:border-primary"
         bind:value={script}
         placeholder={SCRIPT_PLACEHOLDER}></textarea></label
     >
@@ -537,10 +534,10 @@
         <ColorSwatches value={color} size="sm" oncolorchange={(next) => (color = next)} />
       </div>
       <div
-        class="mt-3 flex items-center gap-2 rounded-lg border border-border bg-surface px-2 py-1.5"
+        class="mt-3 flex items-center gap-2 border border-border bg-surface px-2 py-1.5"
         style={color ? `border-left: 3px solid ${color}` : ''}
       >
-        <span class="h-2 w-2 shrink-0 rounded-full bg-raised"></span>
+        <span class="h-2 w-2 shrink-0 bg-raised"></span>
         <span class="truncate text-xs font-semibold text-foreground"
           >{name || 'Action preview'}</span
         >
@@ -560,24 +557,24 @@
         </div>
         <button
           type="button"
-          class="flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-semibold hover:bg-elevated"
-          onclick={addVariable}><Variable size={13} /> Add variable</button
+          class="flex h-8 items-center gap-1.5 border border-border px-2.5 text-xs font-semibold hover:bg-elevated"
+          onclick={addVariable}><CioVariable size={ICON_SIZE.inline} /> Add variable</button
         >
       </div>
       <div class="mt-2 space-y-2">
         {#each variables as variable, index (index)}<div
-            class="grid grid-cols-[1fr_1fr_auto_auto] items-end gap-2 rounded-lg bg-elevated p-2"
+            class="grid grid-cols-[1fr_1fr_auto_auto] items-end gap-2 bg-elevated p-2"
           >
             <label class="text-[0.625rem] font-semibold text-muted"
               >Name<input
-                class="mt-1 h-8 w-full rounded-md border border-border bg-surface px-2 font-mono text-xs"
+                class="mt-1 h-8 w-full border border-border bg-surface px-2 font-mono text-xs"
                 value={variable.name}
                 oninput={(event) => updateVariable(index, { name: event.currentTarget.value })}
                 placeholder="m"
               /></label
             ><label class="text-[0.625rem] font-semibold text-muted"
               >Prompt label<input
-                class="mt-1 h-8 w-full rounded-md border border-border bg-surface px-2 text-xs"
+                class="mt-1 h-8 w-full border border-border bg-surface px-2 text-xs"
                 value={variable.label}
                 oninput={(event) => updateVariable(index, { label: event.currentTarget.value })}
                 placeholder="Commit message"
@@ -590,10 +587,10 @@
               /> Required</label
             ><button
               type="button"
-              class="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-danger/10 hover:text-danger"
+              class="flex h-8 w-8 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
               title="Remove variable"
               aria-label="Remove variable"
-              onclick={() => removeVariable(index)}><X size={13} /></button
+              onclick={() => removeVariable(index)}><CioClose size={13} /></button
             >
           </div>{/each}
       </div>
@@ -612,7 +609,7 @@
     {#each runTarget?.variables ?? [] as variable (variable.name)}<label
         class="block text-xs font-semibold"
         >{variable.label || variable.name}<input
-          class="mt-1 h-9 w-full rounded-lg border border-border bg-elevated px-3 text-sm outline-none focus:border-primary"
+          class="mt-1 h-9 w-full border border-border bg-elevated px-3 text-sm outline-none focus:border-primary"
           value={runValues[variable.name] ?? ''}
           oninput={(event) =>
             (runValues = { ...runValues, [variable.name]: event.currentTarget.value })}
@@ -636,11 +633,11 @@
   <div class="flex justify-end gap-2">
     <button
       type="button"
-      class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
+      class="h-9 border border-border px-3 text-xs font-semibold hover:bg-elevated"
       onclick={() => (editorOpen = false)}>Cancel</button
     ><button
       type="button"
-      class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
+      class="h-9 bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
       disabled={!script.trim() || saving}
       onclick={() => void save()}>{saving ? 'Saving…' : 'Save action'}</button
     >
@@ -651,11 +648,11 @@
   <div class="flex justify-end gap-2">
     <button
       type="button"
-      class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
+      class="h-9 border border-border px-3 text-xs font-semibold hover:bg-elevated"
       onclick={() => (runTarget = null)}>Cancel</button
     ><button
       type="button"
-      class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
+      class="h-9 bg-primary px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
       disabled={(runTarget?.variables ?? []).some(
         (variable) => variable.required && !runValues[variable.name]?.trim()
       )}
@@ -668,11 +665,11 @@
   <div class="flex justify-end gap-2">
     <button
       type="button"
-      class="h-9 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-elevated"
+      class="h-9 border border-border px-3 text-xs font-semibold hover:bg-elevated"
       onclick={() => (deleteTarget = null)}>Cancel</button
     ><button
       type="button"
-      class="h-9 rounded-lg bg-danger px-3 text-xs font-semibold text-on-primary"
+      class="h-9 bg-danger px-3 text-xs font-semibold text-on-primary"
       onclick={async () => {
         if (deleteTarget) await projectActionsState.delete(projectId, deleteTarget.id)
         deleteTarget = null

@@ -1,14 +1,17 @@
 import { requireLocalProject, requireLocalProjectViaWorker } from '../../lib/project-artifacts'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
+import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
 import { openDesignPreview } from '../design/design-preview-session'
-import { currentWorkRoot } from '../design/work-roots-state'
+import { currentWorkRoot, projectWorkRootPaths } from '../design/work-roots-state'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
 import type { DirectoryPreviewService } from './directory-preview-service'
 import { readDesignContracts, writeDesignContract } from '../design/design-contract-service'
 import { runDesignReview } from '../design/design-review-service'
+import { executeDesignMotion } from '../design/design-motion-service'
 import { extractDesignReference } from '../design/design-reference-service'
+import { DesignRepo } from '../database/repositories/design-repo'
 
 /**
  * What the design capability needs from the app.
@@ -58,6 +61,8 @@ export function createDesignPreviewExecutor(
   options: DesignPreviewExecutorOptions
 ): DesignCapabilityExecutor {
   return async (operation, input, context) => {
+    if (['motion-read', 'motion-preview', 'motion-apply', 'motion-inspect'].includes(operation))
+      return executeDesignMotion(options, operation, input, context)
     if (operation === 'lint' || operation === 'critique')
       return runDesignReview(options.database, context, input, operation === 'critique')
     if (operation === 'extract-reference') return extractDesignReference(input['url'])
@@ -82,9 +87,15 @@ export function createDesignPreviewExecutor(
         projectPath: project.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory: input['directory'],
+        directory:
+          typeof input['directory'] === 'string'
+            ? new DesignRepo(options.database).resolveDirectory(
+                context.projectId,
+                input['directory']
+              )
+            : input['directory'],
         entry: input['entry'],
-        defaultRoot: currentWorkRoot('design'),
+        defaultRoot: currentWorkRoot('design', context.projectId),
         attention,
         reveal: false,
         // The agent's own preview moves through the thread's one tab: it is the
@@ -101,6 +112,16 @@ export function createDesignPreviewExecutor(
       kind: 'design'
     })
 
+    const designRoot = currentWorkRoot('design', context.projectId)
+    const folderNote = workFolderNote(
+      'design',
+      result.directory,
+      projectWorkRootPaths(context.projectId, 'design'),
+      designRoot
+    )
+    const tabNote = result.tab
+      ? 'Activate the in-app browser capability to screenshot this tab, change its viewport, or read its console.'
+      : 'No browser tab was opened, so this URL is for the user to open while the app is running.'
     return {
       url: result.url,
       directory: result.directory,
@@ -108,9 +129,7 @@ export function createDesignPreviewExecutor(
       served: result.served,
       attention,
       tab: result.tab,
-      note: result.tab
-        ? 'Activate the in-app browser capability to screenshot this tab, change its viewport, or read its console.'
-        : 'No browser tab was opened, so this URL is for the user to open while the app is running.'
+      note: [folderNote, tabNote].filter(Boolean).join(' ')
     }
   }
 }

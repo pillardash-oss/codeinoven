@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, MessageSquarePlus, Plus, X } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import type { SpecAnnotation, SpecSectionId } from '$shared/types'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import SpecStudioAnnotationBubbles from './SpecStudioAnnotationBubbles.svelte'
@@ -37,24 +40,24 @@
       onclick={(event: MouseEvent) => onHeading(id, event)}
     >
       <span class="text-xl font-semibold tracking-tight">{title}</span>
-      <MessageSquarePlus
+      <CioMessagePlus
         size={14}
         class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
       />
     </button>
     <button
-      class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay"
+      class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] text-muted hover:bg-overlay"
       title={`Add ${title.toLowerCase()} item`}
       onclick={onAdd}
     >
-      <Plus size={11} />
+      <CioPlus size={11} />
       Add
     </button>
   </div>
   <ul class="mt-3 space-y-2">
     {#each items as item, index (`${id}:${index}`)}
-      <li class="group flex items-start gap-2 rounded-lg px-2 py-1 text-muted hover:bg-surface">
-        <Check size={13} class="mt-1.5 shrink-0 text-success" />
+      <li class="group flex items-start gap-2 px-2 py-1 text-muted hover:bg-surface">
+        <CioCheck size={13} class="mt-1.5 shrink-0 text-success" />
         <EditableMarkdown
           class="min-w-0 flex-1 outline-none focus:text-foreground"
           text={item}
@@ -62,12 +65,12 @@
           onChange={(value) => onEdit(index, value)}
         />
         <button
-          class="mt-0.5 rounded p-1 text-dimmed opacity-0 hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
+          class="mt-0.5 p-1 text-dimmed opacity-0 hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
           aria-label={`Remove item ${index + 1}`}
           title={`Remove item ${index + 1}`}
           onclick={() => onRemove(index)}
         >
-          <X size={11} />
+          <CioClose size={11} />
         </button>
       </li>
     {:else}

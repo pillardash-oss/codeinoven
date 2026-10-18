@@ -1,17 +1,15 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioHeartPulse from '@pillardash-oss/cio-icon/CioHeartPulse.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    CheckCircle2,
-    HeartPulse,
-    Loader2,
-    Pencil,
-    Plus,
-    Trash2,
-    UserRound,
-    XCircle,
-    Zap
-  } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { heartbeatStore } from '$lib/stores/heartbeat.svelte'
@@ -233,32 +231,32 @@
       </p>
     </div>
     <button
-      class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="flex h-8 shrink-0 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       disabled={providers.length === 0}
       onclick={openCreate}
     >
-      <Plus size={13} /> Add heartbeat
+      <CioPlus size={13} /> Add heartbeat
     </button>
   </div>
 
   {#if providersError}
-    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {providersError}
     </p>
   {/if}
   {#if heartbeatStore.error}
-    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {heartbeatStore.error}
     </p>
   {/if}
 
   {#if heartbeatStore.loading && heartbeatStore.heartbeats.length === 0}
-    <div class="rounded-xl border border-dashed p-6 text-center">
-      <Loader2 size={17} class="mx-auto animate-spin text-dimmed" />
+    <div class="border border-dashed p-6 text-center">
+      <CioSpinner size={17} class="mx-auto animate-spin text-dimmed" />
     </div>
   {:else if heartbeatStore.heartbeats.length === 0}
-    <div class="rounded-xl border border-dashed p-6 text-center">
-      <HeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
+    <div class="border border-dashed p-6 text-center">
+      <CioHeartPulse size={18} class="mx-auto mb-1.5 text-dimmed" />
       <p class="text-xs text-muted">No heartbeats configured yet.</p>
       {#if providers.length === 0 && !providersLoading}
         <p class="mt-1 text-[0.6875rem] text-dimmed">Select a configured project first.</p>
@@ -269,11 +267,11 @@
       {/if}
     </div>
   {:else}
-    <div class="overflow-hidden rounded-xl border bg-surface">
+    <div class="overflow-hidden border bg-surface">
       {#each heartbeatStore.heartbeats as config (config.id)}
         {@const account = accountFor(config)}
         <div class="flex items-start gap-3 border-b px-4 py-3 last:border-b-0">
-          <div class="mt-0.5 rounded-lg bg-primary/10 p-1.5 text-primary">
+          <div class="mt-0.5 bg-primary/10 p-1.5 text-primary">
             <AgentIcon agentId={config.harnessId} size={16} />
           </div>
           <div class="min-w-0 flex-1">
@@ -287,9 +285,9 @@
                   title={formatLastRun(config)}
                 >
                   {#if config.lastRun.success}
-                    <CheckCircle2 size={11} />
+                    <CioCheckCircle size={11} />
                   {:else}
-                    <XCircle size={11} />
+                    <CioCrossCircle size={11} />
                   {/if}
                   {formatLastRun(config)}
                 </span>
@@ -307,15 +305,17 @@
             </p>
             {#if account}
               <span
-                class="mt-1 inline-flex max-w-full truncate rounded-full border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
+                class="mt-1 inline-flex max-w-full truncate border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
                 title="Account: {account.label}"
               >
-                <UserRound size={10} class="mr-1 shrink-0" />{account.label}
+                <CioPerson size={10} class="mr-1 shrink-0" />{account.label}
               </span>
             {/if}
             <div class="mt-1.5 flex flex-wrap gap-1">
               {#each config.times as time (time)}
-                <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
+                <span
+                  class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-muted"
+                >
                   {formatTimeOfDay(time)}
                 </span>
               {/each}
@@ -323,7 +323,7 @@
           </div>
           <div class="flex shrink-0 items-center gap-1">
             <button
-              class="flex h-7 w-7 items-center justify-center rounded-lg {triggeringId === config.id
+              class="flex h-7 w-7 items-center justify-center {triggeringId === config.id
                 ? 'text-primary'
                 : 'text-muted'} hover:bg-overlay hover:text-foreground"
               aria-label="Trigger {config.name} now"
@@ -332,9 +332,9 @@
               onclick={() => void triggerNow(config.id)}
             >
               {#if triggeringId === config.id}
-                <Loader2 size={13} class="animate-spin" />
+                <CioSpinner size={13} class="animate-spin" />
               {:else}
-                <Zap size={13} />
+                <CioZap size={13} />
               {/if}
             </button>
             <Switch
@@ -344,20 +344,20 @@
               title={config.enabled ? 'Disable heartbeat' : 'Enable heartbeat'}
             />
             <button
-              class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-overlay hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
               aria-label="Edit {config.name}"
               title="Edit {config.name}"
               onclick={() => openEdit(config)}
             >
-              <Pencil size={13} />
+              <CioPencil size={13} />
             </button>
             <button
-              class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+              class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
               aria-label="Delete {config.name}"
               title="Delete {config.name}"
               onclick={() => (deleteTarget = config)}
             >
-              <Trash2 size={13} />
+              <CioTrash size={13} />
             </button>
           </div>
         </div>
@@ -373,33 +373,33 @@
 >
   {#snippet footer()}
     <button
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       type="button"
       onclick={closeEditor}
     >
       Cancel
     </button>
     <button
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="flex h-9 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
       type="button"
       disabled={heartbeatStore.saving}
       onclick={() => void saveDraft()}
     >
-      {#if heartbeatStore.saving}<Loader2 size={13} class="animate-spin" />{/if}
+      {#if heartbeatStore.saving}<CioSpinner size={13} class="animate-spin" />{/if}
       Save heartbeat
     </button>
   {/snippet}
 
   <div class="space-y-4">
     {#if draftError}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{draftError}</p>
+      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{draftError}</p>
     {/if}
 
     <div>
       <label class="mb-1 block text-xs font-medium text-muted" for="heartbeat-name">Name</label>
       <input
         id="heartbeat-name"
-        class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
         placeholder="e.g. Codex Sub, Claude Work"
         bind:value={draftName}
       />
@@ -449,23 +449,23 @@
       <div class="flex gap-2">
         <input
           type="time"
-          class="h-9 flex-1 rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+          class="h-9 flex-1 border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
           bind:value={draftTimeInput}
         />
         <button
           type="button"
-          class="flex h-9 items-center gap-1 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-1 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           disabled={!draftTimeInput}
           onclick={addDraftTime}
         >
-          <Plus size={13} /> Add
+          <CioPlus size={13} /> Add
         </button>
       </div>
       {#if draftTimes.length > 0}
         <div class="mt-2 flex flex-wrap gap-1.5">
           {#each draftTimes as time (time)}
             <span
-              class="flex items-center gap-1 rounded-full bg-raised px-2 py-1 text-[0.6875rem] text-muted"
+              class="flex items-center gap-1 border border-border bg-raised px-2 py-1 text-[0.6875rem] tabular-nums text-muted"
             >
               {formatTimeOfDay(time)}
               <button
@@ -489,26 +489,26 @@
 <Modal open={deleteTarget !== null} title="Delete heartbeat" onClose={() => (deleteTarget = null)}>
   {#snippet footer()}
     <button
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       type="button"
       onclick={() => (deleteTarget = null)}
     >
       Cancel
     </button>
     <button
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+      class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
       type="button"
       disabled={heartbeatStore.saving}
       onclick={() => void removeHeartbeat()}
     >
-      {#if heartbeatStore.saving}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+      {#if heartbeatStore.saving}<CioSpinner size={13} class="animate-spin" />{:else}<CioTrash
           size={13}
         />{/if}
       Delete heartbeat
     </button>
   {/snippet}
   <div class="flex gap-2 text-sm text-muted">
-    <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
+    <CioAttention size={16} class="mt-0.5 shrink-0 text-warning" />
     <p>
       Delete <strong class="text-foreground">{deleteTarget?.name}</strong>? This can't be undone.
     </p>

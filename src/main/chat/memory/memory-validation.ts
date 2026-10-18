@@ -114,7 +114,7 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
     )
     const projectId = optionalEntityId(entry.projectId, `Memory entry ${index} project ID`)
     const threadId = optionalEntityId(entry.threadId, `Memory entry ${index} thread ID`)
-    const routineId = optionalEntityId(entry.routineId, `Memory entry ${index} routine ID`)
+    const assistantId = optionalEntityId(entry.assistantId, `Memory entry ${index} assistant ID`)
     const scopes = validateMemoryScopes(
       entry.scopes,
       { scope, projectId },
@@ -135,7 +135,7 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       lastReinforced,
       projectId,
       threadId,
-      routineId,
+      assistantId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
   })
@@ -253,24 +253,14 @@ export function normalizeStoredProposal(value: unknown): MemoryProposal | null {
   try {
     const id = text(value.id, 'Proposal ID', 1, 128)
     if (!SAFE_ID.test(id)) return null
-    const status = enumValue(
-      value.status,
-      VALID_PROPOSAL_STATUSES,
-      'pending',
-      'Proposal status'
-    )
+    const status = enumValue(value.status, VALID_PROPOSAL_STATUSES, 'pending', 'Proposal status')
     const label = text(value.label, 'Proposal label', 1, MEMORY_LIMITS.maxLabelCharacters)
     const content = text(value.content, 'Proposal content', 1, MEMORY_LIMITS.maxEntryCharacters)
-    const category = enumValue(
-      value.category,
-      VALID_CATEGORIES,
-      'preference',
-      'Proposal category'
-    )
+    const category = enumValue(value.category, VALID_CATEGORIES, 'preference', 'Proposal category')
     const priority = enumValue(value.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
     const projectId = optionalEntityId(value.projectId, 'Proposal project ID')
     const threadId = optionalEntityId(value.threadId, 'Proposal thread ID')
-    const routineId = optionalEntityId(value.routineId, 'Proposal routine ID')
+    const assistantId = optionalEntityId(value.assistantId, 'Proposal assistant ID')
     const legacyScope = typeof value.scope === 'string' ? value.scope : undefined
     const scopes = validateMemoryScopes(
       value.scopes,
@@ -294,7 +284,7 @@ export function normalizeStoredProposal(value: unknown): MemoryProposal | null {
       scopes,
       projectId,
       threadId,
-      routineId,
+      assistantId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),
       createdAt,
       expiresAt,

@@ -1,6 +1,10 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPlug from '@pillardash-oss/cio-icon/CioPlug.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import { Loader2, Plug, Server, X } from '@lucide/svelte'
+
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -27,6 +31,7 @@
   import {
     type AddTab,
     type ConnectStep,
+    loginFailureDetail,
     providerMatchesSearch
   } from './add-provider-modal-helpers'
 
@@ -479,7 +484,7 @@
     void discardPendingAccount()
   }
 
-  async function handleLoginExit(exitCode: number): Promise<void> {
+  async function handleLoginExit(exitCode: number, output: string): Promise<void> {
     const attemptedProvider = selectedProvider
     const providerName = selectedProvider?.name ?? 'Provider'
     loginHandoff = null
@@ -508,7 +513,12 @@
             : `${providerName} sign-in could not be verified.`
       }
     } else {
-      actionWarning = `${providerName} sign-in exited with code ${exitCode}.`
+      // The CLI named the reason in the terminal the user was just watching, so
+      // it belongs in the notice instead of an exit code on its own.
+      const detail = loginFailureDetail(output)
+      actionWarning = `${providerName} sign-in exited with code ${exitCode}.${
+        detail ? ` ${detail}` : ''
+      }`
       await discardPendingAccount()
     }
   }
@@ -603,18 +613,18 @@
   {#snippet dock()}
     <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked provider sign-in">
       <div
-        class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl"
+        class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl"
         data-region="provider-sign-in-dock"
       >
         <button
           type="button"
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           title={dockRestoreLabel}
           aria-label={dockRestoreLabel}
           onclick={() => (oauth.docked = false)}
         >
           {#if signingIn}
-            <Loader2 size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
           {/if}
           <span class="flex min-w-0 flex-col">
             <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
@@ -633,12 +643,12 @@
         <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={dockDismissLabel}
           title={dockDismissLabel}
           onclick={() => void closeModal()}
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       </div>
     </DockRow>
@@ -666,27 +676,27 @@
     />
   {/snippet}
 
-  <div class="mb-4 flex gap-1 rounded-lg bg-elevated p-1">
+  <div class="mb-4 flex gap-1 border border-border bg-elevated p-1">
     <button
-      class="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors {tab ===
+      class="flex h-8 flex-1 items-center justify-center gap-1.5 text-xs font-medium transition-colors {tab ===
       'connect'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       type="button"
       onclick={() => (tab = 'connect')}
     >
-      <Plug size={13} /> Connect provider
+      <CioPlug size={13} /> Connect provider
     </button>
     {#if canAddCustom}
       <button
-        class="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition-colors {tab ===
+        class="flex h-8 flex-1 items-center justify-center gap-1.5 text-xs font-medium transition-colors {tab ===
         'custom'
-          ? 'bg-surface text-foreground shadow-sm'
+          ? 'bg-surface text-foreground'
           : 'text-muted hover:text-foreground'}"
         type="button"
         onclick={() => (tab = 'custom')}
       >
-        <Server size={13} /> Custom base URL
+        <CioServer size={13} /> Custom base URL
       </button>
     {/if}
   </div>
@@ -722,7 +732,7 @@
       onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
       onBackToList={backToList}
       onConnectWithKey={() => void connectWithKey()}
-      onLoginExit={(exitCode) => void handleLoginExit(exitCode)}
+      onLoginExit={(exitCode, output) => void handleLoginExit(exitCode, output)}
       onRequestDisconnect={(account) => (disconnectTarget = account)}
       onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}
     />

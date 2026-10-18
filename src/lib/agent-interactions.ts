@@ -4,6 +4,7 @@ const TODO_TOOL_NAMES = new Set([
   'todo',
   'todos',
   'todowrite',
+  'todolist',
   'writetodo',
   'writetodos',
   'updatetodo',
@@ -17,8 +18,7 @@ const TODO_TOOL_NAMES = new Set([
   'checklist',
   'settasks',
   'taskcreate',
-  'taskupdate',
-  'tasklist'
+  'taskupdate'
 ])
 
 const QUESTION_TOOL_NAMES = new Set([
@@ -86,11 +86,18 @@ const CODE_MODE_TOOL_NAMES = new Set([
   'interpreter',
   'repl',
   'notebook',
-  'execute'
+  'execute',
+  'exec'
 ])
 
 export function isCodeModeToolName(value: string): boolean {
-  return CODE_MODE_TOOL_NAMES.has(normalizeInteractionName(value))
+  // Match a namespace boundary, never arbitrary suffixes such as shell_exec.
+  const name =
+    value
+      .toLowerCase()
+      .split(/(?:__|[./:])/u)
+      .at(-1) ?? value
+  return CODE_MODE_TOOL_NAMES.has(normalizeInteractionName(name))
 }
 
 export function recordValue(value: unknown): Record<string, unknown> | undefined {

@@ -7,6 +7,7 @@ import type {
   ProviderConnectionInfo
 } from '../../lib/types'
 import { findHarness, listHarnesses } from './harness-registry'
+import { resolvedOpenCodeCommand } from './opencode-installation'
 import { parseMajorVersion, compareVersions } from '../../lib/version-compare'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { Logger } from '../system/logger'
@@ -339,7 +340,12 @@ export class HarnessUpdateService {
             args
           )
         : await prepareHarnessTerminalHandoff(
-            openCodeOverride?.command ?? definition.command,
+            openCodeOverride?.command ??
+              // An OpenCode self-update must land on the install the app drives.
+              // The registry names the harness `opencode`, and the updater would
+              // resolve that name through PATH, which is a different copy on a
+              // machine whose PATH copy is the package manager's.
+              (harnessId === 'opencode' ? resolvedOpenCodeCommand() : definition.command),
             openCodeOverride?.args ?? args
           )
     return {

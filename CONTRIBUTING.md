@@ -114,8 +114,8 @@ Three rules keep that from drifting again:
 
 - **`.bun-version` is the only place the toolchain version lives.** Never pass a
   literal `bun-version` to `setup-bun`; `package.json`'s `engines.bun` and
-  `packageManager` declare the floor, and `scripts/check-bun-version.ts` fails
-  the run when the two disagree.
+  `packageManager` must match that exact version, and
+  `scripts/check-bun-version.ts` fails the run when they disagree.
 - **The installer formats a release publishes are owned by
   `scripts/release-artifacts.ts`.** Add a format there, not in a `find` filter.
 - **The promotion-skip rule lives in the `policy` job** of `quality.yml` and
@@ -155,11 +155,13 @@ some changes get extra review scrutiny:
 - **Secrets scanning** runs on every push (Gitleaks) and `bun audit` runs in
   CI. Do not commit `.env` files or tokens.
 - **`bun audit` is never invoked directly.** Run the `audit` script
-  (`bun run audit`), which carries the accepted-advisory list. Add to that
-  script only when no patched release exists anywhere on the path, and say so
-  in the comment it requires. `GHSA-ch52-4w7c-c8xp` is the current entry: it has
-  no upstream fix and its only path is the build-time Electron download. See
-  the `audit` job in `.github/workflows/security.yml`.
+  (`bun run audit`), which carries the accepted-advisory list. Prefer an
+  `overrides` entry in `package.json` that lifts the vulnerable package to a
+  patched release, and add an advisory to that script only when no patched
+  release exists anywhere on the path. Every accepted advisory and its removal
+  condition is recorded in the `audit` job comment in
+  `.github/workflows/security.yml`; say why there when you add one. See the
+  `audit` job in that workflow for the mechanism.
 
 ---
 

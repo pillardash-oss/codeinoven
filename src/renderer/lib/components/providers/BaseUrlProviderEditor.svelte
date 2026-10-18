@@ -1,14 +1,13 @@
 <script lang="ts">
-  import {
-    ArrowLeft,
-    ClipboardPaste,
-    Copy,
-    Loader2,
-    Plus,
-    RefreshCw,
-    Server,
-    X
-  } from '@lucide/svelte'
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioClipboardPaste from '@pillardash-oss/cio-icon/CioClipboardPaste.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
   import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -22,7 +21,14 @@
   import { APP_SLUG } from '$shared/brand'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
+  import EnumSelect from '../ui/EnumSelect.svelte'
   import Switch from '../ui/Switch.svelte'
+  import UsageWindowList from '../shared/UsageWindowList.svelte'
+  import { creditsLabel } from '$lib/format/usage'
+  import {
+    PROVIDER_USAGE_FORMATS,
+    providerUsageFormatEndpoint
+  } from '$shared/provider-usage-format'
   import HarnessToggleGroup from '../shared/HarnessToggleGroup.svelte'
   import {
     parseModelClipboard,
@@ -36,6 +42,8 @@
     BaseUrlProviderCreateRequest,
     BaseUrlProviderModel,
     BaseUrlProviderUpdateRequest,
+    BaseUrlProviderUsageFormat,
+    BaseUrlProviderUsagePreview,
     DiscoveredBaseUrlModel,
     ProviderConnectionInfo,
     ThinkingLevel
@@ -79,8 +87,10 @@
     apiKey: string
     removeApiKey: boolean
     headers: string
-    /** Optional account status/usage route (e.g. /status or /usage). */
+    /** Optional usage route (e.g. /status or /usage) or absolute URL. */
     usagePath: string
+    /** Response format of the usage route; empty means auto-detect. */
+    usageFormat: BaseUrlProviderUsageFormat | ''
     /** Optional model-list route (defaults to /models when empty). */
     modelsPath: string
     models: ModelDraft[]
@@ -270,6 +280,65 @@
   let discoveringModels = $state(false)
   let discoverError = $state('')
 
+  /** Result of the last usage-route Test, shown inline under the format picker. */
+  let usagePreview = $state<BaseUrlProviderUsagePreview | null>(null)
+  let testingUsage = $state(false)
+  const activeUsageFormat = $derived<BaseUrlProviderUsageFormat>(draft.usageFormat || 'auto')
+  const usageFormatHint = $derived(
+    PROVIDER_USAGE_FORMATS.find((option) => option.value === activeUsageFormat)?.hint ?? ''
+  )
+  const usageFormatOptions = PROVIDER_USAGE_FORMATS.map((option) => ({
+    id: option.value,
+    label: option.label,
+    hint: option.hint
+  }))
+
+  /**
+   * Picking a format fills in the route that format knows how to read, so the
+   * user can pick and test without having to recall an endpoint. A route the
+   * user typed by hand is never clobbered   only an empty field, or one still
+   * holding the previous format's own default, is replaced.
+   */
+  function applyUsageFormat(format: BaseUrlProviderUsageFormat): void {
+    const previousEndpoint = providerUsageFormatEndpoint(activeUsageFormat)
+    const current = draft.usagePath.trim()
+    draft.usageFormat = format
+    if (!current || current === previousEndpoint) {
+      draft.usagePath = providerUsageFormatEndpoint(format) ?? ''
+    }
+    usagePreview = null
+  }
+
+  /** Read the usage route as configured in the draft, before saving. */
+  async function testUsage(): Promise<void> {
+    const usagePath = draft.usagePath.trim()
+    if (!usagePath) {
+      toast.error('Pick a response format or enter a usage endpoint first.')
+      return
+    }
+    if (!draft.baseURL.trim()) {
+      toast.error('Enter the provider base URL first.')
+      return
+    }
+    testingUsage = true
+    usagePreview = null
+    try {
+      const headers = parseHeaders(draft.headers)
+      usagePreview = await baseUrlProviderStore.previewUsage({
+        baseURL: draft.baseURL.trim(),
+        usagePath,
+        ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
+        ...(draft.usageFormat ? { usageFormat: draft.usageFormat } : {}),
+        ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+        ...(headers ? { headers } : {})
+      })
+    } catch (usageError) {
+      reportError(usageError, 'Usage preview failed.')
+    } finally {
+      testingUsage = false
+    }
+  }
+
   async function discoverModels(force = false): Promise<void> {
     if (!draft.baseURL.trim()) return
     discoveringModels = true
@@ -377,6 +446,7 @@
               .join('\n')
           : '',
         usagePath: provider.usagePath ?? '',
+        usageFormat: provider.usageFormat ?? 'auto',
         modelsPath: provider.modelsPath ?? '',
         models: provider.models.map((model) => ({
           id: model.id,
@@ -420,6 +490,7 @@
       removeApiKey: false,
       headers: '',
       usagePath: '',
+      usageFormat: 'auto',
       modelsPath: '',
       models: [],
       enabled: true
@@ -537,6 +608,7 @@
           models,
           enabled: draft.enabled,
           usagePath: draft.usagePath.trim(),
+          usageFormat: draft.usageFormat,
           modelsPath: draft.modelsPath.trim(),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.removeApiKey ? { removeApiKey: true } : {}),
@@ -559,6 +631,7 @@
           models,
           enabled: draft.enabled,
           ...(draft.usagePath.trim() ? { usagePath: draft.usagePath.trim() } : {}),
+          ...(draft.usageFormat ? { usageFormat: draft.usageFormat } : {}),
           ...(draft.modelsPath.trim() ? { modelsPath: draft.modelsPath.trim() } : {}),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
@@ -610,6 +683,7 @@
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
         headers: draft.headers,
         usagePath: draft.usagePath,
+        usageFormat: draft.usageFormat,
         modelsPath: draft.modelsPath,
         models: draft.models,
         enabled: draft.enabled
@@ -635,6 +709,7 @@
         removeApiKey: false,
         headers: provider.headers,
         ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
+        usageFormat: provider.usageFormat ?? '',
         ...(provider.modelsPath ? { modelsPath: provider.modelsPath } : {}),
         models: provider.models.map(modelToDraft),
         enabled: provider.enabled
@@ -680,15 +755,15 @@
 >
   {#snippet dock()}
     <DockRow storageKey={PANEL_STORAGE_KEY} label="Move docked base URL provider">
-      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+      <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
         <button
           type="button"
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           title={dockRestoreLabel}
           aria-label={dockRestoreLabel}
           onclick={() => (docked = false)}
         >
-          <Server size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioServer size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
           <span class="flex min-w-0 flex-col">
             <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
               {provider ? 'Edit base URL provider' : 'Add base URL provider'}
@@ -701,13 +776,13 @@
         <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={dockDismissLabel}
           title={dockDismissLabel}
           disabled={submitting}
           onclick={onClose}
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       </div>
     </DockRow>
@@ -718,21 +793,21 @@
       <div class="flex items-center gap-3">
         {#if onBack}
           <button
-            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+            class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
             type="button"
             data-modal-dismiss
             title="Back to Add provider"
             disabled={submitting}
             onclick={onBack}
           >
-            <ArrowLeft size={13} /> Back
+            <CioArrowLeft size={13} /> Back
           </button>
         {/if}
         <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
       </div>
       <div class="flex items-center gap-2">
         <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           type="button"
           data-modal-dismiss
           disabled={submitting}
@@ -741,13 +816,13 @@
           Cancel
         </button>
         <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
           data-modal-primary
           form="base-url-provider-form"
           disabled={baseUrlProviderStore.saving || readingIcon || submitting}
         >
-          {#if baseUrlProviderStore.saving || submitting}<Loader2
+          {#if baseUrlProviderStore.saving || submitting}<CioSpinner
               size={13}
               class="animate-spin"
             />{/if}
@@ -784,7 +859,7 @@
         {#if provider === null}
           {#each QUICK_PRESETS as preset (preset.name)}
             <button
-              class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               type="button"
               title="Pre-fill {preset.name} settings"
               onclick={() => applyPreset(preset)}
@@ -795,20 +870,20 @@
         {/if}
         <span class="ml-auto flex items-center gap-1.5">
           <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
             type="button"
             title="Copy this provider (including API key) to the clipboard"
             onclick={() => void copyProviderDraft()}
           >
-            <Copy size={12} /> Copy
+            <CioCopy size={12} /> Copy
           </button>
           <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
             type="button"
             title="Paste a copied provider over this form"
             onclick={() => void pasteProviderFromClipboard()}
           >
-            <ClipboardPaste size={12} /> Paste
+            <CioClipboardPaste size={12} /> Paste
           </button>
         </span>
       </div>
@@ -816,13 +891,15 @@
 
     <label
       class={[
-        'flex items-center gap-3 rounded-lg border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
+        'flex items-center gap-3 border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
         iconUploadDisabled
           ? 'cursor-default opacity-60'
           : 'cursor-pointer hover:border-primary/40 hover:bg-elevated'
       ]}
     >
-      <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-elevated">
+      <span
+        class="flex h-12 w-12 shrink-0 items-center justify-center border border-border bg-elevated"
+      >
         <VendorIcon name="CodeInOven" imageSrc={iconPreview} size={iconPreview ? 40 : 32} />
       </span>
       <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
@@ -842,7 +919,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Display name</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         placeholder="My AI Provider"
         required
         bind:value={draft.name}
@@ -852,7 +929,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>SDK package</span>
       <select
-        class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
         bind:value={draft.npm}
       >
         {#each NPM_OPTIONS as option (option.value)}
@@ -864,7 +941,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Base URL</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
         placeholder="https://api.example.com/v1"
         required
         bind:value={draft.baseURL}
@@ -875,7 +952,7 @@
       <span>{draft.id ? 'API key' : 'API key (optional)'}</span>
       <input
         id="base-url-provider-api-key"
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
         placeholder={apiKeyConfigured ? 'Stored securely   enter a new key to replace' : 'sk-...'}
         autocomplete="off"
         spellcheck="false"
@@ -884,7 +961,7 @@
       />
     </label>
     {#if draft.id && apiKeyConfigured}
-      <div class="space-y-2 rounded-lg bg-raised px-3 py-2">
+      <div class="space-y-2 bg-raised px-3 py-2">
         <p id="stored-api-key-status" class="text-[0.6875rem] text-muted">
           An API key is stored securely. Leave the field blank to keep it.
         </p>
@@ -909,34 +986,91 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Custom headers · one Name: Value per line</span>
       <textarea
-        class="min-h-16 w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
+        class="min-h-16 w-full border bg-elevated px-3 py-2 font-mono text-xs outline-none focus:border-primary"
         placeholder="Authorization: Bearer token"
         autocomplete="off"
         spellcheck="false"
         bind:value={draft.headers}></textarea>
     </label>
 
-    <label class="block space-y-1 text-xs font-medium" for="base-url-provider-usage-path">
-      <span>Status route (optional)</span>
-      <input
-        id="base-url-provider-usage-path"
-        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
-        placeholder="/status or /usage"
-        autocomplete="off"
-        spellcheck="false"
-        bind:value={draft.usagePath}
-      />
-      <span class="block text-[0.6875rem] font-normal text-dimmed">
-        Path (relative to the base URL) or full URL that reports this account's usage/limit. Used to
-        show quota bars; leave empty if the provider has none.
-      </span>
-    </label>
+    <div class="space-y-3 border bg-surface/40 px-3 py-2.5">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs font-medium">Usage &amp; limits</span>
+        <button
+          type="button"
+          class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          title="Read the usage endpoint now and show the limits it reports"
+          aria-label="Test the usage endpoint"
+          disabled={testingUsage || !draft.usagePath.trim() || !draft.baseURL.trim()}
+          onclick={() => void testUsage()}
+        >
+          {#if testingUsage}
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
+            Testing…
+          {:else}
+            <CioActions size={13} aria-hidden="true" />
+            Test
+          {/if}
+        </button>
+      </div>
+
+      <div class="space-y-1">
+        <span class="block text-xs font-medium">Response format</span>
+        <EnumSelect
+          options={usageFormatOptions}
+          value={activeUsageFormat}
+          onChange={applyUsageFormat}
+          placeholder="Auto-detect"
+          ariaLabel="Usage response format"
+          title="How CodeInOven reads this usage endpoint"
+          class="w-full"
+        />
+        <p class="text-[0.6875rem] font-normal text-dimmed">{usageFormatHint}</p>
+      </div>
+
+      <label class="block space-y-1 text-xs font-medium" for="base-url-provider-usage-path">
+        <span>Usage endpoint</span>
+        <input
+          id="base-url-provider-usage-path"
+          class="h-9 w-full border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+          placeholder="/status or https://analytics.example.com/usage"
+          autocomplete="off"
+          spellcheck="false"
+          bind:value={draft.usagePath}
+        />
+        <span class="block text-[0.6875rem] font-normal text-dimmed">
+          Picking a format fills in the route it reads. A path is resolved against the base URL; a
+          full URL is used as-is. Leave it blank for a provider with no readings to show.
+        </span>
+      </label>
+
+      {#if usagePreview}
+        <div class="border bg-elevated px-2.5 py-2">
+          {#if usagePreview.usage && (usagePreview.usage.rateLimits.length > 0 || usagePreview.usage.credits)}
+            <UsageWindowList limits={usagePreview.usage.rateLimits} />
+            {#if creditsLabel(usagePreview.usage)}
+              <p class="mt-1 text-[0.625rem] text-dimmed">{creditsLabel(usagePreview.usage)}</p>
+            {/if}
+            <p
+              class="mt-1.5 truncate text-[0.5625rem] text-dimmed"
+              title={usagePreview.usage.source}
+            >
+              {usagePreview.usage.source}
+            </p>
+          {:else}
+            <p class="text-[0.6875rem] text-muted">
+              {usagePreview.message ?? 'No limits to report.'}
+            </p>
+          {/if}
+        </div>
+      {/if}
+    </div>
 
     <label class="block space-y-1 text-xs font-medium" for="base-url-provider-models-path">
       <span>Models route (optional)</span>
       <input
         id="base-url-provider-models-path"
-        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
         placeholder="/models"
         autocomplete="off"
         spellcheck="false"
@@ -953,38 +1087,38 @@
         <span class="text-xs font-medium">Models</span>
         <div class="flex items-center gap-1.5">
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
             type="button"
             title="Fetch available models from {draft.baseURL || 'the base URL'}/models"
             disabled={!draft.baseURL.trim() || discoveringModels}
             onclick={() => void discoverModels(true)}
           >
             {#if discoveringModels}
-              <Loader2 size={11} class="animate-spin" />
+              <CioSpinner size={11} class="animate-spin" />
             {:else}
-              <RefreshCw size={11} />
+              <CioRefresh size={11} />
             {/if}
             Refresh models
           </button>
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
+            class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
             type="button"
             title="Paste a copied model from the clipboard"
             onclick={() => void pasteModelFromClipboard()}
           >
-            <ClipboardPaste size={11} /> Paste model
+            <CioClipboardPaste size={11} /> Paste model
           </button>
           <button
-            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
+            class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium hover:bg-overlay"
             type="button"
             onclick={addModel}
           >
-            <Plus size={11} /> Add model
+            <CioPlus size={11} /> Add model
           </button>
         </div>
       </div>
       {#if draft.models.length === 0}
-        <p class="rounded-lg border border-dashed p-3 text-[0.6875rem] text-dimmed">
+        <p class="border border-dashed p-3 text-[0.6875rem] text-dimmed">
           No models added. On save, we will fetch the model list from the /models route and add
           every model found.
         </p>
@@ -992,7 +1126,7 @@
           <p class="text-[0.6875rem] text-danger">{discoverError}</p>
         {:else if discoveringModels}
           <p class="flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
-            <Loader2 size={11} class="animate-spin" /> Searching {draft.baseURL}/models…
+            <CioSpinner size={11} class="animate-spin" /> Searching {draft.baseURL}/models…
           </p>
         {:else if discoveredModels.length > 0}
           <div class="space-y-1">
@@ -1003,7 +1137,7 @@
             <div class="flex flex-wrap gap-1.5">
               {#each discoveredModels as model (model.id)}
                 <button
-                  class="rounded-full border bg-elevated px-2.5 py-1 text-[0.6875rem] font-mono hover:bg-overlay disabled:opacity-40"
+                  class="border bg-elevated px-2.5 py-1 text-[0.6875rem] font-mono hover:bg-overlay disabled:opacity-40"
                   type="button"
                   disabled={draft.models.some((m) => m.id === model.id)}
                   onclick={() => addDiscoveredModel(model)}
@@ -1016,27 +1150,27 @@
         {/if}
       {/if}
       {#each draft.models as model, index (index)}
-        <div class="rounded-lg border bg-elevated/50 p-3">
+        <div class="border bg-elevated/50 p-3">
           <div class="flex items-center justify-between">
             <span class="text-[0.6875rem] font-medium text-dimmed">Model {index + 1}</span>
             <div class="flex items-center gap-1">
               <button
-                class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-overlay hover:text-foreground"
+                class="flex h-6 w-6 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                 aria-label="Copy model {index + 1} to clipboard"
                 title="Copy model {index + 1} to clipboard"
                 type="button"
                 onclick={() => copyModelDraft(model)}
               >
-                <Copy size={12} />
+                <CioCopy size={12} />
               </button>
               <button
-                class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
+                class="flex h-6 w-6 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
                 aria-label="Remove model {index + 1}"
                 title="Remove model {index + 1}"
                 type="button"
                 onclick={() => removeModel(index)}
               >
-                <X size={12} />
+                <CioClose size={12} />
               </button>
             </div>
           </div>
@@ -1044,7 +1178,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Model ID</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
                 placeholder="my-model"
                 bind:value={model.id}
               />
@@ -1052,7 +1186,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Display name</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs outline-none focus:border-primary"
                 placeholder="My Model"
                 bind:value={model.name}
               />
@@ -1060,7 +1194,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Context window</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
                 placeholder="200000"
                 inputmode="numeric"
                 bind:value={model.contextWindow}
@@ -1069,7 +1203,7 @@
             <label class="space-y-1 text-[0.6875rem] font-medium">
               <span>Max output tokens</span>
               <input
-                class="h-8 w-full rounded border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
+                class="h-8 w-full border bg-elevated px-2 text-xs font-mono outline-none focus:border-primary"
                 placeholder="65536"
                 inputmode="numeric"
                 bind:value={model.maxOutputTokens}
@@ -1086,7 +1220,7 @@
             <label class="flex items-center gap-1.5 text-[0.6875rem] font-medium">
               <span>Default thinking</span>
               <select
-                class="h-7 rounded border bg-elevated px-1.5 text-[0.6875rem] outline-none focus:border-primary"
+                class="h-7 border bg-elevated px-1.5 text-[0.6875rem] outline-none focus:border-primary"
                 bind:value={model.defaultThinkingLevel}
               >
                 <option value="">None</option>

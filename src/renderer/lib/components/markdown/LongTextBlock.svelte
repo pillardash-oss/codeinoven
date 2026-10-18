@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, ChevronDown, ChevronUp, Copy } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
   import { copyText } from '$lib/copy-text'
 
   interface Props {
@@ -38,34 +41,34 @@
   }
 </script>
 
-<div class="overflow-hidden rounded-lg border bg-elevated" data-long-text-block={text.length}>
+<div class="overflow-hidden border bg-elevated" data-long-text-block={text.length}>
   <div class="flex h-7 items-center justify-between border-b px-3">
     <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">
       long text · {text.length.toLocaleString()} chars
     </span>
     <div class="flex items-center gap-1">
       <button
-        class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        class="flex items-center p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label={expanded ? 'Collapse long text' : 'Expand long text'}
         title={expanded ? 'Collapse long text' : 'Expand long text'}
         onclick={() => (expanded = !expanded)}
       >
         {#if expanded}
-          <ChevronUp size={12} />
+          <CioChevronUp size={12} />
         {:else}
-          <ChevronDown size={12} />
+          <CioChevronDown size={12} />
         {/if}
       </button>
       <button
-        class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        class="flex items-center p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label="Copy text"
         title="Copy text"
         onclick={() => void copy()}
       >
         {#if copied}
-          <Check size={12} class="text-success" />
+          <CioCheck size={12} class="text-success" />
         {:else}
-          <Copy size={12} />
+          <CioCopy size={12} />
         {/if}
       </button>
     </div>

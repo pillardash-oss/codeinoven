@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bookmark } from '@lucide/svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
   import { skillBookmarkState } from '$lib/stores/skill-bookmarks.svelte'
   import type { SkillMarketEntry } from '$shared/types'
 
@@ -34,12 +34,12 @@
   {title}
   aria-label={title}
   aria-pressed={bookmarked}
-  class="flex shrink-0 items-center justify-center gap-1.5 rounded-lg transition-colors {bookmarked
+  class="flex shrink-0 items-center justify-center gap-1.5 transition-colors {bookmarked
     ? 'text-accent'
     : 'text-muted hover:text-foreground'} {labelled ? 'h-8 px-2.5 text-xs font-medium' : 'h-7 w-7'}
   {className}"
   onclick={toggle}
 >
-  <Bookmark {size} fill={bookmarked ? 'currentColor' : 'none'} />
+  <CioBookmark {size} fill={bookmarked ? 'currentColor' : 'none'} />
   {#if labelled}<span>{bookmarked ? 'Bookmarked' : 'Bookmark'}</span>{/if}
 </button>

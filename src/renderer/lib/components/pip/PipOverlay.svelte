@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { MousePointer2, X, PictureInPicture2 } from '@lucide/svelte'
+  import CioCursor from '@pillardash-oss/cio-icon/CioCursor.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -72,7 +74,7 @@
   let overlaySize = $state({ width: 0, height: 0 })
   let overlayElement = $state<HTMLDivElement | undefined>()
   let userMoved = $state(false)
-  /** Scale that pins every dimension: preview, cursor projection and the
+  /** Scale that pins every dimension: preview, MousePointer2 projection and the
    *  occlusion rectangle all follow it, so the aspect ratio is never negotiable. */
   let scale = $state(MIN_SCALE)
   let resizingEdge = $state<ResizeEdge | null>(null)
@@ -430,7 +432,7 @@
 {#if visible}
   <div
     {@attach anchorOverlay}
-    class="fixed z-50 touch-none select-none rounded-xl border bg-surface shadow-2xl"
+    class="fixed z-50 touch-none select-none border bg-surface shadow-2xl"
     style="left: {displayPosition.x}px; top: {displayPosition.y}px;"
     role="group"
     aria-label="Computer-use preview for {pipState.appName}"
@@ -438,7 +440,7 @@
     {#each RESIZE_HANDLES as handle (handle.edge)}
       <button
         type="button"
-        class="absolute z-10 rounded-sm bg-transparent transition-colors hover:bg-accent/25 focus-visible:bg-accent/25 focus-visible:outline-none {handle.classes}"
+        class="absolute z-10 bg-transparent transition-colors hover:bg-accent/25 focus-visible:bg-accent/25 focus-visible:outline-none {handle.classes}"
         title="Drag to resize the computer-use preview (up to twice its default size). Arrow keys also resize."
         aria-label="Resize computer-use preview from the {handle.label}"
         onpointerdown={(event) => onResizePointerDown(event, handle.edge)}
@@ -460,17 +462,17 @@
       title="Drag to move · click preview to bring the app to the front"
     >
       <span class="flex min-w-0 items-center gap-1.5 text-xs font-medium text-foreground">
-        <PictureInPicture2 size={13} class="shrink-0 text-accent" />
+        <CioWindow size={13} class="shrink-0 text-accent" />
         <span class="truncate">{pipState.appName}</span>
       </span>
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Close computer-use preview"
         aria-label="Close computer-use preview"
         onclick={() => void pipState.dismiss()}
       >
-        <X size={13} />
+        <CioClose size={13} />
       </button>
     </div>
 
@@ -482,7 +484,7 @@
       onclick={() => void pipState.bringToFront()}
     >
       <div
-        class="relative overflow-hidden rounded-md border border-border bg-app"
+        class="relative overflow-hidden border border-border bg-app"
         style="width: {previewWidth}px; height: {previewHeight}px;"
       >
         <img
@@ -492,7 +494,7 @@
           draggable="false"
         />
         {#if cursorPosition}
-          <MousePointer2
+          <CioCursor
             size={cursorSize}
             strokeWidth={2.5}
             class="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 text-accent drop-shadow-md"

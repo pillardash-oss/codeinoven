@@ -53,6 +53,23 @@ export const invokeEngineeringContract = {
     ],
     EngineeringLifecycleState
   >,
+  /**
+   * Seed a sibling/fork thread from an Engineering source: mark the destination
+   * as an Engineering thread (even when the source has every switch off, so its
+   * Toolbox stays filled) and copy the selection the user actually sees. The
+   * optional `selection` is the source view's staged (not-yet-sent) intent; when
+   * omitted the source's persisted selection is used. Never inherits from an
+   * independent-audit or orchestration-child thread.
+   */
+  'engineeringLifecycle:inherit': {} as Contract<
+    [
+      projectId: string,
+      sourceThreadId: string,
+      destinationThreadId: string,
+      selection?: import('../types').EngineeringLifecycleSelectionInput
+    ],
+    Thread | null
+  >,
   'engineeringLifecycle:start': {} as Contract<
     [projectId: string, threadId: string, stage?: import('../types').EngineeringLifecycleStage],
     EngineeringLifecycleTransitionResult

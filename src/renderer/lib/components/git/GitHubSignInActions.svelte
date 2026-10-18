@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ExternalLink, Globe, Loader2 } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
 
   /**
@@ -24,7 +26,7 @@
     <button
       type="button"
       data-modal-primary
-      class="flex h-8 cursor-pointer items-center justify-center rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="flex h-8 cursor-pointer items-center justify-center bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
       onclick={() =>
         githubSignIn.phase === 'authorized' ? githubSignIn.close() : githubSignIn.start()}
     >
@@ -42,7 +44,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="mr-auto cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="mr-auto cursor-pointer px-3 py-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Cancel this sign-in and stop waiting for the code"
       aria-label="Cancel this sign-in"
       onclick={() => githubSignIn.close()}
@@ -51,18 +53,18 @@
     </button>
     <button
       type="button"
-      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 border border-border bg-surface px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
       title="Open the GitHub verification page in your default browser"
       disabled={!githubSignIn.device || githubSignIn.handingOffToAppBrowser}
       onclick={() => void githubSignIn.openInDefaultBrowser()}
     >
-      <ExternalLink size={13} />
+      <CioExternalLink size={13} />
       Open in Default Browser
     </button>
     <button
       type="button"
       data-modal-primary
-      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+      class="flex h-8 cursor-pointer items-center justify-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
       title="Sign in inside CodeInOven: opens the verification page in the app-wide browser and copies the code"
       disabled={!githubSignIn.device || githubSignIn.handingOffToAppBrowser}
       onclick={() => void githubSignIn.openInCioBrowser()}
@@ -74,10 +76,10 @@
           the alternative is a click that looks like it did nothing, which is
           exactly what a user reported when the hand-off was silent.
         -->
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Opening…
       {:else}
-        <Globe size={13} />
+        <CioBrowser size={13} />
         Open in Global CIO Browser
       {/if}
     </button>

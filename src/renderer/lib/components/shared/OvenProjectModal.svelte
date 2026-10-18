@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, Loader2, Plus, Server } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { invoke } from '$lib/ipc.svelte'
   import { ovenMarkUrl } from '$lib/stores/ovens.svelte'
@@ -157,26 +160,26 @@
 
 <Modal {open} size="lg" title="Project from an Oven" {onClose}>
   {#if loadError}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{loadError}</p>
+    <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{loadError}</p>
   {:else if loadingOvens || !ovenState}
     <p class="flex items-center gap-2 py-6 text-sm text-muted">
-      <Loader2 size={15} class="animate-spin" />
+      <CioSpinner size={15} class="animate-spin" />
       Loading Ovens…
     </p>
   {:else if remoteOvens.length === 0}
     <EmptyState
-      icon={Server}
+      icon={CioServer}
       title="No Ovens yet"
       description="An Oven is a machine CodeInOven runs agents on over SSH. Add one to start a project there."
     >
       {#snippet action()}
         <button
           type="button"
-          class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="flex items-center gap-2 bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
           title="Add a new Oven in Settings"
           onclick={requestNewOven}
         >
-          <Plus size={15} />
+          <CioPlus size={15} />
           Create a New Oven
         </button>
       {/snippet}
@@ -190,7 +193,7 @@
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
             id="oven-project-oven"
-            class="flex h-9 w-full items-center gap-2 rounded-lg border bg-elevated px-3 text-left text-sm text-foreground transition-colors hover:bg-overlay"
+            class="flex h-9 w-full items-center gap-2 border bg-elevated px-3 text-left text-sm text-foreground transition-colors hover:bg-overlay"
             aria-label="Choose an Oven"
             title="Choose an Oven"
           >
@@ -198,14 +201,14 @@
               {#if ovenMarkUrl(selectedOven)}
                 <img class="h-4 w-4 shrink-0" alt="" src={ovenMarkUrl(selectedOven)} />
               {:else}
-                <Server size={14} class="shrink-0 text-muted" />
+                <CioServer size={14} class="shrink-0 text-muted" />
               {/if}
               <span class="min-w-0 flex-1 truncate">{selectedOven.name}</span>
             {:else}
-              <Server size={14} class="shrink-0 text-muted" />
+              <CioServer size={14} class="shrink-0 text-muted" />
               <span class="min-w-0 flex-1 truncate text-muted">Choose an Oven</span>
             {/if}
-            <ChevronDown size={14} class="shrink-0 text-muted" />
+            <CioChevronDown size={14} class="shrink-0 text-muted" />
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -213,18 +216,18 @@
               align="start"
               sideOffset={6}
               collisionPadding={8}
-              class="z-60 max-h-72 w-[var(--bits-floating-anchor-width)] overflow-y-auto rounded-xl border bg-surface p-1 shadow-lg"
+              class="z-60 max-h-72 w-[var(--bits-floating-anchor-width)] overflow-y-auto border bg-surface p-1 shadow-lg"
             >
               {#each remoteOvens as oven (oven.id)}
                 <DropdownMenu.Item
-                  class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                  class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
                   title={`Use ${oven.name}`}
                   onSelect={() => (selectedOvenId = oven.id)}
                 >
                   {#if ovenMarkUrl(oven)}
                     <img class="h-4 w-4 shrink-0" alt="" src={ovenMarkUrl(oven)} />
                   {:else}
-                    <Server size={14} class="shrink-0 text-muted" />
+                    <CioServer size={14} class="shrink-0 text-muted" />
                   {/if}
                   <span class="min-w-0 flex-1 truncate">{oven.name}</span>
                   {#if oven.id === ovenState?.defaultOvenId}
@@ -239,11 +242,11 @@
 
       {#if probing}
         <p class="flex items-center gap-2 py-2 text-sm text-muted">
-          <Loader2 size={15} class="animate-spin" />
+          <CioSpinner size={15} class="animate-spin" />
           Connecting to {selectedOven?.name ?? 'the Oven'}…
         </p>
       {:else if probeError}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {probeError}
         </p>
       {:else if selectedOvenId && probeHome}
@@ -256,7 +259,7 @@
       {/if}
 
       {#if error}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+        <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
       {/if}
     </div>
   {/if}
@@ -264,7 +267,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Cancel"
       onclick={onClose}
     >
@@ -273,13 +276,13 @@
     {#if remoteOvens.length > 0}
       <button
         type="button"
-        class="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="flex items-center gap-2 bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         title="Add this Oven project"
         disabled={!canAdd}
         onclick={() => void addProject()}
       >
         {#if adding}
-          <Loader2 size={15} class="animate-spin" />
+          <CioSpinner size={15} class="animate-spin" />
         {/if}
         Use This Folder
       </button>

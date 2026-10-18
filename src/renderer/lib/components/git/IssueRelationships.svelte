@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Ban, CornerDownRight, Link2, ListTree, Plus, X } from '@lucide/svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEnter from '@pillardash-oss/cio-icon/CioEnter.svelte'
+  import CioLink from '@pillardash-oss/cio-icon/CioLink.svelte'
+  import CioListTree from '@pillardash-oss/cio-icon/CioListTree.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import { issueStateIcon } from './issue-view'
   import type {
     IssueRelationshipItem,
@@ -87,12 +92,12 @@
   {#if canLink}
     <button
       type="button"
-      class="flex h-5 cursor-pointer items-center gap-0.5 rounded-full border border-dashed border-border px-1.5 text-[0.5625rem] font-medium text-dimmed transition-colors hover:border-primary hover:text-primary"
+      class="flex h-5 cursor-pointer items-center gap-0.5 border border-dashed border-border px-1.5 text-[0.5625rem] font-medium text-dimmed transition-colors hover:border-primary hover:text-primary"
       title={label}
       aria-label={label}
       onclick={() => onAdd(mode)}
     >
-      <Plus size={9} />
+      <CioPlus size={9} />
       Add
     </button>
   {/if}
@@ -107,7 +112,7 @@
       reader is not acting on stays a chip.
     -->
     <div
-      class="group flex h-5 max-w-full items-center rounded-full border border-border pl-1.5 pr-1 text-[0.5625rem] font-medium transition-colors hover:bg-elevated"
+      class="group flex h-5 max-w-full items-center border border-border pl-1.5 pr-1 text-[0.5625rem] font-medium transition-colors hover:bg-elevated"
     >
       <button
         type="button"
@@ -124,12 +129,12 @@
       {#if removable(item)}
         <button
           type="button"
-          class="ml-0.5 flex size-3.5 shrink-0 cursor-pointer items-center justify-center rounded-full text-dimmed opacity-0 transition-opacity hover:bg-danger/15 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
+          class="ml-0.5 flex size-3.5 shrink-0 cursor-pointer items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-danger/15 hover:text-danger focus-visible:opacity-100 group-hover:opacity-100"
           title="Unlink {item.repository}#{item.number}"
           aria-label="Unlink {item.repository}#{item.number}"
           onclick={() => onRemove(mode, item)}
         >
-          <X size={8} />
+          <CioClose size={8} />
         </button>
       {/if}
     </div>
@@ -139,7 +144,7 @@
 {#snippet group(
   labelText: string,
   items: IssueRelationshipItem[],
-  Icon: typeof Ban,
+  Icon: typeof CioBan,
   tone: string,
   mode: IssueRelationshipMode
 )}
@@ -154,9 +159,9 @@
   </div>
 {/snippet}
 
-<div class="mt-2 rounded-lg border border-border bg-surface/40 px-2.5 py-2">
+<div class="mt-2 border border-border bg-surface/40 px-2.5 py-2">
   <div class="flex items-center gap-1.5">
-    <ListTree size={10} class="text-dimmed" />
+    <CioListTree size={10} class="text-dimmed" />
     <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
       Relationships
     </span>
@@ -173,13 +178,13 @@
         so an empty parent is something to offer rather than something to list.
       -->
       {#if relationships.parent}
-        {@render group('Parent', [relationships.parent], CornerDownRight, '', 'parent')}
+        {@render group('Parent', [relationships.parent], CioEnter, '', 'parent')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <CornerDownRight size={9} />
+            <CioEnter size={9} />
             Parent
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">
@@ -195,7 +200,7 @@
         <span
           class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
         >
-          <ListTree size={9} />
+          <CioListTree size={9} />
           Sub-issues
         </span>
         <div class="flex min-w-0 flex-1 flex-col gap-1">
@@ -212,13 +217,13 @@
       </div>
 
       {#if relationships.blockedBy.length > 0}
-        {@render group('Blocked by', relationships.blockedBy, Ban, 'text-warning', 'blocked-by')}
+        {@render group('Blocked by', relationships.blockedBy, CioBan, 'text-warning', 'blocked-by')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <Ban size={9} class="text-warning" />
+            <CioBan size={9} class="text-warning" />
             Blocked by
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">
@@ -228,13 +233,13 @@
       {/if}
 
       {#if relationships.blocking.length > 0}
-        {@render group('Blocking', relationships.blocking, Link2, '', 'blocking')}
+        {@render group('Blocking', relationships.blocking, CioLink, '', 'blocking')}
       {:else}
         <div class="flex items-start gap-1.5">
           <span
             class="flex shrink-0 items-center gap-1 pt-0.5 text-[0.5625rem] font-medium text-dimmed"
           >
-            <Link2 size={9} />
+            <CioLink size={9} />
             Blocking
           </span>
           <div class="flex min-w-0 flex-1 flex-wrap gap-1">

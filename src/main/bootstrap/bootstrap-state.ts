@@ -12,6 +12,7 @@ import type { DesignService } from '../design/design-service'
 import type { BrowserService } from '../browser/browser-service'
 import type { BrowserDownloadManager } from '../browser/browser-service/browser-downloads'
 import type { ChatEngine } from '../chat/chat-engine'
+import type { CrossInstanceThreadService } from '../chat/cross-instance-thread-service'
 import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
 import type { GatewaySupervisorService } from '../gateway/gateway-supervisor-service'
@@ -21,13 +22,14 @@ import type { UpdaterService } from '../notifications/updater-service'
 import type { SkillUpdateService } from '../utilities/skill-updates'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { ConnectivityService } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { CioCleanupService } from '../cio-cleanup/cio-cleanup-service'
-import type { RoutineSchedulerService } from '../scheduler/routine-scheduler-service'
+import type { AssistantSchedulerService } from '../scheduler/assistant-scheduler-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
 import type { AutoAnswerStore } from '../system/auto-answer-store'
 import type { CleanShutdownStore } from '../system/clean-shutdown-store'
-import type { RoutineManager } from '../../lib/engines/routine-manager'
+import type { AssistantManager } from '../../lib/engines/assistant-manager'
 import type { PtyService } from '../system/pty-service'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import type { OpenCodeV2Service } from '../opencode-v2/opencode-v2-service'
@@ -101,13 +103,15 @@ export interface BootstrapState {
   skillUpdateService: SkillUpdateService | null
   powerWakeService: PowerWakeService | null
   retryScheduler: RetrySchedulerService | null
+  /** Verified device connectivity, the gate every connection wait resumes on. */
+  connectivity: ConnectivityService | null
   heartbeatScheduler: HeartbeatSchedulerService | null
   /** Daily sweep of stale `.cio` scratch folders, plus its manual run. */
   cioCleanup: CioCleanupService | null
   /** Authored-work service, so a sweep can reconcile the histories it orphaned. */
   designService: DesignService | null
-  routineManager: RoutineManager | null
-  routineScheduler: RoutineSchedulerService | null
+  assistantManager: AssistantManager | null
+  assistantScheduler: AssistantSchedulerService | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
   backgroundRunLedger: BackgroundRunLedger | null
   /** Durable record of gates the app resolved without the user (attention rail). */
@@ -122,6 +126,8 @@ export interface BootstrapState {
   stopInstanceTakeOverListener: (() => void) | null
   /** Cross-instance turn-ownership notices pushed to every window. */
   foreignRuns: ForeignRunService | null
+  /** Shared thread rows and transcripts a sibling instance changed. */
+  crossInstanceThreads: CrossInstanceThreadService | null
   /** Cross-instance thread transfer: releases and adopts running threads. */
   threadTransfer: ThreadTransferService | null
   modelPricingService: ModelPricingService | null
@@ -195,16 +201,18 @@ export function createBootstrapState(): BootstrapState {
     skillUpdateService: null,
     powerWakeService: null,
     retryScheduler: null,
+    connectivity: null,
     heartbeatScheduler: null,
     cioCleanup: null,
     designService: null,
-    routineManager: null,
-    routineScheduler: null,
+    assistantManager: null,
+    assistantScheduler: null,
     backgroundRunLedger: null,
     autoAnswerStore: null,
     cleanShutdownStore: null,
     stopInstanceTakeOverListener: null,
     foreignRuns: null,
+    crossInstanceThreads: null,
     threadTransfer: null,
     modelPricingService: null,
     speechService: null,

@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Eye, Mic, Volume2, VolumeX } from '@lucide/svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pillardash-oss/cio-icon/CioVolumeX.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import {
@@ -33,7 +36,7 @@
       role="img"
       class="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center text-accent"
       title="Peek open on this tab"
-      aria-label="Peek open on this tab"><Eye size={12} /></span
+      aria-label="Peek open on this tab"><CioEye size={12} /></span
     >
   {:else if indicator === 'capture'}
     <span
@@ -42,21 +45,21 @@
       title={BROWSER_TAB_CAPTURE_LABEL}
       aria-label={BROWSER_TAB_CAPTURE_LABEL}
     >
-      <Mic size={12} />
+      <CioMic size={12} />
     </span>
   {:else}
     <button
       type="button"
-      class="pointer-events-auto flex h-4 w-4 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-overlay"
+      class="pointer-events-auto flex h-4 w-4 shrink-0 items-center justify-center text-accent transition-colors hover:bg-overlay"
       aria-pressed={runtime.muted}
       title={muteLabel}
       aria-label={muteLabel}
       onclick={() => contextSidebarState.toggleBrowserTabMute(tabId)}
     >
       {#if runtime.muted}
-        <VolumeX size={12} />
+        <CioVolumeX size={12} />
       {:else}
-        <Volume2 size={12} />
+        <CioVolume size={12} />
       {/if}
     </button>
   {/if}

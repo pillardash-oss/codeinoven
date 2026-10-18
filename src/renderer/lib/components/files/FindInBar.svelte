@@ -1,14 +1,12 @@
 <script lang="ts">
+  import CioCaseSensitive from '@pillardash-oss/cio-icon/CioCaseSensitive.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioReplace from '@pillardash-oss/cio-icon/CioReplace.svelte'
+  import CioReplaceAll from '@pillardash-oss/cio-icon/CioReplaceAll.svelte'
   import { onDestroy, tick } from 'svelte'
-  import {
-    CaseSensitive,
-    ChevronDown,
-    ChevronRight,
-    ChevronUp,
-    Replace,
-    ReplaceAll,
-    X
-  } from '@lucide/svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
@@ -149,99 +147,99 @@
 <div
   data-find-exclude
   class={[
-    'flex shrink-0 flex-col gap-1 rounded-xl border border-border bg-surface p-1 shadow-xl',
+    'flex shrink-0 flex-col gap-1 border border-border bg-surface p-1 shadow-xl',
     floating ? 'absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]' : 'w-full'
   ]}
   role="search"
   aria-label={label}
 >
   <div class="flex h-8 items-center gap-1.5 pl-1">
-  {#if enableReplace}
+    {#if enableReplace}
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label={replaceOpen ? 'Hide replace' : 'Show replace'}
+        title={replaceOpen ? 'Hide replace' : 'Show replace'}
+        onclick={toggleReplace}
+      >
+        {#if replaceOpen}
+          <CioChevronDown size={13} aria-hidden="true" />
+        {:else}
+          <CioForward size={13} aria-hidden="true" />
+        {/if}
+      </button>
+    {/if}
+    <input
+      bind:this={inputEl}
+      type="search"
+      class="h-7 min-w-0 flex-1 border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+      {placeholder}
+      aria-label={label}
+      value={draft}
+      oninput={(event: Event & { currentTarget: HTMLInputElement }) =>
+        scheduleQuery(event.currentTarget.value)}
+      onkeydown={(event: KeyboardEvent) => void handleKeydown(event)}
+    />
+    {#if onToggleMatchCase}
+      <button
+        type="button"
+        class={[
+          'flex h-7 w-7 shrink-0 items-center justify-center transition-colors',
+          matchCase
+            ? 'bg-elevated text-foreground'
+            : 'text-dimmed hover:bg-elevated hover:text-foreground'
+        ]}
+        aria-label="Match case"
+        aria-pressed={matchCase}
+        title={matchCase
+          ? 'Matching case: click to ignore case'
+          : 'Ignoring case: click to match case'}
+        onclick={onToggleMatchCase}
+      >
+        <CioCaseSensitive size={13} aria-hidden="true" />
+      </button>
+    {/if}
+    {#if draft}
+      <span class="whitespace-nowrap text-[0.625rem] text-dimmed tabular-nums">
+        {matches > 0 ? `${activeIndex + 1}/${matches}` : '0/0'}
+      </span>
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        aria-label="Previous match"
+        title="Previous match (Shift+Enter)"
+        disabled={matches === 0}
+        onclick={onPrev}
+      >
+        <CioChevronUp size={13} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        aria-label="Next match"
+        title="Next match (Enter)"
+        disabled={matches === 0}
+        onclick={onNext}
+      >
+        <CioChevronDown size={13} aria-hidden="true" />
+      </button>
+    {/if}
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label={replaceOpen ? 'Hide replace' : 'Show replace'}
-      title={replaceOpen ? 'Hide replace' : 'Show replace'}
-      onclick={toggleReplace}
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label="Close find"
+      title="Close find (Escape)"
+      onclick={handleClose}
     >
-      {#if replaceOpen}
-        <ChevronDown size={13} aria-hidden="true" />
-      {:else}
-        <ChevronRight size={13} aria-hidden="true" />
-      {/if}
+      <CioClose size={13} aria-hidden="true" />
     </button>
-  {/if}
-  <input
-    bind:this={inputEl}
-    type="search"
-    class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-    {placeholder}
-    aria-label={label}
-    value={draft}
-    oninput={(event: Event & { currentTarget: HTMLInputElement }) =>
-      scheduleQuery(event.currentTarget.value)}
-    onkeydown={(event: KeyboardEvent) => void handleKeydown(event)}
-  />
-  {#if onToggleMatchCase}
-    <button
-      type="button"
-      class={[
-        'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors',
-        matchCase
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-foreground'
-      ]}
-      aria-label="Match case"
-      aria-pressed={matchCase}
-      title={matchCase
-        ? 'Matching case: click to ignore case'
-        : 'Ignoring case: click to match case'}
-      onclick={onToggleMatchCase}
-    >
-      <CaseSensitive size={13} aria-hidden="true" />
-    </button>
-  {/if}
-  {#if draft}
-    <span class="whitespace-nowrap text-[0.625rem] text-dimmed tabular-nums">
-      {matches > 0 ? `${activeIndex + 1}/${matches}` : '0/0'}
-    </span>
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-      aria-label="Previous match"
-      title="Previous match (Shift+Enter)"
-      disabled={matches === 0}
-      onclick={onPrev}
-    >
-      <ChevronUp size={13} aria-hidden="true" />
-    </button>
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-      aria-label="Next match"
-      title="Next match (Enter)"
-      disabled={matches === 0}
-      onclick={onNext}
-    >
-      <ChevronDown size={13} aria-hidden="true" />
-    </button>
-  {/if}
-  <button
-    type="button"
-    class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-    aria-label="Close find"
-    title="Close find (Escape)"
-    onclick={handleClose}
-  >
-    <X size={13} aria-hidden="true" />
-  </button>
   </div>
   {#if enableReplace && replaceOpen}
     <div class="flex h-8 shrink-0 items-center gap-1.5 pl-9">
       <input
         bind:this={replaceInputEl}
         type="text"
-        class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="h-7 min-w-0 flex-1 border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder="Replace…"
         aria-label="Replace"
         value={replaceValue}
@@ -251,23 +249,23 @@
       />
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
         aria-label="Replace match"
         title="Replace"
         disabled={matches === 0 || !onReplaceOne}
         onclick={() => onReplaceOne?.()}
       >
-        <Replace size={13} aria-hidden="true" />
+        <CioReplace size={13} aria-hidden="true" />
       </button>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
         aria-label="Replace all matches"
         title="Replace All"
         disabled={matches === 0 || !onReplaceAll}
         onclick={() => onReplaceAll?.()}
       >
-        <ReplaceAll size={13} aria-hidden="true" />
+        <CioReplaceAll size={13} aria-hidden="true" />
       </button>
     </div>
   {/if}

@@ -1,4 +1,10 @@
 <script lang="ts">
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioNotes from '@pillardash-oss/cio-icon/CioNotes.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioRedo from '@pillardash-oss/cio-icon/CioRedo.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '$lib/components/speech/VoiceInputButton.svelte'
@@ -10,7 +16,7 @@
   import { stickyNotes, type StickyNoteEntry } from '$lib/stores/sticky-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { StickyNoteAppearance } from '$shared/types'
-  import { Eye, Maximize2, Redo2, SquarePen, StickyNotes, Undo2 } from '@lucide/svelte'
+
   import { tick } from 'svelte'
   import { cubicOut } from 'svelte/easing'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
@@ -134,24 +140,24 @@
   {#if activeNote && activeIsEditing}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="View sticky note"
       aria-label="View sticky note"
       aria-pressed={!activeIsEditing}
       onclick={() => stopEditing(activeNote.id)}
     >
-      <Eye size={14} />
+      <CioEye size={14} />
     </button>
   {:else if activeNote}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Edit sticky note"
       aria-label="Edit sticky note"
       aria-pressed={activeIsEditing}
       onclick={() => startEditing(activeNote.id)}
     >
-      <SquarePen size={14} />
+      <CioPencil size={14} />
     </button>
   {/if}
 {/snippet}
@@ -162,7 +168,7 @@
   {#if icon}
     <img src={icon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
   {:else}
-    <StickyNotes size={13} class="shrink-0" />
+    <CioNotes size={13} class="shrink-0" />
   {/if}
 {/snippet}
 
@@ -170,7 +176,7 @@
   {#if activeNote?.loaded && activeIsEditing && canUndo}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Undo"
       aria-label="Undo sticky note edit"
       onclick={() => historyController?.undo()}
@@ -178,13 +184,13 @@
       out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
       style="width: 1.75rem"
     >
-      <Undo2 size={14} />
+      <CioUndo size={14} />
     </button>
   {/if}
   {#if activeNote?.loaded && activeIsEditing && canRedo}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Redo"
       aria-label="Redo sticky note edit"
       onclick={() => historyController?.redo()}
@@ -192,7 +198,7 @@
       out:slideWidth={{ duration: motionDuration(120), easing: cubicOut }}
       style="width: 1.75rem"
     >
-      <Redo2 size={14} />
+      <CioRedo size={14} />
     </button>
   {/if}
   <VoiceInputButton
@@ -214,7 +220,7 @@
         <p class="text-sm text-muted">{note.saveError ?? 'Could not load this sticky note.'}</p>
         <button
           type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
+          class="border border-border bg-elevated px-3 py-1.5 text-xs text-foreground hover:bg-overlay"
           title="Retry loading this note"
           aria-label="Retry loading this note"
           onclick={() => selectNote(note.id)}
@@ -272,11 +278,11 @@
       </div>
     {:else if stickyNotes.error && !stickyNotes.isLoaded}
       <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-        <StickyNotes size={22} class="text-dimmed" />
+        <CioNotes size={22} class="text-dimmed" />
         <p class="max-w-64 text-sm text-muted">{stickyNotes.error}</p>
         <button
           type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground hover:bg-overlay"
+          class="border border-border bg-elevated px-3 py-1.5 text-xs font-medium text-foreground hover:bg-overlay"
           title="Retry loading sticky notes"
           aria-label="Retry loading sticky notes"
           onclick={() => void stickyNotes.load().catch(() => {})}
@@ -286,20 +292,20 @@
       </div>
     {:else if stickyNotes.entries.length === 0}
       <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-        <StickyNotes size={22} class="text-dimmed" />
+        <CioNotes size={22} class="text-dimmed" />
         <div class="space-y-1">
           <h2 class="text-sm font-medium text-foreground">No sticky notes yet</h2>
           <p class="text-xs text-muted">Create a note to keep it handy across the app.</p>
         </div>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
+          class="flex items-center gap-1.5 border border-border bg-elevated px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
           title="Create a sticky note"
           aria-label="Create a sticky note"
           disabled={!stickyNotes.isLoaded}
           onclick={() => void createNote()}
         >
-          <StickyNotes size={13} />
+          <CioNotes size={13} />
           New sticky note
         </button>
         {#if createError}<p class="text-xs text-danger" role="alert">{createError}</p>{/if}
@@ -325,7 +331,7 @@
       >
         {#snippet actions()}{@render stripActions()}{/snippet}
         {#snippet trailingIcon()}
-          <Maximize2 size={13} />
+          <CioMaximize size={13} />
         {/snippet}
       </PanelTabStrip>
 

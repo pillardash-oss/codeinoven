@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Boxes, ChevronDown, Globe } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
@@ -16,7 +18,7 @@
    *
    * A box is a named cookie jar, so this is where a conversation says whose
    * sign-ins its pages run against. Every conversation starts in its own scope's
-   * jar   a project's box, a routine's box, a chat's box   and the control names
+   * jar   a project's box, an assistant's box, a chat's box   and the control names
    * that as the default. Picking one of the profile's boxes runs this
    * conversation's pages in that box's jar instead, which is how a run can face a
    * site as a different identity than the scope's own. The profile's own box, the
@@ -107,7 +109,7 @@
 <button
   type="button"
   class={[
-    'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+    'relative flex h-7 shrink-0 items-center justify-center transition-colors',
     labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7',
     menuOpen ? 'bg-elevated text-foreground' : 'text-dimmed hover:bg-elevated hover:text-foreground'
   ]}
@@ -118,17 +120,16 @@
   onclick={(event) => void openMenu(event.currentTarget)}
 >
   {#if current && currentIcon}
-    <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain" />
+    <img src={currentIcon} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
   {:else if usesProfileDefault}
-    <Globe size={13} />
+    <CioBrowser size={13} />
   {:else if current}
-    <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background-color: {currentAccent}"
-    ></span>
+    <span class="h-2.5 w-2.5 shrink-0" style="background-color: {currentAccent}"></span>
   {:else}
-    <Boxes size={13} />
+    <CioTabBoxes size={13} />
   {/if}
   {#if labelled}
     <span class="max-w-32 truncate">{currentName}</span>
-    <ChevronDown size={12} />
+    <CioChevronDown size={12} />
   {/if}
 </button>

@@ -60,8 +60,8 @@
   }
 </script>
 
-<div id="settings-block-about-community" class="mt-4 rounded-xl border bg-surface p-4">
-  <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Community</h3>
+<div id="settings-block-about-community" class="mt-4 border bg-surface p-4">
+  <h3 class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Community</h3>
   <p class="text-xs leading-relaxed text-dimmed">
     Report a bug, send feedback, or contribute on GitHub.
   </p>
@@ -69,7 +69,7 @@
     {#each actions as action (action.label)}
       <button
         type="button"
-        class="flex h-9 items-center rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+        class="flex h-9 items-center border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
         title={action.title}
         data-external-url={action.url}
         onclick={() => void open(action.url)}
@@ -80,7 +80,7 @@
   </div>
 </div>
 
-<div id="settings-block-about-privacy" class="mt-4 rounded-xl border bg-surface p-4">
+<div id="settings-block-about-privacy" class="mt-4 border bg-surface p-4">
   <div class="flex flex-wrap items-center justify-between gap-4">
     <p class="text-sm font-medium">Share anonymous daily active ping</p>
     <Switch

@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { coordinatorDockState } from './coordinator-dock.svelte'
 import { SidebarBrowserTabs } from './context-sidebar-browser.svelte'
 import type { BrowserTabRuntime } from './browser-tab-status'
 import type { BrowserPageState } from '$shared/ipc-contract'
@@ -79,15 +80,15 @@ class ContextSidebarState {
    * thread rows, and the workspace owns the only list of them, so the workspace
    * registers this one resolver: it maps a thread to the conversation that owns
    * its browser tabs (see `conversationScopeId`), which is what makes a
-   * routine's threads keep one browser across a thread switch. Until it is
+   * assistant's threads keep one browser across a thread switch. Until it is
    * registered, a conversation is scoped by its own thread, which is the
-   * pre-routine behaviour.
+   * pre-assistant behaviour.
    */
   private threadBrowserScopeResolver: ((projectId: string, threadId: string) => string) | null =
     null
   /**
    * How the sidebar names a conversation scope's own box. The workspace owns the
-   * only list of projects, routines and threads, so it registers this one
+   * only list of projects, assistants and threads, so it registers this one
    * resolver; until then a scope's box is named generically.
    */
   private threadBrowserScopeLabelResolver = $state<
@@ -389,6 +390,40 @@ class ContextSidebarState {
     return this.activeProjectId === projectId ? this.activeThreadId : null
   }
 
+  /** The project the sidebar's context is docked on. A caller that shows a
+   *  thread reads this to tell whether the sidebar already follows it. */
+  get dockedProjectId(): string | null {
+    return this.activeProjectId
+  }
+
+  /**
+   * Keep the sidebar docked on the thread the workspace is showing.
+   *
+   * Every ordinary thread open goes through `activateThread`, so this is a
+   * repair rather than the normal path. It exists because a surface that changes
+   * the visible thread without going through that call leaves the sidebar on the
+   * project it was docked on before, and the sidebar's panels are scoped to the
+   * project it is docked on: another project's coordinator board then stays on
+   * screen until the user toggles something. Acting only on a mismatch means a
+   * sidebar that is already correct is never re-activated.
+   */
+  ensureDockedThread(
+    projectId: string,
+    threadId: string,
+    threadTitle?: string,
+    rowThreadId?: string
+  ): void {
+    const row = rowThreadId ?? threadId
+    if (
+      this.activeProjectId === projectId &&
+      this.activeThreadId === threadId &&
+      this.activeRowThreadId === row
+    ) {
+      return
+    }
+    this.activateThread(projectId, threadId, threadTitle, rowThreadId)
+  }
+
   /** `rowThreadId` is the sidebar row that represents `threadId`. A worker or
    *  auditor child passes its coordinator so the child opens the parent's tab
    *  context, which is where the coordinator panel is docked. It defaults to
@@ -408,6 +443,15 @@ class ContextSidebarState {
       this.attentionScope.projectId === projectId &&
       this.attentionScope.threadId === threadId
     const projectChanged = this.activeProjectId !== projectId
+    const previousTab = this.sidebarActiveTab
+    // Only the entering thread's own board is restored. A board never follows the
+    // user onto a thread that is not in the session, so coming from a design
+    // thread opens the new thread's own panel (or nothing) instead of the board
+    // the user just left.
+    const inheritedWork =
+      !projectChanged && previousTab?.kind === 'coordinator'
+        ? coordinatorDockState.inheritWork(projectId, rowThreadId ?? threadId)
+        : null
     // Capture before `activeProjectId` moves: the native view (if any) belongs
     // to the outgoing project and must be detached from the store layer so the
     // floating view never outlives its sidebar visibility.
@@ -422,6 +466,8 @@ class ContextSidebarState {
     this.tabContexts.ensureContext(projectId, contextThreadId)
     this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
     this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)
+    if (inheritedWork)
+      this.tabContexts.openCoordinator(projectId, contextThreadId, inheritedWork.label)
     this.notificationsVisible = keepNotificationsVisible
     this.stickyNotesVisible = keepStickyNotesVisible
     if (!keepAttentionVisible) this.attentionScope = null
@@ -639,7 +685,7 @@ class ContextSidebarState {
   }
 
   /** The label of a conversation scope's own box, for the thread browser's box
-   *  control: a project's name, a routine's name, or a chat's title. */
+   *  control: a project's name, an assistant's name, or a chat's title. */
   browserScopeBoxLabel(projectId: string, threadId: string): string {
     return this.threadBrowserScopeLabel(projectId, threadId)
   }
@@ -783,23 +829,23 @@ class ContextSidebarState {
     this.tabContexts.closeCoordinator(projectId, threadId)
   }
 
-  /** Dock the assistant how-to panel for a routine (one panel per routine). */
-  openAssistantHowTo(
+  /** Dock the assistant knowledge panel for an assistant (one panel per assistant). */
+  openAssistantKnowledge(
     projectId: string,
     threadId: string,
-    routineId: string | null,
+    assistantId: string | null,
     title: string
   ): void {
-    this.tabContexts.openAssistantHowTo(projectId, threadId, routineId, title)
+    this.tabContexts.openAssistantKnowledge(projectId, threadId, assistantId, title)
   }
 
   openMemory(
     projectId: string,
     threadId: string,
     section?: MemorySection,
-    routineId?: string
+    assistantId?: string
   ): void {
-    this.tabContexts.openMemory(projectId, threadId, section, routineId)
+    this.tabContexts.openMemory(projectId, threadId, section, assistantId)
   }
 
   toggleNotifications(): void {

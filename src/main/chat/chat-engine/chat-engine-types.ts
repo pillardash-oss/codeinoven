@@ -5,7 +5,7 @@ import type { HarnessDriver, StructuredOutputRequest } from '../../drivers/drive
 import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
-import type { UtilitySuggestionDecision } from '../../../lib/utility-suggestion'
+import type { UtilitySuggestionResolution } from '../../../lib/utility-suggestion'
 import type {
   AgentMessage,
   AgentModelSelection,
@@ -220,6 +220,27 @@ export interface TurnStreamCacheEntry {
   /** Fold inputs the cached `folded` parts were built from. */
   foldKey: string | null
   folded: AgentPart[] | null
+  /** Fold inputs the cached completed turns were built from. */
+  completedKey: string | null
+  /** Completed turns of the run in flight, oldest first: the turns a prompt
+   *  closed without the transcript ever mirroring their work. Held so paging
+   *  one of them never rescans the log. */
+  completed: CompletedTurnFold[] | null
+  /** Oldest prompt whose work this log must keep. A steer closes a turn but does
+   *  not let the log forget it, so compaction retains every closed turn of the
+   *  run plus the one in flight, and drops back to the newest turn once the
+   *  mirror carries them. Null means "the newest turn only". */
+  retainFromTs: number | null
+}
+
+/** One completed turn of a run in flight, folded out of the durable log. */
+export interface CompletedTurnFold {
+  /** Timestamp of the prompt that opened it. */
+  startTs: number
+  /** Timestamp of the prompt that closed it (the steer that interrupted it). */
+  endTs: number
+  /** Its trace entries, oldest to newest. */
+  parts: AgentPart[]
 }
 
 export interface ActiveAssignmentDraftSession {
@@ -355,7 +376,7 @@ export interface PendingQuestionInfo {
    * instead of being answered through a harness: only the gateway installs, and
    * only after this reports "accepted".
    */
-  settleUtilitySuggestion?: (decision: UtilitySuggestionDecision) => void
+  settleUtilitySuggestion?: (resolution: UtilitySuggestionResolution) => void
   /** The suggestion card was answered, dismissed, or timed out. */
   resumeUtilitySuggestionAfterSettlement?: boolean
 }
@@ -528,7 +549,10 @@ export interface PersistedAuditAttempt {
   artifactPath: string
 }
 export interface VirtualTaskOptions {
-  utilityManagement?: boolean
+  /**
+   * Run in a disposable driver session instead of a normal one, for tasks that
+   * must not appear among the user's own harness sessions.
+   */
   isolateOpenCode?: boolean
   readOnly?: boolean
   systemPrompt?: string

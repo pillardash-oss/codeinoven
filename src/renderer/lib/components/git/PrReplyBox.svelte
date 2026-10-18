@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioSend from '@pillardash-oss/cio-icon/CioSend.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   /**
    * The reply composer for one conversation entry.
    *
@@ -8,7 +10,7 @@
    * quotes it. The caller passes that difference in as `hint` so the reader is
    * never surprised by where their words land.
    */
-  import { Loader2, Send } from '@lucide/svelte'
+
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
 
   interface Props {
@@ -35,14 +37,14 @@
   }
 </script>
 
-<div class="rounded-lg border border-border bg-elevated/40 p-1.5">
+<div class="border border-border bg-elevated/40 p-1.5">
   <RichMarkdownEditor
     bind:value={body}
     placeholder="Reply to @{recipient}…"
     ariaLabel="Reply to @{recipient}"
     autofocus
     disabled={busy}
-    containerClass="rounded-md border border-border bg-surface focus-within:border-primary"
+    containerClass="border border-border bg-surface focus-within:border-primary"
     class="max-h-40 min-h-16 w-full overflow-y-auto px-2.5 pt-2 pb-1 text-[0.6875rem] leading-relaxed text-foreground outline-none"
     onSubmit={() => void submit()}
   />
@@ -57,7 +59,7 @@
     <div class="flex shrink-0 items-center gap-1.5">
       <button
         type="button"
-        class="h-7 cursor-pointer rounded-lg border border-border px-2.5 text-[0.6875rem] text-foreground hover:bg-elevated"
+        class="h-7 cursor-pointer border border-border px-2.5 text-[0.6875rem] text-foreground hover:bg-elevated"
         title="Discard this reply"
         disabled={busy}
         onclick={onCancel}
@@ -66,16 +68,16 @@
       </button>
       <button
         type="button"
-        class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-40"
+        class="flex h-7 cursor-pointer items-center gap-1.5 bg-primary px-2.5 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-40"
         title="Post this reply"
         disabled={!ready || busy}
         onclick={() => void submit()}
       >
         {#if busy}
-          <Loader2 size={12} class="animate-spin" />
+          <CioSpinner size={12} class="animate-spin" />
           Posting…
         {:else}
-          <Send size={12} />
+          <CioSend size={12} />
           Reply
         {/if}
       </button>

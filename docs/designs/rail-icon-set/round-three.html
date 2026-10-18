@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · round three</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      /* Weight comparison: the same meaning drawn four ways, always at the real
+         16px, so a stroke decision can be made by looking rather than by feel. */
+      .weight-row {
+        display: grid;
+        grid-template-columns: 11rem repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        align-items: center;
+        padding: 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+      }
+
+      .weight-row:last-child {
+        border-bottom: 0;
+      }
+
+      .weight-row .what {
+        font-size: 0.6875rem;
+        color: var(--color-muted);
+        line-height: 1.5;
+      }
+
+      .weight-row .what b {
+        display: block;
+        color: var(--color-foreground);
+        font-weight: 500;
+      }
+
+      .weight-row .view {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .weight-row .view svg {
+        width: 1rem;
+        height: 1rem;
+        display: block;
+        color: var(--color-foreground);
+      }
+
+      .weight-row .view .measured {
+        font-size: 0.5625rem;
+        color: var(--color-dimmed);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .weight-row.lucide .view svg {
+        color: var(--color-dimmed);
+      }
+
+      .weight-head {
+        display: grid;
+        grid-template-columns: 11rem repeat(4, minmax(0, 1fr));
+        gap: 1rem;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        background: var(--color-overlay);
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+      }
+
+      .weight-head span:not(:first-child) {
+        text-align: center;
+      }
+
+      .corrections {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1.25rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        font-size: 0.75rem;
+      }
+
+      .corrections th,
+      .corrections td {
+        text-align: left;
+        padding: 0.625rem 0.75rem;
+        border-bottom: 1px solid var(--color-border);
+        vertical-align: middle;
+        line-height: 1.5;
+      }
+
+      .corrections thead th {
+        font-size: 0.5625rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-dimmed);
+        background: var(--color-overlay);
+      }
+
+      .corrections tbody tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .corrections .who {
+        color: var(--color-foreground);
+        font-weight: 500;
+        white-space: nowrap;
+      }
+
+      .corrections .said {
+        color: var(--color-muted);
+        font-style: normal;
+      }
+
+      .corrections .did {
+        color: var(--color-foreground);
+      }
+
+      .corrections svg {
+        width: 1rem;
+        height: 1rem;
+        display: block;
+        color: var(--color-foreground);
+      }
+
+      .corrections .glyph {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">CodeInOven · brand work · round three</div>
+          <h1>Refinement, and <em>the stroke answer</em></h1>
+          <p class="lede">
+            You asked what is going on with the stroke, and you said the weight
+            is still too much next to Lucide. You are right, and it is worse than
+            it looks: I measured it. Pass C draws every shape at 3 units against
+            Lucide's 2, which is 50 percent heavier. That is not a refinement
+            problem, it is a decision I made and never justified. This round
+            answers it with the number, then redraws the set to sit under Lucide
+            instead of over it.
+          </p>
+        </div>
+        <div class="lockup">
+          <svg viewBox="0 0 96 96" aria-label="CodeInOven mark">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <div>
+            <b>CodeInOven</b>
+            <span>mitered, weighted, deliberate</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ══ The stroke answer ════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>1 · What is going on with the stroke</h2>
+          <span class="note">measured ink thickness, in the 24-unit design grid</span>
+        </div>
+        <p class="lede">
+          The measurement takes each glyph, renders it large, and reads the
+          thickness of the ink itself rather than trusting the number written in
+          the file. Lucide at stroke-width 2 measures 2.00. Pass C measures 3.00
+          on every shape. So the answer to "what is going on with the stroke" is
+          that there were two of them: 3 units for the outline and 2.2 to 2.6 for
+          the detail, and both are heavier than the icons the rail sits beside.
+          That is why it read as coarse instead of refined.
+        </p>
+
+        <div class="size-test" style="margin-top: 1.25rem">
+          <div class="weight-head">
+            <span>One meaning, four weights, all at the real 16px</span>
+            <span>Lucide</span>
+            <span>C · Weighted Line</span>
+            <span>D · Cut Block</span>
+            <span>E · Refined</span>
+          </div>
+
+          <div class="weight-row">
+            <div class="what"><b>A folder</b>the shape every icon set measures itself against</div>
+            <div class="view">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" /><path d="M8 10v4" /><path d="M12 10v2" /><path d="M16 10v6" /></svg>
+              <span class="measured">2.00</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-projects" /></svg>
+              <span class="measured">3.00</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-projects" /></svg>
+              <span class="measured">solid</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-projects" /></svg>
+              <span class="measured">1.90</span>
+            </div>
+          </div>
+
+          <div class="weight-row">
+            <div class="what"><b>Three columns of work</b>the busiest silhouette in the set</div>
+            <div class="view">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v11" /><path d="M12 5v6" /><path d="M18 5v14" /></svg>
+              <span class="measured">2.00</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-board" /></svg>
+              <span class="measured">3.00</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-board" /></svg>
+              <span class="measured">solid</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-board" /></svg>
+              <span class="measured">1.90</span>
+            </div>
+          </div>
+
+          <div class="weight-row">
+            <div class="what"><b>A conversation</b>where the tail tells the story</div>
+            <div class="view">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+              <span class="measured">2.00</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-chats" /></svg>
+              <span class="measured">3.00</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-chats" /></svg>
+              <span class="measured">solid</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-chats" /></svg>
+              <span class="measured">1.90</span>
+            </div>
+          </div>
+
+          <div class="weight-row">
+            <div class="what"><b>A gear-free settings</b>the mark every app gets wrong</div>
+            <div class="view">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
+              <span class="measured">2.25</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-settings" /></svg>
+              <span class="measured">3.00</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-settings" /></svg>
+              <span class="measured">solid</span>
+            </div>
+            <div class="view">
+              <svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-settings" /></svg>
+              <span class="measured">1.90</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Your corrections ═════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>2 · Your corrections, applied</h2>
+          <span class="note">every mark you made, and what happened to it</span>
+        </div>
+        <p class="lede">
+          Six marks, six changes. The four "this should be used for" notes are
+          readings of the drawings, and three of them were readings I had not
+          seen. In each case the glyph in the refined pass is drawn to be that
+          thing, not relabelled into it.
+        </p>
+
+        <table class="corrections">
+          <thead>
+            <tr>
+              <th style="width: 11rem">Your mark</th>
+              <th style="width: 9rem">You said</th>
+              <th style="width: 9rem">Now</th>
+              <th>What changed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="who">C · browser</td>
+              <td class="said">"looks like an ATM card"</td>
+              <td>
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-browser" /></svg>globe</span>
+              </td>
+              <td class="did">
+                Right, and it was unfixable as drawn. A rounded rectangle with a
+                horizontal band across the top is a bank card, because that is
+                exactly what a card is: a frame with a stripe. The browser is a
+                globe again, at the brand's weight rather than Lucide's, with the
+                meridian and equator kept so it still reads as a sphere.
+              </td>
+            </tr>
+            <tr>
+              <td class="who">C · task manager</td>
+              <td class="said">"too generic"</td>
+              <td>
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-tasks" /></svg>two panels</span>
+              </td>
+              <td class="did">
+                Also right. Three equal lanes is a menu, a list, or a table. It
+                named nothing. It is now two running panels, one behind the
+                other with the front one lit, which is a stack of live work and
+                not a shape any other app uses for a menu.
+              </td>
+            </tr>
+            <tr>
+              <td class="who">D · settings</td>
+              <td class="said">"should be used for utilities"</td>
+              <td>
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-utilities" /></svg>4 panels</span>
+              </td>
+              <td class="did">
+                You read it as a grid of parts, which is the better reading, so
+                that drawing is now Utilities. Utilities is skills, MCP servers
+                and plugins: four panels is what that page actually is. Settings
+                gets the sliders instead, which is a more honest mark for a page
+                of preferences than four tiles was.
+              </td>
+            </tr>
+            <tr>
+              <td class="who">D · threads</td>
+              <td class="said">"should be used for threads"</td>
+              <td>
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-threads" /></svg>tapering entries</span>
+              </td>
+              <td class="did">
+                Agreed and kept. The entries taper as they get older, the live
+                one is solid, and the spine holds them. This is the one glyph I
+                did not redraw beyond weight, because you are right that it reads
+                as a conversation's history.
+              </td>
+            </tr>
+            <tr>
+              <td class="who">D · chats</td>
+              <td class="said">"should be used for chats"</td>
+              <td>
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-chats" /></svg>bubble</span>
+              </td>
+              <td class="did">
+                Kept, with the tail redrawn. It was a small stub that vanished at
+                16px, which left a plain frame with a bar in it. The tail is now
+                a proper tapered point and the line inside is solid, so the
+                glyph reads as something said.
+              </td>
+            </tr>
+            <tr>
+              <td class="who">D · projects</td>
+              <td class="said">"should be used for project"</td>
+              <td>
+                <span class="glyph"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-projects" /></svg>folder</span>
+              </td>
+              <td class="did">
+                Kept. The folder silhouette with its tab, at the lighter weight,
+                with the door lit. A project is a folder, and this is the one
+                meaning in the set that everyone already understands, so it is
+                not the place to be clever.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ══ E, the full pass ═══════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>3 · E · Refined</h2>
+          <span class="note">one weight, one box, one solid anchor, nothing under a pixel</span>
+        </div>
+        <p class="lede">
+          Five rules, and every one is a reaction to a fault I measured rather
+          than a preference. One stroke weight of 1.9 units on every glyph, which
+          is under Lucide's 2 so the rail reads as the lighter, more precise
+          layer rather than a heavier one. Nothing drawn under 1.5 units, because
+          at 16px that is one device pixel and anything thinner breaks into
+          specks, which is what produced the rough edges you saw. Round corners
+          at 1.6 to 2 units, matching the assistant mark's language. One solid
+          anchor per glyph at a consistent size. And every glyph on the same
+          17-unit optical box, so the rail stops looking uneven.
+        </p>
+
+        <div class="size-test">
+          <div class="size-test-head">
+            <span></span>
+            <span>Project</span>
+            <span>Thread</span>
+            <span>Scoped</span>
+            <span>Board</span>
+            <span>Chat</span>
+            <span>Assistant</span>
+            <span>Browser</span>
+            <span>Update</span>
+            <span>Tasks</span>
+            <span>Utilities</span>
+            <span>Settings</span>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>E · Refined</b>the real 16px</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-projects" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-threads" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-scoped" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-board" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-chats" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-browser" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-info" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-tasks" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-utilities" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-settings" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>Today, for reference</b>Lucide, the real 16px</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" /><path d="M8 10v4" /><path d="M12 10v2" /><path d="M16 10v6" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h10" /><path d="M6 12h10" /><path d="M4 18h10" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8" /><path d="M3 22h18" /><path d="M14 22a7 7 0 1 0 0-14h-1" /><path d="M9 14h2" /><path d="M9 12a2 2 0 0 1-2-2V6h6v4a2 2 0 0 1-2 2Z" /><path d="M12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v11" /><path d="M12 5v6" /><path d="M18 5v14" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.95 10.05a7 7 0 011.412 7.872 1 1 0 00-.058.787l.675 2.089a1 1 0 01-1.236 1.168l-2.155-.631a1 1 0 00-.745.06 7 7 0 01-7.793-1.445" /><path d="M2.696 12.708a1 1 0 00-.058-.785 7 7 0 113.518 3.473 1 1 0 00-.744-.061l-2.155.63a1 1 0 01-1.236-1.167z" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M15 2v2" /><path d="M15 20v2" /><path d="M2 15h2" /><path d="M2 9h2" /><path d="M20 15h2" /><path d="M20 9h2" /><path d="M9 2v2" /><path d="M9 20v2" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15h4" /><path d="m14.817 10.995-.971-1.45 1.034-1.232a2 2 0 0 0-2.025-3.238l-1.82.364L9.91 3.885a2 2 0 0 0-3.625.748L6.141 6.55l-1.725.426a2 2 0 0 0-.19 3.756l.657.27" /><path d="m18.822 10.995 2.26-5.38a1 1 0 0 0-.557-1.318L16.954 2.9a1 1 0 0 0-1.281.533l-.924 2.122" /><path d="M4 12.006A1 1 0 0 1 4.994 11H19a1 1 0 0 1 1 1v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>E · at 4x</b>the drawing itself</div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-projects" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-threads" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-scoped" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-board" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-chats" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-browser" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-info" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-tasks" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-utilities" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-settings" /></svg></div>
+          </div>
+        </div>
+
+        <div class="rail-row">
+          <div class="window">
+            <nav class="rail" aria-label="Rail, direction E">
+              <div class="group">
+                <span class="item" data-current title="Project"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-browser" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-tasks" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-utilities" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24"><use href="./icons-e.svg#e-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ What I found while refining ═════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>4 · What refinement actually required</h2>
+          <span class="note">every fault, and the rule that now prevents it</span>
+        </div>
+        <p class="lede">
+          Refining was not redrawing prettier. It was finding the specific points
+          where the drawings broke and writing a rule so they cannot break again.
+          Each fault below was found by rendering the glyph at exactly 16px and
+          reading the pixels, not by looking at it enlarged, which is where all of
+          them hid.
+        </p>
+        <table class="corrections">
+          <thead>
+            <tr>
+              <th style="width: 12rem">Fault at 16px</th>
+              <th style="width: 13rem">Why it happened</th>
+              <th>The rule that fixes it</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="who">The task rack, three lanes</td>
+              <td class="said">2.3 units between lanes is under one and a half device pixels</td>
+              <td class="did">Nothing closer than 1.5 units. That glyph is gone entirely, replaced by two overlapped panels.</td>
+            </tr>
+            <tr>
+              <td class="who">The isometric stack</td>
+              <td class="said">three planes of 1.9-unit ink at 2.3-unit spacing close into a single downward point</td>
+              <td class="did">Dropped. A shape that only reads when enlarged is not an icon.</td>
+            </tr>
+            <tr>
+              <td class="who">Settings handles</td>
+              <td class="said">a 1.2-unit gap in the track vanished, so the handle merged into it</td>
+              <td class="did">The gap is 1.6 units, over one device pixel, and the handles are narrow enough not to swallow their own track.</td>
+            </tr>
+            <tr>
+              <td class="who">The chat tail</td>
+              <td class="said">the stub was under a pixel wide and disappeared, leaving a plain frame</td>
+              <td class="did">Every terminal point is at least 1.5 units wide, so it survives the rasterizer.</td>
+            </tr>
+            <tr>
+              <td class="who">The browser card</td>
+              <td class="said">a frame with a horizontal band is, literally, a bank card</td>
+              <td class="did">No frame with a stripe across it, for any meaning. The globe is back.</td>
+            </tr>
+            <tr>
+              <td class="who">Uneven optical weight</td>
+              <td class="said">pass C ran out to 21 units and pass D to 18, so the rail looked uneven whatever the drawings did</td>
+              <td class="did">One 17-unit optical box for every glyph in the set.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- ══ Verdict ══════════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>5 · Where I land</h2>
+          <span class="note">my own read, for what it is worth</span>
+        </div>
+        <p class="lede">
+          E supersedes both C and D rather than sitting beside them, so this is
+          not a three-way choice. It keeps the two things you said you liked, the
+          solid anchor and the mass that made the slab recognisable, and drops the
+          thing you flagged, the weight. What I still have not done is the update
+          button: it is one control cycling through six state glyphs, and I would
+          rather decide what that button is before drawing six marks for it.
+        </p>
+        <p class="footnote">
+          Round one is at <a href="./index.html">index.html</a> and round two at
+          <a href="./round-two.html">round-two.html</a>. The measurements are
+          reproducible with <code>.cio/tmp/rail-stroke-measure.ts</code> and the
+          16px pixel inspector is <code>.cio/tmp/rail-icon-ascii.ts</code>.
+        </p>
+      </section>
+    </div>
+  </body>
+</html>

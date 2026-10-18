@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
   import { onMount, onDestroy } from 'svelte'
-  import { Mic, TriangleAlert } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import RecordingIndicator from './RecordingIndicator.svelte'
@@ -52,9 +54,9 @@
   let buttonEl = $state<HTMLElement | null>(null)
   let preparedTarget: SpeechEditorTarget | null = null
   let preparedSnapshot: SpeechEditorSnapshot | null = null
-  let fetchedHasInstalledAsr = $state(false)
   let fetchedVoiceRecordingEnabled = $state(false)
-  let visibilityKnown = $state(false)
+  let availabilityRefresh: Promise<void> | null = null
+  let soundRevision = 0
 
   let storeHasInstalledAsr = $derived.by(() => {
     const caps = speechSettingsStore.capabilities
@@ -72,16 +74,18 @@
     })
   })
 
-  let hasInstalledAsr = $derived(storeHasInstalledAsr ?? fetchedHasInstalledAsr)
+  let hasInstalledAsr = $derived(storeHasInstalledAsr ?? false)
   let voiceRecordingEnabled = $derived(fetchedVoiceRecordingEnabled)
 
-  // Mic is hidden only when we know the state and neither a local ASR nor the
-  // opt-in audio-to-LLM fallback is available. Store-derived ASR makes this
-  // reactive across the app without a restart   import/activate in Sound
-  // immediately flows to every mounted composer, edit and comment editor.
-  let hidden = $derived(visibilityKnown && !hasInstalledAsr && !voiceRecordingEnabled)
+  function refreshFetchedState(): Promise<void> {
+    availabilityRefresh ??= fetchAvailability().finally(() => {
+      availabilityRefresh = null
+    })
+    return availabilityRefresh
+  }
 
-  async function refreshFetchedState(): Promise<void> {
+  async function fetchAvailability(): Promise<void> {
+    const revision = soundRevision
     try {
       const [capabilities, catalog, config] = await Promise.all([
         invoke('speech:getCapabilities'),
@@ -89,41 +93,32 @@
         invoke('config:get')
       ])
       if (capabilities.ok && catalog.ok) {
-        fetchedHasInstalledAsr = capabilities.value.installedArtifacts.some((artifact) => {
-          if (!artifact.available) return false
-          if (artifact.capability) return artifact.capability === 'asr'
-          const catalogEntry = catalog.value.artifacts.find((c) => c.id === artifact.artifactId)
-          return (
-            catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
-          )
-        })
+        // Update the same snapshot used by the derived gate. Otherwise an old
+        // settings-page snapshot overrides a newer successful availability probe.
+        speechSettingsStore.capabilities = capabilities.value
+        speechSettingsStore.catalog = catalog.value
       }
-      fetchedVoiceRecordingEnabled = Boolean(
-        (config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound
-          ?.voiceRecordingEnabled
-      )
+      // A settings event can arrive while the IPC request is in flight.
+      // Its newer value must win over the older config snapshot.
+      if (revision === soundRevision) {
+        fetchedVoiceRecordingEnabled = config.sound.voiceRecordingEnabled
+      }
     } catch {
-      // keep mic visible on probe failure
-    } finally {
-      visibilityKnown = true
+      // Preserve the last confirmed availability on transient probe failure.
     }
   }
 
   onMount(() => {
     void refreshFetchedState()
-    // If Sound settings loads after us, the store-derived ASR flips visibility
-    // without waiting for this component to remount. Count store readiness as
-    // known as well so hidden recomputes as soon as store populates.
+    // Model changes refresh availability without loading unrelated speech history.
     const unsubProgress = subscribe('speech:progress', () => {
       void refreshFetchedState()
-      // also ensure the shared store reloads for other consumers
-      void speechSettingsStore.load()
     })
     const onSoundChanged = (event: Event) => {
       const detail = (event as CustomEvent<{ voiceRecordingEnabled?: boolean }>).detail
       if (detail && typeof detail.voiceRecordingEnabled === 'boolean') {
+        soundRevision += 1
         fetchedVoiceRecordingEnabled = detail.voiceRecordingEnabled
-        visibilityKnown = true
       } else {
         void refreshFetchedState()
       }
@@ -142,6 +137,19 @@
 
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
   const transcribingHere = $derived(speechController.isTranscribingTarget(targetId))
+  // Unknown availability stays hidden. Keep a live recording/transcription's
+  // control available even if a capability refresh arrives while it finishes.
+  let hidden = $derived(
+    !hasInstalledAsr &&
+      !voiceRecordingEnabled &&
+      !(
+        belongsHere &&
+        speechController.state.state !== 'idle' &&
+        speechController.state.state !== 'failed'
+      ) &&
+      !transcribingHere
+  )
+
   /** Armed delivery stage of the transcription in flight, if the user armed it. */
   const voiceSendStage = $derived(speechController.voiceSendStageForTarget(targetId))
   const canAutoSendVoice = $derived(speechController.canAutoSendVoice(targetId))
@@ -221,56 +229,71 @@
   })
 
   /**
-   * A click on the processing icon normally starts the next recording, but a
-   * double-click arms the automatic send of the transcript on its way. The
-   * single-click meaning is held back by one double-click window so the arming
-   * gesture never also starts a recording underneath it. While the capture is
-   * still finalising there is no recording to start at all, so the click can
-   * only be the arming gesture.
+   * The mic's click ladder.
+   *
+   * A single click always means what the button is showing: stop a recording,
+   * retry a failed one, or start the next one. A double-click, wherever it
+   * lands, is the arming gesture for the dictation it belongs to. The first
+   * press performs its single-click meaning (past a recording that means the
+   * mic is closed, past the processing icon it means the restart is held back),
+   * and the second press hands that dictation's delivery to the send/steer
+   * cycle. A double-click never starts a recording, so a user who double-taps
+   * the mic while recording stops and arms the transcript instead of stopping
+   * and immediately recording over it.
    */
   let pendingRestart: ReturnType<typeof setTimeout> | null = null
-  let lastProcessingClickAt = 0
+  let lastClickAt = 0
 
   function clearPendingRestart(): void {
     if (pendingRestart) clearTimeout(pendingRestart)
     pendingRestart = null
   }
 
-  function armVoiceSend(): void {
-    lastProcessingClickAt = 0
+  function armVoiceSend(): boolean {
+    lastClickAt = 0
     clearPendingRestart()
-    speechController.armVoiceSend({ targetId })
+    return speechController.armVoiceSend({ targetId })
   }
 
   function activateFromClick(): void {
-    if (!canAutoSendVoice) {
-      void activate()
-      return
-    }
-    if (action !== 'start') {
-      // The capture is still being finalised, so nothing can start or stop
-      // here: only the double-click that arms the transcript has a meaning.
-      if (performance.now() - lastProcessingClickAt <= VOICE_SEND_DOUBLE_CLICK_MS) armVoiceSend()
-      else lastProcessingClickAt = performance.now()
-      return
-    }
     const now = performance.now()
-    if (now - lastProcessingClickAt <= VOICE_SEND_DOUBLE_CLICK_MS) {
-      armVoiceSend()
+    const isDoubleClick = now - lastClickAt <= VOICE_SEND_DOUBLE_CLICK_MS
+    lastClickAt = now
+
+    if (isDoubleClick) {
+      // The restart the first press held back belongs to a click the user has
+      // since turned into a double-click, so it must never fire underneath the
+      // arming press no matter which meaning this second press takes.
+      clearPendingRestart()
+      if (canAutoSendVoice && armVoiceSend()) return
+    }
+
+    if (action === 'start') {
+      // The previous press was a stop (or a held-back restart) and this press is
+      // its other half. Starting a recording here is exactly the stop-then-
+      // record-over-it behaviour the double-click gesture replaces.
+      if (isDoubleClick) return
+      if (!canAutoSendVoice) {
+        void activate()
+        return
+      }
+      // A click on the processing icon starts the next recording once the
+      // window has proved the gesture was not a double-click that arms instead.
+      clearPendingRestart()
+      pendingRestart = setTimeout(() => {
+        pendingRestart = null
+        // The hold-back exists to separate the gesture from a double-click. The
+        // transcript may land inside that window, which rewrites the editor this
+        // recording was prepared against, so re-capture the target and its
+        // snapshot now instead of starting against a value that no longer exists.
+        preparedTarget = null
+        preparedSnapshot = null
+        void activate()
+      }, VOICE_SEND_DOUBLE_CLICK_MS)
       return
     }
-    lastProcessingClickAt = now
-    clearPendingRestart()
-    pendingRestart = setTimeout(() => {
-      pendingRestart = null
-      // The hold-back exists to separate the gesture from a double-click. The
-      // transcript may land inside that window, which rewrites the editor this
-      // recording was prepared against, so re-capture the target and its
-      // snapshot now instead of starting against a value that no longer exists.
-      preparedTarget = null
-      preparedSnapshot = null
-      void activate()
-    }, VOICE_SEND_DOUBLE_CLICK_MS)
+
+    void activate()
   }
 
   onDestroy(clearPendingRestart)
@@ -398,7 +421,7 @@
   <button
     bind:this={buttonEl}
     type="button"
-    class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action ===
+    class="relative flex h-8 w-8 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action ===
     'blocked'
       ? 'opacity-60'
       : ''} {className}"
@@ -420,7 +443,7 @@
     {#if action === 'stop'}
       <RecordingIndicator decorative />
     {:else if action === 'retry'}
-      <TriangleAlert size={14} aria-hidden="true" />
+      <CioAttention size={14} aria-hidden="true" />
     {:else if voiceSendStage && (transcribingHere || stoppingHere)}
       <!-- Armed while the dictation is still being produced, including the
            window where the capture is finalising and the row already shows
@@ -431,7 +454,7 @@
     {:else if transcribingHere}
       <WaveBars decorative label="Transcribing your last recording" />
     {:else}
-      <Mic size={14} aria-hidden="true" />
+      <CioMic size={14} aria-hidden="true" />
     {/if}
   </button>
 

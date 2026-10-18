@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
 
   /**
@@ -38,13 +38,13 @@
 <button
   type="button"
   class="flex shrink-0 items-center justify-center transition-colors {size === 'sm'
-    ? 'h-6 w-6 rounded-md'
-    : 'h-7 w-7 rounded-lg'} {tone === 'danger'
+    ? 'h-6 w-6'
+    : 'h-7 w-7'} {tone === 'danger'
     ? 'text-danger hover:bg-danger/10'
     : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
   {title}
   aria-label={title}
   onclick={() => noticeDismissals.dismiss(id, condition)}
 >
-  <X size={size === 'sm' ? 12 : 13} aria-hidden="true" />
+  <CioClose size={size === 'sm' ? 12 : 13} aria-hidden="true" />
 </button>

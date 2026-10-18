@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { FileQuestion, Loader2 } from '@lucide/svelte'
+  import CioFileQuestion from '@pillardash-oss/cio-icon/CioFileQuestion.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
@@ -61,7 +62,7 @@
   <div class="min-h-0 flex-1 overflow-auto bg-surface">
     {#if documentLoading}
       <div class="flex h-full items-center justify-center gap-2 text-dimmed" role="status">
-        <Loader2 size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         <span class="sr-only">Loading document preview</span>
       </div>
     {:else if documentHtml}
@@ -73,7 +74,7 @@
       ></iframe>
     {:else if documentFailed}
       <div class="flex h-full flex-col items-center justify-center gap-2 text-dimmed" role="status">
-        <FileQuestion size={24} />
+        <CioFileQuestion size={24} />
         <span class="text-xs">This document could not be previewed</span>
         {#if showDocumentError && documentError}
           <span class="max-w-md text-center text-[0.625rem] break-words text-danger">

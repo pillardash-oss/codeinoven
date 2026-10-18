@@ -1,4 +1,10 @@
 <script lang="ts">
+  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioFlame from '@pillardash-oss/cio-icon/CioFlame.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrendingUp from '@pillardash-oss/cio-icon/CioTrendingUp.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     cachedSkillMarketLeaderboard,
@@ -9,7 +15,6 @@
   import { installedSkillState } from '$lib/stores/installed-skills.svelte'
   import { skillBookmarkState, skillBookmarkTitle } from '$lib/stores/skill-bookmarks.svelte'
   import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
-  import { BookOpen, Bookmark, Flame, Loader2, Search, TrendingUp } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import SkillBookmarkButton from './SkillBookmarkButton.svelte'
   import SkillInstalledBadge from './SkillInstalledBadge.svelte'
@@ -22,10 +27,10 @@
 
   let { onOpenSkill, onOpenBookmarks }: Props = $props()
 
-  const views: Array<{ id: SkillMarketView; label: string; icon: typeof BookOpen }> = [
-    { id: 'all-time', label: 'All Time', icon: BookOpen },
-    { id: 'trending', label: 'Trending', icon: TrendingUp },
-    { id: 'hot', label: 'Hot', icon: Flame }
+  const views: Array<{ id: SkillMarketView; label: string; icon: typeof CioBook }> = [
+    { id: 'all-time', label: 'All Time', icon: CioBook },
+    { id: 'trending', label: 'Trending', icon: CioTrendingUp },
+    { id: 'hot', label: 'Hot', icon: CioFlame }
   ]
 
   const initialLeaderboard = cachedSkillMarketLeaderboard('all-time')
@@ -139,26 +144,24 @@
         </div>
         <div class="flex items-center gap-2">
           <button
-            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
             type="button"
             title="Open your bookmarked skills"
             onclick={onOpenBookmarks}
           >
-            <Bookmark size={13} />
+            <CioBookmark size={13} />
             Bookmarks
             {#if skillBookmarkState.count > 0}
               <span class="tabular-nums text-dimmed">{skillBookmarkState.count}</span>
             {/if}
           </button>
-          <span
-            class="rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted"
-          >
+          <span class="border bg-elevated px-2.5 py-1.5 text-[0.6875rem] font-medium text-muted">
             Top 100
           </span>
         </div>
       </div>
 
-      <p class="mt-3 rounded-lg bg-raised px-3 py-2 text-[0.625rem] leading-relaxed text-muted">
+      <p class="mt-3 border bg-raised px-3 py-2 text-[0.625rem] leading-relaxed text-muted">
         Marketplace skills are third-party instructions and code. Review the repository and security
         signals before installing. CodeInOven disables anonymous Skills CLI telemetry.
       </p>
@@ -166,12 +169,12 @@
       <form class="mt-4 flex gap-2" onsubmit={searchMarketplace}>
         <label class="relative min-w-0 flex-1">
           <span class="sr-only">Search skills marketplace</span>
-          <Search
+          <CioSearch
             size={15}
             class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
           />
           <input
-            class="h-10 w-full rounded-xl border bg-surface pl-9 pr-3 text-sm outline-none transition-colors focus:border-primary"
+            class="h-10 w-full border bg-surface pl-9 pr-3 text-sm outline-none transition-colors focus:border-primary"
             type="search"
             minlength="2"
             placeholder="Search by skill, repository, or use case"
@@ -179,23 +182,23 @@
           />
         </label>
         <button
-          class="flex h-10 items-center gap-1.5 rounded-xl bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-10 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
           disabled={loading || (query.trim().length > 0 && query.trim().length < 2)}
         >
-          {#if loading && searchMode}<Loader2 size={13} class="animate-spin" />{/if}
-          Search
+          {#if loading && searchMode}<CioSpinner size={13} class="animate-spin" />{/if}
+          CioSearch
         </button>
       </form>
 
       <div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-b pb-3">
-        <div class="flex items-center gap-1 rounded-lg bg-elevated p-0.5" role="tablist">
+        <div class="flex items-center gap-1 border bg-elevated p-0.5" role="tablist">
           {#each views as view (view.id)}
             {@const Icon = view.icon}
             <button
-              class="flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors {activeView ===
+              class="flex h-8 items-center gap-1.5 px-3 text-xs font-medium transition-colors {activeView ===
                 view.id && !searchMode
-                ? 'bg-surface text-foreground shadow-sm'
+                ? 'bg-surface text-foreground'
                 : 'text-muted hover:text-foreground'}"
               type="button"
               role="tab"
@@ -214,7 +217,7 @@
       </div>
 
       {#if error}
-        <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mt-3 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {error}
         </p>
       {/if}
@@ -222,18 +225,18 @@
 
     <div class="min-h-0 flex-1 overflow-y-auto pb-24">
       {#if loading}
-        <div class="mt-2 rounded-xl border border-dashed p-10 text-center">
-          <Loader2 size={20} class="mx-auto animate-spin text-dimmed" />
+        <div class="mt-2 border border-dashed p-10 text-center">
+          <CioSpinner size={20} class="mx-auto animate-spin text-dimmed" />
           <p class="mt-2 text-xs text-dimmed">Loading skills…</p>
         </div>
       {:else if entries.length === 0}
-        <div class="mt-2 rounded-xl border border-dashed p-10 text-center">
-          <Search size={20} class="mx-auto text-dimmed" />
+        <div class="mt-2 border border-dashed p-10 text-center">
+          <CioSearch size={20} class="mx-auto text-dimmed" />
           <p class="mt-2 text-sm font-medium">No skills found</p>
           <p class="mt-1 text-xs text-dimmed">Try a broader search.</p>
         </div>
       {:else}
-        <div class="divide-y rounded-xl border bg-surface">
+        <div class="divide-y border bg-surface">
           {#each entries as entry, index (entry.id)}
             <div class="flex items-center gap-1 pr-2 transition-colors hover:bg-elevated">
               <button
@@ -252,7 +255,7 @@
                     <span class="truncate font-mono text-sm font-semibold">{entry.name}</span>
                     {#if entry.isOfficial}
                       <span
-                        class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
+                        class="border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
                       >
                         Official
                       </span>

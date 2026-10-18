@@ -4,6 +4,7 @@ import type {
   AgentBankedResets,
   AgentEvent,
   AgentMessage,
+  AgentTokenUsage,
   AgentProviderIssue,
   AgentRateLimitWindow,
   AgentUsageCredits,
@@ -22,6 +23,7 @@ import { Logger } from '../system/logger'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
+  gatewayToolForModel,
   UTILITY_SUGGEST_TOOL_NAME
 } from '../../lib/gateway-tools'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
@@ -35,6 +37,7 @@ import type {
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
+  IdleNativeSessionHandOffProbe,
   IdleNativeSessionReleaseResult,
   SendPromptOptions,
   SteerPromptOptions,
@@ -53,6 +56,12 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 import { fallbackCodexModels, mapCodexModel, THINKING_PRESETS } from './codex/codex-models'
+import {
+  type CodexWindowCatalog,
+  codexContextWindowOptions,
+  emptyCodexWindowCatalog,
+  parseCodexWindowCatalog
+} from './codex/codex-catalog'
 import {
   CODEX_APP_SERVER_REQUEST_TIMEOUT_MS,
   CODEX_COMPACTION_TIMEOUT_MS,
@@ -93,7 +102,7 @@ import {
   codexUsageLimitIssue,
   isCodexRetryRecoveryActivity
 } from './codex/codex-errors'
-import { mapCodexRateLimits, mapCodexUsage } from './codex/codex-usage'
+import { mapCodexRateLimits, mapCodexUsage, mapCodexTotalUsage } from './codex/codex-usage'
 import {
   appServerRequestId,
   notificationThreadId,
@@ -103,6 +112,7 @@ import {
 } from './codex/codex-values'
 import {
   codexDeveloperInstructions,
+  codexAuxiliaryConfig,
   composePrompt,
   localAttachmentPath
 } from './codex/codex-prompts'
@@ -122,6 +132,9 @@ const CODEX_APP_SERVER_RESTART_DELAY_MS = 5_000
  * that cannot stay up must surface for manual recovery instead of retry-looping.
  */
 const CODEX_APP_SERVER_RECOVERY_LIMIT = 3
+/** How long Codex's own context-window catalog is reused before it is read
+ *  again. Codex updates that catalog with its own releases, not per turn. */
+const CODEX_WINDOW_CATALOG_TTL_MS = 5 * 60 * 1000
 
 /** Multiplexed bridge for one resident Codex app-server and many native threads. */
 export class CodexDriver extends PersistentCliDriver {
@@ -161,6 +174,12 @@ export class CodexDriver extends PersistentCliDriver {
   private appServerHosts = new Set<CodexAppServerHost>()
   private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
+  /** Codex's own context windows, cached per Codex home. The CLI's catalog
+   *  changes only when Codex itself updates it, so a short TTL keeps repeated
+   *  catalog refreshes from re-running the dump for every project. */
+  private codexWindowsByHome = new Map<string, { catalog: CodexWindowCatalog; readAt: number }>()
+  private codexWindowReads = new Map<string, Promise<CodexWindowCatalog>>()
+
   /** Consecutive automatic recoveries already attempted for a session after the
    *  shared app-server died under it, cleared the moment one of its turns
    *  completes. Bounds the auto-resume of a harness that cannot stay up, so a
@@ -189,15 +208,18 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    // Codex states its own context windows in its model catalog, so the picker
+    // offers exactly what Codex accepts and starts at what Codex uses.
+    const windows = await this.codexWindowCatalog(projectPath)
     let builtInModels: ProviderModel[]
     try {
       const discovered = await this.discoverModels(projectPath)
-      builtInModels = discovered.length > 0 ? discovered : fallbackCodexModels()
+      builtInModels = discovered.length > 0 ? discovered : fallbackCodexModels(windows)
     } catch (error) {
       Logger.info('Codex model discovery fell back to the bundled catalog', {
         error: error instanceof Error ? error.message : String(error)
       })
-      builtInModels = fallbackCodexModels()
+      builtInModels = fallbackCodexModels(windows)
     }
     const catalogs: ProviderCatalog[] = [
       {
@@ -348,6 +370,8 @@ export class CodexDriver extends PersistentCliDriver {
 
   /** Start a Codex turn through app-server so the same native turn can be steered. */
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
+    // A sibling can have rebound this app session since our last turn.
+    if (!this.activeTurns.has(options.sessionId)) this.sessionCache.delete(options.sessionId)
     const session = await this.requireSession(projectPath, options.sessionId)
     // A native turn can still be registered while the engine believes the
     // session is idle: a network failure tears down the visible turn, but the
@@ -356,6 +380,11 @@ export class CodexDriver extends PersistentCliDriver {
     // "A turn is already active" on every retry, so a dispatch that lands on a
     // live native turn is delivered as a steer instead - the driver's turn
     // registry is authoritative, not the engine's session status.
+    const previousTurn = this.activeTurns.get(session.id)
+    if (previousTurn?.completionReceived) {
+      // Let the old turn finish emitting idle before a new turn can start.
+      await previousTurn.completion
+    }
     if (this.activeTurns.has(session.id)) {
       await this.steerPrompt(projectPath, options)
       return
@@ -386,28 +415,42 @@ export class CodexDriver extends PersistentCliDriver {
       options.settings.thinkingLevel
     )
     this.appendUserMessage(session, options)
+    active.messageOffset = session.messages.length
 
     try {
-      const dynamicTools = [
-        codexQuestionTool((await this.storage.getConfig()).agentQuestionCap),
-        ...(this.utilityEndpoints.has(session.id)
-          ? GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
-              name,
-              description,
-              inputSchema
-            }))
-          : [])
-      ]
-      const developerInstructions = codexDeveloperInstructions(options.systemPrompt)
-      const contextConfig =
-        options.settings.contextWindow && options.settings.providerId === 'openai'
-          ? {
-              config: {
-                model_context_window: options.settings.contextWindow,
-                model_auto_compact_token_limit: Math.floor(options.settings.contextWindow * 0.9)
-              }
-            }
-          : {}
+      const dynamicTools = options.minimalContext
+        ? []
+        : [
+            codexQuestionTool((await this.storage.getConfig()).agentQuestionCap),
+            ...(this.utilityEndpoints.has(session.id)
+              ? GATEWAY_TOOLS.filter(({ name }) => {
+                  const granted = this.utilityEndpoints.get(session.id)?.toolNames
+                  return granted === undefined || granted.includes(name)
+                })
+                  .map(gatewayToolForModel)
+                  .map(({ name, description, inputSchema }) => ({
+                    name,
+                    description,
+                    inputSchema
+                  }))
+              : [])
+          ]
+      const developerInstructions = options.minimalContext
+        ? 'Return only the requested auxiliary answer.'
+        : codexDeveloperInstructions(options.systemPrompt)
+      const contextWindow = this.codexContextWindowOverride(options.settings)
+      const contextConfig = {
+        config: {
+          tool_output_token_limit: 3_000,
+          ...(options.minimalContext ? await codexAuxiliaryConfig(projectPath) : {}),
+          ...(contextWindow === undefined
+            ? {}
+            : {
+                model_context_window: contextWindow,
+                model_auto_compact_token_limit: Math.floor(contextWindow * 0.9)
+              })
+        }
+      }
       const startThread = (): Promise<Record<string, unknown>> =>
         this.appServerRequest(host, 'thread/start', {
           ...contextConfig,
@@ -438,7 +481,22 @@ export class CodexDriver extends PersistentCliDriver {
       let historyRecap = options.historyRecap
       let threadResult: Record<string, unknown>
       const previousNativeId = session.nativeSessionId
-      if (previousNativeId) {
+      const transferPath = `drivers/${this.id}/transfers/${session.id}.json`
+      const transfer = await this.storage.read<{ nativeThreadId: string; projectPath: string }>(
+        transferPath
+      )
+      const forkForTransfer =
+        transfer?.projectPath === projectPath && previousNativeId === transfer.nativeThreadId
+      if (forkForTransfer) {
+        threadResult = await this.appServerRequest(host, 'thread/fork', {
+          ...contextConfig,
+          threadId: transfer.nativeThreadId,
+          excludeTurns: true,
+          cwd: projectPath,
+          dynamicTools,
+          developerInstructions
+        })
+      } else if (previousNativeId) {
         try {
           threadResult = await this.appServerRequest(host, 'thread/resume', {
             threadId: previousNativeId,
@@ -474,10 +532,23 @@ export class CodexDriver extends PersistentCliDriver {
       const thread = recordValue(threadResult['thread'])
       const nativeThreadId = stringValue(thread?.['id']) ?? session.nativeSessionId
       if (!nativeThreadId) throw new Error('Codex app-server did not return a thread ID')
+      if (forkForTransfer && nativeThreadId === transfer.nativeThreadId) {
+        throw new Error('Codex app-server did not return a new thread ID for the transfer')
+      }
       active.nativeThreadId = nativeThreadId
+      if (!previousNativeId || nativeThreadId !== previousNativeId) {
+        session.codexUsageCheckpoint = {
+          nativeThreadId,
+          tokens:
+            forkForTransfer && session.codexUsageCheckpoint
+              ? session.codexUsageCheckpoint.tokens
+              : { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+        }
+      }
       session.nativeSessionId = nativeThreadId
       this.threadSessionsByNativeId.set(nativeThreadId, { sessionId: session.id, projectPath })
       await this.persistSession(session)
+      if (transfer?.projectPath === projectPath) await this.storage.remove(transferPath)
 
       const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
@@ -524,16 +595,24 @@ export class CodexDriver extends PersistentCliDriver {
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
     const active = this.activeTurns.get(session.id)
-    if (!active?.nativeThreadId || !active.turnId) {
+    if (!active?.nativeThreadId || !active.turnId || active.completionReceived || active.finished) {
       throw new Error(`No active Codex turn is available to steer for session ${session.id}`)
     }
-    this.appendUserMessage(session, options)
+    const input = await this.codexInput(options.text, options.attachments, session.id)
+    if (
+      this.activeTurns.get(session.id) !== active ||
+      active.completionReceived ||
+      active.finished
+    ) {
+      throw new Error(`Codex turn finished before steering session ${session.id}`)
+    }
     await this.appServerRequest(active.host, 'turn/steer', {
       threadId: active.nativeThreadId,
       clientUserMessageId: options.userMessageId,
-      input: await this.codexInput(options.text, options.attachments, session.id),
+      input,
       expectedTurnId: active.turnId
     })
+    this.appendUserMessage(session, options)
     await this.persistSession(session)
   }
 
@@ -834,6 +913,7 @@ export class CodexDriver extends PersistentCliDriver {
     if (active) await this.finishAppServerTurn(active)
     await super.deleteSession(projectPath, sessionId)
     await this.storage.remove(`drivers/${this.id}/inputs/${sessionId}`)
+    await this.storage.remove(`drivers/${this.id}/transfers/${sessionId}.json`)
     this.stopResidentHostForPathIfIdle(projectPath)
   }
 
@@ -843,50 +923,35 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   /**
-   * Hand an idle native thread to another CodeInOven process. Codex holds its
-   * writer lock for the lifetime of the loaded app-server thread, so closing
-   * only the project host can release it without deleting or forking history.
+   * Transfer a settled app session. An idle host exits to release the exact
+   * native writer. A busy host stays alive for unrelated turns; the receiving
+   * instance forks the settled history under a new native ID on its own host.
    */
   async releaseIdleSessionForTransfer(
     projectPath: string,
     sessionId: string
   ): Promise<IdleNativeSessionReleaseResult> {
-    const session = await this.requireSession(projectPath, sessionId)
-    const nativeThreadId = session.nativeSessionId
-    if (!nativeThreadId) return { owner: false, released: false }
+    const nativeThreadId =
+      (await this.requireSession(projectPath, sessionId)).nativeSessionId ?? null
+    const host = this.writerHostFor(projectPath, sessionId, nativeThreadId)
+    if (!host || !nativeThreadId) return { owner: false, released: false }
 
-    const binding = this.threadSessionsByNativeId.get(nativeThreadId)
-    const host = this.hostsByProjectPath.get(projectPath)
-    if (
-      !host ||
-      !binding ||
-      binding.sessionId !== sessionId ||
-      binding.projectPath !== projectPath
-    ) {
-      return { owner: false, released: false }
-    }
-
-    if (this.activeTurns.has(sessionId)) {
-      return {
-        owner: true,
-        released: false,
-        reason: 'This Codex thread still has an active turn.'
-      }
-    }
-    const hostBusy =
-      [...this.activeTurns.values()].some((active) => active.host === host) ||
-      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
-      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
-      [...this.serverRequests.values()].some(
-        (request) => request.host === host && request.sessionId !== sessionId
-      ) ||
-      host.pending.size > 0
-    if (hostBusy) {
-      return {
-        owner: true,
-        released: false,
-        reason: 'Another Codex operation is still using this app-server.'
-      }
+    const sessionBlocker = this.sessionTransferBlocker(sessionId, nativeThreadId)
+    if (sessionBlocker) return { owner: true, released: false, reason: sessionBlocker }
+    const blocker = this.handOffBlockerFor(host, sessionId)
+    if (blocker) {
+      // Keep unrelated turns on their shared server. The adopter forks this
+      // settled native history on its own host and retains the app session ID.
+      await this.storage.write(`drivers/${this.id}/transfers/${sessionId}.json`, {
+        nativeThreadId,
+        projectPath
+      })
+      this.threadSessionsByNativeId.delete(nativeThreadId)
+      this.sessionCache.delete(sessionId)
+      void this.appServerRequest(host, 'thread/unsubscribe', { threadId: nativeThreadId }).catch(
+        (error: unknown) => Logger.dev('Codex transferred thread unsubscribe unavailable:', error)
+      )
+      return { owner: true, released: true }
     }
 
     if (this.hostsByProjectPath.get(projectPath) === host) {
@@ -907,6 +972,110 @@ export class CodexDriver extends PersistentCliDriver {
       if (sessionOwner.projectPath === projectPath) this.threadSessionsByNativeId.delete(threadId)
     }
     return { owner: true, released: true }
+  }
+
+  /**
+   * Whether this thread's writer could be released once its own turn stops,
+   * judged without stopping anything.
+   *
+   * Unrelated host activity can use the history-fork path. Only operations on
+   * this session block the transfer, and its own turn will be stopped by the
+   * caller after this probe.
+   */
+  async canHandOffIdleSession(
+    projectPath: string,
+    sessionId: string
+  ): Promise<IdleNativeSessionHandOffProbe> {
+    let nativeThreadId: string | null
+    try {
+      nativeThreadId = (await this.requireSession(projectPath, sessionId)).nativeSessionId ?? null
+    } catch (error) {
+      // A session this process cannot even read is one it cannot hand over.
+      Logger.dev('Codex hand-off probe could not read the session:', error)
+      return { blocked: true, reason: 'This Codex session is no longer available to hand over.' }
+    }
+    const host = this.writerHostFor(projectPath, sessionId, nativeThreadId)
+    // No writer here means this process is not the one holding the thread, so a
+    // hand-off has nothing to wait on.
+    if (!host) return { blocked: false }
+    const blocker = this.sessionTransferBlocker(sessionId, nativeThreadId, true)
+    return blocker ? { blocked: true, reason: blocker } : { blocked: false }
+  }
+
+  private sessionTransferBlocker(
+    sessionId: string,
+    nativeThreadId: string | null,
+    ignoreOwnTurn = false
+  ): string | null {
+    if (!ignoreOwnTurn && this.activeTurns.has(sessionId)) {
+      return `Codex session ${sessionId} still has an active turn.`
+    }
+    if (nativeThreadId && this.compactionsByThreadId.has(nativeThreadId)) {
+      return `Codex session ${sessionId} is still compacting its history.`
+    }
+    if (nativeThreadId && this.contextUsageByThreadId.has(nativeThreadId)) {
+      return `Codex session ${sessionId} is still refreshing context usage.`
+    }
+    return null
+  }
+
+  /**
+   * The resident host whose native writer this session's thread lives in, or
+   * null when this process holds no writer for it.
+   */
+  private writerHostFor(
+    projectPath: string,
+    sessionId: string,
+    nativeThreadId: string | null
+  ): CodexAppServerHost | null {
+    if (!nativeThreadId) return null
+    const binding = this.threadSessionsByNativeId.get(nativeThreadId)
+    const host = this.hostsByProjectPath.get(projectPath)
+    if (
+      !host ||
+      !binding ||
+      binding.sessionId !== sessionId ||
+      binding.projectPath !== projectPath
+    ) {
+      return null
+    }
+    return host
+  }
+
+  /**
+   * Why the host cannot be stopped for a hand-off right now, or null when it can.
+   *
+   * `ignoreOwnTurn` covers a transfer's pre-flight: the thread being handed over
+   * is still running its turn at that moment, and the transfer stops it before
+   * it releases the writer.
+   */
+  private handOffBlockerFor(
+    host: CodexAppServerHost,
+    sessionId: string,
+    options: { ignoreOwnTurn?: boolean } = {}
+  ): string | null {
+    if (!options.ignoreOwnTurn && this.activeTurns.has(sessionId)) {
+      return `Codex session ${sessionId} still has an active turn on the app-server.`
+    }
+    const blockers = new Set<string>()
+    for (const [turnSessionId, active] of this.activeTurns) {
+      if (active.host !== host || turnSessionId === sessionId) continue
+      blockers.add(`active turn for session ${turnSessionId}`)
+    }
+    for (const [threadId, compaction] of this.compactionsByThreadId) {
+      if (compaction.host === host) blockers.add(`compaction for native thread ${threadId}`)
+    }
+    for (const [threadId, waiter] of this.contextUsageByThreadId) {
+      if (waiter.host === host) blockers.add(`context-usage request for native thread ${threadId}`)
+    }
+    for (const request of this.serverRequests.values()) {
+      if (request.host === host && request.sessionId !== sessionId) {
+        blockers.add(`${request.method} server request for session ${request.sessionId}`)
+      }
+    }
+    for (const pending of host.pending.values()) blockers.add(`pending ${pending.method} request`)
+    if (blockers.size === 0) return null
+    return `This Codex thread cannot move yet; its app-server is still handling ${[...blockers].join('; ')}.`
   }
 
   override dispose(): void {
@@ -1091,9 +1260,74 @@ export class CodexDriver extends PersistentCliDriver {
     }
   }
 
+  private codexHomeKey(): string {
+    return this.accountEnvironment['CODEX_HOME']?.trim() || 'default'
+  }
+
+  /**
+   * The context window this turn actually sends to Codex. Codex's own catalog
+   * decides which windows a model runs with, so a stored window the model no
+   * longer offers is dropped and the turn keeps Codex's default, exactly as the
+   * picker shows it. A catalog that has not been read leaves the stored pick
+   * untouched instead of silently discarding the user's choice.
+   */
+  private codexContextWindowOverride(settings: ThreadSettings): number | undefined {
+    const requested = settings.contextWindow
+    if (requested === undefined || settings.providerId !== 'openai') return undefined
+    const cached = this.codexWindowsByHome.get(this.codexHomeKey())
+    if (!cached) return requested
+    const offered = codexContextWindowOptions(cached.catalog.get(settings.modelId))
+    return offered.length === 0 || offered.includes(requested) ? requested : undefined
+  }
+
+  /**
+   * Codex's own context windows for every model it lists, read through
+   * `codex debug models`, the CLI's supported dump of the catalog it actually
+   * runs with. A failed read yields an empty catalog rather than a guessed
+   * figure: a model with no stated window shows no window options at all.
+   */
+  private async codexWindowCatalog(projectPath: string): Promise<CodexWindowCatalog> {
+    const home = this.codexHomeKey()
+    const cached = this.codexWindowsByHome.get(home)
+    if (cached && Date.now() - cached.readAt < CODEX_WINDOW_CATALOG_TTL_MS) return cached.catalog
+    const pending = this.codexWindowReads.get(home)
+    if (pending) return pending
+    const read = this.readCodexWindowCatalog(projectPath)
+      .then((catalog) => {
+        this.codexWindowsByHome.set(home, { catalog, readAt: Date.now() })
+        return catalog
+      })
+      .catch((error: unknown) => {
+        // A transient failure must not cache an empty catalog: the next
+        // discovery reads Codex again instead of showing no windows for minutes.
+        Logger.info('Codex context window catalog unavailable', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+        return emptyCodexWindowCatalog()
+      })
+      .finally(() => {
+        this.codexWindowReads.delete(home)
+      })
+    this.codexWindowReads.set(home, read)
+    return read
+  }
+
+  private async readCodexWindowCatalog(projectPath: string): Promise<CodexWindowCatalog> {
+    const result = await runHarnessCommand('codex', ['debug', 'models'], {
+      cwd: projectPath,
+      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      timeoutMs: 20_000,
+      // The catalog embeds each model's prompt templates, so it is far larger
+      // than any other harness command output.
+      maxOutputBytes: 8 * 1024 * 1024
+    })
+    return parseCodexWindowCatalog(JSON.parse(result.stdout))
+  }
+
   private async discoverModels(projectPath: string): Promise<ProviderModel[]> {
     let temporaryHost: CodexAppServerHost | null = null
     try {
+      const windows = await this.codexWindowCatalog(projectPath)
       const host =
         this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
@@ -1111,7 +1345,7 @@ export class CodexDriver extends PersistentCliDriver {
           throw new Error('Codex model discovery returned an invalid response')
         }
         for (const value of data) {
-          const model = mapCodexModel(value)
+          const model = mapCodexModel(value, windows)
           if (model) discovered.push(model)
         }
         cursor = stringValue(result['nextCursor'])
@@ -1331,11 +1565,65 @@ export class CodexDriver extends PersistentCliDriver {
       return
     }
     if (method === 'thread/tokenUsage/updated') {
-      const usage = mapCodexUsage(params['tokenUsage'] ?? params)
-      const message = [...active.session.messages]
-        .reverse()
-        .find((candidate) => candidate.role === 'assistant')
+      let usage = mapCodexUsage(params['tokenUsage'] ?? params)
+      const message = active.session.messages
+        .slice(active.messageOffset ?? 0)
+        .findLast((candidate) => candidate.role === 'assistant')
+      if (usage && !message) {
+        // Wait for this turn's first response instead of rewriting the previous
+        // turn's final response. Cumulative counters recover coalesced updates.
+        active.pendingUsage = params
+        return
+      }
       if (usage && message) {
+        const total = mapCodexTotalUsage(params['tokenUsage'] ?? params)
+        const checkpoint = active.session.codexUsageCheckpoint
+        if (total && active.nativeThreadId) {
+          const previous =
+            checkpoint?.nativeThreadId === active.nativeThreadId ? checkpoint.tokens : undefined
+          // A legacy resumed session has no checkpoint. Its first last-request
+          // snapshot is all that can be attributed honestly; retain the total
+          // from then on rather than charging old session history to this turn.
+          if (previous && total.total >= previous.total) {
+            const tokens = { ...total }
+            for (const key of Object.keys(tokens) as Array<keyof AgentTokenUsage>) {
+              tokens[key] = (message.tokens?.[key] ?? 0) + Math.max(0, total[key] - previous[key])
+            }
+            const mapped = mapCodexUsage({ ...tokens, totalTokens: tokens.total })
+            if (mapped) {
+              usage = {
+                ...usage,
+                aggregateTokens: mapped.aggregateTokens,
+                normalizedUsage: mapped.normalizedUsage
+                  ? {
+                      ...mapped.normalizedUsage,
+                      cachedInput:
+                        usage.normalizedUsage?.cachedInput === null
+                          ? null
+                          : mapped.normalizedUsage.cachedInput,
+                      cacheWrite:
+                        usage.normalizedUsage?.cacheWrite === null
+                          ? null
+                          : mapped.normalizedUsage.cacheWrite,
+                      reasoning:
+                        usage.normalizedUsage?.reasoning === null
+                          ? null
+                          : mapped.normalizedUsage.reasoning,
+                      rawProviderUsage: {
+                        providerSnapshot: recordValue(params['tokenUsage'] ?? params) ?? {},
+                        cumulative: total,
+                        previousCumulative: previous
+                      }
+                    }
+                  : undefined
+              }
+            }
+          }
+          active.session.codexUsageCheckpoint = {
+            nativeThreadId: active.nativeThreadId,
+            tokens: total
+          }
+        }
         if (usage.normalizedUsage) message.normalizedUsage = usage.normalizedUsage
         const event: AgentEvent = {
           type: 'usage.updated',
@@ -1355,17 +1643,34 @@ export class CodexDriver extends PersistentCliDriver {
       const error = recordValue(params['error'])
       const message = stringValue(error?.['message']) ?? 'Codex turn failed'
       if (params['willRetry'] === true) {
+        const retryIssue = codexRetryIssue(error, message)
+        // Codex's reconnecting loop cannot satisfy an expired credential: it
+        // re-fails the same 401 until it gives up, which used to leave the
+        // thread parked on a connection-wait card whose only actions were
+        // Retry and Stop, with no way to sign in again. Report the terminal
+        // sign-in verdict now, and keep it so the turn's teardown carries it.
+        if (retryIssue.kind === 'authentication') {
+          active.waitingForRetry = false
+          active.failure = retryIssue.message
+          active.failureIssue = retryIssue
+          this.emit({
+            type: 'session.status',
+            sessionId: active.session.id,
+            status: { state: 'error', issue: retryIssue }
+          })
+          return
+        }
         active.failure = undefined
         active.waitingForRetry = true
         this.emit({
           type: 'session.status',
           sessionId: active.session.id,
-          status: { state: 'waiting', issue: codexRetryIssue(error, message) }
+          status: { state: 'waiting', issue: retryIssue }
         })
       } else {
         active.waitingForRetry = false
         active.failure = message
-        active.failureIssue = codexUsageLimitIssue(error, message)
+        active.failureIssue = codexUsageLimitIssue(error, message) ?? active.failureIssue
       }
       return
     }
@@ -1398,7 +1703,7 @@ export class CodexDriver extends PersistentCliDriver {
     // A card answer arriving during that refresh must resume from persisted
     // history instead of being written into the completed turn.
     active.completionReceived = true
-    void this.completeAppServerTurn(active, message, issue)
+    active.completion = this.completeAppServerTurn(active, message, issue)
   }
 
   /** Promote Codex's asynchronous default-mode question item into CIO's
@@ -1545,7 +1850,12 @@ export class CodexDriver extends PersistentCliDriver {
     try {
       const tool = GATEWAY_TOOLS.find(({ name }) => name === params['tool'])
       const endpoint = this.utilityEndpoints.get(active.session.id)
-      if (!tool || !endpoint || active.finished) {
+      if (
+        !tool ||
+        !endpoint ||
+        active.finished ||
+        (endpoint.toolNames !== undefined && !endpoint.toolNames.includes(tool.name))
+      ) {
         throw new Error('The utility tool is not active for this turn')
       }
       const response = await fetch(`${endpoint.url}${tool.route}`, {
@@ -1680,6 +1990,8 @@ export class CodexDriver extends PersistentCliDriver {
         (active) => active.nativeThreadId === threadId
       )
       if (byThread) return byThread
+      // A transferred thread can still emit late events on the source host.
+      return undefined
     }
     if (this.activeTurns.size === 1) return this.activeTurns.values().next().value
     return undefined
@@ -1745,6 +2057,11 @@ export class CodexDriver extends PersistentCliDriver {
       this.applyEventToSession(active.session, event)
       this.emit(event)
     }
+    if (active.pendingUsage && result.messages?.some((message) => message.role === 'assistant')) {
+      const pendingUsage = active.pendingUsage
+      delete active.pendingUsage
+      this.handleAppServerNotification(active.host, 'thread/tokenUsage/updated', pendingUsage)
+    }
     active.session.updatedAt = Date.now()
   }
 
@@ -1761,7 +2078,7 @@ export class CodexDriver extends PersistentCliDriver {
         host.pending.delete(id)
         reject(new Error(`Codex app-server ${method} request timed out`))
       }, CODEX_APP_SERVER_REQUEST_TIMEOUT_MS)
-      host.pending.set(id, { resolve, reject, timer })
+      host.pending.set(id, { method, resolve, reject, timer })
       host.child.stdin?.write(`${JSON.stringify({ id, method, ...(params ? { params } : {}) })}\n`)
     })
   }
@@ -1827,6 +2144,53 @@ export class CodexDriver extends PersistentCliDriver {
   ): Promise<void> {
     if (!error) this.appServerRecoveriesBySessionId.delete(active.session.id)
     if (active.finished) return
+    if (active.pendingUsage) {
+      // A cancelled or failed request can report usage without ever emitting
+      // content. Keep an accounting-only response rather than losing its spend.
+      this.applyCodexResult(active, {
+        messages: [
+          {
+            id: `${active.session.id}:${active.turnId ?? 'turn'}:usage`,
+            role: 'assistant',
+            visibility: 'working_trace',
+            parts: [],
+            createdAt: Date.now(),
+            completedAt: Date.now(),
+            ...(error ? { error } : {})
+          }
+        ]
+      })
+    }
+    const finalUsageMessage = active.session.messages
+      .slice(active.messageOffset ?? 0)
+      .findLast((message) => message.role === 'assistant')
+    if (finalUsageMessage) {
+      let sessionCost = 0
+      let priced = false
+      let complete = true
+      for (const message of active.session.messages) {
+        if (
+          message.role !== 'assistant' ||
+          message.providerId !== finalUsageMessage.providerId ||
+          message.harnessId !== this.id
+        )
+          continue
+        if (typeof message.cost === 'number') {
+          sessionCost += message.cost
+          priced = true
+        } else if (message.tokens || message.normalizedUsage) complete = false
+      }
+      if (priced && complete) {
+        const costEvent: AgentEvent = {
+          type: 'usage.updated',
+          sessionId: active.session.id,
+          messageId: finalUsageMessage.id,
+          cost: sessionCost
+        }
+        this.applyEventToSession(active.session, costEvent)
+        this.emit(costEvent)
+      }
+    }
     active.finished = true
     if (this.activeTurns.get(active.session.id) === active) {
       this.activeTurns.delete(active.session.id)
@@ -2171,16 +2535,23 @@ export class CodexDriver extends PersistentCliDriver {
       '-c',
       `features.fast_mode=${serviceTier !== 'default'}`
     )
-    if (options.settings.contextWindow && options.settings.providerId === 'openai') {
+    const contextWindow = this.codexContextWindowOverride(options.settings)
+    if (contextWindow !== undefined) {
       args.push(
         '-c',
-        `model_context_window=${options.settings.contextWindow}`,
+        `model_context_window=${contextWindow}`,
         '-c',
-        `model_auto_compact_token_limit=${Math.floor(options.settings.contextWindow * 0.9)}`
+        `model_auto_compact_token_limit=${Math.floor(contextWindow * 0.9)}`
       )
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)
+    args.push('-c', 'tool_output_token_limit=3000')
+    if (options.minimalContext) {
+      const config = await codexAuxiliaryConfig(_projectPath)
+      for (const [key, value] of Object.entries(config))
+        args.push('-c', `${key}=${JSON.stringify(value)}`)
+    }
     const inlineSvg = await inlineSvgAttachments(options.attachments)
     const attachmentPrompts: string[] = []
     for (const attachment of options.attachments) {

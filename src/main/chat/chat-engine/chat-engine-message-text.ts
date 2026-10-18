@@ -1,4 +1,5 @@
 import { MEMORY_EXTRACTION_LIMITS } from '../memory-service'
+import { isTodoToolPart } from '../../../lib/agent-todos'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../../drivers/persistent-cli-driver'
 import type {
@@ -181,7 +182,7 @@ export function formatConversationTranscript(
  *
  * The newest entries win the character budget, so a long interview keeps what
  * was agreed last and drops the oldest records first. `maxCharacters` lets one
- * caller (Brainstorm generation) keep a large window and another (the routine
+ * caller (Brainstorm generation) keep a large window and another (the assistant
  * Getting started interview, which re-injects this every turn) keep a smaller
  * one.
  */
@@ -323,6 +324,50 @@ export function assistantText(message: AgentMessage): string {
     .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
     .join('\n')
+}
+
+/**
+ * Whether an assistant message is a task-list-only bookkeeping message.
+ *
+ * The task-list reconcile instruction tells the agent that when a completed list
+ * only lagged, it must publish the corrected list and add no prose. A harness
+ * that ends such a continuation on an assistant message of its own therefore
+ * leaves a message whose whole content is the task-list tool call, with no text
+ * and no structured output. That message owns no answer of its own.
+ */
+export function isTaskListBookkeepingMessage(message: AgentMessage): boolean {
+  if (message.role !== 'assistant') return false
+  if (message.structuredOutput !== undefined) return false
+  if (assistantText(message).trim().length > 0) return false
+  return message.parts.some((part) => isTodoToolPart(part))
+}
+
+/**
+ * The assistant message that owns a turn's final answer.
+ *
+ * A turn whose last assistant message is task-list bookkeeping ended on a
+ * corrected list, not on an answer. The agent's prose is the message before it,
+ * so the turn's outcome must be read from that prose: the specification contract
+ * marker, the completeness check, the report, and the memory context all belong
+ * to the answer the user actually read, not to the bookkeeping call that followed
+ * it. Reading the empty bookkeeping message instead would flag a finished turn as
+ * having no final response and would overwrite the real answer with nothing. Any
+ * other turn answers with its last assistant message.
+ */
+export function terminalAssistantMessage(
+  messages: readonly AgentMessage[],
+  turnAssistant: AgentMessage | undefined
+): AgentMessage | undefined {
+  if (!turnAssistant || !isTaskListBookkeepingMessage(turnAssistant)) return turnAssistant
+  const index = messages.findIndex((message) => message.id === turnAssistant.id)
+  for (let cursor = (index < 0 ? messages.length : index) - 1; cursor >= 0; cursor--) {
+    const candidate = messages[cursor]
+    if (candidate?.role !== 'assistant') continue
+    if (assistantText(candidate).trim().length > 0 || candidate.structuredOutput !== undefined) {
+      return candidate
+    }
+  }
+  return turnAssistant
 }
 
 export function hasTerminalSpecContractMarker(text: string, marker: string): boolean {

@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
   import { onMount } from 'svelte'
-  import { Download } from '@lucide/svelte'
+
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
@@ -29,7 +30,7 @@
 <div class="flex h-full min-h-0 flex-col">
   {#if downloads.length === 0}
     <EmptyState
-      icon={Download}
+      icon={CioDownload}
       title="No downloads yet"
       description="Files this browser downloads appear here with their progress and the location they were saved to."
     />

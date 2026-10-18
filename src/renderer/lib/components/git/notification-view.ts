@@ -7,14 +7,13 @@
  * are: the list and the reader both draw these, and a label that exists in one
  * and not the other is exactly the drift this module prevents.
  */
-import {
-  Bell,
-  CircleDot,
-  GitCommitHorizontal,
-  GitPullRequest,
-  MessageSquare,
-  Tag
-} from '@lucide/svelte'
+
+import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
 import type { GitHubNotification, IssueSummary, PullRequestSummary } from '$shared/types'
 
 /**
@@ -48,13 +47,13 @@ export function reasonLabel(reason: string): string {
  * The glyph a notification's subject kind draws with, so a row reads at a glance
  * what it addresses instead of what it says.
  */
-export function subjectIcon(type: string): typeof CircleDot {
-  if (type === 'PullRequest') return GitPullRequest
-  if (type === 'Issue') return CircleDot
-  if (type === 'Discussion') return MessageSquare
-  if (type === 'Commit') return GitCommitHorizontal
-  if (type === 'Release') return Tag
-  return Bell
+export function subjectIcon(type: string): typeof CioDot {
+  if (type === 'PullRequest') return CioPullRequest
+  if (type === 'Issue') return CioDot
+  if (type === 'Discussion') return CioMessage
+  if (type === 'Commit') return CioCommit
+  if (type === 'Release') return CioTag
+  return CioNotifications
 }
 
 /** A subject kind as a word, for the reader's header. */

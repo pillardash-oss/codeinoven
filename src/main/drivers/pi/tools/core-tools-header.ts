@@ -10,6 +10,7 @@ import {
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME
 } from '../../../../lib/core-tools'
+import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 
 export function piCoreToolsHeaderSource(): string {
   return `import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -34,7 +35,6 @@ const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 const CIO_HISTORY_RECAP_PATH = '__CIO_HISTORY_RECAP_PATH__'
 const CIO_ALLOWED_TOOLS_PATH = '__CIO_ALLOWED_TOOLS_PATH__'
-const CIO_MCP_SERVERS_PATH = '__CIO_MCP_SERVERS_PATH__'
 
 // The tools pi bundles itself. When the driver hands this session a tool
 // allowlist (File-System-OFF chat threads), every call to one of these that
@@ -52,10 +52,10 @@ const CIO_PI_BUILTIN_TOOLS = new Set([
   'ls',
   'powershell',
   // Pi 0.99's script runner and deferred-tool discovery are bundled surfaces,
-  // and CodeInOven itself turns codemode on for sessions whose MCP bridge has
-  // servers to orchestrate. The script host needs no card of its own: every
-  // call a script makes runs through this same gate and gets vetted one call
-  // at a time, so a card per script would ask twice for the same work.
+  // and CodeInOven itself activates the script runner for every session that
+  // carries the utility gateway. The script host needs no card of its own:
+  // every call a script makes runs through this same gate and gets vetted one
+  // call at a time, so a card per script would ask twice for the same work.
   'codemode',
   'tool_search'
 ])
@@ -114,6 +114,7 @@ const CIO_SUBAGENT_TOOL_NAMES = new Set([
 // exact lines from its base prompt before the model ever sees them.
 const CIO_SUBAGENT_PROMPT_GUIDELINES = [
   'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
+  'When the user asks to split work across workers and wants to prompt those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead of ${CIO_SPAWN_AGENT_TOOL_NAME}: both can be monitored, but only Assignment workers can be prompted independently. Ask with cio_ask_user which the user wants when they have not already said, and do not ask again once they have.',
   'Every worker inherits the project rules you follow: scope its instructions to the files it owns, tell it to verify only those files (a project-wide check is forbidden for a worker), and never ask it to commit, stage or stash.',
   'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.'
 ]
@@ -186,31 +187,6 @@ function loadCioAllowedTools() {
     return parsed.filter(function (entry) {
       return typeof entry === 'string'
     })
-  } catch {
-    return []
-  }
-}
-
-// The driver rewrites this file with the MCP servers the app itself registered
-// on pi's MCP host for this session (the utilities this thread activated). A
-// server named here is an app-bound utility the user enabled, exactly like the
-// cio_util_* gateway tools, and its calls carry no card for the same reason:
-// the app chose the server, resolved its credentials and knows what it is. A
-// server pi picked up from the user's own mcp.json is NOT named here and keeps
-// the unclassified-surface card.
-function loadCioMcpServerNames() {
-  try {
-    const parsed = JSON.parse(readFileSync(CIO_MCP_SERVERS_PATH, 'utf8'))
-    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.servers)) return []
-    const names: string[] = []
-    for (const entry of parsed.servers) {
-      if (!entry || typeof entry !== 'object') continue
-      if (typeof entry.name !== 'string' || entry.name.length === 0) continue
-      // Pi's tool namespace replaces a dash with an underscore in the server
-      // segment, so compare the normalised prefixes.
-      names.push('mcp__' + entry.name.replace(/-/g, '_') + '__')
-    }
-    return names
   } catch {
     return []
   }
@@ -483,10 +459,6 @@ function evaluateGate(toolName, input, cwd) {
   // pi reports it as read-only.
   if (CIO_PI_BUILTIN_TOOLS.has(toolName) || isCioOwnToolName(toolName)) return null
   if (cioReadOnlyTools.has(toolName)) return null
-  // An app-bound MCP server the user enabled is not an unknown surface.
-  for (const prefix of loadCioMcpServerNames()) {
-    if (toolName.indexOf(prefix) === 0) return null
-  }
   return gateHit(
     toolName,
     'runs "' + toolName + '", a tool CodeInOven cannot verify as read-only',

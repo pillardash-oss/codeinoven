@@ -62,7 +62,7 @@
       <input
         id="viewer-rename-file"
         bind:value={renameTarget.name}
-        class="mt-1 h-9 w-full rounded-lg border border-border bg-app px-3 text-sm text-foreground outline-none focus:border-primary"
+        class="mt-1 h-9 w-full border border-border bg-app px-3 text-sm text-foreground outline-none focus:border-primary"
         autocomplete="off"
       />
     </form>
@@ -72,7 +72,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       onclick={onClearRenameTarget}
     >
       Cancel
@@ -83,7 +83,7 @@
       type="submit"
       form="viewer-rename-file-form"
       data-modal-primary
-      class="rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      class="bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
       disabled={mutationPending || !renameTarget?.name.trim()}
     >
       Rename

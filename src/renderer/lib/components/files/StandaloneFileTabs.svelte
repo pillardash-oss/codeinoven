@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
-
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 
   /**
@@ -22,7 +21,7 @@
         type="button"
         role="tab"
         class={[
-          'flex h-5 max-w-52 shrink-0 items-center gap-1.5 rounded px-2 text-[0.625rem] transition-colors',
+          'flex h-5 max-w-52 shrink-0 items-center gap-1.5 px-2 text-[0.625rem] transition-colors',
           file.path === standaloneFiles.activePath
             ? 'bg-overlay text-foreground'
             : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -33,7 +32,7 @@
       >
         {#if standaloneFiles.isDirty(file.path)}
           <span
-            class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+            class="h-1.5 w-1.5 shrink-0 bg-accent"
             role="status"
             aria-label="Unsaved changes"
             title="Unsaved changes"
@@ -43,12 +42,12 @@
       </button>
       <button
         type="button"
-        class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label={`Close ${file.name}`}
         title={`Close ${file.name}`}
         onclick={() => standaloneFiles.requestClose(file.path)}
       >
-        <X size={11} />
+        <CioClose size={11} />
       </button>
     {/each}
   </div>

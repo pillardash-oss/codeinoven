@@ -89,7 +89,7 @@
     </label>
     <textarea
       id="pr-batch-comment-{fieldSuffix}"
-      class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+      class="min-h-16 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-xs leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
       placeholder={mode === 'close'
         ? 'Why these are being closed, e.g. superseded by a single dependency bump'
         : 'Why these are being reopened'}

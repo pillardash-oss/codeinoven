@@ -349,9 +349,16 @@ export class ThreadMessagesCache {
   }
 
   latestUserMessageId(projectId: string, threadId: string): string | undefined {
-    const messages = this.entry(projectId, threadId).messages
+    const entry = this.entry(projectId, threadId)
+    const { messages } = entry
     for (let index = messages.length - 1; index >= 0; index--) {
-      if (messages[index]?.role === 'user') return messages[index].id
+      const message = messages[index]
+      if (message?.role !== 'user') continue
+      // A held steer has not reached the harness yet, so it does not open a
+      // turn: the run stays anchored to the prompt it is steering, and the
+      // held message renders under that turn's live working trace.
+      if (entry.heldSteerIds.has(message.id)) continue
+      return message.id
     }
     return undefined
   }

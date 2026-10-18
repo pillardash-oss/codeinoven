@@ -37,6 +37,10 @@ interface AgentRunEntry {
   retryAt: number | null
   /** Whether the user explicitly opened the trace (vs auto-opened by busy state). */
   traceUserOpened: boolean
+  /** True once the user explicitly folded the trace this turn. A folded trace
+   *  stays folded across remounts (a window re-bound, "Load earlier messages")
+   *  instead of being force-opened again by the busy state. */
+  traceUserFolded: boolean
   /** When the last busy → idle transition happened, used by the thread row
    *  badge for "last action wins" ordering against side-chat unread marks. */
   settledAt: number
@@ -66,6 +70,7 @@ class AgentRunsStore {
         traceOpen: false,
         retryAt: null,
         traceUserOpened: false,
+        traceUserFolded: false,
         settledAt: 0
       }
       this.#runs.set(key, entry)
@@ -160,6 +165,11 @@ class AgentRunsStore {
     return this.runs.get(threadKey(projectId, threadId))?.traceUserOpened ?? false
   }
 
+  /** Whether the user explicitly folded the current turn's trace. */
+  isTraceUserFolded(projectId: string, threadId: string): boolean {
+    return this.runs.get(threadKey(projectId, threadId))?.traceUserFolded ?? false
+  }
+
   /**
    * Mark a run as active. If a new turn is starting, resets trace state and
    * records the user message ID that owns the turn.
@@ -190,6 +200,7 @@ class AgentRunsStore {
     const previousTurnUserMessageId = entry.currentTurnUserMessageId
     const previousTraceOpen = entry.traceOpen
     const previousTraceUserOpened = entry.traceUserOpened
+    const previousTraceUserFolded = entry.traceUserFolded
     const wasBusy = entry.busy
     const isNewTurn =
       busy &&
@@ -212,6 +223,7 @@ class AgentRunsStore {
       entry.currentTurnUserMessageId = turnUserMessageId
       entry.traceOpen = false
       entry.traceUserOpened = false
+      entry.traceUserFolded = false
     }
 
     // Auto-open the trace when a new turn starts; auto-close when it ends
@@ -230,7 +242,8 @@ class AgentRunsStore {
       entry.busySince !== previousBusySince ||
       entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
       entry.traceOpen !== previousTraceOpen ||
-      entry.traceUserOpened !== previousTraceUserOpened
+      entry.traceUserOpened !== previousTraceUserOpened ||
+      entry.traceUserFolded !== previousTraceUserFolded
     ) {
       this.#notify()
     }
@@ -265,11 +278,19 @@ class AgentRunsStore {
     this.setIdle(projectId, threadId)
   }
 
-  /** Toggle the working trace open/closed state, recording user intent. */
-  setTraceOpen(projectId: string, threadId: string, open: boolean, userOpened: boolean): void {
+  /** Toggle the working trace open/closed state, recording user intent.
+   *  `userFolded` marks an explicit fold so a remount cannot force it back open. */
+  setTraceOpen(
+    projectId: string,
+    threadId: string,
+    open: boolean,
+    userOpened: boolean,
+    userFolded: boolean
+  ): void {
     const entry = this.entry(projectId, threadId)
     entry.traceOpen = open
     entry.traceUserOpened = userOpened
+    entry.traceUserFolded = userFolded
     this.#notify()
   }
 

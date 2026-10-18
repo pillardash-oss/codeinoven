@@ -1,18 +1,15 @@
 <script lang="ts">
-  import {
-    Clock1,
-    FolderGit2,
-    FolderPlus,
-    GraduationCap,
-    MessageSquarePlus,
-    PanelLeft,
-    Settings2,
-    Workflow
-  } from '@lucide/svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
+  import CioFolderGit from '@pillardash-oss/cio-icon/CioFolderGit.svelte'
+  import CioFolderPlus from '@pillardash-oss/cio-icon/CioFolderPlus.svelte'
+  import CioLearn from '@pillardash-oss/cio-icon/CioLearn.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioPanelLeft from '@pillardash-oss/cio-icon/CioPanelLeft.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
-  import type { WorkspaceTourView } from '../onboarding/onboarding-tour-steps'
-
+  import type { WorkspaceTourView } from '$lib/guide/guide-stops'
   interface Props {
     /**
      * Which view's empty state this is. Projects and Threads share their body
@@ -31,9 +28,9 @@
     onToggleSidebar?: () => void
     /** Start a standalone chat without a project. */
     onNewChat?: () => void
-    /** Start the new-routine flow (Assistant). */
-    onNewRoutine?: () => void
-    /** Create a routine-less task (Assistant). */
+    /** Start the new-assistant flow (Assistant). */
+    onNewAssistant?: () => void
+    /** Create an assistant-less task (Assistant). */
     onNewTask?: () => void
     /** Open the add-project flow. */
     onAddProject?: () => void
@@ -50,7 +47,7 @@
     sidebarHasContent = false,
     onToggleSidebar,
     onNewChat,
-    onNewRoutine,
+    onNewAssistant,
     onNewTask,
     onAddProject,
     onCloneRepo,
@@ -79,7 +76,7 @@
 
   const settingsAction = (): ActionItem => ({
     id: 'settings',
-    icon: Settings2,
+    icon: CioTabSettings,
     title: 'Open settings',
     description: 'Configure agents, models, and preferences',
     run: () => onOpenSettings?.()
@@ -87,7 +84,7 @@
 
   const tourAction = (view: WorkspaceTourView): ActionItem => ({
     id: 'tour',
-    icon: GraduationCap,
+    icon: CioLearn,
     title: 'Learn what CodeInOven can do',
     description: `Get a tour of the ${view} view`,
     run: () => onShowTour?.()
@@ -100,26 +97,26 @@
     return items.map((item, index) => (index === 0 ? { ...item, highlight: true } : item))
   }
 
-  /** The Assistant's empty state: a routine first, then a one-off task, then
+  /** The Assistant's empty state: an assistant first, then a one-off task, then
    *  the app's own settings, then its tour. */
   function assistantActions(): ActionItem[] {
     const items: ActionItem[] = []
-    if (onNewRoutine) {
+    if (onNewAssistant) {
       items.push({
-        id: 'new-routine',
-        icon: Workflow,
-        title: 'Start a new routine',
-        description: 'A job that repeats, with a how-to the agent works from',
-        run: () => onNewRoutine?.(),
+        id: 'new-assistant',
+        icon: AssistantIcon,
+        title: 'Start a new assistant',
+        description: 'Someone you hand something over to, once',
+        run: () => onNewAssistant?.(),
         highlight: true
       })
     }
     if (onNewTask) {
       items.push({
         id: 'new-task',
-        icon: Clock1,
+        icon: AssistantTaskIcon,
         title: 'Start a new task',
-        description: 'One piece of work for the agent, with no schedule',
+        description: 'One thing to do, inside an assistant',
         run: () => onNewTask?.()
       })
     }
@@ -133,7 +130,7 @@
     if (onNewChat) {
       items.push({
         id: 'new-chat',
-        icon: MessageSquarePlus,
+        icon: CioMessagePlus,
         title: 'New chat',
         description: 'Start a conversation with an agent',
         run: () => onNewChat?.(),
@@ -143,7 +140,7 @@
     if (sidebarHasContent && onToggleSidebar) {
       items.push({
         id: 'toggle-sidebar',
-        icon: PanelLeft,
+        icon: CioPanelLeft,
         title: 'Toggle chats sidebar',
         description: 'Choose an existing chat to continue the conversation',
         run: () => onToggleSidebar?.()
@@ -161,7 +158,7 @@
     if (sidebarHasContent && onToggleSidebar) {
       items.push({
         id: 'toggle-sidebar',
-        icon: PanelLeft,
+        icon: CioPanelLeft,
         title: variant === 'threads' ? 'Toggle threads sidebar' : 'Toggle project sidebar',
         description: 'Hover on a project to create a new thread',
         run: () => onToggleSidebar?.(),
@@ -171,7 +168,7 @@
     if (onAddProject) {
       items.push({
         id: 'add-project',
-        icon: FolderPlus,
+        icon: CioFolderPlus,
         title: 'Add project',
         description: 'Create one from a local folder',
         run: () => onAddProject?.()
@@ -180,7 +177,7 @@
     if (onCloneRepo) {
       items.push({
         id: 'clone-repo',
-        icon: FolderGit2,
+        icon: CioFolderGit,
         title: 'Clone repository',
         description: 'Add a project from a git URL',
         run: () => onCloneRepo?.()
@@ -190,7 +187,7 @@
     if (onNewChat) {
       items.push({
         id: 'new-chat',
-        icon: MessageSquarePlus,
+        icon: CioMessagePlus,
         title: 'New chat',
         description: 'Start a conversation, no project needed',
         run: () => onNewChat?.()
@@ -214,15 +211,19 @@
   <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">CodeInOven</h1>
   <p class="mt-1 text-[0.8125rem] text-muted">{subtitles[variant]}</p>
 
-  <div class="mt-8 flex w-full max-w-sm flex-col gap-1" data-onboarding="empty-state-actions">
+  <div
+    class="mt-8 flex w-full max-w-sm flex-col gap-1"
+    data-onboarding="empty-state-actions"
+    data-guide="empty-state-actions"
+  >
     {#each actions as action (action.id)}
       <button
         type="button"
-        class="group flex w-full items-center gap-3.5 rounded-xl px-3 py-2.5 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
+        class="group flex w-full items-center gap-3.5 px-3 py-2.5 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
         onclick={action.run}
       >
         <span
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors
+          class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors
             {action.highlight
             ? 'bg-primary/10 group-hover:bg-primary/20'
             : 'bg-elevated group-hover:bg-overlay'}"

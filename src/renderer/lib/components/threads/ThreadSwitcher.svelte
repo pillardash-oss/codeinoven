@@ -3,6 +3,7 @@
   import { on } from 'svelte/events'
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
+  import { contentThreadFamily } from '$lib/content-view-threads'
   import { contentFamilyIcon } from '$lib/content-view-icons'
   import ThreadRow from './ThreadRow.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -11,8 +12,10 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { ensureStoredBrowserTabs, isBrowserLoaded } from '$lib/stores/browser-access.svelte'
+  import { threadSwitcherRequest } from '$lib/stores/thread-switcher-request.svelte'
   import { browserTabLabel } from '$lib/stores/global-browser-types'
   import type { Project } from '$shared/types'
+  import type { Component } from 'svelte'
   import { threadSwitcherEntryKey, type ThreadSwitcherEntry } from './thread-switcher-entries'
 
   interface Props {
@@ -26,6 +29,20 @@
   }
 
   let { entries, projects, projectIconUrls, selectedKey, onSelect }: Props = $props()
+
+  function entryType(entry: ThreadSwitcherEntry): string {
+    if (entry.kind === 'browser') return 'browser'
+    if (entry.kind === 'panel') return `panel:${entry.tab.kind}`
+    return contentThreadFamily(entry.thread)
+  }
+
+  const showTypeBadges = $derived.by(() => {
+    const firstEntry = entries[0]
+    return (
+      firstEntry !== undefined &&
+      entries.some((entry) => entryType(entry) !== entryType(firstEntry))
+    )
+  })
 
   let open = $state(false)
   let nativeReady = $state(false)
@@ -86,11 +103,28 @@
     return getProjectIcon(project, projectIconUrls.get(project.id))
   }
 
+  /** The owning project's icon for a panel entry, drawn beside the panel's own
+   *  icon so a terminal or file tab is identified with the project it belongs
+   *  to. */
+  function panelProjectIcon(entry: ThreadSwitcherEntry): string | null {
+    if (entry.kind !== 'panel') return null
+    const project = projectsById.get(entry.tab.projectId)
+    if (!project) return null
+    return getProjectIcon(project, projectIconUrls.get(project.id))
+  }
+
+  /** The container glyph for a panel tab whose project is a hidden container
+   *  (Chats, Assistant), which has no project icon of its own. */
+  function panelProjectGlyph(entry: ThreadSwitcherEntry): Component | null {
+    if (entry.kind !== 'panel') return null
+    return contentFamilyIcon({ projectId: entry.tab.projectId })
+  }
+
   /** The hover tooltip for one entry, phrased for the kind of surface it is. */
   function entryTitle(entry: ThreadSwitcherEntry): string {
-    return entry.kind === 'browser'
-      ? `Switch to ${browserTabLabel(entry.tab)}`
-      : `Open ${entry.thread.title}`
+    if (entry.kind === 'browser') return `Switch to ${browserTabLabel(entry.tab)}`
+    if (entry.kind === 'panel') return `Switch to ${entry.tab.title}`
+    return `Open ${entry.thread.title}`
   }
 
   /**
@@ -118,9 +152,22 @@
     if (nativeReady && !nativeFailed) {
       // The native window owns focus. Focusing its hidden source row would
       // activate the parent again and dismiss the native modal on hover.
-      row.scrollIntoView({ block: 'nearest' })
-    } else row.focus()
+      scrollRowIntoList(row)
+    } else {
+      row.focus({ preventScroll: true })
+      scrollRowIntoList(row)
+    }
     return true
+  }
+
+  /** Scroll only the list, never the panel or the source document behind the overlay. */
+  function scrollRowIntoList(row: HTMLElement): void {
+    const list = row.parentElement
+    if (!list) return
+    const bounds = list.getBoundingClientRect()
+    const item = row.getBoundingClientRect()
+    if (item.top < bounds.top) list.scrollTop += item.top - bounds.top
+    else if (item.bottom > bounds.bottom) list.scrollTop += item.bottom - bounds.bottom
   }
 
   function focusHighlightedEntry(key: string | null, attempts = 8): void {
@@ -193,6 +240,38 @@
     restoreFocusOnClose = true
     open = false
   }
+
+  /**
+   * Open the list for pointer picking (logo click). The highlight starts on
+   * the current surface so mouse users see where they are, and an empty list
+   * stays closed instead of flashing an empty dialog.
+   */
+  function openForPointer(): void {
+    if (open) return
+    keyboardAt = performance.timeOrigin + performance.now()
+    // Same stored-tab read as the keyboard cycle: the only fill for a list
+    // that is empty only because the browser runtime never loaded.
+    if (!isBrowserLoaded()) ensureStoredBrowserTabs()
+    if (entries.length === 0) return
+    nativeFailed = false
+    previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    restoreFocusOnClose = true
+    pointerAtOpen = lastPointer
+    const selectedIndex = entries.findIndex(
+      (entry) => threadSwitcherEntryKey(entry) === selectedKey
+    )
+    const first = selectedIndex >= 0 ? entries[selectedIndex] : entries[0]
+    highlightedKey = first ? threadSwitcherEntryKey(first) : null
+    open = true
+  }
+
+  let seenPointerRequest = 0
+  $effect(() => {
+    const id = threadSwitcherRequest.requestId
+    if (id === 0 || id === seenPointerRequest) return
+    seenPointerRequest = id
+    openForPointer()
+  })
 
   async function selectEntry(entry: ThreadSwitcherEntry): Promise<void> {
     commitToken += 1
@@ -272,7 +351,7 @@
   })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (keymapState.matches('thread-switcher', event)) {
+    if (keymapState.matches('thread-switcher', event) || (open && event.key === 'Tab')) {
       // No "nothing to show" guard before the cycle: an empty list is exactly the
       // state the cycle's own stored-list read is there to fill, so returning
       // here would leave Ctrl+Tab doing nothing in that session.
@@ -352,14 +431,14 @@
   <header class="border-b border-border px-4 py-3">
     <p class="text-sm font-semibold text-foreground">Switch to</p>
     <p class="mt-0.5 text-[0.6875rem] text-dimmed">
-      Release Control to open the highlighted thread or browser tab
+      Release Control to open the highlighted thread, browser tab or panel tab
     </p>
   </header>
 
   <div
-    class="max-h-[min(28rem,65vh)] overflow-y-auto p-1.5"
+    class="max-h-[calc(80vh-7rem)] min-h-0 overflow-y-auto overscroll-contain p-1.5"
     role="listbox"
-    aria-label="Recent threads and browser tabs"
+    aria-label="Recent threads, browser tabs and panel tabs"
   >
     {#each entries as entry, index (threadSwitcherEntryKey(entry))}
       {@const entryKey = threadSwitcherEntryKey(entry)}
@@ -370,11 +449,11 @@
         aria-selected={entryKey === highlightedKey}
         data-entry-index={index}
         data-native-dock-key={entryKey}
-        class="w-full cursor-pointer overflow-hidden rounded-lg text-left transition-colors hover:bg-elevated focus-visible:outline-none!"
+        class="w-full cursor-pointer overflow-hidden text-left transition-colors hover:bg-elevated focus-visible:outline-none!"
         title={entryTitle(entry)}
         onpointerenter={(event) => {
-          // The native window owns pointer selection, including its opening
-          // position. Only a failed native presentation uses this DOM fallback.
+          // Native presentation owns pointer selection. Only a failed native
+          // presentation uses the source document's pointer events.
           if (nativeFailed && pointerMovedSinceOpen(event)) highlightedKey = entryKey
         }}
         onclick={() => void selectEntry(entry)}
@@ -385,12 +464,37 @@
                one, so importing the row statically would carry the browser's
                model into the first-paint chunk for a row that cannot appear. -->
           {#await import('./SwitcherBrowserRow.svelte') then { default: SwitcherBrowserRow }}
-            <SwitcherBrowserRow tab={entry.tab} selected={entryKey === highlightedKey} />
+            <SwitcherBrowserRow
+              tab={entry.tab}
+              selected={entryKey === highlightedKey}
+              showBadge={showTypeBadges}
+            />
+          {/await}
+        {:else if entry.kind === 'panel'}
+          <!-- A panel row is a dynamic import for the same reason the browser row
+               is: the switcher mounts before any panel tab can, and the row only
+               ever appears in a list that already holds one. -->
+          {#await import('./SwitcherPanelRow.svelte') then { default: SwitcherPanelRow }}
+            <SwitcherPanelRow
+              tab={entry.tab}
+              selected={entryKey === highlightedKey}
+              showBadge={showTypeBadges}
+              projectIconUrl={panelProjectIcon(entry)}
+              projectGlyph={panelProjectGlyph(entry)}
+            />
           {/await}
         {:else}
           <ThreadRow
             thread={entry.thread}
             picker
+            compact
+            pickerBadge={!showTypeBadges
+              ? undefined
+              : contentThreadFamily(entry.thread) === 'chats'
+                ? 'Chat'
+                : contentThreadFamily(entry.thread) === 'assistant'
+                  ? 'Assistant'
+                  : 'Project'}
             selected={entryKey === highlightedKey}
             projectIconUrl={resolvedProjectIcon}
             projectIconGlyph={contentFamilyIcon(entry.thread)}

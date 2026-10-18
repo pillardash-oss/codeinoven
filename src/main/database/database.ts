@@ -1,3 +1,4 @@
+import { RECONCILE_THREAD_CONTEXT_USAGE_SQL } from './thread-context-usage-sql'
 import { mkdirSync } from 'fs'
 import { dirname, join } from 'path'
 import { performance } from 'node:perf_hooks'
@@ -5,11 +6,17 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { DEFAULT_WORK_ROOTS, authoredWorkKindOf } from '../../lib/design/work-roots'
+import {
+  orderAuthoredWorkKinds,
+  parseAuthoredWorkKinds,
+  serializeAuthoredWorkKinds
+} from '../../lib/design/authored-work-kinds'
 import { USAGE_EVENT_FEATURES } from '../../lib/types/usage'
 import { Logger } from '../system/logger'
 import {
   DATABASE_SCHEMA_SQL,
   LEGACY_RUBRIC_VERSION,
+  MAX_PLAUSIBLE_SHOT_COST_USD,
   MODEL_RANKINGS_COLUMNS_SQL,
   MODEL_RANKING_CALC_VERSION,
   MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL,
@@ -73,6 +80,8 @@ export class Database {
    * `backfillAgentMessageSearchMeta`).
    */
   private searchMetaReady = false
+  private closing = false
+  private contextCostRepair: Promise<void> | null = null
 
   constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
     this.path = path ?? getConfigRoot() + '/codeinoven.db'
@@ -82,6 +91,7 @@ export class Database {
   /** Initialise the database: open connection, apply schema, set WAL mode. */
   async init(): Promise<void> {
     if (this.db) return
+    this.closing = false
     const startedAt = performance.now()
 
     // On a fresh install the config root does not exist yet and
@@ -102,11 +112,49 @@ export class Database {
     // serialized batches, so init never waits on it and the main thread stays
     // free. Until it reports ready, search uses the legacy (correct) query.
     void this.backfillAgentMessageSearchMeta()
+    this.contextCostRepair = this.reconcileLegacyContextUsageCosts()
 
     Logger.info('SQLite database initialised', {
       path: this.path,
       durationMs: this.roundDuration(performance.now() - startedAt)
     })
+  }
+
+  /** One bounded worker-only repair pass for snapshots written before ledger reconciliation. */
+  private async reconcileLegacyContextUsageCosts(): Promise<void> {
+    try {
+      const marker = await this.queryViaWorker(
+        "SELECT value FROM db_meta WHERE key = 'context_usage_cost_v1'",
+        [],
+        1
+      )
+      if (!marker.ok || marker.rows.length > 0) return
+      let cursor = ''
+      for (;;) {
+        if (this.closing) return
+        const batch = await this.queryViaWorker(
+          'SELECT id FROM threads WHERE id > ? AND context_usage IS NOT NULL ORDER BY id LIMIT 32',
+          [cursor],
+          32
+        )
+        if (!batch.ok) throw new Error(batch.error ?? 'Context cost repair read failed')
+        if (batch.rows.length === 0) break
+        for (const row of batch.rows) {
+          if (this.closing) return
+          const id = String(row['id'])
+          const result = await this.executeViaWorker(RECONCILE_THREAD_CONTEXT_USAGE_SQL, [id])
+          if (!result.ok) throw new Error(result.error ?? 'Context cost repair failed')
+          cursor = id
+        }
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      await this.executeViaWorker(
+        "INSERT OR REPLACE INTO db_meta(key,value) VALUES('context_usage_cost_v1','complete')",
+        []
+      )
+    } catch (error) {
+      Logger.error('Legacy context cost reconciliation failed:', error)
+    }
   }
 
   /** Whether thread search may rank against the narrow search mirror. */
@@ -243,6 +291,9 @@ export class Database {
    * worker has stopped and its connection is closed before teardown completes.
    */
   async close(): Promise<void> {
+    this.closing = true
+    await this.contextCostRepair
+    this.contextCostRepair = null
     const worker = this.maintenanceWorker
     this.maintenanceWorker = null
     if (worker?.isRunning()) {
@@ -434,6 +485,11 @@ export class Database {
     if (!worker || !worker.isRunning()) {
       return { ok: false, reason: 'io', error: 'no maintenance worker' }
     }
+    // Drain the bounded repair before the worker swaps database files. Its
+    // next queued statement must never race a restore onto a different inode.
+    this.closing = true
+    await this.contextCostRepair
+    this.contextCostRepair = null
     // Close the primary connection so it cannot hold the pre-restore inode.
     this.closeConnection()
     let result: WorkerRestoreResult
@@ -855,16 +911,20 @@ export class Database {
   private applySchema(): void {
     const connection = this.requireDb()
     connection.transaction(() => {
+      this.migrateAssistantVocabulary(connection)
       this.migrateModelRankingTables(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
+      this.migrateModelRankingCostPlausibility(connection)
       this.migrateModelRankingSnapshotClaimToken(connection)
       this.migrateModelRankingSnapshotAnchorMessageId(connection)
       this.migrateModelRankingSnapshotUndoneAt(connection)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
       this.migrateThreadIndependentAuditColumns(connection)
+      this.migrateThreadEngineeringColumn(connection)
       this.migrateThreadAccountColumn(connection)
       this.migrateThreadDraftColumns(connection)
+      this.migrateThreadBookmarkColumn(connection)
       this.migrateThreadAssistantColumns(connection)
       this.migrateThreadFailureColumns(connection)
       this.migrateAgentMessageGenerationColumn(connection)
@@ -878,26 +938,97 @@ export class Database {
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
       this.migrateAssignmentSpecNullable(connection)
       this.migrateThreadPinnedAt(connection)
-      this.migrateRoutinePinned(connection)
-      this.migrateRoutineAgentsAndPause(connection)
-      this.migrateRoutineDescription(connection)
-      this.migrateRoutineReporting(connection)
+      this.migrateAssistantPinned(connection)
+      this.migrateAssistantAgentsAndPause(connection)
+      this.migrateAssistantIdentityColumns(connection)
+      this.migrateAssistantDescription(connection)
+      this.migrateAssistantReporting(connection)
       this.migrateCustomSvgIcons(connection)
       this.migrateProjectOvenColumn(connection)
       this.migrateStickyNoteImagePath(connection)
       this.migrateStickyNoteSortOrder(connection)
       this.migrateCustomIconLibrary(connection)
-      this.migrateRoutineScheduleAnchor(connection)
-      this.migrateRoutineExecution(connection)
-      this.migrateRoutineScheduled(connection)
+      this.migrateAssistantScheduleAnchor(connection)
+      this.migrateAssistantExecution(connection)
+      this.migrateAssistantScheduled(connection)
       this.migrateThreadDesignKind(connection)
       this.migrateThreadAuthoredWorkKind(connection)
+      this.migrateThreadAuthoredWorkKinds(connection)
       this.migrateDesignRevisionMetadata(connection)
+      this.migrateSettledAuditThreadStatus(connection)
     })()
   }
 
+  /**
+   * Rename the assistant vocabulary in a database written before it.
+   *
+   * The feature was called a routine: its rows lived in `routines`, a task
+   * carried `threads.routine_id`, and the listing index was
+   * `idx_routines_listing`. Those names are user data, so they are renamed in
+   * place rather than rebuilt: the table keeps its ids, its rows, and the
+   * threads pointing at it. The old index is dropped because the schema
+   * recreates it under its new name, and SQLite carries an index through a table
+   * rename with its old name still attached.
+   *
+   * The assistant's written instruction set was its how-to: the `how_to` and
+   * `how_to_updated_at` columns became `knowledge` and `knowledge_updated_at`.
+   * The rename reached the schema but not the rows an existing database already
+   * held, so the columns are renamed here rather than only added: a database
+   * that predates the wording keeps its authored knowledge and the timestamp the
+   * schedule anchor backfill reads, instead of failing on a column that only the
+   * fresh schema carried. A table that already uses the new names is untouched.
+   *
+   * Runs first, before the schema is applied: `CREATE TABLE IF NOT EXISTS
+   * assistants` would otherwise create an empty table the rename could not
+   * replace, and the later migrations (the schedule anchor reads
+   * `knowledge_updated_at`) would find the old columns. Idempotent, so a database
+   * that has already migrated is untouched.
+   */
+  private migrateAssistantVocabulary(connection: DatabaseType): void {
+    const hasTable = (name: string): boolean =>
+      Boolean(
+        connection
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+          .get(name)
+      )
+    if (hasTable('routines') && !hasTable('assistants')) {
+      connection.exec('ALTER TABLE routines RENAME TO assistants')
+      connection.exec('DROP INDEX IF EXISTS idx_routines_listing')
+    }
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.has('routine_id') && !columns.has('assistant_id')) {
+      connection.exec('ALTER TABLE threads RENAME COLUMN routine_id TO assistant_id')
+    }
+
+    const assistantColumns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!assistantColumns.has('knowledge')) {
+      if (assistantColumns.has('how_to')) {
+        connection.exec('ALTER TABLE assistants RENAME COLUMN how_to TO knowledge')
+      } else if (assistantColumns.size > 0) {
+        connection.exec("ALTER TABLE assistants ADD COLUMN knowledge TEXT NOT NULL DEFAULT ''")
+      }
+    }
+    if (!assistantColumns.has('knowledge_updated_at')) {
+      if (assistantColumns.has('how_to_updated_at')) {
+        connection.exec(
+          'ALTER TABLE assistants RENAME COLUMN how_to_updated_at TO knowledge_updated_at'
+        )
+      } else if (assistantColumns.size > 0) {
+        connection.exec('ALTER TABLE assistants ADD COLUMN knowledge_updated_at INTEGER')
+      }
+    }
+  }
+
   private migrateCustomSvgIcons(connection: DatabaseType): void {
-    for (const table of ['projects', 'routines'] as const) {
+    for (const table of ['projects', 'assistants'] as const) {
       const columns = new Set<string>(
         (connection.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
           (column) => column.name
@@ -1011,26 +1142,26 @@ export class Database {
   }
 
   /**
-   * Add the routine pin columns to databases created before routines could be
+   * Add the assistant pin columns to databases created before assistants could be
    * pinned, then backfill a pin timestamp for any pinned row (matching the
    * thread pin behaviour). Fresh databases already carry both columns, and the
    * guarded `ALTER TABLE` makes this idempotent.
    */
-  private migrateRoutinePinned(connection: DatabaseType): void {
+  private migrateAssistantPinned(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
     if (!columns.has('pinned')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
+      connection.exec('ALTER TABLE assistants ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0')
     }
     if (!columns.has('pinned_at')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN pinned_at INTEGER')
+      connection.exec('ALTER TABLE assistants ADD COLUMN pinned_at INTEGER')
     }
     connection
       .prepare(
-        `UPDATE routines
+        `UPDATE assistants
             SET pinned_at = COALESCE(updated_at, created_at)
           WHERE pinned = 1 AND pinned_at IS NULL`
       )
@@ -1038,118 +1169,138 @@ export class Database {
   }
 
   /**
-   * Add the routine model-set and pause columns to databases created before a
-   * routine could carry a primary/fallback model set or be paused. Fresh
+   * Add the assistant model-set and pause columns to databases created before a
+   * assistant could carry a primary/fallback model set or be paused. Fresh
    * databases already carry both, and the guarded `ALTER TABLE` is idempotent.
    */
-  private migrateRoutineAgentsAndPause(connection: DatabaseType): void {
+  private migrateAssistantAgentsAndPause(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
     if (!columns.has('agents')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN agents TEXT')
+      connection.exec('ALTER TABLE assistants ADD COLUMN agents TEXT')
     }
     if (!columns.has('paused')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN paused INTEGER NOT NULL DEFAULT 0')
+      connection.exec('ALTER TABLE assistants ADD COLUMN paused INTEGER NOT NULL DEFAULT 0')
     }
   }
 
   /**
-   * Add the routine description column to databases created before a routine
+   * Add the two columns an assistant is described by, to databases created
+   * before it had a voice of its own: the personality its owner wrote, and the
+   * name they gave its schedule. Fresh databases already carry both, and the
+   * guarded `ALTER TABLE`s are idempotent.
+   */
+  private migrateAssistantIdentityColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.size > 0 && !columns.has('personality')) {
+      connection.exec('ALTER TABLE assistants ADD COLUMN personality TEXT')
+    }
+    if (columns.size > 0 && !columns.has('schedule_name')) {
+      connection.exec('ALTER TABLE assistants ADD COLUMN schedule_name TEXT')
+    }
+  }
+
+  /**
+   * Add the assistant description column to databases created before an assistant
    * could carry the user's own note about what it is for. Fresh databases
    * already carry it, and the guarded `ALTER TABLE` is idempotent.
    */
-  private migrateRoutineDescription(connection: DatabaseType): void {
+  private migrateAssistantDescription(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
     if (!columns.has('description')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN description TEXT')
+      connection.exec('ALTER TABLE assistants ADD COLUMN description TEXT')
     }
   }
 
   /**
-   * Add the routine reporting columns to databases created before a routine
+   * Add the assistant reporting columns to databases created before an assistant
    * could record where its output goes and how urgent it is. Fresh databases
    * already carry both, and the guarded `ALTER TABLE` is idempotent.
    */
-  private migrateRoutineReporting(connection: DatabaseType): void {
+  private migrateAssistantReporting(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
     if (!columns.has('delivery')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN delivery TEXT')
+      connection.exec('ALTER TABLE assistants ADD COLUMN delivery TEXT')
     }
     if (!columns.has('priority')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN priority TEXT')
+      connection.exec('ALTER TABLE assistants ADD COLUMN priority TEXT')
     }
   }
 
   /**
-   * Add the routine execution-target column to databases created before a
-   * routine could name an Oven its runs execute on. Fresh databases already
-   * carry it, and the guarded `ALTER TABLE` is idempotent. An existing routine
+   * Add the assistant execution-target column to databases created before a
+   * assistant could name an Oven its runs execute on. Fresh databases already
+   * carry it, and the guarded `ALTER TABLE` is idempotent. An existing assistant
    * keeps the column NULL, which means this computer.
    */
   /**
-   * Add the routine schedule-enable column to databases created before a
-   * routine could be unscheduled. On by default, so every existing routine
+   * Add the assistant schedule-enable column to databases created before a
+   * assistant could be unscheduled. On by default, so every existing assistant
    * keeps firing. Fresh databases already carry it, and the guarded
    * `ALTER TABLE` is idempotent.
    */
-  private migrateRoutineScheduled(connection: DatabaseType): void {
+  private migrateAssistantScheduled(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
     if (!columns.has('scheduled')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN scheduled INTEGER NOT NULL DEFAULT 1')
+      connection.exec('ALTER TABLE assistants ADD COLUMN scheduled INTEGER NOT NULL DEFAULT 1')
     }
   }
 
-  private migrateRoutineExecution(connection: DatabaseType): void {
+  private migrateAssistantExecution(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
     if (!columns.has('execution')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN execution TEXT')
+      connection.exec('ALTER TABLE assistants ADD COLUMN execution TEXT')
     }
   }
 
   /**
-   * Add the routine schedule-anchor column to databases created before the
+   * Add the assistant schedule-anchor column to databases created before the
    * scheduler could tell a real missed fire from a slot that predates the
    * schedule. Fresh databases already carry it, and the guarded `ALTER TABLE`
    * is idempotent.
    *
-   * The backfill stamps each scheduled routine from its how-to write time,
-   * which is when the authoring flow set the schedule alongside the how-to,
-   * falling back to the routine's creation. Without it an existing schedule
+   * The backfill stamps each scheduled assistant from its knowledge write time,
+   * which is when the authoring flow set the schedule alongside the knowledge,
+   * falling back to the assistant's creation. Without it an existing schedule
    * would look active since the epoch, and a slot that came due before the
-   * routine existed would read as missed.
+   * assistant existed would read as missed.
    */
-  private migrateRoutineScheduleAnchor(connection: DatabaseType): void {
+  private migrateAssistantScheduleAnchor(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (connection.prepare('PRAGMA table_info(routines)').all() as Array<{ name: string }>).map(
+      (connection.prepare('PRAGMA table_info(assistants)').all() as Array<{ name: string }>).map(
         (column) => column.name
       )
     )
     if (!columns.has('schedule_updated_at')) {
-      connection.exec('ALTER TABLE routines ADD COLUMN schedule_updated_at INTEGER')
+      connection.exec('ALTER TABLE assistants ADD COLUMN schedule_updated_at INTEGER')
     }
     connection
       .prepare(
-        `UPDATE routines
-            SET schedule_updated_at = COALESCE(how_to_updated_at, created_at)
+        `UPDATE assistants
+            SET schedule_updated_at = COALESCE(knowledge_updated_at, created_at)
           WHERE schedule IS NOT NULL AND schedule_updated_at IS NULL`
       )
       .run()
@@ -1239,6 +1390,71 @@ export class Database {
           SET authored_work_kind = (SELECT kind FROM thread_designs WHERE thread_id = threads.id)
         WHERE EXISTS (SELECT 1 FROM thread_designs WHERE thread_id = threads.id)`
     )
+  }
+
+  /**
+   * Add the durable set of authored-work kinds beside the current session kind.
+   *
+   * `authored_work_kind` answers "which session is this thread in now". The row's
+   * marker has to answer "what work has this thread done", because a thread that
+   * designed something and later cut a video about it has done both and a single
+   * column can only name one. Without this backfill every thread alive before the
+   * column existed would show one marker, and the thread the set exists to
+   * describe, one that started as a design and has since moved to a video
+   * session, would lose its design marker on upgrade.
+   *
+   * Two sources, because neither alone is the whole set. The session kind is what
+   * the thread was already showing. The creator records are what it did earlier:
+   * `design_origins` names the thread that first previewed a folder and
+   * `authored_work_folders` gives that folder's kind, so the join recovers a
+   * design the thread has since navigated away from. Both reads are one grouped
+   * statement for the whole table rather than a query per thread.
+   */
+  private migrateThreadAuthoredWorkKinds(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.has('authored_work_kinds')) return
+    connection.exec('ALTER TABLE threads ADD COLUMN authored_work_kinds TEXT')
+    const rows = connection
+      .prepare('SELECT id, authored_work_kind, authored_work_kinds FROM threads')
+      .all() as Array<{
+      id: string
+      authored_work_kind: string | null
+      authored_work_kinds: string | null
+    }>
+    if (rows.length === 0) return
+    const created = connection
+      .prepare(
+        `SELECT o.thread_id AS thread_id, f.kind AS kind
+           FROM design_origins o
+           JOIN authored_work_folders f
+             ON f.project_id = o.project_id AND f.directory = o.directory
+          GROUP BY o.thread_id, f.kind`
+      )
+      .all() as Array<{ thread_id: string; kind: string }>
+    const createdByThread = new Map<string, string[]>()
+    for (const row of created) {
+      const kinds = createdByThread.get(row.thread_id)
+      if (kinds) kinds.push(row.kind)
+      else createdByThread.set(row.thread_id, [row.kind])
+    }
+    const update = connection.prepare('UPDATE threads SET authored_work_kinds = ? WHERE id = ?')
+    for (const row of rows) {
+      // Both spellings feed the same normalizer, so an unknown or corrupt value
+      // reads as "nothing recorded" instead of failing a startup migration.
+      const kinds = serializeAuthoredWorkKinds(
+        orderAuthoredWorkKinds([
+          ...parseAuthoredWorkKinds(row.authored_work_kinds),
+          row.authored_work_kind,
+          ...(createdByThread.get(row.id) ?? [])
+        ])
+      )
+      if (kinds === null || kinds === row.authored_work_kinds) continue
+      update.run(kinds, row.id)
+    }
   }
 
   /**
@@ -1380,6 +1596,42 @@ export class Database {
   }
 
   /**
+   * Discard ranking cost sums that an arithmetic artifact poisoned.
+   *
+   * The cost columns of `model_rankings` are running sums whose snapshots are
+   * hard-deleted the moment they are scored, so one absurd addend can never be
+   * subtracted back out   it only ever surfaces as an impossible per-sample
+   * average, and it takes the "spent across ranked conversations" figure with
+   * it forever. Anything above `MAX_PLAUSIBLE_SHOT_COST_USD` per ranked
+   * conversation is therefore dropped to 0, exactly how an unpriced session is
+   * already recorded: the priced siblings of those samples under-report by the
+   * few cents they actually cost, which is the honest direction for a sum
+   * nothing can recompute. Scores, sample counts, and durations are untouched,
+   * because those are the ranking's own numbers and they were never corrupt.
+   * The 2026-10-10 pi cumulative-cost fix stopped the one producer of such
+   * addends, and `ModelRankingRepo` now refuses to fold a new one in at all.
+   * Idempotent: a repaired row is already below the ceiling.
+   */
+  migrateModelRankingCostPlausibility(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const beyondCeiling = (samplesColumn: string, costColumn: string): string =>
+      `${samplesColumn} > 0 AND ${costColumn} > ${samplesColumn} * ${MAX_PLAUSIBLE_SHOT_COST_USD}`
+    target.exec(`
+      UPDATE model_rankings
+      SET one_shot_cost_usd = CASE
+            WHEN ${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')} THEN 0
+            ELSE one_shot_cost_usd
+          END,
+          multi_shot_cost_usd = CASE
+            WHEN ${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')} THEN 0
+            ELSE multi_shot_cost_usd
+          END
+      WHERE (${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')})
+         OR (${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')})
+    `)
+  }
+
+  /**
    * Rows persisted before the legacy `engineeringMode` settings flag was
    * scrubbed still carry it inside their settings JSON. Rewrite affected rows
    * without the flag   the Engineering lifecycle selection is the single
@@ -1496,6 +1748,65 @@ export class Database {
     }
   }
 
+  /**
+   * Existing databases predate the durable Engineering marker on a thread. The
+   * marker is set the first time a thread engages the Engineering lifecycle and
+   * never cleared, so the row can draw its Engineering indicator without a
+   * lifecycle round trip. Threads that already engaged engineering are
+   * backfilled from the persisted lifecycle (`selection` moved off `none`, or a
+   * run was ever started). `SELECT`-based, so it costs one grouped pass and is
+   * idempotent on re-run.
+   */
+  private migrateThreadEngineeringColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (columns.has('engineering')) return
+    connection.exec('ALTER TABLE threads ADD COLUMN engineering INTEGER NOT NULL DEFAULT 0')
+    connection.exec(
+      `UPDATE threads
+          SET engineering = 1
+        WHERE id IN (
+          SELECT thread_id FROM engineering_lifecycle
+           WHERE selection != 'none' OR started_at IS NOT NULL
+        )`
+    )
+  }
+
+  /**
+   * Land threads a settled audit left parked on `spec`.
+   *
+   * An audit parks its thread on `spec` while the report waits on the user, and
+   * settling the report used to clear the audit state without moving the status:
+   * the thread kept reading "Spec ready" with nothing left to review, holding a
+   * review count on its project strip forever. `completed` is what a settled
+   * audit means, so the thread is done.
+   *
+   * Only a row whose `spec` can have come from an audit is touched: an
+   * independent-audit thread (locked out of the specification flows for its
+   * lifetime) and an Achievement coordinator that owns a durable auditor. A
+   * thread parked on a specification that is still waiting for approval keeps
+   * its status, and so does an audit `offered`, which is still an open question
+   * for the user. Idempotent: a database with nothing left to settle is
+   * untouched.
+   */
+  private migrateSettledAuditThreadStatus(connection: DatabaseType): void {
+    connection.exec(
+      `UPDATE threads
+          SET status = 'completed',
+              scope_sort_order = NULL,
+              sort_order = NULL
+        WHERE status = 'spec'
+          AND audit_state IS NULL
+          AND (
+            independent_audit = 1
+            OR (achievement_role = 'coordinator' AND auditor_thread_id IS NOT NULL)
+          )`
+    )
+  }
+
   /** Existing databases predate the in-flight turn owner recorded for cross-instance recovery. */
   private migrateActiveTurnOwnerColumn(connection: DatabaseType): void {
     const columns = new Set<string>(
@@ -1537,7 +1848,18 @@ export class Database {
     }
   }
 
-  /** Existing databases predate assistant-space task columns: routine grouping,
+  private migrateThreadBookmarkColumn(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(threads)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    if (!columns.has('bookmarked')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN bookmarked INTEGER NOT NULL DEFAULT 0')
+    }
+  }
+
+  /** Existing databases predate assistant-space task columns: assistant grouping,
    *  custom row icon, per-task schedule override, and last-run timestamp. */
   private migrateThreadAssistantColumns(connection: DatabaseType): void {
     const columns = new Set<string>(
@@ -1545,8 +1867,8 @@ export class Database {
         (column) => column.name
       )
     )
-    if (!columns.has('routine_id')) {
-      connection.exec('ALTER TABLE threads ADD COLUMN routine_id TEXT')
+    if (!columns.has('assistant_id')) {
+      connection.exec('ALTER TABLE threads ADD COLUMN assistant_id TEXT')
     }
     if (!columns.has('assistant_icon_type')) {
       connection.exec('ALTER TABLE threads ADD COLUMN assistant_icon_type TEXT')
@@ -1557,9 +1879,9 @@ export class Database {
     if (!columns.has('schedule_override')) {
       connection.exec('ALTER TABLE threads ADD COLUMN schedule_override TEXT')
     }
-    // A task's own schedule switch: 1 schedules it even when its routine is
-    // unscheduled, 0 keeps it off the clock even when its routine is scheduled,
-    // and NULL inherits the routine. Tasks predating it read back as inheriting.
+    // A task's own schedule switch: 1 schedules it even when its assistant is
+    // unscheduled, 0 keeps it off the clock even when its assistant is scheduled,
+    // and NULL inherits the assistant. Tasks predating it read back as inheriting.
     if (!columns.has('scheduled')) {
       connection.exec('ALTER TABLE threads ADD COLUMN scheduled INTEGER')
     }
@@ -1582,9 +1904,9 @@ export class Database {
     if (!columns.has('assistant_task_id')) {
       connection.exec('ALTER TABLE threads ADD COLUMN assistant_task_id TEXT')
     }
-    // A routine's how-to ("Getting started") thread is pinned for its whole
+    // An assistant's knowledge ("Getting started") thread is pinned for its whole
     // life: pinning is what keeps it out of automatic eviction. It still renders
-    // nested inside its routine (AssistantSidebar keeps a pinned how-to thread
+    // nested inside its assistant (AssistantSidebar keeps a pinned knowledge thread
     // in place), so the pin is retention, not a move to the Pinned section. Rows
     // created before that rule are pinned once here, and the guard makes the
     // statement a no-op on every later boot.

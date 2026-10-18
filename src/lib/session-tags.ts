@@ -4,11 +4,14 @@ import { isQuotedMentionPosition } from './mention-context'
  * The two session tags, in one place because three layers judge them.
  *
  * A design session and a video session are both opened by the user typing a tag,
- * and the same question about it is asked in the main process (which turn mode a
- * turn carries, which authored-work kind a thread is in) and in the renderer
- * (whether the send the user is about to make is the one that opens a session).
- * A second copy of the pattern is how the two answers drift apart, so the tokens,
- * the predicates and the modes live here and both layers read them.
+ * and the same question about it is asked in the renderer (whether the send the
+ * user is about to make is the one that opens a session) and in the main process
+ * (which turn mode a turn carries, which authored-work kind a thread is in). The
+ * tag is not the session's only door: an agent activating the app-owned design or
+ * video capability opens the same session and records the same kind on the
+ * thread, and that row is what main reads from then on. A second copy of the
+ * pattern is how the two answers drift apart, so the tokens, the predicates and
+ * the modes live here and both layers read them.
  *
  * The prompts themselves stay in the main process: they are the contract a turn
  * carries, not a fact about a tag.

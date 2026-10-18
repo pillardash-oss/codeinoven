@@ -70,7 +70,7 @@
 
   {#if method === 'rebase'}
     <p
-      class="rounded-lg border border-border bg-surface px-3 py-2 text-[0.625rem] leading-relaxed text-dimmed"
+      class="border border-border bg-surface px-3 py-2 text-[0.625rem] leading-relaxed text-dimmed"
     >
       Rebase preserves the original commits, so there's no custom commit message to add.
     </p>
@@ -85,7 +85,7 @@
         </label>
         <input
           id="merge-commit-title-{fieldSuffix}"
-          class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-8 w-full border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder={method === 'merge'
             ? `Merge pull request #${number} from ${summary.headRef}`
             : 'Title of the squashed commit'}
@@ -101,7 +101,7 @@
         </label>
         <textarea
           id="merge-commit-message-{fieldSuffix}"
-          class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="min-h-16 w-full resize-y border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder={method === 'merge'
             ? 'Describe the merge (optional)'
             : 'Commit message for the squashed changes'}

@@ -9,6 +9,7 @@ import {
 } from '../../main/database/repositories/thread-repo'
 import { Logger } from '../../main/system/logger'
 import { mergeHybridThreadSearchResults } from '../search/hybrid-merge'
+import { evidenceFtsQuery, hasQueryEvidence } from '../search/query-evidence'
 import type { IntentThreadMatch } from '../search/types'
 import type { ThreadSearchResult } from '../types'
 
@@ -29,11 +30,13 @@ export type IntentSearchProvider = (
  * with a primary-connection fallback.
  *
  * When the narrow search mirror is ready the message query ranks against it and
- * only touches `agent_messages` for the rows that return a snippet; until the
+ * extracts excerpts around the indexed matches; until the
  * mirror has been backfilled the legacy join is used (correct, just slower).
  *
- * When an intent provider is attached (and intent search is enabled), the
- * keyword results are merged with semantic matches into one hybrid ranking.
+ * Semantic (intent) ranking is opt-in per search. The keyword answer is always
+ * the one that resolves; a search that asked for intent gets its merged hybrid
+ * ranking pushed through a callback once the local model has answered, so an
+ * interactive surface never waits on a model load to show rows.
  */
 export class ThreadSearchService {
   private intentProvider: IntentSearchProvider | null = null
@@ -48,16 +51,76 @@ export class ThreadSearchService {
     this.intentProvider = provider
   }
 
-  /** Family-scoped when `options.family` is set; project-scoped when
-   *  `options.projectId` is set. */
+  /**
+   * Keyword-only search: the answer every panel's own search button shows.
+   *
+   * Family-scoped when `options.family` is set; project-scoped when
+   * `options.projectId` is set. The embedding model is never consulted here -
+   * semantic ranking belongs to the spotlight's thread search, which asks for it
+   * explicitly through {@link searchWithDeferredIntent}.
+   */
   async search(query: string, options: ThreadSearchOptions = {}): Promise<ThreadSearchResult[]> {
     const raw = query.trim()
     if (!raw) return []
+    const { results } = await this.keywordSearch(raw, options)
+    return results
+  }
+
+  /**
+   * Spotlight search: answer with keyword rows now, hand the merged hybrid
+   * ranking to `onIntentReady` when the semantic step lands.
+   *
+   * The spotlight is the only surface that ranks by meaning, and the only one
+   * that can afford to wait for it: its rows are already on screen, so the
+   * semantic answer replaces them instead of delaying them. The model may need
+   * tens of seconds to boot when nothing has warmed it (measured: 22 s); that
+   * boot runs here, off the interactive path, and the callback fires only once
+   * the semantic matches are merged.
+   */
+  async searchWithDeferredIntent(
+    query: string,
+    options: ThreadSearchOptions,
+    onIntentReady: (results: ThreadSearchResult[]) => void
+  ): Promise<ThreadSearchResult[]> {
+    const raw = query.trim()
+    if (!raw) return []
     const { results: keyword, limit } = await this.keywordSearch(raw, options)
-    if (!this.intentProvider) return keyword
+    const provider = this.intentProvider
+    if (!provider) return keyword
+    void this.enrichWithIntent(raw, options, keyword, limit, provider, onIntentReady)
+    return keyword
+  }
+
+  /**
+   * Resolve the semantic half and hand the merged ranking to the caller.
+   *
+   * Semantic search is an enhancement: a failure is logged and dropped, never
+   * allowed to break the keyword answer or surface as an unhandled rejection.
+   * When the provider finds nothing, no callback fires - the keyword rows the
+   * caller is already showing are the whole answer.
+   */
+  private async enrichWithIntent(
+    raw: string,
+    options: ThreadSearchOptions,
+    keyword: readonly ThreadSearchResult[],
+    limit: number,
+    provider: IntentSearchProvider,
+    onIntentReady: (results: ThreadSearchResult[]) => void
+  ): Promise<void> {
     try {
-      const matches = await this.intentProvider(raw, options)
-      if (matches.length === 0) return keyword
+      const [matches, evidence] = await Promise.all([
+        provider(raw, options),
+        this.conversationEvidence(raw, options, limit)
+      ])
+      // All-term conversation evidence outranks similarity to only one concept.
+      // Keep exact keyword evidence ahead of typo-tolerant evidence.
+      const grounded = [...keyword.filter((result) => result.kind === 'message'), ...evidence]
+      if (matches.length === 0) {
+        if (evidence.length > 0) {
+          onIntentReady(mergeHybridThreadSearchResults(keyword, grounded, limit))
+        }
+        return
+      }
       const threads = await this.threadRepo.listByIdsViaWorker(
         matches.map((match) => match.threadId)
       )
@@ -69,14 +132,34 @@ export class ThreadSearchService {
         if (!threadMatchesSearchScope(thread, options)) continue
         intent.push({ thread, kind: 'intent', score: match.score })
       }
-      if (intent.length === 0) return keyword
-      return mergeHybridThreadSearchResults(keyword, intent, limit)
+      if (intent.length === 0 && evidence.length === 0) return
+      onIntentReady(mergeHybridThreadSearchResults(keyword, [...grounded, ...intent], limit))
     } catch (error) {
-      // Semantic search is an enhancement; a failure must never break keyword
-      // search, only silently fall back to it.
-      Logger.dev('Intent search enrichment failed; returning keyword results.', error)
-      return keyword
+      Logger.dev('Intent search enrichment failed; keeping keyword results.', error)
     }
+  }
+
+  private async conversationEvidence(
+    raw: string,
+    options: ThreadSearchOptions,
+    limit: number
+  ): Promise<ThreadSearchResult[]> {
+    const query = evidenceFtsQuery(raw)
+    if (!query) return []
+    const built = buildThreadSearchSql(raw, options, this.db.isSearchMetaReady(), query)
+    if (!built.fts) return []
+    // Never scan transcripts or fall back to the main connection for this pass.
+    const candidates = await this.db.queryViaWorker(
+      built.fts.sql,
+      built.fts.params,
+      threadSearchMessageLimit(limit),
+      { allowPrimaryFallback: false }
+    )
+    if (!candidates.ok) return []
+    const verified = candidates.rows.filter(
+      (row) => typeof row.snippet_text === 'string' && hasQueryEvidence(raw, row.snippet_text)
+    )
+    return mergeThreadSearchResults([], verified, raw, limit)
   }
 
   private async keywordSearch(

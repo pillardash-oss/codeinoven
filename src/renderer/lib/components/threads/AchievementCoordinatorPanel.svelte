@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ArrowLeft, ArrowUpRight, Play, ShieldCheck, Target } from '@lucide/svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioArrowUpRight from '@pillardash-oss/cio-icon/CioArrowUpRight.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { AchievementCoordinatorPanelProps, ThinkingLevel } from '$shared/types'
@@ -134,9 +138,9 @@
   <header class="shrink-0 border-b border-border p-4">
     <div class="flex min-w-0 items-center gap-2 text-primary">
       {#if mode === 'achievement'}
-        <Target size={15} class="shrink-0" />
+        <CioTarget size={15} class="shrink-0" />
       {:else}
-        <ShieldCheck size={15} class="shrink-0" />
+        <CioShieldCheck size={15} class="shrink-0" />
       {/if}
       <h2 class="text-xs font-semibold uppercase tracking-wide">{coordinatorLabel}</h2>
     </div>
@@ -147,23 +151,23 @@
       {#if auditState === 'offered' && onOpenAudit}
         <button
           type="button"
-          class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+          class="flex flex-1 items-center justify-center gap-2 bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
           title="Start an audit of the current implementation"
           onclick={onOpenAudit}
         >
           Audit work
-          <ShieldCheck size={13} />
+          <CioShieldCheck size={13} />
         </button>
       {/if}
       {#if reportAvailable && onViewReport}
         <button
           type="button"
-          class="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+          class="flex flex-1 items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
           title="Open the latest report in Audit Studio"
           onclick={onViewReport}
         >
           View report
-          <ArrowUpRight size={13} />
+          <CioArrowUpRight size={13} />
         </button>
       {/if}
     </div>
@@ -173,10 +177,7 @@
     <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} progress`}>
       <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
       <div class="mt-2 flex items-start gap-2">
-        <span
-          class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-current {progress.tone}"
-          aria-hidden="true"
-        ></span>
+        <span class="mt-1.5 h-2 w-2 shrink-0 bg-current {progress.tone}" aria-hidden="true"></span>
         <div class="min-w-0">
           <p class="text-xs font-semibold {progress.tone}">{progress.label}</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">{progress.description}</p>
@@ -185,11 +186,11 @@
       {#if onResume && !loopComplete && !coordinatorWorking && !auditRunning && auditState !== 'report_ready'}
         <button
           type="button"
-          class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
+          class="mt-3 flex h-8 w-full items-center justify-center gap-2 border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
           title="Ask the Sr. Engineer to continue working toward the achievement"
           onclick={onResume}
         >
-          <Play size={12} />
+          <CioPlay size={12} />
           Resume coordination
         </button>
       {/if}
@@ -197,8 +198,8 @@
 
     <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} auditor model`}>
       <div class="flex items-start gap-3">
-        <div class="rounded-lg bg-primary/10 p-2 text-primary">
-          <ShieldCheck size={16} />
+        <div class="bg-primary/10 p-2 text-primary">
+          <CioShieldCheck size={16} />
         </div>
         <div class="min-w-0 flex-1">
           <h3 class="text-xs font-semibold text-foreground">Auditor model</h3>
@@ -268,12 +269,12 @@
     <footer class="shrink-0 border-t border-border p-3">
       <button
         type="button"
-        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+        class="flex w-full items-center justify-center gap-1.5 whitespace-nowrap border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
         title="Back to the Sr. Engineer thread that owns this coordination"
         aria-label="Back to the Sr. Engineer thread that owns this coordination"
         onclick={onBackToCoordinator}
       >
-        <ArrowLeft size={13} aria-hidden="true" />
+        <CioArrowLeft size={13} aria-hidden="true" />
         Back to Sr. Engineer
       </button>
     </footer>

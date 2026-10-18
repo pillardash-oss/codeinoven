@@ -23,6 +23,10 @@
   right: 6px !important;
   left: auto !important;
   transform: none !important;
+  /* svelte-sonner draws this button as a `border-radius: 50%` circle. The app
+     has one corner shape, so it is stated here for every toast rather than
+     only the status ones. */
+  border-radius: 0 !important;
 }
 
 [data-close-button] > * {
@@ -64,16 +68,22 @@
   flex: 1 1 100% !important;
   margin-top: 4px !important;
   justify-content: center !important;
+  border-radius: 0 !important;
 }
 
 /* ─── Normal toasts ─────────────────────────────────────────────────────── */
+/* The corner of every card. svelte-sonner resolves the card's own
+   `border-radius` from this variable (8px by default), so the app's right angle
+   is stated once, here, instead of being chased property by property. */
 [data-sonner-toaster][data-sonner-theme='light'] {
+  --border-radius: 0 !important;
   --normal-bg: var(--color-surface) !important;
   --normal-border: var(--color-border) !important;
   --normal-text: var(--color-foreground) !important;
 }
 
 [data-sonner-toaster][data-sonner-theme='dark'] {
+  --border-radius: 0 !important;
   --normal-bg: var(--color-surface) !important;
   --normal-border: var(--color-border) !important;
   --normal-text: var(--color-foreground) !important;
@@ -148,18 +158,25 @@
 [data-sonner-toast][data-type='info'] [data-close-button] {
   color: color-mix(in srgb, var(--status) 70%, var(--color-dimmed)) !important;
   background: color-mix(in srgb, var(--status) 10%, transparent) !important;
-  border-radius: 999px !important;
   width: 1.25rem !important;
   height: 1.25rem !important;
   display: grid !important;
   place-items: center !important;
 }
 
-/* Icon chip: tinted circle behind the status icon */
+/* Icon chip: tinted square behind the card's icon.
+   A status card tints the chip from its own `--status`; a card that carries an
+   icon and no status (the memory proposal sets one, a copy confirmation does
+   not) falls back to the muted token, so its chip still reads as a chip rather
+   than as a glyph floating on the card.
+   Only the tint lives in this rule for a status card: svelte-sonner's own icon
+   rule carries `data-styled`, so it outranks this one and draws those chips at
+   16px as a flex row, which suits the library's glyphs and their tuned
+   `--toast-icon-margin-*`. This rule's geometry is the shape a card carrying one
+   of the app's own marks re-states below, where it has to outrank that rule. */
 [data-sonner-toast] [data-icon] {
-  background: color-mix(in srgb, var(--status) 22%, transparent);
-  color: var(--status);
-  border-radius: 999px;
+  background: color-mix(in srgb, var(--status, var(--color-muted)) 22%, transparent);
+  color: var(--status, var(--color-muted));
   width: 1.75rem;
   height: 1.75rem;
   display: grid;
@@ -169,18 +186,35 @@
   margin-top: 1px;
 }
 
-/* The memory proposal's card leads with the app's own BrainCircuit, and that
-   chip is the one thing that tells it apart from a plain notice.
+/* A loading toast draws three bars inside that chip and svelte-sonner rounds
+   each one. The chip is a right angle now, so its contents are. */
+.sonner-loading-bar {
+  border-radius: 0 !important;
+}
+
+/* A plain card's icon is the app's own mark, not one of sonner's status glyphs:
+   the memory proposal leads with the BrainCircuit, a copy confirmation with the
+   clipboard. That chip is the one thing that tells these cards apart from every
+   other plain notice.
    svelte-sonner sizes every icon slot at 16px for its own status glyphs and
-   its rule outranks the chip above (it carries `data-styled`), so the memory
-   card re-states the chip's geometry with a selector that outranks it back and
-   keeps the glyph centred in a chip the size of the app's own memory icon.
-   Only a `default`-type card that carries an icon matches this, and the memory
-   proposal is the only plain toast in the app that asks for one. */
+   its rule outranks the chip above (it carries `data-styled`), so a plain card
+   re-states the chip's geometry with a selector that outranks it back and keeps
+   the glyph centred in a chip the size of the app's own mark. Only a
+   `default`-type card that carries an icon matches this.
+
+   `grid-template-columns` is what does the centring, and it is not decoration.
+   `place-items: center` centres a grid *item* inside its track, and a lone item
+   sizes its implicit track to itself: measured 17px of track in this 28px chip.
+   The library's own `justify-content: flex-start` then survives into the grid
+   this rule turns the chip into (nothing here restates it) and pins that narrow
+   track to the chip's start, which left the mark flush against the left edge
+   with an 11px empty band to its right. A full-width track leaves `place-items`
+   the whole chip to centre in, and no value of `justify-content` can move it. */
 html[data-native-toasts] [data-sonner-toast][data-type='default'] [data-icon] {
   width: 1.75rem !important;
   height: 1.75rem !important;
   display: grid !important;
+  grid-template-columns: 100% !important;
   place-items: center !important;
 }
 

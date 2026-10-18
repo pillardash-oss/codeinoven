@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { STAGE_COLORS, STAGE_LABELS, type ThreadStage } from '$lib/stores/scope.svelte'
   import type { Thread } from '$shared/types'
@@ -62,16 +63,16 @@
 </script>
 
 <section
-  class="flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-lg {collapsed
+  class="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border border-border {collapsed
     ? 'w-16'
-    : 'min-w-0 flex-1'} {dropActive ? 'bg-primary/5' : 'bg-app'}"
+    : 'min-w-0 flex-1'} {dropActive ? 'bg-primary/5' : 'bg-surface'}"
   aria-label="{STAGE_LABELS[stage]} threads"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
 >
   <div
-    class="sticky top-0 z-20 flex h-9 shrink-0 items-center rounded-t-lg border-b bg-surface"
+    class="sticky top-0 z-20 flex h-9 shrink-0 items-center border-b border-border bg-surface"
     style="border-top: 2px solid {STAGE_COLORS[stage]}"
   >
     <button
@@ -82,11 +83,11 @@
       onclick={onToggle}
     >
       {#if collapsed}
-        <ChevronRight size={13} class="shrink-0 text-dimmed" />
+        <CioForward size={13} class="shrink-0 text-dimmed" />
         <span class="text-[0.625rem] tabular-nums text-dimmed">{threads.length}</span>
         <span class="sr-only">{STAGE_LABELS[stage]}</span>
       {:else}
-        <ChevronDown size={13} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={13} class="shrink-0 text-dimmed" />
         <span class="text-[0.6875rem] font-semibold uppercase tracking-wide text-foreground">
           {STAGE_LABELS[stage]}
         </span>

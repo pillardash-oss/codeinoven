@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Bot, User } from '@lucide/svelte'
+  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
   import type { RepositoryMentionUser } from '$shared/types'
   import { mentionHandle } from './pr-mentions'
 
@@ -51,7 +52,7 @@
 -->
 <div
   bind:this={listElement}
-  class="absolute bottom-full left-2 right-2 z-40 mb-1 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+  class="absolute bottom-full left-2 right-2 z-40 mb-1 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
   style="max-height: {maxHeight}px"
   role="listbox"
   aria-label="Mention an account on this pull request"
@@ -63,7 +64,7 @@
       <button
         type="button"
         class={[
-          'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
+          'flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs outline-none',
           entry === entries[activeIndex]
             ? 'bg-elevated text-foreground'
             : 'text-muted hover:bg-elevated'
@@ -75,9 +76,9 @@
         onclick={() => onSelect(entry)}
       >
         {#if entry.bot}
-          <Bot size={13} class="shrink-0 text-primary" aria-hidden="true" />
+          <CioSubagent size={13} class="shrink-0 text-primary" aria-hidden="true" />
         {:else}
-          <User size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioPerson size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="min-w-0 flex-1">
           <span class="block truncate font-mono">@{mentionHandle(entry)}</span>

@@ -121,7 +121,7 @@ describe('PromptAssembler application behavior', () => {
     const layers = await assembler().getLayers(
       'assistant',
       'thread-1',
-      '/assistant-cwd/routine-1',
+      '/assistant-cwd/assistant-1',
       { id: 'opencode', name: 'OpenCode' },
       undefined,
       'assistant',
@@ -133,11 +133,11 @@ describe('PromptAssembler application behavior', () => {
     const behavior = layers.find((layer) => layer.title === 'Agent behavior (Assistant)')
     expect(behavior?.content).toContain('## Skills')
     expect(behavior?.content).not.toContain('Agent behavior for implementation work')
-    // The guard names the routine's own workspace and keeps the citation rule;
+    // The guard names the assistant's own workspace and keeps the citation rule;
     // it never claims a project the user opened.
     const workspace = layers.find((layer) => layer.title === 'Assistant workspace')
     expect(workspace).toBeDefined()
-    expect(workspace?.content).toContain('/assistant-cwd/routine-1')
+    expect(workspace?.content).toContain('/assistant-cwd/assistant-1')
     expect(workspace?.content).toContain('Markdown link')
     expect(workspace?.content).not.toContain('WORKING SCOPE')
     const app = layers.find((layer) => layer.title.startsWith('Application:'))
@@ -147,10 +147,10 @@ describe('PromptAssembler application behavior', () => {
   it('exported assistant guard is compact and keeps the citation rule', () => {
     const guard = assistantWorkspaceGuard(
       { id: 'opencode', name: 'OpenCode' },
-      '/assistant-cwd/routine-1'
+      '/assistant-cwd/assistant-1'
     )
     expect(guard.length).toBeLessThan(900)
-    expect(guard).toContain('/assistant-cwd/routine-1')
+    expect(guard).toContain('/assistant-cwd/assistant-1')
     expect(guard).toContain('Markdown link')
     expect(guard).not.toContain('WORKING SCOPE')
     expect(guard).not.toContain("the user's project")

@@ -30,13 +30,13 @@
     {@const spokenOffset = i === activeIndex ? spokenWordOffset(seg.text, spokenProgress) : -1}
     <div
       class={i === activeIndex
-        ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
+        ? 'border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
         : 'px-2.5 py-1 opacity-80'}
       data-speech-line={i === activeIndex ? 'active' : undefined}
     >
       <span class="leading-relaxed">
         {#if spokenOffset > 0}
-          <span class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
+          <span class="bg-info/20 px-0.5 box-decoration-clone"
             >{seg.text.slice(0, spokenOffset)}</span
           >{seg.text.slice(spokenOffset)}
         {:else}

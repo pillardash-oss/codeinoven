@@ -41,6 +41,23 @@ The interview owns both the active Assignment stage and its `assignment_approval
 
 Once the Assignment is signed, its thread stops being a planning turn altogether. The Sr. Engineer coordinates the workers there, so plain messages are an ordinary coordinator conversation (and each worker thread stays independently chat-able) instead of reopening the specification pipeline.
 
+### Engineering artifact tools
+
+A thread that never entered Engineering has no Studio buttons in front of the agent, so before these tools existed a message like "create an assignment for this" could only be answered by the coordinator spawning its own inline sub-agents, which is not the mechanism the user asked for.
+
+The agent now reaches the artifacts through four real callable tools instead of the app watching the wording of a message. They live in `src/lib/engineering-tools.ts` and travel on the same utility gateway every other app-owned tool uses, so the Pi extension, the generated MCP server and the main-process bridge stay in step from that one catalog.
+
+- `cio_create_brainstorm` creates the thread's durable Brainstorm draft.
+- `cio_create_prd` creates the product requirements document.
+- `cio_create_spec` enters the Engineering spec stage and generates the specification draft.
+- `cio_create_assignment` creates the Assignment task graph for the user to sign off.
+
+Each tool runs the same machinery the Studio buttons use: an isolated generation session that persists a reviewable draft and broadcasts the matching `ready` event. Nothing is approved, implemented or signed off on the user's behalf, so the existing review surface keeps owning that decision.
+
+The tools carry the choice that used to be a guessed rule. An Assignment and the inline sub-agents from `cio_spawn_agent` can both be watched, but only Assignment workers can be prompted independently, so `cio_create_assignment` is the right tool exactly when the user wants to steer the workers themselves. When the user has not already said which they want, the tool description tells the agent to ask with `cio_ask_user` before choosing, and never to ask again once a preference is stated. The same rule is repeated in the `cio_spawn_agent` description and its prompt guidelines, so either tool leads the agent to the question.
+
+The routes are granted per turn. `prepareTurnUtilities` receives `artifactTools`, set for a real project thread's turn and left off for a chat, an assistant task, the inbox and an Assignment worker, and the gateway refuses a route a turn never received.
+
 ### Worker reporting
 
 A worker thread decides for itself whether the finished task goes back to the Sr. Engineer. The composer footer of any worker thread carries a reporting control next to the git branch pill: it reads **Reporting** in green while the worker hands its work back, and **Not reporting** in amber once the user has taken the thread over.

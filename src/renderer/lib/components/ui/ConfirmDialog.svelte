@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import Modal, { type ModalSize } from './Modal.svelte'
 
@@ -72,7 +72,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       onclick={onCancel}
     >
       {cancelLabel}
@@ -81,7 +81,7 @@
       <button
         type="button"
         class={[
-          'rounded-lg border px-3 py-2 text-sm font-medium',
+          'border px-3 py-2 text-sm font-medium',
           secondaryAction.tone === 'danger'
             ? 'border-danger/40 text-danger hover:bg-danger/10'
             : 'bg-elevated hover:bg-overlay'
@@ -95,14 +95,14 @@
       type="button"
       data-modal-primary
       class={[
-        'inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50',
         variant === 'danger' ? 'bg-danger text-on-danger' : 'bg-primary text-on-primary'
       ]}
       disabled={disabled || busy}
       onclick={() => void onConfirm()}
     >
       {#if busy}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {/if}
       <span>{confirmLabel}</span>
     </button>

@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Layers, LayoutGrid, Star } from '@lucide/svelte'
+  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
+  import CioTabUtilities from '@pillardash-oss/cio-icon/CioTabUtilities.svelte'
   import RailHighlight from '../layout/RailHighlight.svelte'
   import ModelPickerHarnessIcon from './ModelPickerHarnessIcon.svelte'
   import type { PickerHarnessOption, PickerRailView } from './model-picker-helpers'
@@ -28,7 +30,7 @@
   }
 
   function buttonClass(active: boolean, disabled = false): string {
-    return `relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors duration-150 focus-visible:outline-none ${
+    return `relative flex h-8 w-8 shrink-0 items-center justify-center outline-none transition-colors duration-150 focus-visible:outline-none ${
       active ? 'text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
     } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`
   }
@@ -54,7 +56,7 @@
     aria-current={isActive('all') ? 'true' : undefined}
     onclick={() => onSelect({ kind: 'all' })}
   >
-    <LayoutGrid size={16} strokeWidth={1.8} />
+    <CioTabUtilities size={16} strokeWidth={1.8} />
   </button>
 
   {#if showFavorites}
@@ -66,7 +68,7 @@
       aria-current={isActive('favorites') ? 'true' : undefined}
       onclick={() => onSelect({ kind: 'favorites' })}
     >
-      <Star size={16} strokeWidth={1.8} />
+      <CioStar size={16} strokeWidth={1.8} />
     </button>
   {/if}
 
@@ -79,7 +81,7 @@
       aria-current={isActive('profiles') ? 'true' : undefined}
       onclick={() => onSelect({ kind: 'profiles' })}
     >
-      <Layers size={16} strokeWidth={1.8} />
+      <CioLayers size={16} strokeWidth={1.8} />
     </button>
   {/if}
 

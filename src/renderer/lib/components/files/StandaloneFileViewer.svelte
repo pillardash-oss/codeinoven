@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { Minimize2, X } from '@lucide/svelte'
-
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioMinimize from '@pillardash-oss/cio-icon/CioMinimize.svelte'
   import Modal from '../ui/Modal.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
@@ -54,23 +54,23 @@
     </span>
     <button
       type="button"
-      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Dock this file into a floating panel"
       title="Dock"
       onclick={() => standaloneFiles.dock()}
     >
-      <Minimize2 size={14} />
+      <CioMinimize size={14} />
     </button>
     <button
       type="button"
-      class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={active ? `Close ${active.name}` : 'Close the file viewer'}
       title="Close the file viewer"
       onclick={() => {
         if (active) standaloneFiles.requestClose(active.path)
       }}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
 

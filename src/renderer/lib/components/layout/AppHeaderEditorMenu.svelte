@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { AppWindow, Check, ChevronDown } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -40,7 +42,7 @@
     {#if preferredIcon}
       <img src={preferredIcon} alt="" class="h-4 w-4" />
     {:else}
-      <AppWindow size={16} />
+      <CioWindow size={16} />
     {/if}
   </button>
   <button
@@ -51,7 +53,7 @@
     title="Select preferred editor"
     onclick={() => (showEditorMenu = !showEditorMenu)}
   >
-    <ChevronDown size={12} />
+    <CioChevronDown size={12} />
   </button>
 
   {#if showEditorMenu}
@@ -81,11 +83,11 @@
           {#if editor.iconDataUrl}
             <img src={editor.iconDataUrl} alt="" class="h-4.5 w-4.5 shrink-0" />
           {:else}
-            <AppWindow size={16} class="shrink-0 text-muted" />
+            <CioWindow size={16} class="shrink-0 text-muted" />
           {/if}
           <span class="flex-1 truncate">{editor.name}</span>
           {#if editorPreference.preferredEditor === editor.id}
-            <Check size={14} class="text-primary" />
+            <CioCheck size={14} class="text-primary" />
           {/if}
         </button>
       {/each}

@@ -18,6 +18,7 @@ import type {
   AgentQuestion,
   AgentQuestionResolution
 } from './agent-message'
+import type { TokenUsageScope } from '../usage-rate'
 
 /** Provider-neutral categories that let the UI offer an appropriate action. */
 export type AgentProviderIssueKind =
@@ -141,8 +142,14 @@ export type AgentEvent =
       issue?: AgentProviderIssue
       /** Structured result captured before a provider history read is required. */
       structuredOutput?: unknown
-      /** Token accounting reported when the harness closes the turn. */
+      /** Provider-reported generated tokens for the message so far. */
       tokens?: AgentTokenUsage
+      /**
+       * What the reported count covers (see `HarnessCapabilities.tokenUsageScope`),
+       * stamped by the engine from the owning driver. Defaults to a per-message
+       * count when a harness does not declare one.
+       */
+      tokenUsageScope?: TokenUsageScope
       normalizedUsage?: NormalizedUsage
       /** Harness that owns the session, stamped by the engine. A live streamed
        *  row carries no provenance of its own, so this is what lets usage
@@ -176,6 +183,8 @@ export type AgentEvent =
       /** Provider the turn was dispatched with, stamped alongside `harnessId`. */
       providerId?: string
       tokens?: AgentTokenUsage
+      /** What the reported count covers; see `message.completed.tokenUsageScope`. */
+      tokenUsageScope?: TokenUsageScope
       normalizedUsage?: NormalizedUsage
       contextWindow?: number
       contextUsed?: number
@@ -323,6 +332,14 @@ export type AgentEvent =
   | {
       /** A held steer was delivered to the harness (undo window closed). */
       type: 'steer.delivered'
+      sessionId: string
+      userMessageId: string
+    }
+  | {
+      /** A held steer was released without reaching the harness (a stop, a
+       *  teardown, or a driver reset) and kept in the transcript. The undo
+       *  window is closed, but the user's message is never deleted. */
+      type: 'steer.released'
       sessionId: string
       userMessageId: string
     }

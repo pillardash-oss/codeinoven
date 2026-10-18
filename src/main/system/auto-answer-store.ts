@@ -54,7 +54,7 @@ function isValidItem(value: unknown): value is AutoAnswerItem {
     typeof record.projectId === 'string' &&
     typeof record.threadId === 'string' &&
     (record.taskId === undefined || typeof record.taskId === 'string') &&
-    (record.routineId === undefined || typeof record.routineId === 'string') &&
+    (record.assistantId === undefined || typeof record.assistantId === 'string') &&
     typeof record.at === 'number' &&
     Array.isArray(record.entries) &&
     record.entries.every(isValidEntry) &&
@@ -109,8 +109,8 @@ export class AutoAnswerStore {
     threadId: string
     /** Assistant task the gate ran for, when it settled on a run thread. */
     taskId?: string
-    /** Routine owning the task, so the gate also surfaces on the routine. */
-    routineId?: string
+    /** Assistant owning the task, so the gate also surfaces on the assistant. */
+    assistantId?: string
     entries: AutoAnswerEntry[]
     at?: number
   }): AutoAnswerItem {
@@ -123,7 +123,7 @@ export class AutoAnswerStore {
       projectId: input.projectId,
       threadId: input.threadId,
       ...(input.taskId ? { taskId: input.taskId } : {}),
-      ...(input.routineId ? { routineId: input.routineId } : {}),
+      ...(input.assistantId ? { assistantId: input.assistantId } : {}),
       at: input.at ?? Date.now(),
       entries: input.entries
     }

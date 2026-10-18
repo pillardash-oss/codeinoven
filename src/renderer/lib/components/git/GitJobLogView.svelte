@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ChevronRight, Loader2, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { parseJobLogSections, type JobLogLine, type JobLogSection } from '$shared/github-job-log'
   import type { GitHubDeploymentJobLog } from '$shared/types'
 
@@ -10,7 +12,7 @@
     /** The job's failed steps, so its steps can be matched to the log's own sections. */
     failedSteps?: readonly string[]
     /**
-     * Padding and decoration for the pane (`rounded-md bg-black/5 p-2`). The log
+     * Padding and decoration for the pane (`bg-black/5 p-2 dark:bg-black/30`). The log
      * brings its own height budget and scroll, and its own utility is emitted after
      * any named one, so a `max-h-*` passed here would not take effect.
      */
@@ -57,7 +59,7 @@
 {#snippet logLine(entry: JobLogLine)}
   {#if entry.kind === 'omitted'}
     <p
-      class="my-1 rounded border border-dashed border-border px-2 py-1 text-center text-[0.5625rem] text-dimmed"
+      class="my-1 border border-dashed border-border px-2 py-1 text-center text-[0.5625rem] text-dimmed"
     >
       {entry.text}
     </p>
@@ -86,11 +88,13 @@
 <div class="max-h-[min(60dvh,36rem)] overflow-auto {paneClass}">
   {#if loading}
     <div class="flex items-center gap-2 text-[0.625rem] text-dimmed">
-      <Loader2 size={11} class="shrink-0 animate-spin" />
+      <CioSpinner size={11} class="shrink-0 animate-spin" />
       Loading log…
     </div>
   {:else if error}
-    <p class="rounded-md bg-danger/10 px-2 py-1.5 text-[0.625rem] text-danger">{error}</p>
+    <p class="border border-danger/20 bg-danger/10 px-2 py-1.5 text-[0.625rem] text-danger">
+      {error}
+    </p>
   {:else if log && grouped}
     <!--
       One row per step, the way GitHub presents a job: the failure is the thing
@@ -99,7 +103,7 @@
     <div class="flex flex-col gap-1 font-mono text-[0.5625rem] leading-relaxed text-muted">
       {#each sections as section (section.id)}
         {@const open = isOpen(section)}
-        <div class="overflow-hidden rounded-md border border-border/60">
+        <div class="overflow-hidden border border-border/60">
           <button
             type="button"
             class="flex w-full cursor-pointer items-center gap-1.5 px-2 py-1 text-left transition-colors hover:bg-elevated {section.failed
@@ -109,12 +113,12 @@
             aria-expanded={open}
             onclick={() => toggle(section)}
           >
-            <ChevronRight
+            <CioForward
               size={11}
               class="shrink-0 text-dimmed transition-transform {open ? 'rotate-90' : ''}"
             />
             {#if section.failed}
-              <TriangleAlert size={11} class="shrink-0 text-danger" />
+              <CioAttention size={11} class="shrink-0 text-danger" />
             {/if}
             <span
               class="min-w-0 flex-1 truncate text-[0.625rem] {section.failed

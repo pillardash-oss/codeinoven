@@ -14,7 +14,8 @@ import {
   composeBrainstormSystemPrompt,
   composeTurnSystemPrompt
 } from '../../src/main/chat/chat-engine'
-import { routineRunContext } from '$shared/routine-run'
+import { RESPONSE_STYLE_INSTRUCTION } from '../../src/main/chat/chat-engine/chat-engine-prompts'
+import { assistantRunContext } from '$shared/assistant-run'
 import {
   composeBudgetedSend,
   computePromptBudget,
@@ -142,9 +143,9 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     expect(total).toBeLessThanOrEqual(available)
   })
 
-  it('carries the routine contract in the system prompt, never in the user message', () => {
+  it('carries the assistant contract in the system prompt, never in the user message', () => {
     const available = modelBudget()
-    const contract = routineRunContext({ name: 'Slack digest', connections: [] })
+    const contract = assistantRunContext({ name: 'Slack digest', connections: [] })
     const systemBase = composeTurnSystemPrompt({
       chatPrompt: 'You are the CodeInOven assistant.',
       memoryInstruction: '',
@@ -152,7 +153,7 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
       assignmentCoordinatorSystemPrompt: '',
       behaviorPrompt: '',
       utilityInstructions: 'CodeInOven utility contract (run)',
-      routineInstruction: contract,
+      assistantInstruction: contract,
       behaviorMode: 'chat'
     })
     expect(systemBase).toContain(contract)
@@ -169,8 +170,55 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     expect(composition.driverText).not.toContain('cio_util_manage')
   })
 
-  it('omits the routine layer when no routine thread applies', () => {
-    const withoutRoutine = implementSystemBase()
-    expect(withoutRoutine).not.toContain('install_bundle')
+  it('omits the assistant layer when no assistant thread applies', () => {
+    const withoutAssistant = implementSystemBase()
+    expect(withoutAssistant).not.toContain('install_bundle')
+  })
+
+  it('scopes the reply budget to day-to-day implementation and chat turns', () => {
+    // Only regular implementation and chats carry the app-owned executive reply
+    // budget. The engineering lifecycle needs the full technical detail, and an
+    // assistant already owns a stricter reply contract of its own, so neither may
+    // receive it. Every half is asserted so the scope cannot silently widen or
+    // collapse to an omission everywhere.
+    const implement = implementSystemBase()
+    expect(implement.split(RESPONSE_STYLE_INSTRUCTION)).toHaveLength(2)
+
+    const chat = composeTurnSystemPrompt({
+      chatPrompt: 'You are a chat.',
+      memoryInstruction: '',
+      imageDescriptorNote: '',
+      assignmentCoordinatorSystemPrompt: '',
+      behaviorPrompt: '',
+      utilityInstructions: '',
+      behaviorMode: 'chat'
+    })
+    expect(chat.split(RESPONSE_STYLE_INSTRUCTION)).toHaveLength(2)
+
+    const lifecycle = composeBrainstormSystemPrompt({
+      activeBrainstormTurn: false,
+      assignmentMode: false,
+      engineeringSpecPrompt: 'Return the specification.',
+      revisionPrompt: '',
+      memoryInstruction: '',
+      imageDescriptorNote: '',
+      behaviorPrompt: '',
+      utilityInstructions: ''
+    })
+    expect(lifecycle).not.toContain(RESPONSE_STYLE_INSTRUCTION)
+    expect(lifecycle).toContain('keep artifact fences inside the appropriate Markdown string field')
+
+    const assistant = composeTurnSystemPrompt({
+      chatPrompt: 'You are the CodeInOven assistant.',
+      memoryInstruction: '',
+      imageDescriptorNote: '',
+      assignmentCoordinatorSystemPrompt: '',
+      behaviorPrompt: '',
+      utilityInstructions: '',
+      assistantInstruction: assistantRunContext({ name: 'Slack digest', connections: [] }),
+      behaviorMode: 'assistant'
+    })
+    expect(assistant).not.toContain(RESPONSE_STYLE_INSTRUCTION)
+    expect(assistant).toContain('at most 80 words')
   })
 })

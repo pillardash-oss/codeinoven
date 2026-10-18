@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Clock, HardDrive, Paperclip, Plus, ShieldCheck, X } from '@lucide/svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDisk from '@pillardash-oss/cio-icon/CioDisk.svelte'
+  import CioPaperclip from '@pillardash-oss/cio-icon/CioPaperclip.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
   import Switch from '../ui/Switch.svelte'
   import type { StartAfterSelection } from './chat-composer-attachments'
 
@@ -55,23 +60,20 @@
   <div class="relative">
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-8 w-8 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Chat options"
       aria-label="Chat options"
       aria-haspopup="menu"
       aria-expanded={open}
       onclick={onToggle}
     >
-      <Plus size={15} class="transition-transform {open ? 'rotate-45' : ''}" />
+      <CioPlus size={15} class="transition-transform {open ? 'rotate-45' : ''}" />
     </button>
 
     {#if open}
       <button class="fixed inset-0 z-30 cursor-default" aria-label="Close menu" onclick={onClose}
       ></button>
-      <div
-        class="absolute bottom-9 left-0 z-40 w-60 rounded-xl border bg-surface p-1 shadow-lg"
-        role="menu"
-      >
+      <div class="absolute bottom-9 left-0 z-40 w-60 border bg-surface p-1 shadow-lg" role="menu">
         {#if showChatModes || showEngineeringMode || independentAuditAvailable}
           {#if showChatModes}
             <!-- File System toggle (chat view) -->
@@ -82,14 +84,14 @@
                 ? 'Turn off File System   chat becomes web-only'
                 : 'Turn on File System   grant this thread file operations'}
               activeClass="bg-info"
-              class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+              class="w-full justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
             >
               <span
                 class="flex min-w-0 items-center gap-2 {fileSystemMode
                   ? 'text-foreground'
                   : 'text-muted'}"
               >
-                <HardDrive size={13} class={fileSystemMode ? 'text-info' : 'text-dimmed'} />
+                <CioDisk size={13} class={fileSystemMode ? 'text-info' : 'text-dimmed'} />
                 File System
               </span>
             </Switch>
@@ -105,14 +107,14 @@
                 ? 'Turn off Independent audit'
                 : 'Turn on Independent audit'}
               activeClass="bg-info"
-              class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+              class="w-full justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
             >
               <span
                 class="flex min-w-0 items-center gap-2 {independentAuditEnabled
                   ? 'text-foreground'
                   : 'text-muted'}"
               >
-                <ShieldCheck
+                <CioShieldCheck
                   size={13}
                   class={independentAuditEnabled ? 'text-info' : 'text-dimmed'}
                 />
@@ -131,14 +133,14 @@
                 : 'Start this thread after other active threads finish'}
               aria-label="Start after other threads"
               activeClass="bg-info"
-              class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+              class="w-full justify-between px-2.5 py-2 transition-colors hover:bg-elevated"
             >
               <span
                 class="flex min-w-0 items-center gap-2 {startAfterEnabled
                   ? 'text-foreground'
                   : 'text-muted'}"
               >
-                <Clock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
+                <CioClock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
                 <span class="min-w-0 truncate">
                   {startAfterEnabled && startAfterThreads.length > 0
                     ? `Start after · ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
@@ -154,18 +156,18 @@
                   </span>
                   <button
                     type="button"
-                    class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                    class="flex h-6 shrink-0 items-center px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
                     title={`Remove ${startAfterThread.title} from Start after`}
                     aria-label={`Remove ${startAfterThread.title} from Start after`}
                     onclick={() => onRemoveStartAfterThread(startAfterThread.id)}
                   >
-                    <X size={11} />
+                    <CioClose size={11} />
                   </button>
                 </div>
               {/each}
               <button
                 type="button"
-                class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex w-full items-center px-2.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 role="menuitem"
                 title="Add another thread to Start after"
                 onclick={onOpenStartAfterPicker}
@@ -182,7 +184,7 @@
           <!-- Attach file -->
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
             role="menuitem"
             title={selectedHarnessLacksAttachments
               ? 'Attachments are unavailable for this model'
@@ -190,7 +192,7 @@
             disabled={selectedHarnessLacksAttachments}
             onclick={onPickAttachment}
           >
-            <Paperclip size={13} class="text-dimmed" />
+            <CioPaperclip size={13} class="text-dimmed" />
             Attach Files
           </button>
         {/if}

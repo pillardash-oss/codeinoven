@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
@@ -129,7 +129,7 @@
     <span class="mb-1.5 block text-xs font-medium text-muted">Title</span>
     <input
       type="text"
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
+      class="h-9 w-full border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
       placeholder={pageTitle}
       maxlength={MAX_BROWSER_TAB_TITLE_LENGTH}
       bind:value={title}
@@ -145,7 +145,7 @@
     </span>
   </label>
 
-  <div class="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+  <div class="flex items-center justify-between gap-3 border px-3 py-2.5">
     <div class="min-w-0">
       <p class="text-sm text-foreground">Pin tab</p>
       <p class="mt-0.5 text-[0.6875rem] text-dimmed">
@@ -161,7 +161,7 @@
         {#if hasAppearance}
           <button
             type="button"
-            class="rounded-lg px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
+            class="px-3 py-2 text-sm text-danger transition-colors hover:bg-danger/10"
             title="Reset appearance"
             onclick={resetAppearance}
           >
@@ -170,7 +170,7 @@
         {/if}
         <button
           type="button"
-          class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+          class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
           title="Close without saving"
           onclick={onClose}
         >
@@ -178,11 +178,11 @@
         </button>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="flex items-center gap-1.5 bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
           title="Save this tab"
           onclick={save}
         >
-          <Check size={14} />
+          <CioCheck size={14} />
           Save
         </button>
       </div>

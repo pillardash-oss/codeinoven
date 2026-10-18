@@ -1,4 +1,5 @@
-import { BrowserWindow, dialog } from 'electron'
+import { dialog } from '../../system/file-dialogs'
+import { BrowserWindow } from 'electron'
 import { readFile } from 'fs/promises'
 import { basename } from 'path'
 import { atomicWrite } from '../../../lib/utils'
@@ -950,7 +951,17 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
     if (assignment?.auditCycle?.status === 'available') {
       await assignmentEngine.dismissAuditOffer(validProjectId, validThreadId)
     }
-    return threadManager.setAuditState(validProjectId, validThreadId, undefined)
+    const thread = await threadManager.setAuditState(validProjectId, validThreadId, undefined)
+    // A thread parked on `spec` for an audit report is done the moment that report
+    // is settled: the audit state is gone, so nothing is waiting on the user any
+    // more, and a thread left on "Spec ready" would hold a review count on its
+    // project strip and stay in the Spec group for a review that no longer exists.
+    // Accepting the report (`audit:complete`) lands on `completed` for the same
+    // reason; this is the other way out of the review.
+    if (thread.status === 'spec') {
+      return threadManager.setStatus(validProjectId, validThreadId, 'completed')
+    }
+    return thread
   })
   ipcMain.handle('audit:restoreOffer', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')

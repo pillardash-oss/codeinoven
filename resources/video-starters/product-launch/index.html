@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Product launch film</title>
+    <style>
+      /* Two static weights ship with the starter. Swap in the brand typeface by
+         replacing these files, or point these at a hosted family you own. */
+      @font-face {
+        font-family: 'Starter Mono';
+        src: url('./assets/jetbrains-mono-regular.ttf') format('truetype');
+        font-weight: 400;
+        font-display: block;
+      }
+      @font-face {
+        font-family: 'Starter Mono';
+        src: url('./assets/jetbrains-mono-bold.ttf') format('truetype');
+        font-weight: 700;
+        font-display: block;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #0b0b0d;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: min(100vw, calc(100vh * 16 / 9));
+        height: auto;
+        aspect-ratio: 16 / 9;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <script src="./cio-video.js"></script>
+    <script type="module">
+      'use strict'
+
+      // ═══ Frame ═════════════════════════════════════════════════════════════
+      const W = 1920
+      const H = 1080
+      const DURATION = 15
+      const SAFE = 96 // nothing important inside the outer 5 percent
+      const CLAIM_SIZE = 92
+      const MONO = "'Starter Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+      const CH = 0.6 // JetBrains Mono advance width, in ems
+
+      const C = {
+        ground: '#0b0b0d',
+        surface: '#141417',
+        border: '#27272c',
+        borderHi: '#3b3b42',
+        fg: '#f5f4f0',
+        muted: '#9d9da6',
+        dim: '#5c5c66',
+        faint: '#2c2c33',
+        accent: '#d9a13b',
+        cool: '#7aa2f7'
+      }
+
+      /**
+       * All of the copy, and every line of it is editable in the video panel once
+       * the film is open. The three proof points describe this starter truthfully
+       * (its length, its frame rate, its source), so nothing on screen is an
+       * invented product claim; replace them with the real ones.
+       */
+      const COPY = {
+        brand: 'HELIO',
+        subtitle: 'product launch film',
+        claim: 'Everything you ship, in one place.',
+        tagline: 'Built to be changed.',
+        proof: [
+          { value: 15, suffix: 's', label: 'the cut', note: 'one file, no render farm' },
+          { value: 30, suffix: 'fps', label: 'the frame rate', note: 'every frame drawn from the clock' },
+          { value: 1, suffix: 'file', label: 'the source', note: 'edit it, or replace it' }
+        ]
+      }
+
+      const canvas = document.getElementById('stage')
+      const ctx = canvas.getContext('2d')
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      canvas.width = W * dpr
+      canvas.height = H * dpr
+
+      /** Values the video panel can edit, live once studio.json has been read. */
+      const P = CIOVideo.parameters
+
+      // ═══ Drawing utilities ═════════════════════════════════════════════════
+      const { progress, interpolate, easings } = CIOVideo
+
+      const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v))
+      const mix = (a, b, p) => a + (b - a) * clamp(p)
+
+      /** Entrance: 0 before `start`, 1 after `start + dur`, arriving quickly. */
+      const inAt = (t, start, dur) => easings.outQuint(progress(t, start, dur))
+      /** Exit: 1 before `start`, 0 after `start + dur`. */
+      const outAt = (t, start, dur) => 1 - easings.outQuint(progress(t, start, dur))
+      /** A symmetric move, for anything that travels across the frame. */
+      const cross = (t, start, dur) => easings.inOutCubic(progress(t, start, dur))
+
+      function rgba(hex, alpha) {
+        const n = parseInt(hex.slice(1), 16)
+        return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${clamp(alpha)})`
+      }
+
+      const textWidth = (str, size, tracking = 0) =>
+        str.length * size * CH + Math.max(0, str.length - 1) * tracking
+
+      /** One line of text, left aligned or centred around x. */
+      function type(str, x, y, o = {}) {
+        const size = o.size ?? 40
+        ctx.save()
+        ctx.globalAlpha = clamp(o.alpha ?? 1)
+        ctx.font = `${o.weight ?? 400} ${size}px ${MONO}`
+        ctx.fillStyle = o.color ?? C.fg
+        ctx.textAlign = o.align ?? 'left'
+        ctx.textBaseline = o.baseline ?? 'alphabetic'
+        ctx.fillText(str, x, y)
+        ctx.restore()
+      }
+
+      /**
+       * Letters drawn one at a time so the mark can carry tracking and arrive
+       * letter by letter. Canvas letter spacing is not used: drawing each glyph
+       * gives the same result and works on every Chromium the app runs.
+       */
+      function tracked(str, x, y, o = {}) {
+        const size = o.size ?? 40
+        const tracking = o.tracking ?? 0
+        const start = o.from ?? 0
+        const stagger = o.stagger ?? 0
+        const duration = o.dur ?? 0.75
+        let pen = x
+        for (let index = 0; index < str.length; index += 1) {
+          const at = inAt(o.t ?? 0, start + index * stagger, duration)
+          type(str[index], pen, y + (1 - at) * size * 0.55, {
+            size,
+            weight: o.weight,
+            color: o.color,
+            alpha: (o.alpha ?? 1) * at,
+            baseline: o.baseline
+          })
+          pen += size * CH + tracking
+        }
+      }
+
+      /** Break a sentence into lines that fit a width. */
+      function wrap(str, size, maxWidth) {
+        const words = str.split(/\s+/u).filter((word) => word.length)
+        const lines = []
+        let line = ''
+        for (const word of words) {
+          const next = line ? `${line} ${word}` : word
+          if (line && textWidth(next, size) > maxWidth) {
+            lines.push(line)
+            line = word
+          } else line = next
+        }
+        if (line) lines.push(line)
+        return lines
+      }
+
+      /** The motif: one horizontal rule that returns in every beat. */
+      function rule(x0, x1, y, alpha, color, thickness = 4) {
+        if (alpha <= 0.002 || x1 <= x0) return
+        ctx.save()
+        ctx.globalAlpha = clamp(alpha)
+        ctx.fillStyle = color
+        ctx.fillRect(x0, y - thickness / 2, x1 - x0, thickness)
+        ctx.restore()
+      }
+
+      // ═══ Beats ═════════════════════════════════════════════════════════════
+      const BEATS = [
+        { from: 0, to: 3.2, name: 'the mark', heat: 0.25 },
+        { from: 3.2, to: 7.2, name: 'the claim', heat: 0.5 },
+        { from: 7.2, to: 11.4, name: 'the proof', heat: 0.8 },
+        { from: 11.4, to: DURATION, name: 'the close', heat: 1 }
+      ]
+      const beatAt = (t) =>
+        BEATS.find((beat) => t >= beat.from && t < beat.to) ?? BEATS[BEATS.length - 1]
+
+      /**
+       * Where the mark sits at this second. It is one object that travels rather
+       * than three marks that appear, which is what makes the film read as a
+       * single piece: centred at display size, a small lockup while the middle
+       * beats play, then back to centre for the payoff.
+       */
+      function markAt(t, brand) {
+        const lockup = cross(t, 3.2, 0.75)
+        const back = cross(t, 11.55, 0.85)
+        const size = mix(mix(150, 46, lockup), 150, back)
+        const width = textWidth(brand, size, size * 0.08)
+        const centred = (W - width) / 2
+        return {
+          size,
+          x: mix(mix(centred, SAFE, lockup), centred, back),
+          y: mix(mix(H * 0.46, SAFE * 1.9, lockup), H * 0.5, back)
+        }
+      }
+
+      /** The grid, a cool glow and a vignette: the frame everything sits on. */
+      function background(t, heat) {
+        const step = typeof P.gridStep === 'number' ? clamp(P.gridStep, 24, 200) : 72
+        const drift = (t * 6) % step
+        ctx.save()
+        ctx.globalAlpha = 0.6 * inAt(t, 0.05, 0.9)
+        ctx.strokeStyle = C.faint
+        ctx.lineWidth = 1
+        for (let x = drift - step; x < W + step; x += step) {
+          ctx.beginPath()
+          ctx.moveTo(Math.round(x) + 0.5, 0)
+          ctx.lineTo(Math.round(x) + 0.5, H)
+          ctx.stroke()
+        }
+        for (let y = -step; y < H + step; y += step) {
+          ctx.beginPath()
+          ctx.moveTo(0, Math.round(y) + 0.5)
+          ctx.lineTo(W, Math.round(y) + 0.5)
+          ctx.stroke()
+        }
+        ctx.restore()
+        const glow = ctx.createRadialGradient(W / 2, H * 0.42, 0, W / 2, H * 0.42, W * 0.62)
+        glow.addColorStop(0, rgba(C.cool, 0.05 + 0.05 * heat))
+        glow.addColorStop(1, rgba(C.cool, 0))
+        ctx.fillStyle = glow
+        ctx.fillRect(0, 0, W, H)
+        const vignette = ctx.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, W * 0.74)
+        vignette.addColorStop(0, 'rgba(0,0,0,0)')
+        vignette.addColorStop(1, 'rgba(0,0,0,0.6)')
+        ctx.fillStyle = vignette
+        ctx.fillRect(0, 0, W, H)
+      }
+
+      /** The strip that says this is a cut and not a poster. */
+      function readout(t) {
+        if (P.showReadout === false) return
+        const alpha = inAt(t, 0.35, 0.7) * outAt(t, DURATION - 0.7, 0.6)
+        if (alpha <= 0.002) return
+        const y = SAFE * 0.62
+        ctx.save()
+        ctx.globalAlpha = clamp(alpha)
+        ctx.fillStyle = C.accent
+        ctx.beginPath()
+        ctx.arc(SAFE, y - 7, 5 + Math.sin(t * 3.4) * 1.2, 0, Math.PI * 2)
+        ctx.fill()
+        type(COPY.brand, SAFE + 22, y, { size: 26, weight: 700, color: C.fg })
+        const clock = `${String(Math.floor(t / 60)).padStart(2, '0')}:${(t % 60).toFixed(1).padStart(4, '0')}`
+        type(clock, W - SAFE, y, { size: 26, color: C.muted, align: 'right' })
+        type(
+          beatAt(t).name,
+          W - SAFE - textWidth(clock, 26) - 28,
+          y,
+          { size: 26, color: C.dim, align: 'right' }
+        )
+        rule(SAFE, W - SAFE, y + 26, alpha * 0.25, C.borderHi, 1)
+        ctx.restore()
+      }
+
+      // ═══ Scenes ════════════════════════════════════════════════════════════
+      function mark(t) {
+        const { size, x, y } = markAt(t, COPY.brand)
+        const tracking = size * 0.08
+        tracked(COPY.brand, x, y, {
+          size,
+          tracking,
+          weight: 700,
+          color: C.fg,
+          t,
+          from: 0.55,
+          stagger: 0.07,
+          dur: 0.75
+        })
+        // The rule draws outward from the centre: the motif's first appearance.
+        const width = textWidth(COPY.brand, size, tracking),
+          draw = cross(t, 1.35, 0.95),
+          half = (width / 2) * draw
+        rule(x + width / 2 - half, x + width / 2 + half, y + size * 0.34, inAt(t, 1.3, 0.5), C.accent)
+        type(COPY.subtitle, x + width / 2, y + size * 0.34 + 64, {
+          size: 30,
+          color: C.muted,
+          align: 'center',
+          alpha: inAt(t, 2.05, 0.6)
+        })
+      }
+
+      function claim(t) {
+        const lines = wrap(COPY.claim, CLAIM_SIZE, W - SAFE * 2 - 240)
+        const top = H * 0.45
+        const lineHeight = CLAIM_SIZE * 1.16
+        lines.forEach((line, index) => {
+          const at = inAt(t, 3.5 + index * 0.14, 0.8)
+          type(line, W / 2, top + index * lineHeight, {
+            size: CLAIM_SIZE,
+            weight: 700,
+            color: C.fg,
+            align: 'center',
+            alpha: at
+          })
+        })
+        const widest = Math.max(...lines.map((line) => textWidth(line, CLAIM_SIZE)))
+        const half = (widest / 2) * cross(t, 3.9, 1.1)
+        rule(
+          W / 2 - half,
+          W / 2 + half,
+          top + (lines.length - 1) * lineHeight + 14,
+          inAt(t, 3.85, 0.5),
+          C.accent
+        )
+      }
+
+      function proof(t) {
+        const cardW = 520
+        const cardH = 300
+        const gap = 48
+        const total = cardW * 3 + gap * 2
+        const left = (W - total) / 2
+        const top = H * 0.41
+        const fill = progress(t, 7.4, 3.55)
+        COPY.proof.forEach((point, index) => {
+          const x = left + index * (cardW + gap)
+          const pop = easings.outBack(progress(t, 7.35 + index * 0.16, 0.7))
+          const lit = easings.outCubic(clamp(fill * 3 - index))
+          ctx.save()
+          ctx.globalAlpha = clamp(inAt(t, 7.3 + index * 0.16, 0.6))
+          ctx.translate(x + cardW / 2, top + cardH / 2)
+          ctx.scale(0.94 + 0.06 * pop, 0.94 + 0.06 * pop)
+          ctx.translate(-(x + cardW / 2), -(top + cardH / 2))
+          ctx.fillStyle = rgba(C.surface, 0.92)
+          ctx.fillRect(x, top, cardW, cardH)
+          ctx.strokeStyle = rgba(C.accent, mix(0.18, 0.85, lit))
+          ctx.lineWidth = mix(1, 2, lit)
+          ctx.strokeRect(x + 0.5, top + 0.5, cardW - 1, cardH - 1)
+          const counted = Math.round(
+            interpolate(0, point.value, easings.outCubic(progress(t, 7.6 + index * 0.16, 0.8)))
+          )
+          type(String(counted), x + 44, top + 158, {
+            size: 108,
+            weight: 700,
+            color: lit > 0.02 ? C.accent : C.fg
+          })
+          // The suffix is placed from the final value, so it does not shift while
+          // the number is still counting up.
+          type(point.suffix, x + 44 + textWidth(String(point.value), 108) + 16, top + 158, {
+            size: 38,
+            color: C.muted
+          })
+          type(point.label, x + 44, top + 210, {
+            size: 30,
+            color: C.fg,
+            alpha: inAt(t, 7.95 + index * 0.16, 0.6)
+          })
+          type(point.note, x + 44, top + 250, {
+            size: 24,
+            color: C.dim,
+            alpha: inAt(t, 8.1 + index * 0.16, 0.6)
+          })
+          ctx.restore()
+        })
+        // The track: the motif as a progress bar, and the beat's own clock.
+        const trackY = top + cardH + 64
+        rule(left, left + total, trackY, 0.6, C.border, 2)
+        rule(left, left + total * clamp(fill), trackY, 0.95, C.accent)
+      }
+
+      function close(t) {
+        const { size, x, y } = markAt(t, COPY.brand)
+        const tracking = size * 0.06
+        tracked(COPY.brand, x, y + (1 - inAt(t, 11.7, 0.9)) * 40, {
+          size,
+          tracking,
+          weight: 700,
+          color: C.fg,
+          t,
+          from: 11.65,
+          dur: 0.9
+        })
+        const width = textWidth(COPY.brand, size, tracking)
+        const half = mix(width / 2, (W - SAFE * 2) / 2, cross(t, 12.35, 0.9))
+        const ruleY = y + size * 0.36
+        rule(W / 2 - half, W / 2 + half, ruleY, inAt(t, 12.3, 0.6), C.accent)
+        type(COPY.tagline, W / 2, ruleY + 80, {
+          size: 38,
+          color: C.muted,
+          align: 'center',
+          alpha: inAt(t, 12.85, 0.7)
+        })
+        // One accent flare as the film lands, and no second one after it.
+        const flare = clamp(progress(t, 13.15, 1.05))
+        if (flare > 0 && flare < 1) {
+          ctx.save()
+          ctx.globalAlpha = (1 - flare) * 0.45
+          ctx.fillStyle = C.accent
+          const spread = easings.outExpo(flare) * W
+          ctx.fillRect(W / 2 - spread / 2, ruleY - 1, spread, 2)
+          ctx.restore()
+        }
+      }
+
+      const SCENES = [
+        { from: BEATS[0].from, to: BEATS[0].to, draw: mark },
+        { from: BEATS[1].from, to: BEATS[1].to, draw: claim },
+        { from: BEATS[2].from, to: BEATS[2].to, draw: proof },
+        { from: BEATS[3].from, to: BEATS[3].to, draw: close }
+      ]
+
+      function draw(t) {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+        ctx.globalAlpha = 1
+        ctx.fillStyle = C.ground
+        ctx.fillRect(0, 0, W, H)
+        background(t, beatAt(t).heat)
+        // Beats overlap by a few frames, so a cut reads as a dissolve and never
+        // as a blink. The frame is still drawn from `t` alone.
+        for (const scene of SCENES) {
+          if (t < scene.from - 0.45 || t > scene.to + 0.45) continue
+          const alpha = Math.min(inAt(t, scene.from - 0.25, 0.55), outAt(t, scene.to - 0.1, 0.45))
+          if (alpha <= 0.002) continue
+          ctx.save()
+          ctx.globalAlpha = alpha
+          scene.draw(t)
+          ctx.restore()
+        }
+        readout(t)
+        // Empty until the panel or `captions` adds lines; the call is here so the
+        // band the app draws is the one the film uses.
+        CIOVideo.drawCaptions(ctx, t, W, H)
+      }
+
+      // ═══ Boot ══════════════════════════════════════════════════════════════
+      // The contract comes first: a capture or an export calls this before the
+      // page has settled, so it must exist before anything awaits.
+      window.cioRenderFrame = draw
+      CIOVideo.useCanvas(canvas)
+
+      const frozen = new URLSearchParams(location.search).has('cio-capture')
+
+      await document.fonts.load(`700 150px ${MONO}`)
+      await document.fonts.load(`400 38px ${MONO}`)
+      await CIOVideo.bind(draw)
+
+      // The panel's controls, applied once studio.json has been read.
+      if (typeof P.brand === 'string' && P.brand.trim()) COPY.brand = P.brand
+      if (typeof P.claim === 'string' && P.claim.trim()) COPY.claim = P.claim
+      if (typeof P.tagline === 'string' && P.tagline.trim()) COPY.tagline = P.tagline
+      if (typeof P.accent === 'string') C.accent = P.accent
+      if (typeof P.cool === 'string') C.cool = P.cool
+
+      // A viewing animates; a capture draws the one frame it was asked for. The
+      // app owns the clock in both cases, so this loop is only for a plain browser.
+      if (!frozen) {
+        const started = performance.now()
+        const loop = (now) => {
+          draw(((now - started) / 1000) % DURATION)
+          requestAnimationFrame(loop)
+        }
+        requestAnimationFrame(loop)
+      }
+    </script>
+  </body>
+</html>

@@ -18,7 +18,7 @@ afterEach(async () => {
   // persisting `scheduler/retry-scheduler.json`) can land between the directory
   // listing and the final `rmdir`, which then fails with ENOTEMPTY on Windows.
   // Retry briefly so late writes can settle (same precedent as
-  // routine-scheduler-service and claude-code-driver tests).
+  // assistant-scheduler-service and claude-code-driver tests).
   await new Promise((resolve) => setTimeout(resolve, 25))
   await Promise.all(
     roots
@@ -47,6 +47,32 @@ function record(overrides: Partial<PendingRetryRecord> = {}): PendingRetryRecord
     issueKind: 'quota',
     issueMessage: 'Usage limit reached   retry after reset.',
     ...overrides
+  }
+}
+
+/** A due connection wait: what a Wi-Fi drop leaves on the ledger. */
+function connectionWait(index: number): PendingRetryRecord {
+  return record({
+    sessionId: `session-${index}`,
+    threadId: `thread-${index}`,
+    retryAt: Date.now() - 1_000,
+    issueKind: 'network',
+    issueMessage: 'Connection interrupted. This thread will resume when the device reconnects.'
+  })
+}
+
+/** Let chained zero-delay continuations (fires, persists, ticks) run. */
+async function settle(rounds = 8): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+}
+
+/** Let continuations run until they satisfy `predicate`, or give up. */
+async function waitFor(predicate: () => boolean, rounds = 100): Promise<void> {
+  for (let index = 0; index < rounds; index += 1) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
   }
 }
 
@@ -116,6 +142,97 @@ describe('RetrySchedulerService', () => {
     await scheduler.track(record())
     scheduler.clear('session-1')
     expect(scheduler.getPendingRetry('session-1')).toBeUndefined()
+    await scheduler.flush()
+    scheduler.stop()
+  })
+
+  it('holds every connection wait while the device is offline and resumes them all when it returns', async () => {
+    const scheduler = new RetrySchedulerService(await storage())
+    await scheduler.start()
+    // The auto-retry toggle governs provider resets; a device connection is not
+    // the provider's business, so these must resume with it off.
+    scheduler.setEnabled(false)
+    let online = false
+    scheduler.attachNetworkTest(() => online)
+    const resume = vi.fn(async () => undefined)
+    await scheduler.attachContinue(resume)
+    const waits = [0, 1, 2, 3, 4].map(connectionWait)
+    for (const wait of waits) await scheduler.track(wait)
+    await settle()
+    // Offline: every wait is due and none of them may be admitted.
+    expect(resume).not.toHaveBeenCalled()
+    expect(scheduler.size).toBe(5)
+
+    online = true
+    scheduler.connectionRestored()
+    await waitFor(() => resume.mock.calls.length === 5)
+    expect(resume).toHaveBeenCalledTimes(5)
+    for (const wait of waits) expect(resume).toHaveBeenCalledWith(wait)
+    expect(scheduler.size).toBe(0)
+    await scheduler.flush()
+    scheduler.stop()
+  })
+
+  it('admits a reconnect backlog in bounded batches, not all at once', async () => {
+    const scheduler = new RetrySchedulerService(await storage())
+    await scheduler.start()
+    scheduler.setEnabled(false)
+    scheduler.attachNetworkTest(() => true)
+    const finishers: Array<() => void> = []
+    const resume = vi.fn(() => new Promise<void>((resolve) => finishers.push(resolve)))
+    await scheduler.attachContinue(resume)
+    for (const wait of [0, 1, 2, 3, 4, 5].map(connectionWait)) await scheduler.track(wait)
+    await settle()
+    // The batch size is what keeps a mass reconnection off the machine's back:
+    // two harness resumes at a time, admitted as the previous pair settles.
+    expect(resume).toHaveBeenCalledTimes(2)
+
+    for (let admitted = 2; admitted < 6; admitted += 2) {
+      finishers.splice(0).forEach((finish) => finish())
+      await settle()
+    }
+    expect(resume).toHaveBeenCalledTimes(6)
+    finishers.splice(0).forEach((finish) => finish())
+    await settle()
+    expect(scheduler.size).toBe(0)
+    await scheduler.flush()
+    scheduler.stop()
+  })
+
+  it('resumes a connection wait when nothing has verified the link yet', async () => {
+    const scheduler = new RetrySchedulerService(await storage())
+    await scheduler.start()
+    scheduler.setEnabled(false)
+    // No connectivity source attached: a wiring gap must fail towards resuming,
+    // never towards a wait that outlives the reconnection it was parked on.
+    const resume = vi.fn(async () => undefined)
+    await scheduler.attachContinue(resume)
+    await scheduler.track(connectionWait(0))
+    await settle()
+    expect(resume).toHaveBeenCalledTimes(1)
+    expect(scheduler.size).toBe(0)
+    await scheduler.flush()
+    scheduler.stop()
+  })
+
+  it('keeps a connection wait on the ledger when its resume attempt fails', async () => {
+    const scheduler = new RetrySchedulerService(await storage())
+    await scheduler.start()
+    scheduler.setEnabled(false)
+    scheduler.attachNetworkTest(() => true)
+    const resume = vi.fn(async () => {
+      throw new Error('Device disconnected before thread recovery')
+    })
+    await scheduler.attachContinue(resume)
+    const wait = connectionWait(0)
+    await scheduler.track(wait)
+    await settle()
+    expect(resume).toHaveBeenCalledTimes(1)
+    // Still waiting, with a cooldown   the reconnection it is parked on has not
+    // happened yet, and the wait must survive the failed attempt.
+    const retained = scheduler.getPendingRetry(wait.sessionId)
+    expect(retained?.issueKind).toBe('network')
+    expect(retained?.retryAt ?? 0).toBeGreaterThan(Date.now())
     await scheduler.flush()
     scheduler.stop()
   })

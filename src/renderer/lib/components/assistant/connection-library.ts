@@ -18,7 +18,7 @@ export type ConnectionLibrarySource = 'library' | 'harness' | 'global' | 'applic
  * and the connection rows never need to know which is which.
  */
 export interface ConnectionLibraryEntry {
-  /** Stable id stored as a routine connection's `utilityId`. */
+  /** Stable id stored as an assistant connection's `utilityId`. */
   id: string
   name: string
   kind: string
@@ -51,7 +51,7 @@ export function normalizeConnectionName(value: string): string {
 
 /**
  * Whether two display names refer to the same thing. One side containing the
- * other is enough, so a routine that says "Slack" links to the "Slack MCP"
+ * other is enough, so an assistant that says "Slack" links to the "Slack MCP"
  * entry the library carries.
  */
 export function connectionNamesOverlap(a: string, b: string): boolean {
@@ -152,7 +152,7 @@ function sourceRank(source: ConnectionLibrarySource): number {
 }
 
 /**
- * The library entry a routine connection points at, by stored id first and by
+ * The library entry an assistant connection points at, by stored id first and by
  * label second. The label fallback keeps a connection that was authored before
  * the utility existed   or that names it in prose   linked to the real entry.
  */

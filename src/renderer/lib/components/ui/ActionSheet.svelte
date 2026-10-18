@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import BottomSheet from './BottomSheet.svelte'
 
@@ -32,7 +32,7 @@
       {:else}
         <button
           type="button"
-          class="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-left text-[0.9375rem] transition-colors active:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 {item.danger
+          class="flex w-full cursor-pointer items-center gap-3 px-3 py-3 text-left text-[0.9375rem] transition-colors active:bg-elevated disabled:cursor-not-allowed disabled:opacity-40 {item.danger
             ? 'text-danger'
             : 'text-foreground'}"
           disabled={item.disabled}
@@ -44,7 +44,7 @@
           {/if}
           <span class="min-w-0 flex-1 truncate text-left">{item.label}</span>
           {#if item.selected}
-            <Check size={17} class="shrink-0 text-primary" />
+            <CioCheck size={17} class="shrink-0 text-primary" />
           {/if}
         </button>
       {/if}

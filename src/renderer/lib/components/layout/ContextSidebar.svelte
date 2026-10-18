@@ -17,9 +17,35 @@
 </script>
 
 <script lang="ts">
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCloud from '@pillardash-oss/cio-icon/CioCloud.svelte'
+  import CioDebugger from '@pillardash-oss/cio-icon/CioDebugger.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioPanelBottom from '@pillardash-oss/cio-icon/CioPanelBottom.svelte'
+  import CioPanelRight from '@pillardash-oss/cio-icon/CioPanelRight.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
+  import CioTabFiles from '@pillardash-oss/cio-icon/CioTabFiles.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     browserTabIndicators,
@@ -32,39 +58,13 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { publicAssetUrl } from '$lib/static-assets'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import {
-    AppWindow,
-    Bell,
-    Bot,
-    Boxes,
-    BrainCircuit,
-    Bug,
-    ChevronDown,
-    Cloud,
-    FileDiff,
-    Files,
-    GitBranch,
-    GlobeCode,
-    Hammer,
-    Info,
-    Maximize2,
-    MessageCircleDashed,
-    MessagesCircle,
-    MonitorCog,
-    Network,
-    PanelBottom,
-    PanelRight,
-    Plus,
-    Puzzle,
-    Server,
-    SquareTerminal,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+
+  const defaultPopupIconUrl = publicAssetUrl('icon-mono.svg')
 
   interface Props {
     tabs: ContextSidebarTab[]
@@ -204,7 +204,7 @@
     'sticky-notes',
     'thread-note',
     'coordinator',
-    'assistant-how-to'
+    'assistant-knowledge'
   ])
 
   /**
@@ -307,7 +307,7 @@
     const ghost = document.createElement('div')
     ghost.textContent = label
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     e.dataTransfer!.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -427,7 +427,7 @@
         />
       {:else}
         <span
-          class="h-2.5 w-2.5 shrink-0 rounded-full bg-muted"
+          class="h-2.5 w-2.5 shrink-0 bg-muted"
           style={presentation.color ? `background-color: ${presentation.color}` : ''}
         ></span>
       {/if}
@@ -435,14 +435,14 @@
       {#if tab.fileTabId}
         <FileTypeIcon path={tab.path ?? tab.title} size={12} />
       {:else}
-        <Files size={12} class="shrink-0" />
+        <CioTabFiles size={ICON_SIZE.row} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'diff'}
-      <FileDiff size={12} class="shrink-0" />
+      <CioDiff size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'terminal'}
-      <SquareTerminal size={12} class="shrink-0" />
+      <CioTerminal size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'actions'}
-      <MonitorCog size={12} class="shrink-0" />
+      <CioActions size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'browser'}
       {#if tab.favicon ?? faviconState.faviconFor(tab.url)}
         <img
@@ -452,52 +452,64 @@
           aria-hidden="true"
         />
       {:else}
-        <GlobeCode size={12} class="shrink-0" />
+        <CioThreadBrowser size={ICON_SIZE.row} class="shrink-0" />
       {/if}
     {:else if tab.kind === 'debugger'}
-      <Bug size={12} class="shrink-0 text-accent" />
+      <CioDebugger size={ICON_SIZE.row} class="shrink-0 text-accent" />
     {:else if tab.kind === 'sources'}
-      <Info size={12} class="shrink-0" />
+      <CioTabInfo size={ICON_SIZE.row} class="shrink-0" />
+    {:else if tab.kind === 'subagent'}
+      <!-- The sub-agent mark is the one a sub-agent wears on every surface; a
+           hue would make it a second class of tab rather than one more tab. -->
+      <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'temporary-chat'}
-      <MessageCircleDashed size={12} class="shrink-0 text-temporary-chat" />
+      <!-- The dashed bubble is the whole signal: a side chat carries the same
+           neutral mark as every other tab, never an indicator colour. -->
+      <CioTemporaryChat size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'browser-agent'}
       <!-- The assistant conversation of a browser tab wears the Chats view's own
            mark, and no tone: it is a conversation, not a status. -->
-      <MessagesCircle size={12} class="shrink-0" />
+      {@const ChatsIcon = CONTENT_FAMILY_ICONS.chats}
+      <ChatsIcon size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'notifications'}
-      <Bell size={12} class="shrink-0" />
+      <CioNotifications size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'sticky-notes'}
       {@const StickyNotesIcon = feature('sticky-notes').icon}
-      <StickyNotesIcon size={12} class="shrink-0" />
+      <StickyNotesIcon size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'attention'}
-      <TriangleAlert size={12} class="shrink-0 text-warning" />
+      <CioAttention size={ICON_SIZE.row} class="shrink-0 text-warning" />
     {:else if tab.kind === 'memory'}
-      <BrainCircuit size={12} class="shrink-0" />
+      <CioMemory size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'git'}
-      <GitBranch size={12} class="shrink-0" />
+      <CioTabGit size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'cloud-deployment'}
-      <Cloud size={12} class="shrink-0" />
+      <CioCloud size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'thread-note'}
       {@const ThreadNoteIcon = feature('thread-note').icon}
-      <ThreadNoteIcon size={12} class="shrink-0" />
+      <ThreadNoteIcon size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'popup-window'}
       {#if tab.favicon}
         <img src={tab.favicon} alt="" class="h-3 w-3 shrink-0" aria-hidden="true" />
       {:else}
-        <AppWindow size={12} class="shrink-0" />
+        <img
+          src={defaultPopupIconUrl}
+          alt=""
+          class="h-3 w-3 shrink-0 object-contain"
+          aria-hidden="true"
+        />
       {/if}
     {:else if tab.kind === 'boxes'}
-      <Boxes size={12} class="shrink-0" />
+      <CioTabBoxes size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'extensions'}
-      <Puzzle size={12} class="shrink-0" />
+      <CioTabExtensions size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
-      <Network size={12} class="shrink-0 text-primary" />
+      <CioNetwork size={ICON_SIZE.row} class="shrink-0 text-primary" />
     {:else if tab.kind === 'oven'}
-      <Server size={12} class="shrink-0" />
-    {:else if tab.kind === 'assistant-how-to'}
-      <Hammer size={12} class="shrink-0 text-primary" />
+      <CioTerminal size={ICON_SIZE.row} class="shrink-0" />
+    {:else if tab.kind === 'assistant-knowledge'}
+      <AssistantIcon mark="knowledge" size={ICON_SIZE.row} class="shrink-0 text-primary" />
     {:else}
-      <Bot size={12} class="shrink-0 text-info" />
+      <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
     {/if}
   {/snippet}
 
@@ -561,7 +573,7 @@
           <input
             use:focusRenameInput
             value={renameValue ?? ''}
-            class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[0.6875rem] font-medium text-foreground outline-none"
+            class="h-6 min-w-0 flex-1 border border-primary bg-app px-1.5 text-[0.6875rem] font-medium text-foreground outline-none"
             aria-label={`Rename ${tab.title}`}
             oninput={(event) => onRenameValueChange?.(event.currentTarget.value)}
             onkeydown={(event) => {
@@ -585,17 +597,22 @@
               ? 'italic'
               : ''}">{tab.title}</span
           >
+          {#if tab.kind === 'popup-window' && tab.boxName}
+            <span class="shrink-0 border-l border-border pl-1.5 text-[0.625rem] text-dimmed">
+              {tab.boxName}
+            </span>
+          {/if}
         {/if}
         {#if conversation}
           {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}
-            <StatusBadge kind="attention" animated title="Needs attention" />
+            <StatusBadge kind="attention" title="Needs attention" />
           {:else if agentRuns.isBusy(conversation.projectId, conversation.conversationId)}
-            <StatusBadge stage="working" animated title="Working" />
+            <StatusBadge stage="working" title="Working" />
           {/if}
         {/if}
         {#if dirtyFileTabIds.has(tab.id)}
           <span
-            class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+            class="h-1.5 w-1.5 shrink-0 bg-accent"
             role="status"
             aria-label="Unsaved changes"
             title="Unsaved changes"
@@ -604,12 +621,12 @@
       </button>
       <button
         type="button"
-        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label={closeLabel(tab)}
         title={closeLabel(tab)}
         onclick={() => onClose(tab.id)}
       >
-        <X size={11} />
+        <CioClose size={11} />
       </button>
       {#if indicators.length > 0}
         <!-- Painted over the tab's own icon slot. A sibling of the
@@ -654,28 +671,28 @@
             {titleFor(activeTab)}
           </span>
           {#if activeTab.kind === 'subagent' && activeTab.activity.status === 'running'}
-            <StatusBadge stage="working" animated title="Running" />
+            <StatusBadge stage="working" title="Running" />
           {/if}
           {#if siblingTabs.length > 1}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex h-6 shrink-0 items-center gap-0.5 rounded px-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-6 shrink-0 items-center gap-0.5 px-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Switch to another open panel"
                 title="Switch open panel"
               >
                 <span class="text-[0.625rem] font-medium">{siblingTabs.length}</span>
-                <ChevronDown size={11} />
+                <CioChevronDown size={11} />
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
                   side="bottom"
                   align="start"
                   sideOffset={6}
-                  class="z-50 min-w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+                  class="z-50 min-w-52 border border-border bg-surface p-1 shadow-lg"
                 >
                   {#each siblingTabs as tab (tab.id)}
                     <DropdownMenu.Item
-                      class="flex items-center gap-2 rounded-md px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
+                      class="flex items-center gap-2 px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
                       textValue={titleFor(tab)}
                       onSelect={() => onSelect(tab.id)}
                     >
@@ -701,58 +718,58 @@
             {#if onNewBrowser}
               <button
                 type="button"
-                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Open another browser tab"
                 title="New browser tab"
                 onclick={() => onNewBrowser?.()}
               >
-                <Plus size={13} />
+                <CioPlus size={13} />
               </button>
             {/if}
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="Fullscreen"
               title="Fullscreen"
               onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
             >
-              <Maximize2 size={13} />
+              <CioMaximize size={13} />
             </button>
           {:else if terminalMode}
             {#if onNewTerminal}
               <button
                 type="button"
-                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Open another terminal"
                 title="New terminal"
                 onclick={onNewTerminal}
               >
-                <Plus size={13} />
+                <CioPlus size={13} />
               </button>
             {/if}
             {#if placement === 'bottom' && onTerminalDockToggle}
               <button
                 type="button"
-                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Hide terminal dock"
                 title="Hide terminal dock"
                 onclick={onTerminalDockToggle}
               >
-                <ChevronDown size={13} />
+                <CioChevronDown size={13} />
               </button>
             {/if}
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="Fullscreen"
               title="Fullscreen"
               onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
             >
-              <Maximize2 size={13} />
+              <CioMaximize size={13} />
             </button>
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label={placement === 'bottom'
                 ? 'Move terminal to the right'
                 : 'Move terminal to the bottom'}
@@ -762,20 +779,20 @@
               onclick={() => onTerminalPlacementChange(placement === 'bottom' ? 'right' : 'bottom')}
             >
               {#if placement === 'bottom'}
-                <PanelRight size={13} />
+                <CioPanelRight size={13} />
               {:else}
-                <PanelBottom size={13} />
+                <CioPanelBottom size={13} />
               {/if}
             </button>
           {:else if activeTab}
             <button
               type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label={popupMode ? 'Close all popups' : `Close ${activeTab.title}`}
               title={popupMode ? 'Close all popup windows' : 'Close panel'}
               onclick={() => (popupMode ? onClosePopups?.() : onClose(activeTab.id))}
             >
-              <X size={13} />
+              <CioClose size={13} />
             </button>
           {/if}
         </div>

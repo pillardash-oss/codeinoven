@@ -1,6 +1,14 @@
 <script lang="ts">
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import GitHubSignInBrowserDock from '$lib/components/git/GitHubSignInBrowserDock.svelte'
   import ContextDock, { type ContextDockItem } from '$lib/components/layout/ContextDock.svelte'
+  import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
   import { feature } from '$lib/feature-registry'
   import { subscribe } from '$lib/ipc.svelte'
   import { motionDuration } from '$lib/motion'
@@ -17,16 +25,7 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID, type BrowserPanelShortcutAction } from '$shared/ipc-contract'
-  import {
-    AppWindow,
-    Bookmark,
-    Boxes,
-    Clock,
-    Download,
-    FolderTree,
-    MessagesCircle,
-    Puzzle
-  } from '@lucide/svelte'
+
   import { onDestroy, onMount } from 'svelte'
   import {
     browserAppearanceAccent,
@@ -135,7 +134,7 @@
           unfinishedDownloadCount > 0
             ? `Downloads (${unfinishedDownloadCount} unfinished)`
             : 'Downloads',
-        icon: Download,
+        icon: CioDownload,
         active: globalBrowser.downloadsSidebarShown,
         countBadge: unfinishedDownloadCount > 0 ? String(unfinishedDownloadCount) : undefined,
         onSelect: () => globalBrowser.toggleDownloadsSidebar()
@@ -146,7 +145,7 @@
       {
         id: 'history',
         label: 'History',
-        icon: Clock,
+        icon: CioClock,
         active: globalBrowser.historySidebarShown,
         onSelect: () => globalBrowser.toggleHistorySidebar()
       },
@@ -156,7 +155,7 @@
       {
         id: 'bookmarks',
         label: 'Bookmarks',
-        icon: Bookmark,
+        icon: CioBookmark,
         active: globalBrowser.bookmarksSidebarShown,
         onSelect: () => globalBrowser.toggleBookmarksSidebar()
       },
@@ -171,7 +170,7 @@
       {
         id: 'boxes',
         label: boxesLabel,
-        icon: Boxes,
+        icon: CioTabBoxes,
         appearance: boxesAppearance,
         active: globalBrowser.boxesSidebarShown,
         onSelect: () => globalBrowser.toggleBoxesSidebar()
@@ -187,7 +186,7 @@
       {
         id: 'extensions',
         label: 'Extensions',
-        icon: Puzzle,
+        icon: CioTabExtensions,
         active: globalBrowser.extensionsSidebarShown,
         badge: installableStoreOffer ? 'attention' : undefined,
         badgeTitle: installableStoreOffer
@@ -203,7 +202,7 @@
                 popupWindows.length === 1
                   ? 'Popup window'
                   : `Popup windows (${popupWindows.length})`,
-              icon: AppWindow,
+              icon: CioWindow,
               active: globalBrowser.popupsSidebarShown,
               onSelect: () => globalBrowser.togglePopupsSidebar()
             }
@@ -227,7 +226,7 @@
             label: hasAgent ? 'Agent conversation' : 'Ask the agent',
             // The conversation wears the Chats view's mark: it is a chat, not a
             // status, so it takes no tone either.
-            icon: MessagesCircle,
+            icon: CONTENT_FAMILY_ICONS.chats,
             active:
               globalBrowser.agentSidebarShown &&
               browserAssistant.artifactThreadId !== activeChat?.threadId,
@@ -242,7 +241,7 @@
                 {
                   id: 'artifacts',
                   label: 'Conversation artifacts',
-                  icon: FolderTree,
+                  icon: CioFiles,
                   active:
                     globalBrowser.agentSidebarShown &&
                     browserAssistant.artifactThreadId === activeChat.threadId,
@@ -345,14 +344,6 @@
       globalBrowser.reopenLastClosedTab()
       return
     }
-    if (action === 'toggle-notes') {
-      globalBrowser.toggleContextSidebar()
-      return
-    }
-    // Find belongs to the surface showing the page (`BrowserWorkspace`), which owns
-    // the bar and its own row, so nothing here answers it. It is named rather than
-    // left to fall through, because the fall-through below closes the tab.
-    if (action === 'find' || action === 'find-next' || action === 'find-previous') return
     const tab = globalBrowser.activeTab
     if (tab) globalBrowser.close(tab.id)
   }
@@ -391,7 +382,10 @@
        resizes, folds and slides exactly like the workspace one. -->
   <BrowserTabsSidebar onOpenAddress={() => globalBrowser.openAddressSpotlight()} />
 
-  <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+  <!-- The page column: the browser's own body, which is what a browser is for.
+       It carries the guide's anchor for the page itself, so the browser's tour
+       can point at the one region the rest of the view is chrome around. -->
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col" data-guide="browser-body">
     {#if activeTab}
       {#key activeTab.id}
         <BrowserWorkspace tab={activeTab} />
@@ -413,7 +407,7 @@
           <div class="mt-4 flex w-full max-w-sm flex-col gap-1"></div>
           <button
             type="button"
-            class="rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            class="bg-primary px-3.5 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
             title="Open a new browser tab"
             onclick={() => {
               globalBrowser.openNewTabAddress()

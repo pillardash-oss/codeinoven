@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Upload } from '@lucide/svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { ComposerDropRegion } from './chat-composer-drop'
 
@@ -61,7 +61,7 @@
     }}
   >
     <div class="flex flex-col items-center gap-2 text-primary">
-      <Upload size={32} />
+      <CioUpload size={32} />
       <span class="text-base font-medium">Drop to attach</span>
     </div>
   </div>

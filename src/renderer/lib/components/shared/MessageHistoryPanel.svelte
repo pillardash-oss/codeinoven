@@ -17,7 +17,7 @@
     <div role="listitem">
       <button
         type="button"
-        class="block min-h-11 w-full truncate rounded-lg px-3 py-2.5 text-left text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground active:bg-elevated"
+        class="block min-h-11 w-full truncate px-3 py-2.5 text-left text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground active:bg-elevated"
         title={message.content}
         onclick={() => onSelect(message.id, message.content)}
       >

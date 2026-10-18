@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
   import type { SvelteMap } from 'svelte/reactivity'
   import { ovenRootKey } from '$lib/oven-root-target'
   import { fly } from 'svelte/transition'
@@ -11,16 +12,21 @@
   // also when its chunk is warmed, so nothing on the first paint waits for it.
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
-  import { Network } from '@lucide/svelte'
+
   import { getProjectIcon } from '$lib/project-icons'
-  import { getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { getAssistantIcon, assistantAccentColor } from '$lib/assistant-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import {
     contextSidebarState,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
-  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
+  import {
+    coordinatorDockState,
+    type CoordinatorDockRegistration
+  } from '$lib/stores/coordinator-dock.svelte'
+  import { LastKnown } from '$lib/last-known'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
+  import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
@@ -43,7 +49,6 @@
     selectedThread?: Thread | null
     projectIcons: SvelteMap<string, string>
     browser: WorkspaceBrowserController
-    coordinator: ReturnType<typeof coordinatorDockState.forThread>
     /** Close the active coordinator tab, used when no coordinator is published
      *  for it so the panel can never trap the user on a blank body. */
     onDismissCoordinator: () => void
@@ -53,6 +58,10 @@
     navigate: (view: MainView) => void
     /** Open an assistant task, so the workspace owns the selection. */
     onOpenAssistantTask: (task: Thread) => void
+    /** Open one assistant connection's setup as a new thread of that assistant. */
+    onSetupAssistantConnection: (input: ConnectionSetupRequest) => void
+    /** Move a task that belongs to no assistant into one the user picks. */
+    onAdoptAssistantTask: (task: Thread) => void
   }
 
   let {
@@ -66,15 +75,61 @@
     selectedThread = null,
     projectIcons,
     browser,
-    coordinator,
     onDismissCoordinator,
     onContinueInThread,
     onOpenSubagent,
     navigate,
-    onOpenAssistantTask
+    onOpenAssistantTask,
+    onSetupAssistantConnection,
+    onAdoptAssistantTask
   }: Props = $props()
 
-  let activeContextTab = $derived(contextSidebarState.sidebarActiveTab)
+  let activeContextTab = $derived.by(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    if (!tab) return null
+    // The context sidebar is scoped to the project it is docked on, so a tab is
+    // only ever rendered for that project. A mismatch means the sidebar has not
+    // followed the thread on screen yet (see `ensureDockedThread`), and drawing
+    // the older project's panel in the meantime is what put another project's
+    // coordinator board on screen. Refusing the tab drops it instead.
+    if (activeProject && 'projectId' in tab && tab.projectId !== activeProject.id) return null
+    return tab
+  })
+
+  /**
+   * The coordinator the active tab belongs to.
+   *
+   * Read from the tab's own row rather than from the on-screen thread's, because
+   * the panel body *is* that row's board: the thread selection is null while a
+   * switch or another top-level view keeps it that way, and reading through it
+   * dropped a board the user still had open. A row that stops coordinating still
+   * answers null here, which is what drops the board to its own empty state.
+   */
+  let tabCoordinator = $derived.by(() => {
+    const tab = activeContextTab
+    return tab?.kind === 'coordinator'
+      ? coordinatorDockState.forThread(tab.projectId, tab.threadId)
+      : null
+  })
+
+  /**
+   * The registration a coordinator panel reads its own props from: the live one,
+   * or the last one this panel rendered.
+   *
+   * A child's props are getters that re-read their source for as long as the child
+   * is mounted, including the frame it unmounts on, so the board must never find a
+   * null there. It did: the throw came out of the board's own cleanup and aborted
+   * the keyed swap below, which left the pane blank and the board's poll running.
+   * Whether a board is shown at all is still `tabCoordinator`'s answer.
+   */
+  const boardRegistrations = new LastKnown<CoordinatorDockRegistration>()
+  let boardRegistration = $derived.by(() => {
+    const known = boardRegistrations.get(tabCoordinator)
+    // A board belongs to the project it was published for, so it is refused when
+    // the workspace is showing another one.
+    if (known && activeProject && known.projectId !== activeProject.id) return null
+    return known
+  })
 
   /**
    * Identity of the surface the active sidebar tab mounts.
@@ -91,6 +146,14 @@
   let activePanelKey = $derived.by(() => {
     const tab = activeContextTab
     if (!tab) return ''
+    if (
+      tab.kind === 'coordinator' &&
+      tabCoordinator &&
+      boardRegistration?.panel.component === 'design'
+    ) {
+      const props = boardRegistration.panel.props
+      return `work:${props.projectId}:${props.threadId}:${props.kind ?? 'session'}`
+    }
     if (tab.kind !== 'files') return tab.id
     const mountThreadId =
       usesThreadWorkspaceMount(tab.projectId) ||
@@ -129,26 +192,26 @@
 
   /**
    * Identity of the file tree's root: its name, the label shown beside its icon,
-   * its icon, and its accent colour. A routine behaves like a project, and an
-   * assistant task's tree mounts on the routine's own workspace, so the routine's
+   * its icon, and its accent colour. An assistant behaves like a project, and an
+   * assistant task's tree mounts on the assistant's own workspace, so the assistant's
    * edited icon and colour stand in for the hidden assistant space's everywhere
-   * the root is drawn. A routine's name is often a whole sentence, so a routine
+   * the root is drawn. An assistant's name is often a whole sentence, so an assistant
    * root shows no label at all: the icon carries it, and the name is the icon's
    * tooltip.
    */
   let filesRootIdentity = $derived.by(() => {
-    const routine = assistantRoutines.routineForTask(
+    const assistant = assistants.assistantForTask(
       filesThreadId === null
         ? null
         : (scopeState.allScopeThreads.find((candidate) => candidate.id === filesThreadId) ?? null)
     )
-    if (routine) {
+    if (assistant) {
       return {
-        name: routine.name,
+        name: assistant.name,
         label: '',
-        routine: true,
-        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null),
-        accentColor: routineAccentColor(routine)
+        assistant: true,
+        iconUrl: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null),
+        accentColor: assistantAccentColor(assistant)
       }
     }
     // The notifications tab carries no project, so the fallback name reads the
@@ -162,7 +225,7 @@
     return {
       name,
       label: name,
-      routine: false,
+      assistant: false,
       iconUrl: activeProject
         ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
         : null,
@@ -214,7 +277,7 @@
               projectId={activeContextTab.projectId}
               projectName={filesRootIdentity.name}
               projectLabel={filesRootIdentity.label}
-              routineRoot={filesRootIdentity.routine}
+              assistantRoot={filesRootIdentity.assistant}
               projectIconUrl={filesRootIdentity.iconUrl}
               projectAccentColor={filesRootIdentity.accentColor}
             />
@@ -296,46 +359,63 @@
           {#if active}
             <div class="h-full" {@attach appPanelSlot}></div>
           {/if}
-        {:else if activeContextTab.kind === 'assistant-how-to'}
-          {#await import('../assistant/AssistantPanel.svelte') then { default: HowToPanel }}
-            <HowToPanel
+        {:else if activeContextTab.kind === 'assistant-knowledge'}
+          {#await import('../assistant/AssistantPanel.svelte') then { default: KnowledgePanel }}
+            <KnowledgePanel
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
-              routineId={activeContextTab.routineId}
+              assistantId={activeContextTab.assistantId}
               bind:panelTab={activeContextTab.panelTab}
               {navigate}
               onOpenTask={onOpenAssistantTask}
+              onSetupConnection={onSetupAssistantConnection}
+              onAdoptTask={onAdoptAssistantTask}
             />
           {/await}
         {:else if activeContextTab.kind === 'coordinator'}
-          {#if coordinator}
-            {#if coordinator.panel.component === 'assignment'}
+          <!--
+            The panel a coordinator row published.
+
+            Every branch reads its props from `boardRegistration`, which is this
+            row's live registration or the last one this panel rendered. The live
+            `tabCoordinator` is what decides whether there is a board at all, so a
+            row that stops coordinating still falls through to the empty state
+            below.
+          -->
+          {#if tabCoordinator && boardRegistration}
+            {#if boardRegistration.panel.component === 'assignment'}
               {#await import('../threads/AssignmentCoordinatorPanel.svelte') then { default: AssignmentCoordinatorPanel }}
-                <AssignmentCoordinatorPanel {...coordinator.panel.props} />
+                <AssignmentCoordinatorPanel {...boardRegistration.panel.props} />
               {/await}
-            {:else if coordinator.panel.component === 'achievement'}
+            {:else if boardRegistration.panel.component === 'achievement'}
               {#await import('../threads/AchievementCoordinatorPanel.svelte') then { default: AchievementCoordinatorPanel }}
-                <AchievementCoordinatorPanel {...coordinator.panel.props} />
+                <AchievementCoordinatorPanel {...boardRegistration.panel.props} />
               {/await}
-            {:else if coordinator.panel.component === 'design'}
+            {:else if boardRegistration.panel.component === 'design'}
               {#await import('../design/DesignCoordinatorPanel.svelte') then { default: DesignCoordinatorPanel }}
-                <DesignCoordinatorPanel {...coordinator.panel.props} />
+                {#key `${boardRegistration.projectId}:${boardRegistration.panel.props.threadId}:${boardRegistration.panel.props.kind ?? 'session'}`}
+                  <DesignCoordinatorPanel
+                    {...boardRegistration.panel.props}
+                    viewingThreadId={selectedThread?.id ?? boardRegistration.threadId}
+                    active={active && contextSidebarState.sidebarVisible}
+                  />
+                {/key}
               {/await}
             {:else}
               {#await import('../threads/IndependentAuditCoordinatorPanel.svelte') then { default: IndependentAuditCoordinatorPanel }}
-                <IndependentAuditCoordinatorPanel {...coordinator.panel.props} />
+                <IndependentAuditCoordinatorPanel {...boardRegistration.panel.props} />
               {/await}
             {/if}
           {:else}
             <EmptyState
-              icon={Network}
+              icon={CioNetwork}
               title="Coordinator unavailable"
               description="The coordinator for this thread is not open right now. Close this panel and reopen the coordinator from the rail."
             >
               {#snippet action()}
                 <button
                   type="button"
-                  class="rounded-lg border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
+                  class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay"
                   onclick={onDismissCoordinator}
                 >
                   Close panel
@@ -349,7 +429,7 @@
               variant="sidebar"
               projectId={activeContextTab.projectId}
               threadId={activeContextTab.threadId}
-              routineId={activeContextTab.routineId}
+              assistantId={activeContextTab.assistantId}
               bind:activeSection={activeContextTab.memorySection}
             />
           {/await}

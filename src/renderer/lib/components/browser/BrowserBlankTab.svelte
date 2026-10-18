@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ArrowRight, Boxes, Globe } from '@lucide/svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { publicAssetUrl } from '$lib/static-assets'
@@ -14,8 +16,12 @@
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
   import { browserAppearanceAccent, browserAppearanceIconUrl } from './browser-group-appearance'
+  import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
 
   interface Props {
+    /** Tab that owns this empty state. Keys the shared draft so the toolbar
+     *  and the fullscreen surface continue the same text and caret. */
+    tabId?: string | null
     /** Scope that owns the history offered under the field. */
     projectId: string
     threadId: string
@@ -31,6 +37,7 @@
   }
 
   let {
+    tabId = null,
     projectId,
     threadId,
     boxId,
@@ -55,9 +62,11 @@
   const listId = $props.id()
 
   let input = $state<HTMLInputElement | null>(null)
-  let draft = $state('')
+  // svelte-ignore state_referenced_locally
+  let draft = $state(tabId ? (browserBlankDraft.get(tabId)?.text ?? '') : '')
   let highlight = $state(-1)
-  let touched = $state(false)
+  // svelte-ignore state_referenced_locally
+  let touched = $state(tabId ? browserBlankDraft.get(tabId) !== null : false)
 
   const scope = $derived(browserHistory.scopeFor(projectId, threadId, boxId))
   const suggestions = $derived(browserHistory.suggestionsFor(scope, draft, 5))
@@ -93,10 +102,25 @@
   }
 
   $effect(() => {
-    if (autofocus) input?.focus()
+    if (autofocus) {
+      input?.focus()
+      // A restored draft continues where typing stopped instead of restarting
+      // at the end: the shared store remembers the exact caret offset.
+      if (tabId && draft !== '') {
+        const caret = browserBlankDraft.get(tabId)?.caret
+        if (caret !== null && caret !== undefined && input) {
+          try {
+            input.setSelectionRange(caret, caret)
+          } catch {
+            // Non-text edge; focus alone is the fallback.
+          }
+        }
+      }
+    }
   })
 
   function open(url: string): void {
+    if (tabId) browserBlankDraft.clear(tabId)
     onNavigate(url)
   }
 
@@ -110,12 +134,28 @@
     if (resolution) open(resolution.url)
   }
 
+  function syncDraft(value: string, element: HTMLInputElement | null): void {
+    if (!tabId) return
+    const caret = element?.selectionStart ?? value.length
+    browserBlankDraft.set(tabId, value, caret)
+  }
+
   function onInput(event: Event): void {
     const target = event.currentTarget
     if (!(target instanceof HTMLInputElement)) return
     draft = target.value
     highlight = -1
     touched = true
+    syncDraft(draft, target)
+  }
+
+  /** Caret-only moves (arrows, click) must also reach the shared draft so the
+   *  fullscreen bar restores the exact point typing stopped at. */
+  function onCaretMove(event: Event): void {
+    const target = event.currentTarget
+    if (!(target instanceof HTMLInputElement)) return
+    if (draft === '') return
+    syncDraft(draft, target)
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -151,7 +191,7 @@
       submit()
     }}
   >
-    <div class="flex items-center gap-1.5 rounded-xl border border-border bg-elevated p-1.5 pl-3.5">
+    <div class="flex items-center gap-1.5 border border-border bg-elevated p-1.5 pl-3.5">
       <label for={listId} class="sr-only">Search or enter an address</label>
       <input
         id={listId}
@@ -169,21 +209,24 @@
         autocomplete="off"
         value={draft}
         oninput={onInput}
+        onkeyup={onCaretMove}
+        onclick={onCaretMove}
+        onselect={onCaretMove}
         onkeydown={onKeydown}
       />
       <button
         type="submit"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+        class="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
         disabled={draft.trim() === ''}
         aria-label="Open address"
         title="Open address"
       >
-        <ArrowRight size={15} />
+        <CioArrowRight size={15} />
       </button>
     </div>
     {#if drawerVisible}
       <div
-        class="absolute top-full right-0 left-0 z-20 mt-1.5 max-h-60 overflow-y-auto rounded-xl border border-border bg-surface p-1.5 text-left shadow-lg"
+        class="absolute top-full right-0 left-0 z-20 mt-1.5 max-h-60 overflow-y-auto border border-border bg-surface p-1.5 text-left shadow-lg"
       >
         <BrowserHistorySuggestions
           {listId}
@@ -207,7 +250,7 @@
         <button
           type="button"
           class={[
-            'flex w-20 shrink-0 flex-col items-center gap-1 rounded-xl px-2 py-2.5 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated',
+            'flex w-20 shrink-0 flex-col items-center gap-1 px-2 py-2.5 outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated',
             active ? 'bg-elevated' : ''
           ]}
           aria-label={active ? `${option.name}, current box` : `Reopen this tab in ${option.name}`}
@@ -217,16 +260,14 @@
         >
           <span class="flex h-8 w-8 items-center justify-center" aria-hidden="true">
             {#if iconUrl}
-              <img src={iconUrl} alt="" class="h-6 w-6 rounded-md object-contain" />
+              <img src={iconUrl} alt="" class="h-6 w-6 object-contain" />
             {:else if option.box?.id === DEFAULT_BOX_ID}
-              <Globe size={20} class="text-dimmed" />
+              <CioBrowser size={20} class="text-dimmed" />
             {:else if option.box}
-              <span
-                class="h-2.5 w-2.5 rounded-full"
-                style:background-color={browserAppearanceAccent(option.box)}
+              <span class="h-2.5 w-2.5" style:background-color={browserAppearanceAccent(option.box)}
               ></span>
             {:else}
-              <Boxes size={20} class="text-dimmed" />
+              <CioTabBoxes size={20} class="text-dimmed" />
             {/if}
           </span>
           <span class="w-full truncate text-center text-[0.6875rem] font-medium text-foreground">

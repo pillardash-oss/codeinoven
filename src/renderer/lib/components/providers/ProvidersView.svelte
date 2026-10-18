@@ -1,4 +1,18 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCircle from '@pillardash-oss/cio-icon/CioCircle.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioPlug from '@pillardash-oss/cio-icon/CioPlug.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import SettingsStatusBadge from '../shared/SettingsStatusBadge.svelte'
   import SettingsDisclosure from '../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../shared/SettingsEntry.svelte'
@@ -22,23 +36,6 @@
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
   } from '$shared/types'
-  import {
-    AlertTriangle,
-    Check,
-    CheckCircle2,
-    Circle,
-    Clock,
-    Copy,
-    Download,
-    Loader2,
-    Plug,
-    Plug2,
-    RefreshCw,
-    RotateCcw,
-    Search,
-    Trash2,
-    X
-  } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type { Attachment } from 'svelte/attachments'
@@ -163,7 +160,7 @@
   }
 
   interface BadgeInfo {
-    Icon: typeof CheckCircle2
+    Icon: typeof CioCheckCircle
     label: string
     classes: string
     spin?: boolean
@@ -173,7 +170,7 @@
   function badgeFor(provider: ProviderConnectionInfo): BadgeInfo {
     if (provider.status === 'error') {
       return {
-        Icon: AlertTriangle,
+        Icon: CioAttention,
         label: 'Needs attention',
         classes: 'border-danger/30 bg-danger/10 text-danger'
       }
@@ -184,14 +181,14 @@
       harnessLifecycleStore.updateAvailableFor(provider.id)
     ) {
       return {
-        Icon: Download,
+        Icon: CioDownload,
         label: 'Update available',
         classes: 'border-warning/30 bg-warning/10 text-warning'
       }
     }
     if (provider.status === 'available' && provider.integration === 'ready') {
       return {
-        Icon: CheckCircle2,
+        Icon: CioCheckCircle,
         label:
           provider.executionTarget?.kind === 'wsl'
             ? `Ready · WSL ${provider.executionTarget.distribution}`
@@ -203,14 +200,14 @@
     }
     if (provider.status === 'available') {
       return {
-        Icon: Circle,
+        Icon: CioCircle,
         label: 'Detected · integration planned',
         classes: 'border-warning/30 bg-warning/10 text-warning'
       }
     }
     if (provider.status === 'checking') {
       return {
-        Icon: Loader2,
+        Icon: CioSpinner,
         label: 'Checking…',
         classes: 'border-info/30 bg-info/10 text-info',
         spin: true
@@ -218,12 +215,16 @@
     }
     if (provider.status === 'not_found') {
       return {
-        Icon: Circle,
+        Icon: CioCircle,
         label: 'Not installed',
         classes: 'border-border bg-elevated text-dimmed'
       }
     }
-    return { Icon: Circle, label: 'Not checked', classes: 'border-border bg-elevated text-dimmed' }
+    return {
+      Icon: CioCircle,
+      label: 'Not checked',
+      classes: 'border-border bg-elevated text-dimmed'
+    }
   }
 
   /** Secondary actions tucked into the row's "..." menu. */
@@ -231,7 +232,7 @@
     const items: MenuItem[] = [
       {
         label: 'Check',
-        icon: RefreshCw,
+        icon: CioRefresh,
         disabled: provider.status === 'checking',
         onClick: () => void checkOne(provider.id)
       }
@@ -242,7 +243,7 @@
     if (canRestartHarness(provider)) {
       items.push({
         label: 'Restart harness',
-        icon: RotateCcw,
+        icon: CioUndo,
         disabled: harnessLifecycleStore.isRunning(provider.id),
         onClick: () => requestRestart(provider)
       })
@@ -250,7 +251,7 @@
     if (canUninstallHarness(provider)) {
       items.push({
         label: 'Uninstall',
-        icon: Trash2,
+        icon: CioTrash,
         danger: true,
         disabled: harnessLifecycleStore.isRunning(provider.id),
         onClick: () => void requestUninstall(provider)
@@ -546,14 +547,14 @@
   </div>
 
   <div
-    class="mb-4 flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+    class="mb-4 flex w-max items-center gap-0.5 border bg-elevated p-0.5"
     role="tablist"
     aria-label="Harness settings tabs"
   >
     <button
       type="button"
-      class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab === 'harnesses'
-        ? 'bg-surface text-foreground shadow-sm'
+      class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === 'harnesses'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'harnesses'}
@@ -564,9 +565,9 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'accounts'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'accounts'}
@@ -577,9 +578,9 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'auxiliary'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'auxiliary'}
@@ -590,9 +591,9 @@
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
       'custom'
-        ? 'bg-surface text-foreground shadow-sm'
+        ? 'bg-surface text-foreground'
         : 'text-muted hover:text-foreground'}"
       role="tab"
       aria-selected={activeTab === 'custom'}
@@ -601,7 +602,9 @@
     >
       Base URL providers
       {#if baseUrlProviderStore.providers.length > 0}
-        <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed">
+        <span
+          class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+        >
           {baseUrlProviderStore.providers.length}
         </span>
       {/if}
@@ -611,7 +614,7 @@
   {#if activeTab === 'harnesses'}
     <div class="mb-4 flex flex-wrap items-center gap-2">
       <div class="relative min-w-[200px] flex-1">
-        <Search
+        <CioSearch
           size={14}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -621,13 +624,13 @@
           type="text"
           placeholder="Search harnesses…"
           aria-label="Search harnesses"
-          class="h-8 w-full rounded-lg border bg-elevated pl-8 pr-14 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
+          class="h-8 w-full border bg-elevated pl-8 pr-14 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
         />
         <div class="absolute right-2 top-1/2 -translate-y-1/2">
           {#if searchQuery}
             <button
               type="button"
-              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-surface hover:text-foreground"
+              class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-surface hover:text-foreground"
               aria-label="Clear search"
               title="Clear search"
               onclick={() => {
@@ -635,11 +638,11 @@
                 searchInputEl?.focus()
               }}
             >
-              <X size={12} />
+              <CioClose size={12} />
             </button>
           {:else}
             <kbd
-              class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
+              class="border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
             >
               {displayShortcutLabel('Ctrl K')}
             </kbd>
@@ -648,7 +651,7 @@
       </div>
 
       <div
-        class="flex shrink-0 items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+        class="flex shrink-0 items-center gap-0.5 border bg-elevated p-0.5"
         role="tablist"
         aria-label="Filter harnesses by status"
       >
@@ -657,14 +660,15 @@
           role="tab"
           aria-selected={statusFilter === 'all'}
           title="Show all harnesses"
-          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
           'all'
-            ? 'bg-surface text-foreground shadow-sm'
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           onclick={() => (statusFilter = 'all')}
         >
           All
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
             >{allCount}</span
           >
         </button>
@@ -673,17 +677,18 @@
           role="tab"
           aria-selected={statusFilter === 'updates'}
           title="Show harnesses with an update available"
-          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
           'updates'
-            ? 'bg-surface text-foreground shadow-sm'
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           onclick={() => (statusFilter = 'updates')}
         >
           {#if updatesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" aria-hidden="true"></span>
+            <span class="h-1.5 w-1.5 shrink-0 bg-warning" aria-hidden="true"></span>
           {/if}
           Updates
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
             >{updatesCount}</span
           >
         </button>
@@ -692,29 +697,30 @@
           role="tab"
           aria-selected={statusFilter === 'issues'}
           title="Show harnesses that need attention"
-          class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
           'issues'
-            ? 'bg-surface text-foreground shadow-sm'
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           onclick={() => (statusFilter = 'issues')}
         >
           {#if issuesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true"></span>
+            <span class="h-1.5 w-1.5 shrink-0 bg-danger" aria-hidden="true"></span>
           {/if}
           Issues
-          <span class="rounded-full bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
             >{issuesCount}</span
           >
         </button>
       </div>
 
       <button
-        class="flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Re-check all harnesses"
         onclick={() => void recheckAll()}
         disabled={providerStore.checkingCount > 0}
       >
-        <RefreshCw size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
+        <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
         Check all
       </button>
     </div>
@@ -726,7 +732,9 @@
         <SettingsEntry {expanded}>
           <div class="grid grid-cols-[13rem_10rem_11rem_minmax(0,1fr)_auto] items-center gap-3">
             <div class="flex min-w-0 items-center gap-3">
-              <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-elevated">
+              <div
+                class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
+              >
                 <AgentIcon agentId={provider.id} label={provider.name} size={20} />
               </div>
               <div class="min-w-0">
@@ -767,15 +775,15 @@
                   {#if provider.resolvedPath}
                     <button
                       type="button"
-                      class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                       title="Copy path"
                       aria-label="Copy {provider.name} path"
                       onclick={() => void copyPath(provider)}
                     >
                       {#if copiedPathId === provider.id}
-                        <Check size={11} class="text-success" />
+                        <CioCheck size={11} class="text-success" />
                       {:else}
-                        <Copy size={11} />
+                        <CioCopy size={11} />
                       {/if}
                     </button>
                   {/if}
@@ -811,15 +819,15 @@
             <div class="flex items-center justify-end gap-2">
               {#if provider.status === 'error'}
                 <button
-                  class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                  class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
                   title="Re-check {provider.name}"
                   onclick={() => void checkOne(provider.id)}
                 >
-                  <RefreshCw size={13} />
+                  <CioRefresh size={13} />
                   Retry
                 </button>
                 <button
-                  class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                   title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
                   aria-expanded={expanded}
                   onclick={() => toggleSettings(provider.id)}
@@ -829,21 +837,21 @@
               {:else}
                 {#if provider.status === 'not_found'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                    class="flex items-center gap-1.5 border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
                     title="Install {provider.name} in the embedded terminal"
                     disabled={harnessLifecycleStore.isRunning(provider.id)}
                     onclick={() =>
                       void harnessLifecycleStore.startInstall(provider.id, provider.name)}
                   >
                     {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <Loader2 size={13} class="animate-spin" />
+                      <CioSpinner size={13} class="animate-spin" />
                     {:else}
-                      <Download size={13} />
+                      <CioDownload size={13} />
                     {/if}
                     Install
                   </button>
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    class="flex items-center gap-1.5 border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                     title="Open the {provider.name} install page for your operating system"
                     onclick={() => void openInstallPage(provider)}
                   >
@@ -851,7 +859,7 @@
                   </button>
                 {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                    class="flex items-center gap-1.5 border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
                     title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
                       provider.id
                     )?.latestVersion}"
@@ -860,22 +868,22 @@
                       void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
                   >
                     {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <Loader2 size={13} class="animate-spin" />
+                      <CioSpinner size={13} class="animate-spin" />
                     {:else}
-                      <Download size={13} />
+                      <CioDownload size={13} />
                     {/if}
                     Update
                   </button>
                 {/if}
                 <button
-                  class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                  class="flex items-center gap-1.5 bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
                   title={canAddProvider(provider)
                     ? `Add a provider to ${provider.name}`
                     : 'Install the harness first, then re-check to add providers'}
                   disabled={!canAddProvider(provider)}
                   onclick={() => providerConnectFlow.open(provider.id)}
                 >
-                  <Plug2 size={13} /> Manage providers
+                  <CioPlug size={13} /> Manage providers
                 </button>
               {/if}
 
@@ -903,7 +911,7 @@
               {#if provider.status === 'error'}
                 <p class="text-xs font-semibold text-foreground">Details</p>
                 <pre
-                  class="overflow-auto rounded-lg border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
+                  class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
                     >{provider.detail ?? 'No additional detail available.'}</code
                   ></pre>
               {:else}
@@ -926,7 +934,7 @@
                       {#if entry.confirmed}
                         <button
                           type="button"
-                          class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                          class="px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
                           title="Clear the confirmed value and fall back to the declared manifest"
                           disabled={manifestSaving[provider.id]}
                           onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
@@ -978,7 +986,7 @@
           {/if}
         </SettingsEntry>
       {:else}
-        <div class="rounded-xl border border-dashed p-6 text-center text-xs text-dimmed">
+        <div class="border border-dashed p-6 text-center text-xs text-dimmed">
           {#if searchQuery || statusFilter !== 'all'}
             No harnesses match the current filter.
           {:else}
@@ -988,8 +996,8 @@
       {/each}
     </div>
 
-    <div class="mt-6 rounded-xl border border-dashed p-4 text-center">
-      <Plug size={18} class="mx-auto mb-1 text-dimmed" />
+    <div class="mt-6 border border-dashed p-4 text-center">
+      <CioPlug size={18} class="mx-auto mb-1 text-dimmed" />
       <p class="text-xs text-dimmed">
         Harnesses are detected from your system PATH and Windows Subsystem for Linux distributions,
         then verified with a version probe. Install the CLI tool and click Check.
@@ -1001,20 +1009,20 @@
     >
       <div class="flex flex-wrap items-center gap-4">
         <span class="flex items-center gap-1.5 text-success">
-          <CheckCircle2 size={12} />
+          <CioCheckCircle size={12} />
           {readyCount} ready
         </span>
         <span class="flex items-center gap-1.5 text-warning">
-          <Download size={12} />
+          <CioDownload size={12} />
           {updatesCount} update{updatesCount === 1 ? '' : 's'}
         </span>
         <span class="flex items-center gap-1.5 text-danger">
-          <AlertTriangle size={12} />
+          <CioAttention size={12} />
           {issuesCount} issue{issuesCount === 1 ? '' : 's'}
         </span>
       </div>
       <span class="flex items-center gap-1.5 text-dimmed">
-        <Clock size={12} />
+        <CioClock size={12} />
         {lastCheckedLabel}
       </span>
     </div>
@@ -1053,20 +1061,20 @@
   <Modal open title={`Uninstall ${uninstallTarget.name}?`} onClose={cancelUninstall}>
     {#snippet footer()}
       <button
-        class="h-9 rounded-lg border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="h-9 border px-3 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         onclick={cancelUninstall}
       >
         Cancel
       </button>
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
+        class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:opacity-50"
         onclick={() => void confirmUninstall()}
         disabled={uninstallBusy || uninstallLoading || !!uninstallError}
       >
         {#if uninstallBusy}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Trash2 size={13} />
+          <CioTrash size={13} />
         {/if}
         Uninstall
       </button>
@@ -1078,18 +1086,18 @@
       </p>
       {#if uninstallLoading}
         <div
-          class="flex items-center gap-2 rounded-lg border border-border bg-raised p-3 font-mono text-xs text-muted"
+          class="flex items-center gap-2 border border-border bg-raised p-3 font-mono text-xs text-muted"
         >
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Resolving uninstall command…
         </div>
       {:else if uninstallError}
-        <div class="rounded-lg border border-danger/30 bg-danger/10 p-3 text-xs text-danger">
+        <div class="border border-danger/30 bg-danger/10 p-3 text-xs text-danger">
           {uninstallError}
         </div>
       {:else}
         <pre
-          class="overflow-auto rounded-lg border border-border bg-raised p-3 font-mono text-xs leading-relaxed text-foreground"><code
+          class="overflow-auto border border-border bg-raised p-3 font-mono text-xs leading-relaxed text-foreground"><code
             >{uninstallCommand}</code
           ></pre>
         <p class="text-xs text-dimmed">

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessagesCircle } from '@lucide/svelte'
+  import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { appPanelSlot } from '$lib/app-panel-portal'
@@ -22,8 +22,10 @@
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { browserHistory, BROWSER_HISTORY_GLOBAL_SCOPE } from '$lib/stores/browser-history.svelte'
+  import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+  import { SvelteMap } from 'svelte/reactivity'
 
   interface Props {
     onClose: () => void
@@ -60,7 +62,7 @@
 
   // The note is docked by the store the moment a tab becomes active and while
   // this rail is shown, so nothing here creates it; this only reads the one the
-  // store owns.
+  // Store owns.
   const noteTab = $derived(
     activeTab ? contextSidebarState.noteTabFor(GLOBAL_BROWSER_PROJECT_ID, activeTab.id) : null
   )
@@ -174,7 +176,24 @@
    * A popup keeps the tab and box session that opened it, while its rail tab stays
    * available as the user moves between pages and boxes.
    */
-  const popupTabs = $derived(browserPopupWindows.tabs())
+  const popupTabs = $derived.by(() => {
+    const tabs = browserPopupWindows.tabs()
+    const extensionTabCounts = new SvelteMap<string, number>()
+    for (const tab of tabs) {
+      if (tab.extensionId) {
+        extensionTabCounts.set(tab.extensionId, (extensionTabCounts.get(tab.extensionId) ?? 0) + 1)
+      }
+    }
+    return tabs.map((tab) => {
+      if (!tab.extensionId || (extensionTabCounts.get(tab.extensionId) ?? 0) < 2) return tab
+      const popup = browserPopupWindows.find(tab.id)
+      const ownerTab = popup ? globalBrowser.tabById(popup.tabId) : null
+      return {
+        ...tab,
+        boxName: globalBrowser.boxById(ownerTab?.boxId ?? DEFAULT_BOX_ID)?.name ?? 'Default'
+      }
+    })
+  })
   /** The browser-wide popup the rail is showing, or null while none are open. */
   const activePopup = $derived(
     globalBrowser.popupsSidebarShown ? browserPopupWindows.active() : null
@@ -502,11 +521,11 @@
            is created by asking for it, so a tab the user only visited is never
            given a transcript they did not want. -->
       <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <MessagesCircle size={20} class="text-dimmed" />
+        <CioChat size={20} class="text-dimmed" />
         <p class="text-xs text-muted">Ask the agent about the page on this tab.</p>
         <button
           type="button"
-          class="rounded-lg bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="bg-primary px-3 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
           title="Start a conversation about this page"
           onclick={() => globalBrowser.showAgentSidebar()}
         >

@@ -1,5 +1,7 @@
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { atomicWriteDurable, generateId } from '../../lib/utils'
 import { Logger } from './logger'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -22,6 +24,25 @@ export interface CleanShutdownMarker {
 }
 
 const STORE_PATH = 'shutdown/clean-shutdown.json'
+
+/**
+ * Best-effort synchronous fsync of the directory holding a durable write, so the
+ * rename itself survives a power loss. Not every platform allows a directory to
+ * be opened for syncing (Windows notably does not), so a failure here is ignored
+ * and the file sync at the call site remains the guarantee.
+ */
+function syncContainingDirectorySync(filePath: string): void {
+  try {
+    const handle = openSync(dirname(filePath), 'r')
+    try {
+      fsyncSync(handle)
+    } finally {
+      closeSync(handle)
+    }
+  } catch {
+    // Directory fsync is unsupported on some platforms; the file sync remains.
+  }
+}
 
 function isValidMarker(value: unknown): value is CleanShutdownMarker {
   if (!value || typeof value !== 'object') return false
@@ -55,9 +76,22 @@ export class CleanShutdownStore {
 
   constructor(private readonly storage: StorageEngine) {}
 
+  /**
+   * Load the marker for this launch.
+   *
+   * An unreadable or unparseable marker is treated as "no marker" and logged,
+   * never thrown: a torn write must not abort the boot reads that follow it, and
+   * the class only ever degrades a bad marker to the crash wording, never the
+   * other way around. A genuinely missing file is filtered out by the reader and
+   * stays silent.
+   */
   async load(): Promise<void> {
-    const raw = await this.storage.read<CleanShutdownStoreFile>(STORE_PATH)
-    this.marker = raw && isValidMarker(raw.marker) ? raw.marker : null
+    try {
+      await this.readMarker()
+    } catch (error) {
+      Logger.error('Clean-shutdown marker load failed', error)
+      this.marker = null
+    }
     this.loaded = true
   }
 
@@ -72,10 +106,20 @@ export class CleanShutdownStore {
    */
   async reload(): Promise<void> {
     try {
-      await this.load()
+      await this.readMarker()
     } catch (error) {
       Logger.error('Clean-shutdown marker reload failed', error)
     }
+  }
+
+  /**
+   * Read and validate the marker, throwing when the file cannot be read or
+   * parsed. Callers decide whether a failed read clears the marker (`load`) or
+   * keeps the last known one (`reload`).
+   */
+  private async readMarker(): Promise<void> {
+    const raw = await this.storage.read<CleanShutdownStoreFile>(STORE_PATH)
+    this.marker = raw && isValidMarker(raw.marker) ? raw.marker : null
   }
 
   isLoaded(): boolean {
@@ -100,22 +144,45 @@ export class CleanShutdownStore {
 
   /**
    * Record the marker with a synchronous write, for the forced-exit path where
-   * the event loop never gets another turn. Deliberately not atomic: the loader
-   * validates the shape, so a torn write degrades to "no marker" instead of a
-   * wrong verdict.
+   * the event loop never gets another turn. The async durable helper cannot run
+   * once nothing will turn the loop again, so this is its synchronous
+   * counterpart: a unique temp file opened with `wx`, fsynced, renamed into
+   * place, then a best-effort directory sync. Every step is synchronous and
+   * takes a single bounded attempt, so a locked or refused path logs and returns
+   * instead of hanging the exit.
    */
   recordSync(pid: number = process.pid): void {
     this.marker = { pid, at: Date.now() }
     this.loaded = true
+    const path = this.storage.resolve(STORE_PATH)
+    const tmpPath = `${path}.${process.pid}.${generateId()}.tmp`
     try {
-      const path = this.storage.resolve(STORE_PATH)
       mkdirSync(dirname(path), { recursive: true })
-      writeFileSync(
-        path,
-        JSON.stringify({ version: 1, marker: this.marker } satisfies CleanShutdownStoreFile),
-        'utf8'
-      )
+      const handle = openSync(tmpPath, 'wx', 0o600)
+      try {
+        writeSync(
+          handle,
+          JSON.stringify({ version: 1, marker: this.marker } satisfies CleanShutdownStoreFile),
+          null,
+          'utf8'
+        )
+        // The event loop never turns again, so the flush has to happen here or a
+        // power loss right after the marker is written could still zero it.
+        fsyncSync(handle)
+      } finally {
+        closeSync(handle)
+      }
+      renameSync(tmpPath, path)
+      syncContainingDirectorySync(path)
     } catch (error) {
+      // Cleanup is best-effort: a locked or read-only path can refuse the temp
+      // file's removal (EACCES/EPERM), and that refusal must never pre-empt the
+      // log below or escape this catch on the forced-exit path.
+      try {
+        rmSync(tmpPath, { force: true })
+      } catch {
+        // A stray temp file is harmless; the marker simply was not written.
+      }
       Logger.error('Clean-shutdown marker sync write failed', error)
     }
   }
@@ -141,10 +208,19 @@ export class CleanShutdownStore {
 
   private async persist(): Promise<void> {
     try {
-      await this.storage.write(STORE_PATH, {
-        version: 1,
-        marker: this.marker
-      } satisfies CleanShutdownStoreFile)
+      const path = this.storage.resolve(STORE_PATH)
+      await mkdir(dirname(path), { recursive: true })
+      // The marker is written at boot and at shutdown, never on a hot path, so
+      // it opts into the durable write: fsync before the rename and the
+      // containing directory after it, so a forced kill cannot leave it zeroed.
+      await atomicWriteDurable(
+        path,
+        JSON.stringify(
+          { version: 1, marker: this.marker } satisfies CleanShutdownStoreFile,
+          null,
+          2
+        )
+      )
     } catch (error) {
       Logger.error('Clean-shutdown marker write failed', error)
     }

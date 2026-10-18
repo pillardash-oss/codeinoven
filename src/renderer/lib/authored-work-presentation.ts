@@ -1,4 +1,5 @@
-import { Clapperboard, Palette } from '@lucide/svelte'
+import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
 import type { Component } from 'svelte'
 import type { AuthoredWorkKind } from '$shared/ipc-contract'
 
@@ -20,6 +21,6 @@ export const AUTHORED_WORK_NAME_BY_KIND: Record<AuthoredWorkKind, string> = {
 
 /** The glyph that marks the session, paired with the name for its label. */
 export const AUTHORED_WORK_ICON_BY_KIND: Record<AuthoredWorkKind, Component> = {
-  design: Palette,
-  video: Clapperboard
+  design: CioPalette,
+  video: CioClapper
 }

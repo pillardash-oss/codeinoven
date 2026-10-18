@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Eye, Globe, Loader2, Volume2 } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { browserTabLabel, type GlobalBrowserTab } from '$lib/stores/global-browser-types'
@@ -13,9 +16,10 @@
   interface Props {
     tab: GlobalBrowserTab
     selected?: boolean
+    showBadge?: boolean
   }
 
-  let { tab, selected = false }: Props = $props()
+  let { tab, selected = false, showBadge = true }: Props = $props()
 
   /**
    * One browser tab in the Ctrl+Tab switcher.
@@ -45,20 +49,20 @@
 </script>
 
 <div
-  class="flex min-h-11 w-full flex-col justify-center px-2.5 py-1.5 text-left transition-colors {selected
+  class="flex h-9 w-full flex-col justify-center px-2.5 py-1.5 text-left transition-colors {selected
     ? 'bg-selected'
     : ''}"
 >
   <span class="flex w-full min-w-0 items-center gap-2">
     <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
       {#if customIconUrl}
-        <img src={customIconUrl} alt="" class="h-3.5 w-3.5 rounded-sm object-contain" />
+        <img src={customIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
       {:else if runtime.loading}
-        <Loader2 size={13} class="animate-spin text-muted" />
+        <CioSpinner size={13} class="animate-spin text-muted" />
       {:else if tab.favicon}
-        <img src={tab.favicon} alt="" class="h-3.5 w-3.5 rounded-sm object-contain" />
+        <img src={tab.favicon} alt="" class="h-3.5 w-3.5 object-contain" />
       {:else}
-        <Globe size={13} class="text-muted" />
+        <CioBrowser size={13} class="text-muted" />
       {/if}
     </span>
     <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{label}</span>
@@ -67,7 +71,7 @@
         role="img"
         class="flex shrink-0 items-center text-accent"
         title="Peek open on this tab"
-        aria-label="Peek open on this tab"><Eye size={12} /></span
+        aria-label="Peek open on this tab"><CioEye size={12} /></span
       >
     {/if}
     {#if runtime.audible && !runtime.muted}
@@ -77,7 +81,7 @@
         title="Playing audio"
         aria-label="Playing audio"
       >
-        <Volume2 size={12} />
+        <CioVolume size={12} />
       </span>
     {/if}
     {#if box}
@@ -88,12 +92,14 @@
         aria-label={`In box ${box.name}`}
       >
         {#if boxIcon}
-          <img src={boxIcon} alt="" class="h-3 w-3 rounded-sm object-contain" />
+          <img src={boxIcon} alt="" class="h-3 w-3 object-contain" />
         {:else}
-          <span class="h-2 w-2 rounded-full" style="background-color: {boxAccent}"></span>
+          <span class="h-2 w-2" style="background-color: {boxAccent}"></span>
         {/if}
       </span>
     {/if}
-    <StatusPill tone="info">Browser</StatusPill>
+    {#if showBadge}
+      <StatusPill><span class={selected ? 'text-accent' : undefined}>Browser</span></StatusPill>
+    {/if}
   </span>
 </div>

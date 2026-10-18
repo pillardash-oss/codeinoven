@@ -57,6 +57,10 @@ export const invokeThreadContract = {
     [projectId: string, threadId: string],
     TurnCheckpointSummary | null
   >,
+  'checkpoint:latestSummary': {} as Contract<
+    [projectId: string, threadId: string],
+    TurnCheckpointSummary | null
+  >,
   'checkpoint:liveDiff': {} as Contract<
     [projectId: string, threadId: string, checkpointId: string, path: string],
     TurnCheckpointFileDiff
@@ -88,7 +92,16 @@ export const invokeThreadContract = {
         projectId?: string
         limit?: number
         family?: 'projects' | 'chats' | 'assistant'
-        routineId?: string
+        assistantId?: string
+        /**
+         * Rank with the local embedding model. The spotlight's own thread search
+         * is the only caller that sets this; the panels' search buttons leave it
+         * off and always get keyword results.
+         */
+        semantic?: boolean
+        /** The spotlight request this search belongs to, echoed on
+         *  `threads:searchIntent` so a deferred answer can be matched to it. */
+        requestId?: number
       }
     ],
     import('../types').ThreadSearchResult[]
@@ -194,9 +207,12 @@ export const invokeThreadContract = {
   >,
   'thread:loadStreamParts': {} as Contract<
     [projectId: string, threadId: string, query?: import('../types').TurnStreamPartsQuery],
-    import('../types').TurnStreamPartsPage | import('../types').TurnStreamPartsChange
+    | import('../types').TurnStreamPartsPage
+    | import('../types').TurnStreamPartsChange
+    | import('../types').TurnStreamCompletedTurns
   >,
   'thread:markRead': {} as Contract<[projectId: string, threadId: string], Thread>,
+  'thread:markUnread': {} as Contract<[projectId: string, threadId: string], Thread>,
   /** Renderer → main composer draft transitions feeding the turn-grading timers. */
   'thread:draftActivity': {} as Contract<
     [projectId: string, threadId: string, drafting: boolean],
@@ -213,6 +229,10 @@ export const invokeThreadContract = {
   'thread:listDrafting': {} as Contract<[], Thread[]>,
   'thread:setPinned': {} as Contract<
     [projectId: string, threadId: string, pinned: boolean],
+    Thread
+  >,
+  'thread:setBookmarked': {} as Contract<
+    [projectId: string, threadId: string, bookmarked: boolean],
     Thread
   >,
   'thread:setContextUsage': {} as Contract<

@@ -1,4 +1,10 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     ASSISTANT_SPACE_ID,
@@ -35,16 +41,16 @@
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
-  import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
+
   import type { Thread } from '$shared/types'
 
   interface Props {
     variant?: 'settings' | 'sidebar'
     projectId?: string
     threadId?: string
-    /** The selected assistant task's routine, so routine-scoped memory knows
-     *  which routine it belongs to. */
-    routineId?: string
+    /** The selected assistant task's assistant, so assistant-scoped memory knows
+     *  which assistant it belongs to. */
+    assistantId?: string
     memoryEnabled?: boolean
     chatMemoryEnabled?: boolean
     onMemoryEnabledChange?: (enabled: boolean) => Promise<void>
@@ -65,7 +71,7 @@
     variant = 'settings',
     projectId,
     threadId,
-    routineId,
+    assistantId,
     memoryEnabled,
     chatMemoryEnabled,
     onMemoryEnabledChange,
@@ -132,12 +138,12 @@
 
   let scopeOptions = $derived(MEMORY_SCOPE_OPTIONS[surface])
 
-  /** The routine the panel resolved for an assistant task. The rail passes it
+  /** The assistant the panel resolved for an assistant task. The rail passes it
    *  with the tab, and every other entry point (a proposal toast, the sources
    *  panel, a shortcut) leaves it out, in which case the panel reads it from
-   *  the task thread so routine memory is never silently hidden. */
-  let resolvedRoutineId = $state<string | undefined>(undefined)
-  let effectiveRoutineId = $derived(routineId ?? resolvedRoutineId)
+   *  the task thread so assistant memory is never silently hidden. */
+  let resolvedAssistantId = $state<string | undefined>(undefined)
+  let effectiveAssistantId = $derived(assistantId ?? resolvedAssistantId)
 
   /** What this panel is and where it sits, the single value every visibility
    *  check (load, save, add) reads from. */
@@ -145,7 +151,7 @@
     surface,
     projectId,
     threadId,
-    routineId: effectiveRoutineId
+    assistantId: effectiveAssistantId
   })
 
   let projectMemoryEnabled = $derived(memoryEnabled ?? loadedProjectEnabled)
@@ -165,7 +171,7 @@
         : projectId === GLOBAL_BROWSER_PROJECT_ID
           ? 'Global, all browser chats, and this chat’s preferences.'
           : projectId === ASSISTANT_SPACE_ID
-            ? 'Global, routine, and task preferences active in this conversation.'
+            ? 'Global, assistant, and task preferences active in this conversation.'
             : 'Global, project, and thread preferences active in this conversation.'
   )
 
@@ -243,14 +249,14 @@
   })
 
   /** What the panel state was read for: the surface, its container, and (on
-   *  the assistant surface) the task's routine, so a task regrouped into
-   *  another routine reloads even though its thread id stayed the same. */
+   *  the assistant surface) the task's assistant, so a task regrouped into
+   *  another assistant reloads even though its thread id stayed the same. */
   function currentContextKey(): string {
-    return `${surface}:${projectId ?? ''}:${routineId ?? ''}:${threadId ?? ''}`
+    return `${surface}:${projectId ?? ''}:${assistantId ?? ''}:${threadId ?? ''}`
   }
 
   function currentContainerKey(): string {
-    return `${surface}:${projectId ?? ''}:${routineId ?? ''}`
+    return `${surface}:${projectId ?? ''}:${assistantId ?? ''}`
   }
 
   async function load(): Promise<void> {
@@ -260,10 +266,10 @@
     loading = true
     error = ''
     try {
-      // A routine entry is only visible through its own routine, so resolve the
-      // task's routine before filtering when the caller did not supply it.
-      if (surface === 'sidebar-assistant' && !routineId && projectId && threadId) {
-        resolvedRoutineId = (await invoke('thread:get', projectId, threadId))?.routineId
+      // An assistant entry is only visible through its own assistant, so resolve the
+      // task's assistant before filtering when the caller did not supply it.
+      if (surface === 'sidebar-assistant' && !assistantId && projectId && threadId) {
+        resolvedAssistantId = (await invoke('thread:get', projectId, threadId))?.assistantId
       }
       const config = await invoke('config:get')
       loadedProjectEnabled = config.memory.enabled
@@ -476,7 +482,7 @@
         source: 'manual',
         projectId: location.projectId,
         threadId: location.threadId,
-        routineId: location.routineId
+        assistantId: location.assistantId
       })
       // Prepend and keep load baseline in sync so a following bulk Save
       // treats this as already-known (not newSinceLoad/duplicate).
@@ -551,7 +557,9 @@
   }
 
   let pendingDeleteEntry = $derived(
-    pendingDeleteId === null ? null : (entries.find((entry) => entry.id === pendingDeleteId) ?? null)
+    pendingDeleteId === null
+      ? null
+      : (entries.find((entry) => entry.id === pendingDeleteId) ?? null)
   )
 
   function requestRemoveEntry(index: number): void {
@@ -578,7 +586,7 @@
         const scopes = value as MemoryScope[]
         const location = locationForScopeChange(
           scopes,
-          { projectId: entry.projectId, threadId: entry.threadId, routineId: entry.routineId },
+          { projectId: entry.projectId, threadId: entry.threadId, assistantId: entry.assistantId },
           surfaceContext
         )
         return {
@@ -586,7 +594,7 @@
           scopes,
           projectId: location.projectId,
           threadId: location.threadId,
-          routineId: location.routineId,
+          assistantId: location.assistantId,
           updatedAt: Date.now()
         }
       }
@@ -764,28 +772,28 @@
         {/if}
       </div>
     {:else if !sidebarMemoryEnabled}
-      <p class="mb-4 rounded-lg bg-raised px-3 py-2 text-xs text-muted" role="status">
+      <p class="mb-4 bg-raised px-3 py-2 text-xs text-muted" role="status">
         Persistent memory is disabled for {memoryAudienceLabel}. Entries can be managed here but are
         not sent to agents.
       </p>
     {/if}
 
     {#if error}
-      <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
         {error}
       </p>
     {/if}
 
     <div class="mb-4 flex items-center justify-between gap-3">
       <div
-        class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+        class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
         role="tablist"
         aria-label="Memory sections"
       >
         <button
-          class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
           'active'
-            ? 'bg-surface text-foreground shadow-sm'
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           role="tab"
           aria-selected={currentSection === 'active'}
@@ -796,9 +804,9 @@
         </button>
         {#if variant === 'settings'}
           <button
-            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
             'inactive'
-              ? 'bg-surface text-foreground shadow-sm'
+              ? 'bg-surface text-foreground'
               : 'text-muted hover:text-foreground'}"
             role="tab"
             aria-selected={currentSection === 'inactive'}
@@ -808,7 +816,7 @@
             Inactive
             {#if inactiveCount > 0}
               <span
-                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
+                class="bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
               >
                 {inactiveCount}
               </span>
@@ -816,9 +824,9 @@
           </button>
         {:else}
           <button
-            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
             'proposed'
-              ? 'bg-surface text-foreground shadow-sm'
+              ? 'bg-surface text-foreground'
               : 'text-muted hover:text-foreground'}"
             role="tab"
             aria-selected={currentSection === 'proposed'}
@@ -828,7 +836,7 @@
             Proposed
             {#if proposals.length > 0}
               <span
-                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
+                class="bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold tabular-nums text-primary"
               >
                 {proposals.length}
               </span>
@@ -846,20 +854,20 @@
         {/if}
         {#if currentSection === 'active'}
           <button
-            class="memory-action-btn flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay disabled:opacity-50"
+            class="memory-action-btn flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay disabled:opacity-50"
             disabled={saving || loading}
             title="Add a new memory entry"
             aria-label="Add a new memory entry"
             type="button"
             onclick={addEntry}
           >
-            <Plus size={14} />
+            <CioPlus size={14} />
             <span class="memory-action-label">Add Memory</span>
           </button>
         {/if}
         {#if currentSection !== 'proposed'}
           <button
-            class="memory-action-btn flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            class="memory-action-btn flex items-center gap-1.5 bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={saving || loading || !hasUnsavedChanges}
             title={saved ? 'All memories saved' : 'Save all memory entries'}
             aria-label={saved ? 'All memories saved' : 'Save all memory entries'}
@@ -867,11 +875,11 @@
             onclick={() => void save()}
           >
             {#if saving}
-              <Loader2 size={14} class="animate-spin" />
+              <CioSpinner size={14} class="animate-spin" />
             {:else if saved}
-              <Check size={14} />
+              <CioCheck size={14} />
             {:else}
-              <Save size={14} />
+              <CioSave size={14} />
             {/if}
             <span class="memory-action-label">{saved ? 'Saved' : 'Save'}</span>
           </button>
@@ -886,7 +894,7 @@
   {#if currentSection === 'proposed'}
     <!-- Proposals list (scrollable) -->
     <div class="min-h-0 flex-1 overflow-y-auto pb-2">
-      <section class="rounded-xl border bg-surface p-4" aria-labelledby="memory-proposals-title">
+      <section class="border bg-surface p-4" aria-labelledby="memory-proposals-title">
         <div class="mb-3">
           <h2 id="memory-proposals-title" class="text-sm font-semibold text-foreground">
             Pending suggestions
@@ -898,7 +906,7 @@
         {#if proposals.length > 0}
           <div class="space-y-2">
             {#each proposals as row (row.proposal.id)}
-              <div class="rounded-lg border bg-elevated p-3">
+              <div class="border bg-elevated p-3">
                 <div class="flex items-start justify-between gap-3">
                   <div class="min-w-0">
                     <p class="text-sm font-medium text-foreground">{row.proposal.label}</p>
@@ -911,24 +919,24 @@
                   </div>
                   <div class="flex shrink-0 items-center gap-1">
                     <button
-                      class="rounded-md p-1.5 text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+                      class="p-1.5 text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
                       type="button"
                       title="Approve this memory suggestion"
                       aria-label="Approve memory suggestion"
                       disabled={proposalBusyIds.includes(row.proposal.id)}
                       onclick={() => void resolveProposal(row, true)}
                     >
-                      <Check size={15} />
+                      <CioCheck size={15} />
                     </button>
                     <button
-                      class="rounded-md p-1.5 text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+                      class="p-1.5 text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
                       type="button"
                       title="Reject this memory suggestion"
                       aria-label="Reject memory suggestion"
                       disabled={proposalBusyIds.includes(row.proposal.id)}
                       onclick={() => void resolveProposal(row, false)}
                     >
-                      <X size={15} />
+                      <CioClose size={15} />
                     </button>
                   </div>
                 </div>
@@ -936,7 +944,7 @@
             {/each}
           </div>
         {:else}
-          <div class="rounded-lg border border-dashed p-6 text-center">
+          <div class="border border-dashed p-6 text-center">
             <p class="text-sm text-dimmed">No pending proposals.</p>
             <p class="mt-1 text-xs text-dimmed">
               Newly detected preferences will appear here for review.
@@ -960,9 +968,9 @@
 
       <div class="mb-4 {variant === 'sidebar' ? 'space-y-2' : 'flex flex-wrap items-center gap-2'}">
         <div class="relative {variant === 'sidebar' ? '' : 'min-w-[160px] flex-1'}">
-          <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
+          <CioSearch size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
           <input
-            class="w-full rounded-lg border bg-elevated pl-8 pr-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+            class="w-full border bg-elevated pl-8 pr-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
             placeholder="Search memories..."
             bind:value={searchQuery}
           />
@@ -975,7 +983,7 @@
           <select
             class="{variant === 'sidebar'
               ? 'w-full'
-              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
+              : 'w-36'} border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
             bind:value={filterCategory}
           >
             <option value="">All categories</option>
@@ -986,7 +994,7 @@
           <select
             class="{variant === 'sidebar'
               ? 'w-full'
-              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
+              : 'w-36'} border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
             bind:value={filterPriority}
           >
             <option value="">All priorities</option>
@@ -1019,7 +1027,7 @@
       </div>
 
       {#if filteredEntries.length === 0 && !loading}
-        <div class="rounded-xl border border-dashed p-8 text-center">
+        <div class="border border-dashed p-8 text-center">
           <p class="text-sm text-dimmed">{emptyState.title}</p>
           <p class="mt-1 text-xs text-dimmed">{emptyState.body}</p>
         </div>

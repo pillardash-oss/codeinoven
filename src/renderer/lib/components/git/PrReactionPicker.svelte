@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioSmilePlus from '@pillardash-oss/cio-icon/CioSmilePlus.svelte'
   /**
    * The "add a reaction" control for one comment: GitHub's own eight reactions,
    * with the ones the reader already used lit up.
@@ -8,7 +9,6 @@
    * the invitation. The chips themselves appear under the body once a reaction
    * exists, which is where a reader looks to see who agreed.
    */
-  import { SmilePlus } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import { gitState } from '$lib/stores/git.svelte'
   import { prReactionBusyKey } from '$lib/stores/git-store-helpers'
@@ -43,15 +43,15 @@
 
 <Popover.Root bind:open>
   <Popover.Trigger
-    class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
+    class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-dimmed hover:bg-overlay hover:text-foreground data-[state=open]:bg-overlay data-[state=open]:text-foreground"
     aria-label="Add a reaction"
     title="Add a reaction"
   >
-    <SmilePlus size={13} />
+    <CioSmilePlus size={13} />
   </Popover.Trigger>
   <Popover.Portal>
     <Popover.Content
-      class="z-50 flex items-center gap-0.5 rounded-lg border border-border bg-surface p-1 shadow-xl"
+      class="z-50 flex items-center gap-0.5 border border-border bg-surface p-1 shadow-xl"
       side="bottom"
       align="end"
       sideOffset={4}
@@ -64,7 +64,7 @@
       {#each reactionOptions() as option (option.content)}
         <button
           type="button"
-          class="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-base leading-none transition-colors hover:bg-elevated disabled:opacity-50 {mine.has(
+          class="flex size-7 shrink-0 cursor-pointer items-center justify-center text-base leading-none transition-colors hover:bg-elevated disabled:opacity-50 {mine.has(
             option.content
           )
             ? 'bg-primary/10'

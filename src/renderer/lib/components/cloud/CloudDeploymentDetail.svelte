@@ -1,21 +1,19 @@
 <script lang="ts">
-  import {
-    ArrowDown,
-    ArrowLeft,
-    Bot,
-    Braces,
-    ChevronDown,
-    ChevronUp,
-    CircleCheck,
-    CircleX,
-    Clock3,
-    Cloud,
-    Copy,
-    Loader2,
-    RefreshCw,
-    Search,
-    X
-  } from '@lucide/svelte'
+  import CioArrowDown from '@pillardash-oss/cio-icon/CioArrowDown.svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioBraces from '@pillardash-oss/cio-icon/CioBraces.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCloud from '@pillardash-oss/cio-icon/CioCloud.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -40,7 +38,7 @@
     projectId: string
     container: CloudDeploymentContainer
     onBack: () => void
-    /** Push an updated status snapshot back into the panel/store cache. */
+    /** Push an updated status snapshot back into the panel/Store cache. */
     onUpdated: (container: CloudDeploymentContainer) => void
     /** Hand the failing deployment to an agent, given its readable log text. */
     onRemediate: (logText: string) => void
@@ -76,7 +74,12 @@
           container.id,
           container.accountId
         )}/${selectedDeploymentId}`
-      : CloudDeployState.containerKey(projectId, container.providerKind, container.id, container.accountId)
+      : CloudDeployState.containerKey(
+          projectId,
+          container.providerKind,
+          container.id,
+          container.accountId
+        )
   )
   const log = $derived(cloudDeployState.containerLogs[logKey]?.value.log ?? '')
 
@@ -343,7 +346,7 @@
       {#if selectedDeployment}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to deployments"
           aria-label="Back to deployments"
           onclick={() => {
@@ -351,17 +354,17 @@
             tail = false
           }}
         >
-          <ArrowLeft size={13} />
+          <CioArrowLeft size={13} />
         </button>
       {:else}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to cloud deployments"
           aria-label="Back to cloud deployments"
           onclick={onBack}
         >
-          <ArrowLeft size={13} />
+          <CioArrowLeft size={13} />
         </button>
       {/if}
       <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
@@ -384,33 +387,33 @@
       {#if selectedDeployment?.status === 'failed'}
         <button
           type="button"
-          class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 cursor-pointer items-center gap-1 border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Diagnose this failed deployment with an agent"
           aria-label="Diagnose this failed deployment with an agent"
           onclick={() => onRemediate(readableLog)}
         >
-          <Bot size={12} />
+          <CioSubagent size={12} />
           Diagnose
         </button>
       {/if}
       <button
         type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Refresh deployment log"
         aria-label="Refresh deployment log"
         onclick={() => void refresh()}
       >
-        <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
+        <CioRefresh size={12} class={refreshing ? 'animate-spin' : ''} />
       </button>
       {#if selectedDeployment}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Jump to the latest log lines"
           aria-label="Jump to the latest log lines"
           onclick={toggleTail}
         >
-          <ArrowDown size={12} class={tail ? 'text-foreground' : ''} />
+          <CioArrowDown size={12} class={tail ? 'text-foreground' : ''} />
         </button>
       {/if}
       {#if containerUrls(container).length > 0}
@@ -458,44 +461,44 @@
         {#if log}
           <button
             type="button"
-            class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Search log (Ctrl/Cmd+F)"
             aria-label="Search log"
             onclick={openSearch}
           >
-            <Search size={10} />
+            <CioSearch size={10} />
             Search
           </button>
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy build log"
             aria-label="Copy build log"
             onclick={() => void copyLog()}
           >
-            <Copy size={10} />
+            <CioCopy size={10} />
             Copy
           </button>
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy raw log JSON"
             aria-label="Copy raw log JSON"
             onclick={() => void copyRawLog()}
           >
-            <Braces size={10} />
+            <CioBraces size={10} />
             Copy raw
           </button>
         {/if}
       </div>
       {#if searchOpen}
         <div class="flex items-center gap-1.5 border-b border-border bg-surface px-3 py-1.5">
-          <Search size={11} class="shrink-0 text-dimmed" />
+          <CioSearch size={11} class="shrink-0 text-dimmed" />
           <input
             bind:this={searchInputEl}
             bind:value={searchQuery}
             type="text"
-            class="h-6 min-w-0 flex-1 rounded border border-border bg-elevated px-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed"
+            class="h-6 min-w-0 flex-1 border border-border bg-elevated px-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed"
             placeholder="Search in log…"
             aria-label="Search in deployment log"
             oninput={() => {
@@ -508,36 +511,36 @@
           </span>
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Previous match"
             aria-label="Previous match"
             onclick={() => goToMatch(-1)}
           >
-            <ChevronUp size={12} />
+            <CioChevronUp size={12} />
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Next match"
             aria-label="Next match"
             onclick={() => goToMatch(1)}
           >
-            <ChevronDown size={12} />
+            <CioChevronDown size={12} />
           </button>
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Close search"
             aria-label="Close search"
             onclick={closeSearch}
           >
-            <X size={12} />
+            <CioClose size={12} />
           </button>
         </div>
       {/if}
       {#if logLoading}
         <div class="flex items-center justify-center gap-2 px-6 py-8 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading log
         </div>
       {:else if logLines.length > 0}
@@ -548,7 +551,7 @@
               {@const isActiveMatch = matchIndex !== -1 && matchIndex === activeMatch}
               <div
                 data-log-line={index}
-                class="rounded px-2 py-0.5 whitespace-pre-wrap break-words {line.isError
+                class="px-2 py-0.5 whitespace-pre-wrap break-words {line.isError
                   ? 'bg-danger/10 text-danger'
                   : 'text-muted'}{matchIndex !== -1
                   ? ' bg-accent/20 ring-1 ring-inset ring-accent/40'
@@ -561,11 +564,11 @@
         </div>
       {:else if logError}
         <div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
-          <CircleX size={18} class="text-danger" />
+          <CioCrossCircle size={18} class="text-danger" />
           <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">{logError}</p>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
+            class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void selectDeployment(selectedDeployment)}
           >
             Try again
@@ -573,7 +576,7 @@
         </div>
       {:else}
         <div class="flex items-center justify-center gap-2 px-6 py-8 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading log
         </div>
       {/if}
@@ -584,25 +587,26 @@
           Deployment history
         </span>
         {#if deployments.length > 0}
-          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{deployments.length}</span>
+          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{deployments.length}</span
+          >
         {/if}
       </div>
       {#if deploymentsLoading && deployments.length === 0}
         <div class="flex items-center justify-center gap-2 px-3 py-8 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading deployments
         </div>
       {:else if deployments.length === 0}
         <div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
           {#if error}
-            <CircleX size={18} class="text-danger" />
+            <CioCrossCircle size={18} class="text-danger" />
           {/if}
           <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
             {error || 'No deployments found for this container.'}
           </p>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
+            class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
             onclick={() => void loadDeployments(true)}
           >
             Try again
@@ -619,13 +623,13 @@
               onclick={() => void selectDeployment(deployment)}
             >
               {#if deployment.status === 'building'}
-                <Clock3 size={14} class="shrink-0 text-warning" />
+                <CioClock size={14} class="shrink-0 text-warning" />
               {:else if deployment.status === 'success'}
-                <CircleCheck size={14} class="shrink-0 text-success" />
+                <CioCheckCircle size={14} class="shrink-0 text-success" />
               {:else if deployment.status === 'failed'}
-                <CircleX size={14} class="shrink-0 text-danger" />
+                <CioCrossCircle size={14} class="shrink-0 text-danger" />
               {:else}
-                <Cloud size={14} class="shrink-0 text-muted" />
+                <CioCloud size={14} class="shrink-0 text-muted" />
               {/if}
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-xs font-medium text-foreground">

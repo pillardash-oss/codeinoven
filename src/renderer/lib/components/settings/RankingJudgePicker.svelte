@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -198,8 +198,7 @@
     {#each chipOptions as option (option.kind)}
       <button
         type="button"
-        class="flex h-7 items-center rounded-lg px-2.5 text-[0.6875rem] font-medium {selection ===
-        option.kind
+        class="flex h-7 items-center px-2.5 text-[0.6875rem] font-medium {selection === option.kind
           ? 'bg-overlay text-foreground'
           : 'text-muted hover:bg-elevated hover:text-foreground'}"
         aria-pressed={selection === option.kind}
@@ -219,14 +218,14 @@
   {#if selection === 'model'}
     {#if loading}
       <div class="flex items-center gap-2 text-xs text-muted">
-        <Loader2 size={14} class="animate-spin" /> Loading models…
+        <CioSpinner size={14} class="animate-spin" /> Loading models…
       </div>
     {:else}
       <div class="flex flex-wrap items-center gap-3">
         <label class="flex min-w-0 shrink-0 items-center gap-2 text-xs text-muted">
           <span class="shrink-0">Runs on</span>
           <select
-            class="max-w-44 rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary disabled:opacity-50"
+            class="max-w-44 border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary disabled:opacity-50"
             aria-label="Harness that runs the pinned judging model"
             value={chosenHarness}
             disabled={busy}
@@ -273,10 +272,7 @@
   {/if}
 
   {#if error}
-    <p
-      class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
-      role="alert"
-    >
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {error}
     </p>
   {/if}

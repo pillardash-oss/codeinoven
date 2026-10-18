@@ -18,6 +18,7 @@ export interface CodexAppServerHost {
   pending: Map<
     number,
     {
+      method: string
       resolve: (value: Record<string, unknown>) => void
       reject: (error: Error) => void
       timer: ReturnType<typeof setTimeout>
@@ -40,7 +41,12 @@ export interface CodexAppServerTurn {
   waitingForRetry?: boolean
   /** Set synchronously when `turn/completed` arrives, before async telemetry refresh. */
   completionReceived?: boolean
+  /** Settles after terminal telemetry, persistence, and the idle event. */
+  completion?: Promise<void>
   finished: boolean
+  /** Excludes responses from previous user turns when usage arrives early. */
+  messageOffset?: number
+  pendingUsage?: Record<string, unknown>
 }
 
 export interface CodexCompactionRun {

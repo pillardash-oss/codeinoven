@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Kanban } from '@lucide/svelte'
+  import CioBoard from '@pillardash-oss/cio-icon/CioBoard.svelte'
   import ScopeCreateModal from '../scope/ScopeCreateModal.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
 
@@ -13,13 +13,13 @@
 </script>
 
 <button
-  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+  class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
   aria-label={title}
   {title}
   disabled={!scopeState.activeProjectId}
   onclick={() => (open = true)}
 >
-  <Kanban size={15} strokeWidth={1.8} />
+  <CioBoard size={15} strokeWidth={1.8} />
 </button>
 
 {#if open && scopeState.activeProjectId}

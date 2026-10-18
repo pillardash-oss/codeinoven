@@ -28,6 +28,8 @@ export function toolInput(item: Record<string, unknown>): Record<string, unknown
       // Preserve schema tolerance for non-JSON provider payloads.
     }
   }
+  // Custom code-mode calls carry JavaScript directly instead of JSON arguments.
+  if (typeof item['input'] === 'string') return { code: item['input'] }
   for (const key of ['plan', 'steps', 'tasks', 'todos', 'todoList', 'todo_list', 'checklist']) {
     if (Array.isArray(item[key])) return { [key]: item[key] }
   }

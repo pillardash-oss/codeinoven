@@ -1,9 +1,27 @@
 <script lang="ts">
+  import AssistantKnowledgeIcon from '$lib/components/icons/cio/AssistantKnowledgeIcon.svelte'
+  import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCloud from '@pillardash-oss/cio-icon/CioCloud.svelte'
+  import CioDebugger from '@pillardash-oss/cio-icon/CioDebugger.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioHistory from '@pillardash-oss/cio-icon/CioHistory.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
   import { contentThreadFamily } from '$lib/content-view-threads'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { feature } from '$lib/feature-registry'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { guideState } from '$lib/guide/guide-state.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { fileUrlToPath, pathToFileUrl } from '$lib/mime'
   import { motionDuration } from '$lib/motion'
@@ -11,8 +29,9 @@
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
   import { browserStore, loadBrowser, switcherBrowserTabs } from '$lib/stores/browser-access.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
@@ -25,6 +44,7 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import {
     AUTHORED_WORK_ICON_BY_KIND,
@@ -42,25 +62,30 @@
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { threadChangesState } from '$lib/stores/thread-changes.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import {
     assistantEffectiveSettings,
     chatEffectiveSettings,
     threadSettings
   } from '$lib/stores/thread-settings.svelte'
+  import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import {
     findEmptyNewThread,
     pinnedThreadSort,
+    splitTimelineThreads,
     threadOrderKey,
     threadSort,
-    threadStatusSort,
     threadStatusSortKey,
     threadVisitKey,
     workspaceState
   } from '$lib/stores/workspace.svelte'
   import { logRendererError } from '$lib/system/renderer-logger'
+  import { openAssistantUtilitySetupThread } from '$lib/utility-setup-thread'
+  import type { ConnectionSetupRequest } from '$lib/components/assistant/assistant-view'
   import {
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
@@ -69,13 +94,13 @@
     threadWithInheritedSettings,
     withProjectOven
   } from '$lib/thread-settings-inheritance'
-  import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
+  import { GLOBAL_BROWSER_PROJECT_ID, type AuthoredWorkKind } from '$shared/ipc-contract'
   import { toPosixPath } from '$shared/paths'
   import {
-    routinePrimaryModel,
-    settingsWithRoutineModel,
-    withDefaultRoutinePrimary
-  } from '$shared/routine-agents'
+    assistantPrimaryModel,
+    settingsWithAssistantModel,
+    withDefaultAssistantPrimary
+  } from '$shared/assistant-agents'
   import type {
     AgentModelSelection,
     AgentPart,
@@ -83,12 +108,13 @@
     AppConfigPatch,
     Project,
     PromptAttachment,
-    Routine,
+    Assistant,
     Thread,
     ThreadSettings
   } from '$shared/types'
   import {
     activeThreadRowId,
+    ASSISTANT_PLACEHOLDER_NAME,
     ASSISTANT_SETUP_TITLE,
     ASSISTANT_SPACE_ID,
     conversationScopeId,
@@ -103,40 +129,24 @@
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
-  import {
-    Bot,
-    BrainCircuit,
-    Bug,
-    Clock1,
-    Cloud,
-    FileDiff,
-    FolderTree,
-    GlobeCode,
-    Hammer,
-    History,
-    Info,
-    MessageCircleDashed,
-    MonitorCog,
-    Plus,
-    SquarePen,
-    SquareTerminal,
-    TriangleAlert
-  } from '@lucide/svelte'
   import { tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { fly } from 'svelte/transition'
   import {
-    groupRunsByRoutine,
+    groupRunsByAssistant,
     groupRunsByTask,
     assistantForeignThread
   } from '../assistant/assistant-view'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import AssistantSearchControl from '../assistant/AssistantSearchControl.svelte'
-  import RoutineCreateControl from '../assistant/RoutineCreateControl.svelte'
+  import AssistantCreateControl from '../assistant/AssistantCreateControl.svelte'
+  import AssistantOwnerPicker from '../assistant/AssistantOwnerPicker.svelte'
+  import type { NewAssistantDraft } from '../assistant/assistant-create'
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
@@ -145,6 +155,7 @@
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import {
     buildThreadSwitcherEntries,
+    type SwitcherPanelTab,
     type ThreadSwitcherEntry
   } from '../threads/thread-switcher-entries'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
@@ -171,10 +182,6 @@
     /** True while the Scope page is on screen   thread switches must keep the
      *  scope store's active project in sync with the selected thread. */
     scopeViewActive?: boolean
-    /** True while the getting-started tour is on screen. That tour explains the
-     *  left sidebar, so the shell paints it even when the view's sidebar has
-     *  nothing in it yet, which is exactly the state a first run is in. */
-    setupTourOpen?: boolean
     navigate: (view: MainView) => void
     /** The project view a Ctrl+Tab return to the project family lands on: the
      *  view the user last used for the family, which is also the one the rail's
@@ -190,7 +197,6 @@
     mode,
     active = true,
     scopeViewActive = false,
-    setupTourOpen = false,
     navigate,
     lastProjectViewLanding = () => 'projects',
     config,
@@ -223,7 +229,8 @@
   // 1. The reader's own wheel or touch gesture hands the scroll over: while they
   //    hold it, background list changes may not move the viewport.
   // 2. Selecting another thread reveals its row, and so does a row the active
-  //    thread moves by itself (typing an unsent draft sends it to the top).
+  //    thread moves by itself (typing an unsent draft sends it to the top, and a
+  //    pin re-hosts it between the Pinned section and its own list).
   // 3. Switching sidebar mode settles the incoming list on the active thread's
   //    row, keeping that mode's remembered place when it already shows the row.
   let sidebarScroller: HTMLElement | null = $state(null)
@@ -289,7 +296,26 @@
     sidebar.expandedFolders.add(thread.projectId)
   }
 
-  async function revealThreadInSidebar(thread: Thread): Promise<void> {
+  /**
+   * Bring a thread's row into view.
+   *
+   * `force` is for the pin of the thread in focus (see `togglePin`): that row is
+   * the one the reader is reading, so a pin re-hosting it between the Pinned
+   * section and its own list is followed wherever it goes. The forced reveal
+   * therefore takes the scroll over (the same hold the reader's own gesture
+   * takes, which is also what keeps the focus-follow effect from pulling the
+   * list back a frame later) and keeps correcting until the row is actually
+   * visible rather than merely rendered, because the move is animated.
+   *
+   * The default honours the reader's hold on the scroll: a row already in view
+   * stays put, and this run gives the scroll back to the thread.
+   */
+  async function revealThreadInSidebar(thread: Thread, force = false): Promise<void> {
+    // A reveal the user asked for is the reader handing the scroll over: they
+    // are looking for this row now. Taking the hold here is also what keeps the
+    // focus-follow effect from pulling the list back to the active thread's row
+    // a frame later, which is what used to undo this scroll.
+    if (force) sidebarReaderOwnsScroll = true
     // The row can only be measured once it is rendered, so prepare it first.
     prepareThreadRow(thread)
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
@@ -304,7 +330,7 @@
       // late (a folder expanding to reveal the row it holds).
       if (attempt > 0) await nextAnimationFrame()
       scrollThreadRowIntoView(thread.id)
-      if (findThreadRow(thread.id)) break
+      if (force ? isThreadRowVisible(thread.id) : findThreadRow(thread.id)) break
     }
   }
 
@@ -390,32 +416,50 @@
       ? rendererRecovery.hasDraftContent(selectedThread.projectId, selectedThread.id)
       : false
   )
-  /** Threads holding any unsent composer content stay pinned at the top of their list,
-      even after the user navigates away, so they are easy to find mid-task.
-      An active voice capture counts as draft activity too   draft status must
-      drive sort order regardless of whether the user is typing or dictating. */
-  let draftThreadKeys = $derived.by(() => {
+  /**
+   * The threads the user is writing into: unsent typed content, attachments and
+   * references, plus a live voice capture.
+   *
+   * The narrower of the two composer sets, and the one that earns the Threads
+   * view's Drafts section: a message already sent and waiting behind a turn is a
+   * finished action, so it stays out of this set and out of that section. A live
+   * dictation counts as writing, because from the first mic press through
+   * transcription the user is composing with their voice.
+   */
+  let typingThreadKeys = $derived.by(() => {
     const keys = new SvelteSet<string>()
     // Only threads that actually hold unsent content belong here, and the draft
-    // store is the authority on which those are. Scanning every thread instead
-    // asked `hasDraftContent` about each one, which materialized an empty draft
+    // Store is the authority on which those are. Scanning every thread instead
+    // asked `hasTypedContent` about each one, which materialized an empty draft
     // entry (six arrays) per thread and subscribed to a draft slot per thread,
-    // on every keystroke.
+    // on every keystroke. A stored entry is dropped the moment it holds nothing,
+    // and the check keeps the set honest if one is ever kept empty.
     for (const ref of rendererRecovery.listDraftThreadRefs()) {
+      if (!rendererRecovery.hasTypedContent(ref.projectId, ref.threadId)) continue
       keys.add(`${ref.projectId}:${ref.threadId}`)
     }
-    for (const ref of rendererRecovery.queuedMessageThreads()) {
-      keys.add(`${ref.projectId}:${ref.threadId}`)
-    }
-    // An active voice capture counts as draft activity too, so the row leaves
-    // the "visited" order while the mic is open. Only one scope captures at a
-    // time, so the thread scan below costs nothing with the mic closed.
+    // Only one scope captures at a time, so the thread scan below costs nothing
+    // with the mic closed.
     if (speechController.capturingScope) {
       for (const t of allThreads) {
         if (!t.archived && speechController.isCapturingThread(t.id)) {
           keys.add(threadVisitKey(t))
         }
       }
+    }
+    return keys
+  })
+
+  /** Threads holding any unsent composer content stay pinned at the top of their list,
+      even after the user navigates away, so they are easy to find mid-task. Wider
+      than `typingThreadKeys`: a queued message counts here too, because it is
+      still waiting on the thread. An active voice capture counts as draft
+      activity, so draft status drives sort order regardless of whether the user
+      is typing or dictating. */
+  let draftThreadKeys = $derived.by(() => {
+    const keys = new SvelteSet(typingThreadKeys)
+    for (const ref of rendererRecovery.queuedMessageThreads()) {
+      keys.add(`${ref.projectId}:${ref.threadId}`)
     }
     return keys
   })
@@ -427,11 +471,11 @@
   let prevAddProjectCount = 0
   let prevNewChatCount = 0
   let prevAssistantTaskCount = 0
-  let prevAssistantRoutineCount = 0
+  let prevAssistantCount = 0
   let prevProjectFileOpenCount = 0
   let prevToggleContextSidebarCount = 0
-  /** Bumped to open the new-routine dialog from a keyboard shortcut. */
-  let routineCreateTrigger = $state(0)
+  /** Bumped to open the new-assistant dialog from a keyboard shortcut. */
+  let assistantCreateTrigger = $state(0)
   let creatingThread = false
 
   // This view hosts the terminal panel   advertise it to the header.
@@ -515,8 +559,8 @@
     }
   })
 
-  /** React to Cmd/Ctrl+N on the Assistant view → new task, inside the routine
-   *  the user is currently in when there is one, routine-less otherwise. */
+  /** React to Cmd/Ctrl+N on the Assistant view → new task, inside the assistant
+   *  the user is currently in when there is one, assistant-less otherwise. */
   $effect(() => {
     const current = workspaceState.requestAssistantTaskCount
     if (current !== prevAssistantTaskCount && workspaceState.consumeAssistantTaskRequest()) {
@@ -525,12 +569,12 @@
     }
   })
 
-  /** React to Cmd/Ctrl+Shift+N on the Assistant view → new routine. */
+  /** React to Cmd/Ctrl+Shift+N on the Assistant view → new assistant. */
   $effect(() => {
-    const current = workspaceState.requestAssistantRoutineCount
-    if (current !== prevAssistantRoutineCount && workspaceState.consumeAssistantRoutineRequest()) {
-      prevAssistantRoutineCount = current
-      routineCreateTrigger++
+    const current = workspaceState.requestAssistantCount
+    if (current !== prevAssistantCount && workspaceState.consumeAssistantRequest()) {
+      prevAssistantCount = current
+      assistantCreateTrigger++
     }
   })
 
@@ -813,7 +857,7 @@
       selectedThread.projectId,
       selectedThread.id,
       undefined,
-      selectedThread.routineId
+      selectedThread.assistantId
     )
   }
 
@@ -836,6 +880,16 @@
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
+    // The sidebar's panels are scoped to the project it is docked on, so make
+    // sure it is docked on the thread on screen before anything reads it. A
+    // surface that moved the visible thread without activating the sidebar would
+    // otherwise leave another project's coordinator board on screen.
+    contextSidebarState.ensureDockedThread(
+      thread.projectId,
+      thread.id,
+      thread.title,
+      activeThreadRowId(thread) ?? thread.id
+    )
     // Read as a dependency: a new message on this thread re-runs the refresh.
     void thread.lastActivity
     void designCoordinatorState.refresh(thread.projectId, thread.id)
@@ -844,6 +898,21 @@
     // settles so work the agent just wrote appears. The store coalesces the reads.
     void projectWorkState.ensure(thread.projectId)
     if (!isThreadBusy(thread)) void projectWorkState.refresh(thread.projectId)
+  })
+
+  /**
+   * Keep the Changes rail indicator on the on-screen conversation. The store is
+   * event-driven, so tracking a thread also starts (and stops) its updates; the
+   * Changes panel itself is only mounted while it is open, so this is what keeps
+   * the rail's summary current either way.
+   */
+  $effect(() => {
+    const thread = selectedThread
+    if (!thread) {
+      threadChangesState.untrack()
+      return
+    }
+    threadChangesState.track(thread.projectId, thread.id)
   })
 
   /** The auditor thread of the on-screen coordinator, if one exists. Orchestration
@@ -941,9 +1010,27 @@
    * in that session. The user reviews the work without hunting for the thread that
    * made it.
    */
+  function authoredWorkActive(kind: 'design' | 'video'): boolean {
+    if (
+      !selectedThread ||
+      !dockKindActive('coordinator') ||
+      coordinator?.panel.component !== 'design'
+    ) {
+      return false
+    }
+    const shownKind =
+      coordinator.panel.props.kind ??
+      designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)?.kind
+    return shownKind === kind
+  }
+
   function openAuthoredWork(kind: 'design' | 'video'): void {
     const thread = selectedThread
     if (!thread) return
+    if (authoredWorkActive(kind)) {
+      contextSidebarState.hide()
+      return
+    }
     designCoordinatorState.openBoard(thread.projectId, thread.id, kind)
   }
 
@@ -1030,6 +1117,26 @@
   })
 
   /**
+   * What the rail calls a tab, when its stored title is not the whole story.
+   *
+   * An Oven tab wears the Oven's own mark and name. An assistant's knowledge tab
+   * wears the assistant's, read from the live list rather than from the title the
+   * tab was opened with: the setup conversation names the assistant while that
+   * panel is open, so the row, the panel header and this conversation all rename
+   * themselves the moment the user answers.
+   */
+  function tabPresentation(
+    tab: ContextSidebarTab
+  ): { title: string; iconUrl?: string | null; color?: string | null } | null {
+    if (tab.kind === 'assistant-knowledge') {
+      if (!tab.assistantId) return null
+      const name = assistantList.find((entry) => entry.id === tab.assistantId)?.name.trim()
+      return name ? { title: name } : null
+    }
+    return ovenTabPresentation(tab)
+  }
+
+  /**
    * The Oven panel names itself.
    *
    * The sidebar header shows the Oven's own mark and name instead of the generic
@@ -1057,7 +1164,7 @@
     // Chats are pure conversations: their rail only carries session tools
     // (sources, memory, debugger in dev)   never project, terminal or cloud tools.
     const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
-    // Assistant tasks are conversations too: their rail adds the how-to panel
+    // Assistant tasks are conversations too: their rail adds the knowledge panel
     // and mounts the file tree on the task's own working directory, but it still
     // carries no terminal, actions or cloud tools.
     const isAssistantThread = selectedThread.projectId === ASSISTANT_SPACE_ID
@@ -1074,7 +1181,7 @@
         label: hasMessages
           ? `Message history (${workspaceState.messageCount} messages you sent)`
           : 'Message history',
-        icon: hasMessages ? undefined : History,
+        icon: hasMessages ? undefined : CioHistory,
         countLabel: hasMessages ? String(workspaceState.messageCount) : undefined,
         active: showHistoryMenu,
         menu: showHistoryMenu ? historyMenu : undefined,
@@ -1082,17 +1189,19 @@
       }
     ]
 
-    // The how-to panel is an assistant task's own authoring surface: it sits
+    // The knowledge panel is an assistant task's own authoring surface: it sits
     // right under history, above the workspace tools.
     const assistantTools: ContextDockItem[] = isAssistantThread
       ? [
           {
-            id: 'assistant-how-to',
+            id: 'assistant-knowledge',
             label: 'How to',
-            icon: Hammer,
-            active: dockKindActive('assistant-how-to'),
+            icon: AssistantKnowledgeIcon,
+            active: dockKindActive('assistant-knowledge'),
             onSelect: () =>
-              toggleDockPanel('assistant-how-to', () => openAssistantHowToForTask(selectedThread))
+              toggleDockPanel('assistant-knowledge', () =>
+                openAssistantKnowledgeForTask(selectedThread)
+              )
           }
         ]
       : []
@@ -1105,7 +1214,7 @@
       workspaceTools.push({
         id: 'oven',
         label: identity?.name ?? 'Oven',
-        icon: SquareTerminal,
+        icon: CioTerminal,
         ...(identity && !identity.local
           ? { appearance: { color: identity.color, iconUrl: identity.iconUrl } }
           : {}),
@@ -1119,30 +1228,63 @@
 
     // Conversations surface their own app-owned workspace directory as the file
     // tree: a chat's artifact directory, or an assistant task's working
-    // directory (the routine's root).
+    // directory (the assistant's root).
     if (isConversation) {
       workspaceTools.push({
         id: 'files',
         label: isChatThread ? 'Artifacts' : 'Workspace files',
-        icon: FolderTree,
+        icon: CioFiles,
         active: dockKindActive('files'),
         onSelect: () => toggleDockPanel('files', () => void openFiles())
       })
     }
     if (!isConversation && projectToolsAvailable) {
+      const changeFileCount = threadChangesState.fileCount
+      const changeTotals = threadChangesState.totals
+      const hasRecordedChanges = threadChangesState.current !== null && changeFileCount > 0
+      // The stored label doubles as the rail's tooltip, so it carries the same
+      // summary the hover flyout draws when a change set exists.
+      const changeLabel = hasRecordedChanges
+        ? [
+            'Changes',
+            changeTotals ? `+${changeTotals.additions} −${changeTotals.deletions}` : null,
+            `${changeFileCount} ${changeFileCount === 1 ? 'file' : 'files'}`
+          ]
+            .filter((part): part is string => part !== null)
+            .join(' · ')
+        : 'Changes'
+      // While the turn runs, the icon itself carries the running insertions and
+      // deletions as plain, colour-coded text on one line ("+128/-24"), so the
+      // change is visible without a hover and without a badge frame.
+      const changeText =
+        threadChangesState.working && changeTotals
+          ? [
+              ...(changeTotals.additions > 0
+                ? [{ text: `+${changeTotals.additions}`, tone: 'success' as const }]
+                : []),
+              ...(changeTotals.additions > 0 && changeTotals.deletions > 0
+                ? [{ text: '/', tone: 'neutral' as const }]
+                : []),
+              ...(changeTotals.deletions > 0
+                ? [{ text: `-${changeTotals.deletions}`, tone: 'danger' as const }]
+                : [])
+            ]
+          : []
       workspaceTools.push(
         {
           id: 'files',
           label: 'Files',
-          icon: FolderTree,
+          icon: CioFiles,
           active: dockKindActive('files'),
           onSelect: () => toggleDockPanel('files', () => void openFiles())
         },
         {
           id: 'diff',
-          label: 'Changes',
-          icon: FileDiff,
+          label: changeLabel,
+          icon: CioDiff,
           active: dockKindActive('diff'),
+          ...(hasRecordedChanges ? { flyout: changeSummaryFlyout } : {}),
+          ...(changeText.length > 0 ? { countText: changeText } : {}),
           onSelect: () => toggleDockPanel('diff', openDiff)
         }
       )
@@ -1152,7 +1294,7 @@
         workspaceTools.push({
           id: 'terminal',
           label: terminalOpen ? 'Hide terminal' : 'Show terminal',
-          icon: SquareTerminal,
+          icon: CioTerminal,
           active: terminalOpen,
           onSelect: toggleTerminal
         })
@@ -1160,7 +1302,7 @@
       workspaceTools.push({
         id: 'actions',
         label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
-        icon: MonitorCog,
+        icon: CioActions,
         active: dockKindActive('actions'),
         countBadge: runningActions > 0 ? String(runningActions) : undefined,
         countBadgeTone: runningActions > 0 ? 'working' : undefined,
@@ -1175,7 +1317,7 @@
           workspaceState.sourceProcessCount > 0
             ? `Sources (${workspaceState.sourceProcessCount} ${workspaceState.sourceProcessCount === 1 ? 'process' : 'processes'} running)`
             : 'Sources',
-        icon: Info,
+        icon: CioTabInfo,
         active: dockKindActive('sources'),
         countBadge:
           workspaceState.sourceProcessCount > 0
@@ -1186,7 +1328,7 @@
       {
         id: 'memory',
         label: 'Memory',
-        icon: BrainCircuit,
+        icon: CioMemory,
         active: dockKindActive('memory'),
         badge: memoryProposalState.hasPending ? 'attention' : undefined,
         badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
@@ -1197,7 +1339,7 @@
       sessionTools.push({
         id: 'cloud-deployment',
         label: 'Cloud deployments',
-        icon: Cloud,
+        icon: CioCloud,
         active: dockKindActive('cloud-deployment'),
         onSelect: () => toggleDockPanel('cloud-deployment', openCloudDeploymentsTab)
       })
@@ -1206,7 +1348,7 @@
       sessionTools.push({
         id: 'debugger',
         label: 'Debugger',
-        icon: Bug,
+        icon: CioDebugger,
         active: dockKindActive('debugger'),
         onSelect: () => toggleDockPanel('debugger', openDebugger)
       })
@@ -1214,7 +1356,8 @@
 
     // Temporary chats get their own hairline-separated slot: they are ephemeral
     // side conversations, not standing tools, and one button toggles the whole
-    // set because the panel tabs them.
+    // set because the panel tabs them. The dashed mark is the whole signal   a
+    // side chat carries no indicator colour, so it reads as one more entry.
     const temporaryChats: ContextDockItem[] = []
     if (temporaryChatTabs.length > 0) {
       const name =
@@ -1224,9 +1367,8 @@
       temporaryChats.push({
         id: 'temporary-chat',
         label: dockKindActive('temporary-chat') ? `Hide ${name}` : `Show ${name}`,
-        icon: MessageCircleDashed,
+        icon: CioTemporaryChat,
         active: dockKindActive('temporary-chat'),
-        tone: 'info',
         onSelect: () => toggleDockPanel('temporary-chat', focusTemporaryChat)
       })
     }
@@ -1239,32 +1381,37 @@
     // on, so the entry is there whether or not a session is open and opens the
     // board for the kind it names.
     const authoredWork: ContextDockItem[] = []
-    if (!coordinator && selectedThread) {
+    if (selectedThread) {
       const work = projectWorkState.stateFor(selectedThread.projectId)
       for (const kind of ['design', 'video'] as const) {
-        if ((work?.[kind].length ?? 0) === 0) continue
+        const session = designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
+        const sessionKind = session?.active ? session.kind : undefined
+        if ((work?.[kind].length ?? 0) === 0 && sessionKind !== kind) continue
         authoredWork.push({
           id: `authored-work-${kind}`,
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in this project`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
-          active: dockKindActive('coordinator'),
+          active: authoredWorkActive(kind),
+          playing: kind === 'video' && browserAudio.videoIsPlaying(selectedThread.id),
           onSelect: () => openAuthoredWork(kind)
         })
       }
     }
-    const coordination: ContextDockItem[] = coordinator
-      ? [
-          {
-            id: 'coordinator',
-            label: coordinator.label,
-            icon: coordinator.icon,
-            active: dockKindActive('coordinator'),
-            badge: coordinatorRailBadge,
-            badgeTitle: coordinatorRailBadgeTitle,
-            onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
-          }
-        ]
-      : authoredWork
+    const coordination: ContextDockItem[] =
+      coordinator && coordinator.panel.component !== 'design'
+        ? [
+            {
+              id: 'coordinator',
+              label: coordinator.label,
+              icon: coordinator.icon,
+              active: dockKindActive('coordinator'),
+              badge: coordinatorRailBadge,
+              badgeTitle: coordinatorRailBadgeTitle,
+              onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
+            },
+            ...authoredWork
+          ]
+        : authoredWork
 
     // The thread-note indicator sits below its own hairline. It's always
     // present   not just once a note exists   so it also doubles as the "add a
@@ -1298,7 +1445,7 @@
       threadNote.push({
         id: 'browser',
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
-        icon: GlobeCode,
+        icon: CioThreadBrowser,
         active: dockKindActive('browser'),
         countBadge:
           browser.unfinishedDownloadCount > 0 ? String(browser.unfinishedDownloadCount) : undefined,
@@ -1312,7 +1459,8 @@
     }
 
     // Sub-agents appear only after the first one is opened. The group shares
-    // one toggle, while the sidebar keeps each sub-agent in its own tab.
+    // one toggle, while the sidebar keeps each sub-agent in its own tab. The Bot
+    // glyph is what marks a sub-agent; no rail colour does.
     const subagents: ContextDockItem[] = []
     if (subagentTabs.length > 0) {
       const name =
@@ -1322,9 +1470,8 @@
       subagents.push({
         id: 'subagent',
         label: dockKindActive('subagent') ? `Hide ${name}` : `Show ${name}`,
-        icon: Bot,
+        icon: CioSubagent,
         active: dockKindActive('subagent'),
-        tone: 'info',
         onSelect: () => toggleDockPanel('subagent', focusSubagent)
       })
     }
@@ -1333,12 +1480,12 @@
     // app's own record of what it decided while the user was away, not a
     // workspace tool. The item is keyed to the open conversation, so it appears
     // only on the thread a decision concerns (or on its task, or on any thread
-    // of its routine), and disappears once that scope has nothing unread.
+    // of its assistant), and disappears once that scope has nothing unread.
     const attentionScope = selectedThread
       ? {
           id: selectedThread.id,
           projectId: selectedThread.projectId,
-          ...(selectedThread.routineId ? { routineId: selectedThread.routineId } : {}),
+          ...(selectedThread.assistantId ? { assistantId: selectedThread.assistantId } : {}),
           ...(selectedThread.assistantTaskId
             ? { assistantTaskId: selectedThread.assistantTaskId }
             : {})
@@ -1351,7 +1498,7 @@
             {
               id: 'attention',
               label: 'Decisions made for you',
-              icon: TriangleAlert,
+              icon: CioAttention,
               tone: 'warning',
               countBadge: String(attentionItems.length),
               active: dockKindActive('attention'),
@@ -1607,8 +1754,19 @@
    * frame by frame and the thread beside it follows, the same motion the left
    * sidebar gets from `slideWidth`.
    */
+  /**
+   * While a guide runs, its dock is a column at the right edge, so the tool
+   * panel gets out of the way rather than letting the thread take the squeeze.
+   *
+   * It is hidden, never closed: the track collapses to nothing and the panel
+   * stops painting, while its tabs, width, scroll and open terminal all stay
+   * exactly as they were. Tearing it down would be a different thing entirely
+   * (a coordinator or editor inside it is not always safe to unmount), and the
+   * user asked for a guide, not for their panel to be closed.
+   */
+  let guideHidesToolPanel = $derived(guideState.visible)
   let railTrackWidth = $derived(
-    sidebarVisible ? `${Math.round(contextSidebarState.width)}px` : '0px'
+    sidebarVisible && !guideHidesToolPanel ? `${Math.round(contextSidebarState.width)}px` : '0px'
   )
   /**
    * True while the user drags the rail's edge. A drag has to track the pointer
@@ -1755,7 +1913,7 @@
           !t.archived &&
           t.projectId !== INBOX_PROJECT_ID &&
           // Assistant tasks live only in Assistant View: a pinned assistant
-          // thread (every routine's how-to thread is pinned) must never surface
+          // thread (every assistant's knowledge thread is pinned) must never surface
           // in the Projects sidebar's pinned section.
           t.projectId !== ASSISTANT_SPACE_ID
       )
@@ -1810,32 +1968,33 @@
     )
     return foreign && foreign.id !== thread.id ? foreign.id : null
   })
-  /** Every routine's runs, newest first, for the sidebar's sibling run rows. */
-  let assistantRunsByRoutine = $derived(groupRunsByRoutine(assistantThreads))
+  /** Every assistant's runs, newest first, for the sidebar's sibling run rows. */
+  let runsByAssistant = $derived(groupRunsByAssistant(assistantThreads))
   /** Every run thread, for the header search's Runs results. */
   let assistantRuns = $derived(assistantThreads.filter((thread) => thread.assistantTaskId))
   /**
-   * Every assistant thread's browser scope, keyed by thread id: a routine's
-   * how-to host and each of its runs share the routine, and a routine-less task
+   * Every assistant thread's browser scope, keyed by thread id: an assistant's
+   * knowledge host and each of its runs share the assistant, and an assistant-less task
    * owns its own. The sidebar resolves a tab's scope through this, so switching
-   * between a routine's threads keeps the browser those threads opened instead
+   * between an assistant's threads keeps the browser those threads opened instead
    * of closing it.
    */
   const assistantBrowserScopes = $derived.by(() => {
     const scopes = new SvelteMap<string, string>()
     for (const thread of allThreads) {
       if (thread.projectId !== ASSISTANT_SPACE_ID) continue
-      scopes.set(thread.id, conversationScopeId(thread.projectId, thread.id, thread.routineId))
+      scopes.set(thread.id, conversationScopeId(thread.projectId, thread.id, thread.assistantId))
     }
     return scopes
   })
-  let assistantRoutineList = $derived(assistantRoutines.routines)
+  let assistantList = $derived(assistants.assistants)
 
   let threadsByProject = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
     for (const t of allThreads) {
-      // Pinned threads live exclusively in the Pinned section.
-      if (t.archived || t.pinned) continue
+      // Bookmarks stay in their project's strip in Projects view. Other pinned
+      // threads live exclusively in the Pinned section.
+      if (t.archived || (t.pinned && !t.bookmarked)) continue
       const list = map.get(t.projectId) ?? []
       list.push(t)
       map.set(t.projectId, list)
@@ -1861,28 +2020,24 @@
       .sort((a, b) => threadSort(a, b, draftThreadKeys))
   )
 
-  /** Threads mode: active threads of the filtered projects, sorted by the
-   *  selected mode, persisted pins first. An empty project-filter selection
-   *  means all projects. */
-  let allThreadsFlat = $derived.by(() => {
-    const list = allThreads.filter(
-      (t) =>
-        !t.archived &&
-        t.projectId !== INBOX_PROJECT_ID &&
-        // Assistant tasks are Assistant View's own rows, never the Threads
-        // timeline's, so a pinned how-to thread cannot appear among them.
-        t.projectId !== ASSISTANT_SPACE_ID &&
-        threadProjectFilterState.matches(t.projectId)
+  /** Threads mode: the filtered active threads as the two lists the timeline
+   *  renders   the pinned rows that open the view, then every row that carries
+   *  its own status, ordered by status and then by the row's own place in it. An
+   *  empty project-filter selection means all projects. */
+  let timelineLists = $derived.by(() =>
+    splitTimelineThreads(
+      allThreads.filter(
+        (t) =>
+          !t.archived &&
+          t.projectId !== INBOX_PROJECT_ID &&
+          // Assistant tasks are Assistant View's own rows, never the Threads
+          // timeline's, so a pinned knowledge thread cannot appear among them.
+          t.projectId !== ASSISTANT_SPACE_ID &&
+          threadProjectFilterState.matches(t.projectId)
+      ),
+      draftThreadKeys
     )
-    // Pinned threads keep one shared pin-time order; the default status sort
-    // (to-do top, last-activity middle, done last) applies to unpinned threads.
-    const pinned = list
-      .filter((t) => t.pinned)
-      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
-    const unpinned = list.filter((t) => !t.pinned)
-    unpinned.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
-    return [...pinned, ...unpinned]
-  })
+  )
 
   /**
    * The browser tab on screen while the browser view is the surface the user is
@@ -1902,14 +2057,35 @@
   let recentSwitcherEntries = $derived.by(() =>
     buildThreadSwitcherEntries({
       // One recency order across every switchable surface: a project thread, a
-      // chat, an assistant task or an open browser tab, interleaved by when each
-      // was last visited.
+      // chat, an assistant task, an open browser tab or a panel tab, interleaved
+      // by when each was last visited.
       visits: recentVisits.all,
       threads: allThreads.filter((thread) => !thread.archived),
       tabs: switcherBrowserTabs(),
+      panelTabs: switcherPanelTabs,
       currentBrowserTabId
     })
   )
+
+  /**
+   * The panel tabs the switcher may list: the open terminal, file and
+   * thread-browser tabs of the active context, each gated by its setting so a
+   * user who does not want a panel's tabs in the switcher never sees them. The
+   * empty "Open file" browser a Files panel starts on is not a file the user
+   * opened and is left out.
+   */
+  let switcherPanelTabs = $derived.by(() => {
+    const includeTerminal = appConfigState.switcherTerminalTabs
+    const includeFiles = appConfigState.switcherFileTabs
+    const includeBrowser = appConfigState.switcherThreadBrowserTabs
+    if (!includeTerminal && !includeFiles && !includeBrowser) return []
+    return contextSidebarState.tabs.filter((tab): tab is SwitcherPanelTab => {
+      if (tab.kind === 'terminal') return includeTerminal
+      if (tab.kind === 'files') return includeFiles && tab.fileTabId !== null
+      if (tab.kind === 'browser') return includeBrowser
+      return false
+    })
+  })
 
   /** The entry the switcher starts cycling from: the active browser tab while the
    *  browser view is on screen, otherwise the selected thread. */
@@ -1946,8 +2122,8 @@
     void ensureRecentScopeBoards(projectIds)
   })
 
-  let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
-  let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
+  let pinnedTimelineThreads = $derived(timelineLists.pinned)
+  let unpinnedTimelineThreads = $derived(timelineLists.statusListed)
 
   /** Every thread the Threads timeline lists, before its project filter. */
   let timelineThreads = $derived(
@@ -1964,18 +2140,19 @@
    *
    * Emptiness is judged on the view's own lists before any search or project
    * filter, because collapsing the sidebar over a filter the user applied would
-   * take away the very control they filtered with. Loading counts as content, so
-   * the sidebar never blinks away while the first page is still arriving.
+   * take away the very control they filtered with. A first page that has not
+   * landed yet is not content either: a view with nothing in it paints no panel
+   * and offers no toggle row, so the panel arrives together with the rows that
+   * justify it instead of standing empty for the length of the load, which is
+   * exactly the shape a project-less or chat-less view starts in.
    */
   let workspaceSidebarHasContent = $derived.by(() => {
-    if (loading || workspaceState.specStudioOpen) return true
+    if (workspaceState.specStudioOpen) return true
     if (mode === 'assistant') {
       // A run is content too: a thread opened from a notification can be a run
       // whose task sits beyond the bounded recent slice, and its row must still
       // have a sidebar to appear in.
-      return (
-        assistantRoutineList.length > 0 || assistantTasks.length > 0 || assistantRuns.length > 0
-      )
+      return assistantList.length > 0 || assistantTasks.length > 0 || assistantRuns.length > 0
     }
     if (mode === 'chats') {
       return pinnedInboxThreads.length > 0 || standaloneThreads.length > 0
@@ -1994,11 +2171,9 @@
   /**
    * Whether the left sidebar is painted at all. A sidebar with nothing in it is
    * not rendered, so no dock and no edge-hover overlay offer a panel with no
-   * content; the getting-started tour keeps it on screen because the sidebar
-   * itself is what one of its steps explains, and a first run is exactly the
-   * moment the sidebar is empty.
+   * content.
    */
-  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent || setupTourOpen)
+  let workspaceSidebarVisible = $derived(workspaceSidebarHasContent)
 
   // ─── Data loading ────────────────────────────────────────────────────────
 
@@ -2022,8 +2197,9 @@
       existing.status === incoming.status &&
       existing.title === incoming.title &&
       existing.pinned === incoming.pinned &&
+      existing.bookmarked === incoming.bookmarked &&
       existing.read === incoming.read &&
-      existing.routineId === incoming.routineId
+      existing.assistantId === incoming.assistantId
     )
   }
 
@@ -2117,11 +2293,12 @@
    *  fires two reads for the same run. */
   const pendingAssistantParentReads = new SvelteSet<string>()
 
-  // An assistant run renders nested under its task. Selecting one from a
+  // A run resolves the task it ran through its `assistantTaskId`, which names
+  // the run's row and decides where the sidebar lifts it. Selecting one from a
   // notification can land on a run whose task sits beyond the bounded recent
   // hydration slice, so the parent is fetched and added before the row is drawn
-  //   without it the run has no row to nest under, the sidebar cannot reveal
-  // it, and the thread looks like it opened nowhere at all.
+  //   without it the run loses its task name and cannot be revealed where it
+  // belongs, and the thread looks like it opened nowhere at all.
   $effect(() => {
     const thread = selectedThread
     if (!thread || mode !== 'assistant') return
@@ -2164,6 +2341,8 @@
   $effect(() => {
     return subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
+      // A thread that reads as read by any path ends a deliberate unread mark.
+      if (updated.read) threadUnreadIntent.clear(updated.id)
       scopeState.updateThread(updated)
       // Children stay out of the sidebar list, but the read flow below must
       // still cover them: the coordinator panel renders a worker's live status
@@ -2226,6 +2405,8 @@
     const thread = selectedThread
     if (!thread || thread.id === readSettledThreadId) return
     readSettledThreadId = thread.id
+    // Selecting the thread is opening it: a deliberate unread mark ends here.
+    threadUnreadIntent.clear(thread.id)
     // Only a thread that tracks read status settles here: a regular thread, or
     // a worker whose reporting the user switched off (the coordinator panel
     // shows its status chip, so an opened or selected non-reporting worker must
@@ -2275,10 +2456,34 @@
     })
   })
 
+  // The authored-work markers arrive on their own light broadcast for the same
+  // reason as the branch: the agent can open a design or video session on its
+  // own, mid-turn, and routing that through `thread:updated` would force
+  // ThreadView's message reconcile at that moment. Patch the fields on the
+  // sidebar's own row so the markers appear without rebuilding any list. The set
+  // is what the row draws, so it is patched with the session kind.
+  $effect(() => {
+    return subscribe('thread:authoredWorkUpdated', (...args: unknown[]) => {
+      const [projectId, threadId, kind, kinds] = args as [
+        string,
+        string,
+        AuthoredWorkKind,
+        AuthoredWorkKind[]
+      ]
+      const listed = allThreads.find(
+        (candidate) => candidate.projectId === projectId && candidate.id === threadId
+      )
+      if (!listed) return
+      listed.authoredWorkKind = kind
+      listed.authoredWorkKinds = [...kinds]
+    })
+  })
+
   $effect(() => {
     return subscribe('thread:deleted', (projectId, threadId) => {
       allThreads = allThreads.filter((thread) => thread.id !== threadId)
       scopeState.removeThread(threadId)
+      threadUnreadIntent.clear(threadId)
       const browserTabIds = contextSidebarState.removeThreadBrowsers(projectId, threadId)
       if (browserFullscreenTabId && browserTabIds.includes(browserFullscreenTabId)) {
         browserFullscreenTabId = null
@@ -2309,16 +2514,16 @@
         : conversationScopeId(projectId, threadId, null)
     )
     // The same resolver pattern names a conversation's own box: a project's
-    // name, a routine's name, or a chat's title. It is read lazily by the
+    // name, an assistant's name, or a chat's title. It is read lazily by the
     // browser's box control, so the reactive lists are tracked where it is
     // called rather than here.
     contextSidebarState.setThreadBrowserScopeLabelResolver((projectId, threadId) => {
       if (projectId === ASSISTANT_SPACE_ID) {
         const thread = allThreads.find((candidate) => candidate.id === threadId)
-        const routine = thread?.routineId
-          ? assistantRoutineList.find((candidate) => candidate.id === thread.routineId)
+        const assistant = thread?.assistantId
+          ? assistantList.find((candidate) => candidate.id === thread.assistantId)
           : null
-        return routine?.name ?? thread?.title ?? 'Assistant'
+        return assistant?.name ?? thread?.title ?? 'Assistant'
       }
       if (projectId === INBOX_PROJECT_ID) {
         return allThreads.find((candidate) => candidate.id === threadId)?.title ?? 'Chat'
@@ -2358,9 +2563,6 @@
       // Focusing the address bar is the panel's own: it owns the input, and it
       // is the surface (sidebar or full screen) that decides whether it shows it.
       if (action === 'focus-address') return
-      // Find is the page-showing surface's too: the bar is a row of that surface,
-      // and the store it writes to is shared with it.
-      if (action === 'find' || action === 'find-next' || action === 'find-previous') return
       const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
       if (!tab || tab.kind !== 'browser') return
       if (action === 'close-tab') {
@@ -2476,7 +2678,10 @@
             contextLabel: 'threads across all scopes',
             title: 'Search threads across all scopes',
             onOpen: openThreadFromScopeSearch,
-            fts: {}
+            // The board spans one project's scopes, but a search on it stays a
+            // search for threads: the chats, assistant tasks and browser
+            // container that share the threads table are never board threads.
+            fts: { family: 'projects' }
           }
         },
         {
@@ -2502,11 +2707,12 @@
           props: {
             open: sidebar.threadsSearchOpen,
             query: sidebar.threadsSearchQuery,
+            loading: sidebar.threadsSearching,
             onOpenChange: (open: boolean) => {
               if (open) sidebar.openThreadsSearch()
               else sidebar.closeThreadsSearch()
             },
-            onQueryChange: sidebar.runThreadsSearch,
+            onQueryChange: (value: string) => sidebar.runThreadsSearch(value),
             ariaLabel: 'Search threads',
             title: 'Search threads',
             placeholder: 'Search threads…',
@@ -2517,7 +2723,7 @@
           ? [
               {
                 id: 'new-thread',
-                icon: Plus,
+                icon: CioPlus,
                 ariaLabel: `New thread in ${activeProject.name}`,
                 title: `New thread in ${activeProject.name}`,
                 shortcut: keymapState.keysFor('nav-new-thread'),
@@ -2543,12 +2749,13 @@
             contextLabel: 'chats',
             title: 'Search chats',
             onOpen: openThread,
-            fts: { projectId: INBOX_PROJECT_ID }
+            // The Chats view is the inbox family and nothing else.
+            fts: { family: 'chats' }
           }
         },
         {
           id: 'new-chat',
-          icon: SquarePen,
+          icon: CioPencil,
           ariaLabel: 'New chat',
           title: 'New chat',
           shortcut: keymapState.keysFor('nav-new-thread'),
@@ -2558,6 +2765,7 @@
       viewActions.set('chats', chatsActions)
     } else if (mode === 'projects' && scopeState.sidebarContext) {
       // Same paradigm as every other view: search first, then new thread.
+      const scopeContextProjectId = scopeState.sidebarContext.projectId
       const scopedActions: ViewActionItem[] = [
         {
           id: 'search',
@@ -2572,12 +2780,17 @@
             contextLabel: 'threads in this scope',
             title: 'Search threads in this scope',
             onOpen: (thread: Thread) => void openScopedThread(thread),
-            fts: {}
+            // A scope belongs to exactly one project, so its search is that
+            // project's threads and never another project's, a chat's, or an
+            // assistant task's. The scope's bucket is a ledger stage, not a
+            // search scope: narrowing to it would hide matching threads that
+            // the board filters by stage rather than by ownership.
+            fts: { family: 'projects', projectId: scopeContextProjectId }
           }
         },
         {
           id: 'new-thread',
-          icon: Plus,
+          icon: CioPlus,
           ariaLabel: 'New thread in this scope',
           title: 'New thread in this scope',
           shortcut: keymapState.keysFor('nav-new-thread'),
@@ -2596,24 +2809,25 @@
           id: 'search',
           component: AssistantSearchControl as unknown as ViewActionItem['component'],
           props: {
-            routines: assistantRoutineList,
+            assistants: assistantList,
             tasks: assistantTasks,
             runs: assistantRuns,
             onOpenTask: openAssistantTask,
-            onOpenRoutine: (routine: Routine) => void openAssistantHowToForRoutine(routine)
+            onOpenAssistant: (assistant: Assistant) => void openAssistantKnowledgeFor(assistant)
           }
         },
         {
-          id: 'new-routine',
-          component: RoutineCreateControl as unknown as ViewActionItem['component'],
+          id: 'new-assistant',
+          component: AssistantCreateControl as unknown as ViewActionItem['component'],
           props: {
-            onCreate: createAssistantRoutine,
-            trigger: routineCreateTrigger
+            onCreate: createAssistant,
+            onCreateViaChat: createAssistantViaChat,
+            trigger: assistantCreateTrigger
           }
         },
         {
           id: 'new-task',
-          icon: Clock1,
+          icon: AssistantTaskIcon,
           ariaLabel: 'New task',
           title: 'New task',
           shortcut: keymapState.keysFor('assistant-new-task'),
@@ -2631,7 +2845,9 @@
             contextLabel: 'threads',
             title: 'Search threads',
             onOpen: openThread,
-            fts: {}
+            // The Projects view lists projects and their threads; a chat or an
+            // assistant task belongs to its own view and its own search.
+            fts: { family: 'projects' }
           }
         },
         {
@@ -2800,6 +3016,37 @@
     void revealThreadInSidebar(thread)
   })
 
+  /**
+   * Pinning puts a row in a section of its own, at the top of the sidebar (and
+   * unpinning sends it back into the list it came from), so the thread's row is
+   * re-hosted somewhere else in the DOM either way.
+   *
+   * The scroll does not follow that move on its own: the sort key driving the
+   * follow effect reads the status bucket, not the pinned flag, and a list
+   * reorder commits no status. So a pin used to leave the sidebar where it was,
+   * hiding the very row the user had just pinned   and a folded Pinned section
+   * did not draw the row at all. Open the section the row will land in, so it
+   * has somewhere to be drawn, and let the caller reveal it afterwards.
+   */
+  function openPinnedSection(thread: Thread): void {
+    if (mode === 'assistant') {
+      pinnedFold.setFolded('assistant', false)
+      return
+    }
+    // The row lands in the section named for the view's own thread kind: the
+    // Threads view owns the flat timeline's pinned block, Chats owns the inbox's
+    // chats, and Projects owns its project threads. `setFolded` is a no-op when
+    // the section is already open, so nothing is written for a reader who keeps
+    // it that way.
+    const section =
+      mode === 'threads'
+        ? 'threads'
+        : thread.projectId === INBOX_PROJECT_ID
+          ? 'chats'
+          : 'projects-threads'
+    pinnedFold.setFolded(section, false)
+  }
+
   // Keep the header icon in sync with the active project and icon cache.
   // Reading activeProjectIconUrl also re-syncs after a thread switch: openThread
   // resets the URL to null when the project has no custom icon, and switching
@@ -2837,7 +3084,7 @@
   async function loadData(): Promise<void> {
     try {
       // Assistant View is a secondary surface and never hydrates in this pass:
-      // its routines and missed runs are deferred to post-paint (see the finally
+      // its assistants and missed runs are deferred to post-paint (see the finally
       // block), so nothing about the assistant competes with the first usable
       // frame. The hidden assistant container itself is created by the main
       // process before navigation, so its project record is already in
@@ -2970,11 +3217,11 @@
       void invoke('app:rendererReady').catch(() => undefined)
       // Assistant View hydrates only after the main project view has landed.
       // Deferred work runs once the shell has painted and the renderer is idle,
-      // so routine/missed-run reads can never occupy the startup frame or race
+      // so assistant/missed-run reads can never occupy the startup frame or race
       // the project and thread hydration for the main process. Idempotent: a
       // second call is a no-op, and re-scheduling replaces the pending task.
       scheduleDeferredWork('assistant:hydrate', () => {
-        assistantRoutines.initialize()
+        assistants.initialize()
         attentionState.initialize()
       })
     }
@@ -3121,7 +3368,7 @@
       // commits) must surface too, even when they fell outside the bounded
       // first-paint slice: a thread being dictated in another window can never
       // be dropped from the listing. Their drafts seed the local recovery
-      // store whenever this window does not hold a newer local draft.
+      // Store whenever this window does not hold a newer local draft.
       const draftingThreads = await invoke('thread:listDrafting').catch(() => [] as Thread[])
       for (const thread of draftingThreads) {
         rendererRecovery.importDbDraft(thread.projectId, thread.id, thread.draftJson ?? null)
@@ -3603,12 +3850,18 @@
   async function createThreadInProject(
     project: Project,
     requestedBucketId?: string,
-    /** Assistant-space grouping: the routine the new task belongs to, and whether
-     *  this is a routine's seed "Getting started" thread. */
-    assistant: { routineId?: string; gettingStarted?: boolean } = {}
+    /** Assistant-space grouping: the assistant the new task belongs to, and whether
+     *  this is an assistant's seed "Getting started" thread. */
+    assistant: { assistantId?: string; gettingStarted?: boolean } = {}
   ): Promise<void> {
-    const routineId = assistant.routineId
+    const assistantId = assistant.assistantId
     const gettingStarted = assistant.gettingStarted === true
+    // A task created inside an assistant starts on demand: it runs only when the
+    // user switches its own schedule on, so a thread they open to work with the
+    // assistant never becomes a quiet recurring job of the assistant. The
+    // assistant's seed Getting started thread is the exception: it carries the
+    // assistant's own clock.
+    const needsOnDemand = assistantId !== undefined && !gettingStarted
     // Scope inheritance mirrors settings inheritance: the new thread object
     // carries the current thread's scope bucket, nothing more. It must never
     // activate the scope sidebar or switch the view  that side effect is
@@ -3635,18 +3888,21 @@
           )
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
-      // A routine-scoped create always lands inside its routine, even when it
+      // An assistant-scoped create always lands inside its assistant, even when it
       // reuses a blank thread: the reused row predates this call, so its
       // grouping and setup label are applied here rather than at creation time.
-      const regroup = routineId !== undefined && existing.routineId !== routineId
+      // A task the user creates starts off the assistant's clock (see needsOnDemand
+      // above), so a reused blank row is put back on demand here too.
+      const regroup = assistantId !== undefined && existing.assistantId !== assistantId
       const needsSetupPatch = gettingStarted && existing.assistantGettingStarted !== true
-      if (regroup || needsSetupPatch) {
+      if (regroup || needsSetupPatch || needsOnDemand) {
         const optimistic: Thread = {
           ...existing,
-          // A routine's how-to ("Getting started") thread is pinned for life, and
+          // An assistant's knowledge ("Getting started") thread is pinned for life, and
           // a reused blank row must join the Pinned section too.
           ...(gettingStarted ? { pinned: true } : {}),
-          ...(regroup ? { routineId } : {}),
+          ...(regroup ? { assistantId } : {}),
+          ...(needsOnDemand ? { scheduled: false } : {}),
           ...(gettingStarted
             ? {
                 title: ASSISTANT_SETUP_TITLE,
@@ -3660,8 +3916,11 @@
           workspaceState.updateThread(optimistic)
         }
         const persist = async (): Promise<void> => {
-          if (regroup && routineId) {
-            upsertThreadInList(await assistantRoutines.setTaskRoutine(existing.id, routineId))
+          if (regroup && assistantId) {
+            upsertThreadInList(await assistants.assignTask(existing.id, assistantId))
+          }
+          if (needsOnDemand) {
+            upsertThreadInList(await assistants.setTaskScheduled(existing.id, false))
           }
           if (needsSetupPatch) {
             upsertThreadInList(
@@ -3671,7 +3930,7 @@
                 assistantGettingStarted: true
               })
             )
-            // `thread:update` cannot carry the pin, and the how-to thread is
+            // `thread:update` cannot carry the pin, and the knowledge thread is
             // pinned for life, so a reused blank row is pinned in its own write.
             upsertThreadInList(
               await invoke('thread:setPinned', existing.projectId, existing.id, true)
@@ -3709,7 +3968,7 @@
             .then((updated) => upsertThreadInList(updated))
             .catch(() => {})
         }
-        if (activeThread) {
+        if (activeThread && activeThread.projectId === project.id) {
           void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
         }
       }
@@ -3726,7 +3985,7 @@
       title: gettingStarted ? ASSISTANT_SETUP_TITLE : DEFAULT_THREAD_TITLE,
       titleSource: gettingStarted ? ('manual' as const) : ('default' as const),
       status: 'created' as const,
-      // The how-to thread is pinned from the instant it exists, so it never
+      // The knowledge thread is pinned from the instant it exists, so it never
       // appears outside the Pinned section and is never an eviction candidate.
       pinned: gettingStarted,
       archived: false,
@@ -3736,7 +3995,8 @@
       updatedAt: Date.now(),
       lastActivity: Date.now(),
       workingDirectory: project.path,
-      ...(routineId ? { routineId } : {}),
+      ...(assistantId ? { assistantId } : {}),
+      ...(needsOnDemand ? { scheduled: false } : {}),
       ...(gettingStarted ? { assistantGettingStarted: true } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
@@ -3770,7 +4030,8 @@
       workingDirectory: project.path,
       settings: inheritedSettings,
       ...(scopeBucketId ? { scopeBucketId } : {}),
-      ...(routineId ? { routineId } : {}),
+      ...(assistantId ? { assistantId } : {}),
+      ...(needsOnDemand ? { scheduled: false } : {}),
       ...(gettingStarted ? { titleSource: 'manual' as const, assistantGettingStarted: true } : {})
     })
       .then((created) => {
@@ -3786,7 +4047,7 @@
         // durable: fired concurrently with creation, its internal `thread:get`
         // can race ahead of the insert and the "Thread not found" failure is
         // swallowed   leaving the toolbox icon lit while every switch reads off.
-        if (activeThread) {
+        if (activeThread && activeThread.projectId === project.id) {
           void inheritEngineeringLifecycle(project.id, activeThread.id, optimisticId)
         }
         if (activeThread?.settings) {
@@ -4097,6 +4358,9 @@
 
   /** Entry point that gates duplicate in-flight requests per thread. */
   function requestThreadRead(projectId: string, threadId: string): void {
+    // A deliberate unread mark outranks the automatic settle: keep the thread
+    // unread until the user opens it again (see `threadUnreadIntent`).
+    if (threadUnreadIntent.has(threadId)) return
     const key = `${projectId}:${threadId}`
     if (pendingReadThreads.has(key)) return
     pendingReadThreads.add(key)
@@ -4117,6 +4381,8 @@
   function openThread(thread: Thread): void {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
+    // Opening a thread is the signal that ends a deliberate unread mark.
+    threadUnreadIntent.clear(thread.id)
     if (threadTracksReadStatus(thread)) markThreadReadAfterPaint(thread)
     // Reveal immediately and again once any read-state update re-sorts the list.
     revealThreadInSidebar(thread)
@@ -4137,16 +4403,10 @@
     })
   }
 
-  /** Create a routine-less task and open it (header New Task). */
-  async function createAssistantTask(): Promise<void> {
-    if (!assistantProject) return
-    await createThreadInProject(assistantProject)
-  }
-
   /**
    * The model the composer would start a new assistant task on: the selected
    * assistant task's model, else the assistant's own last-used model, else the
-   * model the project work last ran on. A routine defaults its primary to it.
+   * model the project work last ran on. An assistant defaults its primary to it.
    */
   function currentAssistantModelSelection(): AgentModelSelection | undefined {
     const selected = workspaceState.selectedThread
@@ -4167,154 +4427,230 @@
   }
 
   /**
-   * The routine the user is currently "inside": the routine of the selected
-   * task, else the routine whose how-to panel is docked (so a shortcut still
-   * lands in the routine while its panel is open on another task).
+   * The assistant the user is currently "inside": the assistant of the selected
+   * task, else the assistant whose knowledge panel is docked (so a shortcut still
+   * lands in the assistant while its panel is open on another task).
    */
-  function activeAssistantRoutine(): Routine | null {
+  function activeAssistant(): Assistant | null {
     const selectedId = selectedThread?.id
     const fromSelection = selectedId
-      ? assistantThreads.find((task) => task.id === selectedId)?.routineId
+      ? assistantThreads.find((task) => task.id === selectedId)?.assistantId
       : undefined
     const tab = contextSidebarState.sidebarActiveTab
-    const fromPanel = tab?.kind === 'assistant-how-to' ? (tab.routineId ?? undefined) : undefined
-    const routineId = fromSelection ?? fromPanel
-    if (!routineId) return null
-    return assistantRoutineList.find((routine) => routine.id === routineId) ?? null
+    const fromPanel =
+      tab?.kind === 'assistant-knowledge' ? (tab.assistantId ?? undefined) : undefined
+    const assistantId = fromSelection ?? fromPanel
+    if (!assistantId) return null
+    return assistantList.find((assistant) => assistant.id === assistantId) ?? null
   }
 
-  /** Cmd/Ctrl+N on the Assistant view: new task in the active routine when the
-   *  user is inside one, otherwise a routine-less task. */
+  /**
+   * Cmd/Ctrl+N on the Assistant view: a new task, in the assistant the user is
+   * currently in, or in the one they pick when they are not in any. There is no
+   * task outside an assistant, so there is nothing to create without an answer.
+   */
   async function createAssistantTaskFromShortcut(): Promise<void> {
-    const routine = activeAssistantRoutine()
-    if (routine) await createAssistantTaskInRoutine(routine)
-    else await createAssistantTask()
+    const assistant = activeAssistant()
+    if (assistant) await createTaskInAssistant(assistant)
+    else requestTaskOwner()
   }
 
-  /** Create a routine and seed its "Getting started" task, then open its panel. */
-  async function createAssistantRoutine(
-    name: string,
-    description: string,
-    scheduled = true
-  ): Promise<void> {
+  /** Create an assistant and seed its "Getting started" task, then open its panel. */
+  async function createAssistant(draft: NewAssistantDraft): Promise<void> {
     if (!assistantProject) return
     // No model prompt: the primary is the model the user is already working on,
-    // so creating a routine never blocks on a pick. Fallbacks are added later
+    // so creating an assistant never blocks on a pick. Fallbacks are added later
     // from the panel's Agents tab, which the agent points the user at.
-    const agents = withDefaultRoutinePrimary({ fallbacks: [] }, currentAssistantModelSelection())
-    const routine = await assistantRoutines.createRoutine({ name, description, scheduled, agents })
-    // The seed task is created already inside the routine: a follow-up regroup
+    const agents = withDefaultAssistantPrimary({ fallbacks: [] }, currentAssistantModelSelection())
+    const assistant = await assistants.createAssistant({
+      name: draft.name,
+      personality: draft.personality || undefined,
+      scheduled: draft.scheduled,
+      scheduleName: draft.scheduleName || undefined,
+      agents
+    })
+    // The seed task is created already inside the assistant: a follow-up regroup
     // would race the creation broadcast and leave the task outside it.
     await createThreadInProject(assistantProject, undefined, {
-      routineId: routine.id,
+      assistantId: assistant.id,
       gettingStarted: true
     })
-    await applyRoutineModelToTask(workspaceState.selectedThread, routine)
-    await openAssistantHowToForRoutine(routine)
-  }
-
-  /** Create a task inside a routine and open the routine's how-to panel. */
-  async function createAssistantTaskInRoutine(routine: Routine): Promise<void> {
-    if (!assistantProject) return
-    await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
-    const created = workspaceState.selectedThread
-    await applyRoutineModelToTask(created, routine)
-    if (created && created.projectId === ASSISTANT_SPACE_ID) {
-      upsertThreadInList(created)
-      // Anchor on the routine id we already hold: a reused blank thread carries
-      // no grouping until its async regroup lands, and the panel must not open
-      // against the wrong routine in that window.
-      contextSidebarState.openAssistantHowTo(
-        ASSISTANT_SPACE_ID,
-        created.id,
-        routine.id,
-        routine.name
-      )
-    } else {
-      await openAssistantHowToForRoutine(routine)
+    await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
+    await openAssistantKnowledgeFor(assistant)
+    // The assistant was given its name and personality on the form, so it opens
+    // the conversation itself: it greets the user by using them, asks what to
+    // call them, and says where a task goes. A failed opening turn is not fatal,
+    // because the conversation is open and the user can send the first message.
+    try {
+      await assistants.startManualSetup(assistant.id)
+    } catch (error) {
+      reportError(error, 'The assistant could not introduce itself')
     }
   }
 
   /**
-   * A task created inside a routine starts on the routine's primary model, so
-   * the composer shows the model the routine actually runs on. Best-effort: the
-   * scheduled run applies the routine's primary regardless, so a failed write
+   * Create an assistant by talking to it.
+   *
+   * It exists straight away with nothing known about it, its Getting started
+   * conversation is seeded exactly like the form's, and the app posts the opening
+   * turn: the user reads one line saying a new assistant is being created, and the
+   * model is told to run the setup conversation, starting with the name. It wears
+   * a placeholder name and a colour of its own from that moment, and the name the
+   * user gives it in the conversation is written onto it as the answer lands, so
+   * every surface renames itself there and then rather than at the recap.
+   */
+  async function createAssistantViaChat(): Promise<void> {
+    if (!assistantProject) return
+    const agents = withDefaultAssistantPrimary({ fallbacks: [] }, currentAssistantModelSelection())
+    const assistant = await assistants.createAssistant({
+      name: ASSISTANT_PLACEHOLDER_NAME,
+      agents
+    })
+    await createThreadInProject(assistantProject, undefined, {
+      assistantId: assistant.id,
+      gettingStarted: true
+    })
+    await applyAssistantModelToTask(workspaceState.selectedThread, assistant)
+    await openAssistantKnowledgeFor(assistant)
+    try {
+      await assistants.startChatSetup(assistant.id)
+    } catch (error) {
+      // The assistant exists and its conversation is open, so a failed opening
+      // turn is not fatal: the user can send the first message themselves.
+      reportError(error, 'The first question could not be asked')
+    }
+  }
+
+  /** Create a task inside an assistant and open the assistant's knowledge panel. */
+  async function createTaskInAssistant(assistant: Assistant): Promise<void> {
+    if (!assistantProject) return
+    await createThreadInProject(assistantProject, undefined, { assistantId: assistant.id })
+    const created = workspaceState.selectedThread
+    await applyAssistantModelToTask(created, assistant)
+    if (created && created.projectId === ASSISTANT_SPACE_ID) {
+      upsertThreadInList(created)
+      // Anchor on the assistant id we already hold: a reused blank thread carries
+      // no grouping until its async regroup lands, and the panel must not open
+      // against the wrong assistant in that window.
+      contextSidebarState.openAssistantKnowledge(
+        ASSISTANT_SPACE_ID,
+        created.id,
+        assistant.id,
+        assistant.name
+      )
+    } else {
+      await openAssistantKnowledgeFor(assistant)
+    }
+  }
+
+  /**
+   * Run one assistant connection's setup in a thread of the assistant's own.
+   *
+   * The connection is the assistant's, so the thread is too: it lands beside the
+   * assistant's other tasks where this panel reports on it, and it starts on the
+   * assistant's primary model. Nothing is docked and no tab is switched, because
+   * the user came here from the assistant's Connections tab and stays on it while
+   * the agent works: the row they pressed Set up on is what flips to Ready.
+   */
+  async function openAssistantConnectionSetup(input: ConnectionSetupRequest): Promise<void> {
+    const project = assistantProject
+    if (!project) return
+    const assistant = assistants.assistants.find((candidate) => candidate.id === input.assistantId)
+    if (!assistant) return
+    try {
+      upsertThreadInList(
+        await openAssistantUtilitySetupThread({
+          project,
+          assistant,
+          label: input.label,
+          request: input.request
+        })
+      )
+    } catch (error) {
+      reportError(error, 'The setup thread could not be opened.')
+    }
+  }
+
+  /**
+   * A task created inside an assistant starts on the assistant's primary model, so
+   * the composer shows the model the assistant actually runs on. Best-effort: the
+   * scheduled run applies the assistant's primary regardless, so a failed write
    * only leaves the composer showing the inherited model.
    */
-  async function applyRoutineModelToTask(
+  async function applyAssistantModelToTask(
     thread: Thread | null | undefined,
-    routine: Routine
+    assistant: Assistant
   ): Promise<void> {
-    const primary = routinePrimaryModel(routine.agents)
+    const primary = assistantPrimaryModel(assistant.agents)
     if (!thread || !primary || !thread.settings) return
     try {
       const updated = await persistInheritedThreadSettings(
         thread,
-        settingsWithRoutineModel(thread.settings, primary)
+        settingsWithAssistantModel(thread.settings, primary)
       )
       upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
     } catch {
-      // Cosmetic only: the run itself uses the routine's primary either way.
+      // Cosmetic only: the run itself uses the assistant's primary either way.
     }
   }
 
-  /** Remove a routine and every thread it owns, its hidden how-to thread included. */
-  async function deleteAssistantRoutine(routineId: string): Promise<void> {
-    const affected = allThreads.filter((thread) => thread.routineId === routineId)
+  /** Remove an assistant and every thread it owns, its hidden knowledge thread included. */
+  async function deleteAssistant(assistantId: string): Promise<void> {
+    const affected = allThreads.filter((thread) => thread.assistantId === assistantId)
     // The container and its rows leave the sidebar first: the removal must not
     // wait on the database sweep. The main process then deletes the threads and
-    // their runs, forgets the routine in the scheduler, and removes its artifact
+    // their runs, forgets the assistant in the scheduler, and removes its artifact
     // folder; the toast reports what went with it.
     for (const thread of affected) {
       allThreads = allThreads.filter((candidate) => candidate.id !== thread.id)
       scopeState.removeThread(thread.id)
       if (selectedThread?.id === thread.id) workspaceState.clearThread()
     }
-    // The routine is gone, so its how-to panel has nothing left to configure.
-    contextSidebarState.close(`assistant-how-to:${ASSISTANT_SPACE_ID}:${routineId}`)
+    // The assistant is gone, so its knowledge panel has nothing left to configure.
+    contextSidebarState.close(`assistant-knowledge:${ASSISTANT_SPACE_ID}:${assistantId}`)
     try {
-      const result = await assistantRoutines.removeRoutine(routineId)
-      toast.success('Routine removed', {
+      const result = await assistants.removeAssistant(assistantId)
+      toast.success('Assistant removed', {
         description: removalSummary(result.taskCount, result.runCount, result.artifactsRemoved)
       })
     } catch (error) {
-      reportError(error, 'The routine could not be removed.')
+      reportError(error, 'The assistant could not be removed.')
     }
   }
 
   /**
-   * What one routine removal swept, in one sentence. The artifact folder is
+   * What one assistant removal swept, in one sentence. The artifact folder is
    * called out because it can hold files the agent produced, so the user knows
-   * they went with the routine.
+   * they went with the assistant.
    */
   function removalSummary(taskCount: number, runCount: number, artifactsRemoved: boolean): string {
     const parts = [`${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}`]
     if (runCount > 0) parts.push(`${runCount} ${runCount === 1 ? 'run' : 'runs'}`)
     const swept = `${parts.join(' and ')} deleted`
     return artifactsRemoved
-      ? `${swept}, along with the routine's artifact folder.`
+      ? `${swept}, along with the assistant's artifact folder.`
       : `${swept}. Its artifact folder could not be removed.`
   }
 
-  async function toggleAssistantRoutinePin(routine: Routine): Promise<void> {
-    await assistantRoutines.setRoutinePinned(routine.id, !routine.pinned)
+  async function toggleAssistantPin(assistant: Assistant): Promise<void> {
+    await assistants.setAssistantPinned(assistant.id, !assistant.pinned)
   }
 
-  async function skipNextAssistantRoutineRun(routine: Routine): Promise<void> {
+  async function skipNextRun(assistant: Assistant): Promise<void> {
     try {
-      await assistantRoutines.skipNextRoutineRun(routine.id)
-      toast.success('Next routine run skipped', { description: routine.name })
+      await assistants.skipNextRun(assistant.id)
+      toast.success('Next assistant run skipped', { description: assistant.name })
     } catch (error) {
       reportError(error, 'The next scheduled run could not be skipped.')
       throw error
     }
   }
 
-  async function skipAssistantRoutineRunsToday(routine: Routine): Promise<void> {
+  async function skipRunsToday(assistant: Assistant): Promise<void> {
     try {
-      await assistantRoutines.skipRoutineRunsToday(routine.id)
-      toast.success("Today's routine runs skipped", { description: routine.name })
+      await assistants.skipRunsToday(assistant.id)
+      toast.success("Today's assistant runs skipped", { description: assistant.name })
     } catch (error) {
       reportError(error, "Today's scheduled runs could not be skipped.")
       throw error
@@ -4322,89 +4658,146 @@
   }
 
   /**
-   * Hide a routine's how-to thread. Hiding is the only state the thread can
+   * Hide an assistant's knowledge thread. Hiding is the only state the thread can
    * change: it stays pinned, so archiving it is what takes it out of the
-   * sidebar until the how-to panel reveals it again.
+   * sidebar until the knowledge panel reveals it again.
    */
-  async function hideAssistantHowTo(task: Thread): Promise<void> {
-    if (!task.routineId) return
+  async function hideAssistantKnowledge(task: Thread): Promise<void> {
+    if (!task.assistantId) return
     try {
-      const updated = await assistantRoutines.setHowToHidden(task.routineId, true)
+      const updated = await assistants.setKnowledgeHidden(task.assistantId, true)
       upsertThreadInList(updated)
       scopeState.updateThread(updated)
     } catch (error) {
-      reportError(error, 'Could not hide the how-to thread')
+      reportError(error, 'Could not hide the knowledge thread')
     }
   }
 
-  /** Reorder routines by drag: move the dragged routine around its drop target. */
-  async function moveAssistantRoutine(
+  /** Reorder assistants by drag: move the dragged assistant around its drop target. */
+  async function moveAssistant(
     draggedId: string,
     targetId: string,
     position: 'before' | 'after'
   ): Promise<void> {
     if (draggedId === targetId) return
-    const list = [...assistantRoutines.routines]
-    const from = list.findIndex((routine) => routine.id === draggedId)
+    const list = [...assistants.assistants]
+    const from = list.findIndex((assistant) => assistant.id === draggedId)
     if (from < 0) return
     const [moved] = list.splice(from, 1)
-    const targetIndex = list.findIndex((routine) => routine.id === targetId)
+    const targetIndex = list.findIndex((assistant) => assistant.id === targetId)
     if (targetIndex < 0) return
     list.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, moved)
-    await assistantRoutines.reorderRoutines(list.map((routine) => routine.id))
+    await assistants.reorderAssistants(list.map((assistant) => assistant.id))
   }
 
-  /** Group a dragged task into a routine. */
-  async function assignAssistantTask(taskId: string, routineId: string): Promise<void> {
-    const updated = await assistantRoutines.setTaskRoutine(taskId, routineId)
+  /** Group a dragged task into an assistant. */
+  async function assignAssistantTask(taskId: string, assistantId: string): Promise<void> {
+    const updated = await assistants.assignTask(taskId, assistantId)
     upsertThreadInList(updated)
     workspaceState.updateThread(updated)
   }
 
-  function openAssistantHowToForTask(task: Thread): void {
-    // One panel per routine: the title follows the routine, so opening the
-    // how-to from any of its tasks focuses the same panel with the same name
+  /**
+   * What the user is choosing an assistant for: a task they just asked for, or a
+   * task that already exists and still belongs to nobody.
+   *
+   * Nothing in the Assistant view runs without an assistant, so a task with no
+   * owner is never created here: the workspace asks which assistant takes it on,
+   * and only a brand-new assistant starts without being asked.
+   */
+  let taskOwnerRequest = $state<{
+    mode: 'create' | 'assign'
+    taskId?: string
+    taskLabel?: string
+  } | null>(null)
+
+  /** Ask which assistant a new task belongs to, before it is created. */
+  function requestTaskOwner(): void {
+    if (assistantList.length === 0) {
+      // Nothing to choose from, so the only way forward is an assistant of its
+      // own; the create flow seeds its first task and opens the panel.
+      assistantCreateTrigger++
+      return
+    }
+    taskOwnerRequest = { mode: 'create' }
+  }
+
+  /** Offer to move one existing task into an assistant. */
+  function requestTaskOwnerForTask(task: Thread): void {
+    if (assistantList.length === 0) {
+      assistantCreateTrigger++
+      return
+    }
+    taskOwnerRequest = { mode: 'assign', taskId: task.id, taskLabel: task.title }
+  }
+
+  /** The assistant the user picked: create the task in it, or move one into it. */
+  async function pickTaskOwner(assistantId: string): Promise<void> {
+    const request = taskOwnerRequest
+    taskOwnerRequest = null
+    const assistant = assistantList.find((entry) => entry.id === assistantId)
+    if (!assistant || !request) return
+    if (request.mode === 'assign' && request.taskId) {
+      try {
+        await assignAssistantTask(request.taskId, assistant.id)
+        toast.success(`Moved into ${assistant.name}`)
+      } catch (error) {
+        reportError(error, 'The task could not be moved')
+      }
+      return
+    }
+    await createTaskInAssistant(assistant)
+  }
+
+  function openAssistantKnowledgeForTask(task: Thread): void {
+    // One panel per assistant: the title follows the assistant, so opening the
+    // knowledge from any of its tasks focuses the same panel with the same name
     // instead of re-titling it with whichever task was clicked. A run is one
     // execution, not the task the panel belongs to, so it anchors on its task
-    // (falling back to the run only when that task is gone): a routine must
-    // never grow a second how-to tab just because it ran.
+    // (falling back to the run only when that task is gone): an assistant must
+    // never grow a second knowledge tab just because it ran.
     const anchor = task.assistantTaskId
       ? (assistantThreads.find((entry) => entry.id === task.assistantTaskId) ?? task)
       : task
-    const routineId = anchor.routineId ?? task.routineId
-    const routine = routineId
-      ? assistantRoutineList.find((entry) => entry.id === routineId)
+    const assistantId = anchor.assistantId ?? task.assistantId
+    const assistant = assistantId
+      ? assistantList.find((entry) => entry.id === assistantId)
       : undefined
-    contextSidebarState.openAssistantHowTo(
+    contextSidebarState.openAssistantKnowledge(
       ASSISTANT_SPACE_ID,
       anchor.id,
-      routineId ?? null,
-      routine?.name ?? anchor.title
+      assistantId ?? null,
+      assistant?.name ?? anchor.title
     )
   }
 
-  /** Open the how-to panel for a routine, creating a first task if it has none. */
-  async function openAssistantHowToForRoutine(routine: Routine): Promise<void> {
+  /** Open the knowledge panel for an assistant, creating a first task if it has none. */
+  async function openAssistantKnowledgeFor(assistant: Assistant): Promise<void> {
     let anchor =
-      assistantTasks.find((task) => task.routineId === routine.id) ??
+      assistantTasks.find((task) => task.assistantId === assistant.id) ??
       (workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
         ? workspaceState.selectedThread
         : undefined)
     if (!anchor) {
-      // A routine whose only task is a hidden how-to thread still has an anchor:
+      // An assistant whose only task is a hidden knowledge thread still has an anchor:
       // ask the main process for it, because hidden rows never reach the
       // hydrated thread list the sidebar renders from.
-      anchor = (await invoke('assistant:howToThread', routine.id)) ?? undefined
+      anchor = (await invoke('assistant:knowledgeThread', assistant.id)) ?? undefined
     }
     if (!anchor) {
       if (!assistantProject) return
-      await createThreadInProject(assistantProject, undefined, { routineId: routine.id })
+      await createThreadInProject(assistantProject, undefined, { assistantId: assistant.id })
       const created = workspaceState.selectedThread
       if (!created) return
       upsertThreadInList(created)
       anchor = created
     }
-    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
+    contextSidebarState.openAssistantKnowledge(
+      ASSISTANT_SPACE_ID,
+      anchor.id,
+      assistant.id,
+      assistant.name
+    )
   }
 
   /**
@@ -4484,6 +4877,14 @@
       // this resolves immediately; asking through the access seam is what keeps
       // that fact out of this component's imports.
       void loadBrowser().then((browser) => browser.switchTo(entry.tab.id))
+      return
+    }
+    if (entry.kind === 'panel') {
+      // A panel tab lives in the workspace surface (the right sidebar or the
+      // bottom terminal dock), so leave the full screen browser first, exactly as
+      // opening a project file does, then focus the tab so its panel reveals.
+      if (!active) navigate(mode)
+      contextSidebarState.focus(entry.tab.id)
       return
     }
     await openThreadFromSwitcher(entry.thread)
@@ -4584,10 +4985,42 @@
   }
 
   async function togglePin(thread: Thread): Promise<void> {
-    const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+    // A pin re-hosts the row into the Pinned section and an unpin sends it back
+    // into its own list, so both directions move it in the DOM. Open the section
+    // that will hold it   a folded one would not draw the row at all, so the pin
+    // would look like it did nothing (see `openPinnedSection`). The unfold is
+    // unconditional: it is content, not the viewport, that has to change for the
+    // row to land anywhere, and the browser's own scroll anchoring keeps the
+    // reader's place through a section opening above them.
+    //
+    // The scroll belongs to the thread in focus, so only that thread's pin moves
+    // the viewport. Pinning the row the reader is reading re-hosts it out from
+    // under them, and the reveal puts it back on screen; pinning anybody else's
+    // row moves a row they are not looking at, and the list stays exactly where
+    // they left it.
+    const isFocusedThread =
+      selectedThread !== null && activeThreadRowId(selectedThread) === thread.id
+    if (!isFocusedThread) {
+      // Nobody else's pin moves this viewport, not even through this update: the
+      // follow effect would pull the list back to the active row the moment that
+      // row is out of view, which is a scroll the user never asked for. Taking
+      // the reader's hold says what their own gesture says   they are driving
+      // this list right now   and the hold is handed back the moment they pick
+      // another thread or the active row comes into view.
+      sidebarReaderOwnsScroll = true
+    }
+    openPinnedSection(thread)
+    const updated = thread.bookmarked
+      ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
+      : await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
     upsertThreadInList(updated)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
+    if (!isFocusedThread) return
+    // The reopen above is synchronous, so the incoming list may be measured in
+    // the same task. A section that had to unfold mounts its rows a tick later,
+    // which the reveal's own retry covers.
+    await revealThreadInSidebar(updated, true)
   }
 
   async function handleDelete(thread: Thread): Promise<void> {
@@ -4690,30 +5123,30 @@
     {#await import('../assistant/AssistantSidebar.svelte') then { default: AssistantSidebar }}
       <AssistantSidebar
         bind:scroller={sidebarScroller}
-        routines={assistantRoutineList}
+        assistants={assistantList}
         tasks={assistantTasks}
         runsByTask={assistantRunsByTask}
-        runsByRoutine={assistantRunsByRoutine}
+        {runsByAssistant}
         selectedThreadId={activeThreadRowId(selectedThread)}
         onOpenTask={openAssistantTask}
-        onOpenTaskHowTo={openAssistantHowToForTask}
-        onOpenRoutineHowTo={(routine) => void openAssistantHowToForRoutine(routine)}
-        onCreateTaskInRoutine={(routine) => void createAssistantTaskInRoutine(routine)}
+        onOpenTaskKnowledge={openAssistantKnowledgeForTask}
+        onOpenAssistantKnowledge={(assistant) => void openAssistantKnowledgeFor(assistant)}
+        onCreateTaskInAssistant={(assistant) => void createTaskInAssistant(assistant)}
         onRenameTask={handleRename}
         onTogglePinTask={(task) => void togglePin(task)}
         onDeleteTask={handleDelete}
         onForkTask={(task) => void forkThread(task)}
         onOpenTaskNotes={openAssistantTaskNotes}
         onHandedOffTask={handleAssistantHandoff}
-        onHideHowTo={(task) => void hideAssistantHowTo(task)}
-        onDeleteRoutine={deleteAssistantRoutine}
-        onHasRoutineRunsToday={(routine) => assistantRoutines.hasRoutineRunsToday(routine.id)}
-        onSkipNextRoutineRun={skipNextAssistantRoutineRun}
-        onSkipRoutineRunsToday={skipAssistantRoutineRunsToday}
-        onTogglePinRoutine={(routine) => void toggleAssistantRoutinePin(routine)}
-        onMoveRoutine={(draggedId, targetId, position) =>
-          void moveAssistantRoutine(draggedId, targetId, position)}
-        onAssignTask={(taskId, routineId) => void assignAssistantTask(taskId, routineId)}
+        onHideKnowledge={(task) => void hideAssistantKnowledge(task)}
+        onDeleteAssistant={deleteAssistant}
+        onHasAssistantRunsToday={(assistant) => assistants.hasRunsToday(assistant.id)}
+        onSkipNextAssistantRun={skipNextRun}
+        onSkipAssistantRunsToday={skipRunsToday}
+        onTogglePinAssistant={(assistant) => void toggleAssistantPin(assistant)}
+        onMoveAssistant={(draggedId, targetId, position) =>
+          void moveAssistant(draggedId, targetId, position)}
+        onAssignTask={(taskId, assistantId) => void assignAssistantTask(taskId, assistantId)}
       />
     {/await}
   {:else if workspaceSidebarVisible}
@@ -4735,6 +5168,7 @@
       {pinnedTimelineThreads}
       {unpinnedTimelineThreads}
       {draftThreadKeys}
+      {typingThreadKeys}
       {hasMoreHistory}
       {historyLoading}
       {projectPageLoading}
@@ -4744,7 +5178,7 @@
       {projectHasMoreInDb}
       onLoadProjectThreadsPage={loadProjectThreadsPage}
       onLoadHistoryPage={loadHistoryPage}
-      onSetProjects={(next) => (projects = next)}
+      onSetProjects={(next: Project[]) => (projects = next)}
       onOpenThread={openThread}
       onRename={handleRename}
       onTogglePin={togglePin}
@@ -4815,7 +5249,6 @@
             {selectedThread}
             {projectIcons}
             {browser}
-            {coordinator}
             onDismissCoordinator={() => {
               const tab = contextSidebarState.sidebarActiveTab
               if (tab?.kind === 'coordinator') closeContextTab(tab.id)
@@ -4824,12 +5257,15 @@
             onOpenSubagent={openNestedSubagent}
             {navigate}
             onOpenAssistantTask={openAssistantTask}
+            onSetupAssistantConnection={openAssistantConnectionSetup}
+            onAdoptAssistantTask={requestTaskOwnerForTask}
           />
         {/snippet}
         <div
           class="min-h-0 min-w-0 {rightSidebarFlushes ? 'border-l border-border' : ''}"
           style:grid-column="2"
           style:grid-row="1"
+          style:visibility={guideHidesToolPanel ? 'hidden' : 'visible'}
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
           out:fly={{
             x: contextSidebarState.width,
@@ -4844,7 +5280,7 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            tabPresentation={ovenTabPresentation}
+            {tabPresentation}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -4917,6 +5353,12 @@
   {/await}
 {/snippet}
 
+<!-- The Changes rail item's hover preview: the current change set's line totals
+     and file count. The store tracked for the on-screen thread feeds it. -->
+{#snippet changeSummaryFlyout()}
+  <ChangeSummaryFlyout />
+{/snippet}
+
 <!-- Global-browser surfaces wait for `browserStore()` so their chunks are not
      fetched on a launch that never reaches the browser. Thread-browser
      fullscreen is loaded separately below when a thread tab asks for it. -->
@@ -4966,4 +5408,20 @@
   onCancel={() => (closeTabTarget = null)}
   onDiscard={discardCloseTab}
   onSave={saveAndCloseTab}
+/>
+
+<!-- Which assistant takes on a task. Nothing in the Assistant view runs without
+     one, so this is the question every task with no owner is answered with. -->
+<AssistantOwnerPicker
+  open={taskOwnerRequest !== null}
+  assistants={assistantList}
+  question={taskOwnerRequest?.mode === 'assign'
+    ? `Who should take on “${taskOwnerRequest.taskLabel ?? 'this task'}”?`
+    : 'Which assistant should this task belong to?'}
+  onPick={(assistantId) => void pickTaskOwner(assistantId)}
+  onNewAssistant={() => {
+    taskOwnerRequest = null
+    assistantCreateTrigger++
+  }}
+  onClose={() => (taskOwnerRequest = null)}
 />

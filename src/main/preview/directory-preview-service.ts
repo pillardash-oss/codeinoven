@@ -1,5 +1,5 @@
 import { realpath } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, dirname } from 'node:path'
 import {
   DirectoryPreviewServer,
   type DirectoryPreviewChangeListener,
@@ -112,6 +112,31 @@ export class DirectoryPreviewService {
       if (entry.origin === origin) return root
     }
     return null
+  }
+
+  /** Retarget existing origins so open previews follow a moved folder. */
+  async relocate(from: string, to: string): Promise<void> {
+    const canonicalTo = await realpath(to)
+    // The old path no longer exists. Canonicalize its parent instead.
+    const canonicalFrom = `${await realpath(dirname(from))}/${basename(from)}`
+    for (const [root, entry] of [...this.live]) {
+      if (root !== canonicalFrom && !root.startsWith(`${canonicalFrom}/`)) continue
+      const next = `${canonicalTo}${root.slice(canonicalFrom.length)}`
+      await entry.server.relocate(next)
+      this.live.delete(root)
+      this.live.set(next, entry)
+      appServiceRegistry.unregister(previewServiceId(root))
+      appServiceRegistry.register({
+        id: previewServiceId(next),
+        kind: 'server',
+        name: `Preview server: ${basename(next)}`,
+        detail: next,
+        scope: 'app',
+        port: entry.endpoint.port,
+        url: entry.endpoint.url,
+        stop: () => this.close(next)
+      })
+    }
   }
 
   /** Close one served directory and drop it from the task manager. */

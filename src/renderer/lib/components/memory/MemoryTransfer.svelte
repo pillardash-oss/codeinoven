@@ -1,7 +1,10 @@
 <script lang="ts">
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { MemoryExportKind, MemoryImportPreview } from '$shared/types'
-  import { Download, Loader2, Upload } from '@lucide/svelte'
+
   import Modal from '../ui/Modal.svelte'
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
 
@@ -115,12 +118,12 @@
 
 {#if variant === 'settings'}
   <button
-    class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+    class="flex shrink-0 items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
     type="button"
     title="Export or import memory as a backup file"
     onclick={() => (transferOpen = true)}
   >
-    <Upload size={13} />
+    <CioUpload size={13} />
     Transfer
   </button>
 
@@ -138,15 +141,15 @@
           Export memory to a JSON backup, or import one. Merges on import: duplicates are skipped.
         </p>
         <div
-          class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+          class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
           role="tablist"
           aria-label="Memory transfer scope"
         >
           {#each exportKinds as option (option.value)}
             <button
-              class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {transferScope ===
+              class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {transferScope ===
               option.value
-                ? 'bg-surface text-foreground shadow-sm'
+                ? 'bg-surface text-foreground'
                 : 'text-muted hover:text-foreground'}"
               role="tab"
               aria-selected={transferScope === option.value}
@@ -159,39 +162,36 @@
         </div>
         <div class="flex items-center gap-2">
           <button
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
             type="button"
             disabled={busy}
             title="Export the selected memory scope to a JSON file"
             onclick={() => void exportMemory()}
           >
             {#if busy}
-              <Loader2 size={13} class="animate-spin" />
+              <CioSpinner size={13} class="animate-spin" />
             {:else}
-              <Download size={13} />
+              <CioDownload size={13} />
             {/if}
             Export
           </button>
           <button
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
             type="button"
             disabled={busy}
             title="Import a memory export file and merge its entries"
             onclick={() => void pickImport()}
           >
-            <Upload size={13} />
+            <CioUpload size={13} />
             Import
           </button>
         </div>
 
         {#if error}
-          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+          <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
         {/if}
         {#if message}
-          <p
-            class="break-all rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary"
-            role="status"
-          >
+          <p class="break-all bg-primary/10 px-3 py-2 text-xs text-primary" role="status">
             {message}
           </p>
         {/if}
@@ -203,13 +203,13 @@
     items={[
       {
         label: 'Export memory',
-        icon: Download,
+        icon: CioDownload,
         disabled: busy,
         onClick: () => void exportMemory()
       },
       {
         label: 'Import memory',
-        icon: Upload,
+        icon: CioUpload,
         disabled: busy,
         onClick: () => void pickImport()
       }
@@ -247,7 +247,7 @@
     </div>
     {#snippet footer()}
       <button
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         type="button"
         disabled={applying}
         title="Cancel the import"
@@ -256,16 +256,16 @@
         Cancel
       </button>
       <button
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         type="button"
         disabled={applying}
         title="Merge the imported memory entries"
         onclick={() => void applyImport()}
       >
         {#if applying}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Upload size={13} />
+          <CioUpload size={13} />
         {/if}
         Import
       </button>

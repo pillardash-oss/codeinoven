@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rail icon set · round two</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      /* Round two is one solid colour, so there is no ember control here. The
+         assistant mark is shown untouched beside each pass, because it is the
+         one custom icon that does not change. */
+      .rail .item svg,
+      .cell-icon svg,
+      .grid-11 svg,
+      .cluster svg {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <div>
+          <div class="eyebrow">CodeInOven · brand work · round two</div>
+          <h1>The rail icon set, <em>merged</em></h1>
+          <p class="lede">
+            Round one drew an outline pass and a solid pass. You picked the solid
+            feel, and you are right about why: mass is what makes a mark
+            recognisable at 16px. What the outline pass had was the drawing, the
+            quieter and clearer shapes. So round two keeps the mass and rebuilds
+            the drawing, and both new passes are single-colour, with no ember.
+            The assistant mark is not touched or redrawn: it is the one custom
+            icon the rail already has, and everything else now has to earn its
+            place beside it.
+          </p>
+        </div>
+        <div class="lockup">
+          <svg viewBox="0 0 96 96" aria-label="CodeInOven mark">
+            <path d="M49 17a31 31 0 1 0 0 62" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="square" />
+            <path d="M61 23h23v50H61z" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" />
+            <rect x="58" y="45" width="29" height="6" fill="currentColor" />
+            <circle cx="84" cy="48" r="5" fill="var(--color-accent)" />
+          </svg>
+          <div>
+            <b>CodeInOven</b>
+            <span>the mark every pass answers to</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ══ The scale test ═══════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>1 · The size test</h2>
+          <span class="note">16px as the rail draws it, then 4x for the drawing</span>
+        </div>
+        <p class="lede">
+          The rail paints a 16px glyph inside a 32px button, and that is the only
+          size that matters. Every row below shows the same eleven meanings at
+          that true size, so if a mark is not recognisable in that column it is
+          not finished. The two 4x rows are below to read the drawing itself.
+          The assistant column is the real AssistantIcon from
+          <code>src/renderer/lib/components/icons/AssistantIcon.svelte</code>,
+          unchanged, and it is not up for replacement: it is the one custom icon
+          the rail already has, so it is here as the family the other ten have to
+          join.
+        </p>
+
+        <div class="size-test">
+          <div class="size-test-head">
+            <span></span>
+            <span>Project</span>
+            <span>Thread</span>
+            <span>Scoped</span>
+            <span>Board</span>
+            <span>Chat</span>
+            <span>Assistant</span>
+            <span>Browser</span>
+            <span>Update</span>
+            <span>Tasks</span>
+            <span>Utilities</span>
+            <span>Settings</span>
+          </div>
+
+          <div class="size-test-row today">
+            <div class="row-label"><b>Today</b>Lucide, at 16px and 4x</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" /><path d="M8 10v4" /><path d="M12 10v2" /><path d="M16 10v6" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h10" /><path d="M6 12h10" /><path d="M4 18h10" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18h8" /><path d="M3 22h18" /><path d="M14 22a7 7 0 1 0 0-14h-1" /><path d="M9 14h2" /><path d="M9 12a2 2 0 0 1-2-2V6h6v4a2 2 0 0 1-2 2Z" /><path d="M12 6V3a1 1 0 0 0-1-1H9a1 1 0 0 0-1 1v3" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5v11" /><path d="M12 5v6" /><path d="M18 5v14" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19.95 10.05a7 7 0 011.412 7.872 1 1 0 00-.058.787l.675 2.089a1 1 0 01-1.236 1.168l-2.155-.631a1 1 0 00-.745.06 7 7 0 01-7.793-1.445" /><path d="M2.696 12.708a1 1 0 00-.058-.785 7 7 0 113.518 3.473 1 1 0 00-.744-.061l-2.155.63a1 1 0 01-1.236-1.167z" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M15 2v2" /><path d="M15 20v2" /><path d="M2 15h2" /><path d="M2 9h2" /><path d="M20 15h2" /><path d="M20 9h2" /><path d="M9 2v2" /><path d="M9 20v2" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15h4" /><path d="m14.817 10.995-.971-1.45 1.034-1.232a2 2 0 0 0-2.025-3.238l-1.82.364L9.91 3.885a2 2 0 0 0-3.625.748L6.141 6.55l-1.725.426a2 2 0 0 0-.19 3.756l.657.27" /><path d="m18.822 10.995 2.26-5.38a1 1 0 0 0-.557-1.318L16.954 2.9a1 1 0 0 0-1.281.533l-.924 2.122" /><path d="M4 12.006A1 1 0 0 1 4.994 11H19a1 1 0 0 1 1 1v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>C · The Weighted Line</b>16px and 4x</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-projects" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-threads" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-scoped" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-board" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-chats" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-browser" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-info" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-gauge" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-plug" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-settings" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>D · The Cut Block</b>16px and 4x</div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-projects" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-threads" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-scoped" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-board" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-chats" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-browser" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-info" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-gauge" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-plug" /></svg></div>
+            <div class="cell at-rail"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-settings" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>C · at 4x</b>the drawing itself</div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-projects" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-threads" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-scoped" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-board" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-chats" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-browser" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-info" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-gauge" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-plug" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-settings" /></svg></div>
+          </div>
+
+          <div class="size-test-row">
+            <div class="row-label"><b>D · at 4x</b>the drawing itself</div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-projects" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-threads" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-scoped" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-board" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-chats" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-browser" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-info" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-gauge" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-plug" /></svg></div>
+            <div class="cell at-4x"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-settings" /></svg></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Direction C ══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>2 · Direction C · The Weighted Line</h2>
+          <span class="note">the wire's drawing, at slab weight</span>
+        </div>
+        <p class="lede">
+          The drawing language of round one's outline pass, redrawn so it cannot
+          disappear. Two stroke weights instead of one: 3 units for the shape and
+          2.2 to 2.6 for the detail, which at 16px lands on 2 whole pixels and
+          about 1.5. Round caps and joins, and rounded corners, because the
+          assistant mark is rounded and the rail should not fight it. What it
+          borrows from the slab is the solid anchor: one filled form per glyph,
+          the thing your eye actually lands on. The lit door, the region you
+          selected, the live entry, the two filter handles.
+        </p>
+
+        <div class="rail-row">
+          <div class="window">
+            <nav class="rail" aria-label="Rail, direction C">
+              <div class="group">
+                <span class="item" data-current title="Project"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-browser" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-gauge" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-plug" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ Direction D ══════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>3 · Direction D · The Cut Block</h2>
+          <span class="note">the slab's mass, drawn with the wire's discipline</span>
+        </div>
+        <p class="lede">
+          Still solid, but no longer a brick. Round one's slab cut rectangular
+          holes into rectangular plates, which is why it read as a stamp rather
+          than a drawing. Here the openings are rounded and generous, each one a
+          shape you can name, and the silhouettes carry meaning of their own:
+          Project is the folder with its tab, Thread is a stack of entries that
+          taper as they age, Scoped is a region selected inside a field, Browser
+          is a slab with one window. The material stays heavy and the drawing
+          stops being blunt. This is the pass that keeps what you liked.
+        </p>
+
+        <div class="rail-row">
+          <div class="window">
+            <nav class="rail" aria-label="Rail, direction D">
+              <div class="group">
+                <span class="item" data-current title="Project"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-projects" /></svg></span>
+                <span class="item" title="Thread"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-threads" /></svg></span>
+                <span class="item" title="Scoped"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-scoped" /></svg></span>
+                <span class="item" title="Board"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-board" /></svg></span>
+                <span class="item" title="Chat"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-chats" /></svg></span>
+                <span class="item" title="Assistant"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g transform="translate(-2.64 -2.64) scale(1.22)"><rect x="4.2" y="6.4" width="15.6" height="12.4" rx="6" /><circle cx="9.4" cy="12.4" r="1.5" fill="currentColor" stroke="none" /><circle cx="14.6" cy="12.4" r="1.5" fill="currentColor" stroke="none" /></g></svg></span>
+                <span class="item" title="Browser"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-browser" /></svg></span>
+              </div>
+              <div class="spacer"></div>
+              <div class="group">
+                <span class="item" title="Update"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-info" /></svg></span>
+                <span class="item" title="Task manager"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-gauge" /></svg></span>
+                <span class="item" title="Utilities"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-plug" /></svg></span>
+                <span class="item" title="Settings"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-settings" /></svg></span>
+              </div>
+            </nav>
+            <div class="pane">
+              <h3>Projects</h3>
+              <div class="rows">
+                <div><b>codeinoven</b><span class="keys">12 threads</span></div>
+                <div><b>pillardash-api</b><span class="keys">4 threads</span></div>
+                <div><b>oven-recipes</b><span class="keys">2 threads</span></div>
+                <div><b>brand-assets</b><span class="keys">idle</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══ States ═══════════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>4 · In the button it will live in</h2>
+          <span class="note">the real 32px control, idle and current, in both themes</span>
+        </div>
+        <p class="lede">
+          A rail item is a 32px button that sits on the surface when idle and on
+          the elevated plate with a 2px bar when it is the current view. These are
+          the real states, in the dark theme and then the light one, because the
+          marks have to survive both without being recoloured.
+        </p>
+
+        <div class="plates" data-theme="dark">
+          <div class="plate" style="background: var(--color-surface)">
+            <h3>C · Weighted Line</h3>
+            <div class="state-pair">
+              <figure><span class="idle-plate"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-projects" /></svg></span><figcaption>Project, idle</figcaption></figure>
+              <figure><span class="real-button"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-threads" /></svg></span><figcaption>Thread, current</figcaption></figure>
+              <figure><span class="idle-plate"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-settings" /></svg></span><figcaption>Settings, idle</figcaption></figure>
+              <figure><span class="real-button"><svg viewBox="0 0 24 24"><use href="./icons-c.svg#c-chats" /></svg></span><figcaption>Chat, current</figcaption></figure>
+            </div>
+          </div>
+          <div class="plate" style="background: var(--color-surface)">
+            <h3>D · Cut Block</h3>
+            <div class="state-pair">
+              <figure><span class="idle-plate"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-projects" /></svg></span><figcaption>Project, idle</figcaption></figure>
+              <figure><span class="real-button"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-threads" /></svg></span><figcaption>Thread, current</figcaption></figure>
+              <figure><span class="idle-plate"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-settings" /></svg></span><figcaption>Settings, idle</figcaption></figure>
+              <figure><span class="real-button"><svg viewBox="0 0 24 24"><use href="./icons-d.svg#d-chats" /></svg></span><figcaption>Chat, current</figcaption></figure>
+            </div>
+          </div>
+        </div>
+
+        <p class="footnote" style="margin-top: 0.875rem">
+          <b>Note on the theme sample.</b> Both plates above use the dark token
+          set, which is what the served page is on. Flip the page's theme with
+          the switch below to see the light one; nothing in either pass is a
+          hardcoded colour, so both follow the theme on their own.
+        </p>
+        <div style="margin-top: 0.75rem">
+          <button
+            type="button"
+            id="theme-toggle"
+            style="
+              font: inherit;
+              font-size: 0.6875rem;
+              padding: 0.5rem 0.875rem;
+              color: var(--color-foreground);
+              background: var(--color-elevated);
+              border: 1px solid var(--color-border-strong);
+              cursor: pointer;
+            "
+          >
+            Switch to light theme
+          </button>
+        </div>
+      </section>
+
+      <!-- ══ The trade ════════════════════════════════════════════════════ -->
+      <section class="section">
+        <div class="section-head">
+          <h2>5 · The trade</h2>
+          <span class="note">round two, stated plainly</span>
+        </div>
+        <div class="verdicts">
+          <div class="card">
+            <header>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-c.svg#c-gauge" /></svg>
+              <b>C · The Weighted Line</b>
+              <span>outline, heavy</span>
+            </header>
+            <ul>
+              <li>Keeps round one's drawing clarity and fixes its only real failure, which was weight.</li>
+              <li>Sits closest to the assistant mark, so the rail reads as one family instead of a mascot with strangers beside it.</li>
+              <li>Borrows the slab's solid anchor, so it still has a shape for the eye to catch at 16px.</li>
+              <li>Risk: more parts per glyph than the slab, so the roomier ones (tasks, chat) are the busiest marks in the set.</li>
+            </ul>
+            <div class="foot">Best if the rail should sit quietly and let the assistant mark stay the loudest thing in it.</div>
+          </div>
+          <div class="card">
+            <header>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><use href="./icons-d.svg#d-board" /></svg>
+              <b>D · The Cut Block</b>
+              <span>solid, refined</span>
+            </header>
+            <ul>
+              <li>Keeps the mass that made the slab recognisable, which was the whole point of your read.</li>
+              <li>Replaces the brick with a die-cut, so every opening is a named shape rather than a rectangle.</li>
+              <li>Its silhouettes carry meaning: the folder tab, the tapering entries, the selected region, the single window.</li>
+              <li>Risk: the heaviest pass of the four, so it will out-shout the Lucide icons in every other panel until those are replaced too.</li>
+            </ul>
+            <div class="foot">Best if the rail should lead the identity rather than follow it.</div>
+          </div>
+        </div>
+        <p class="footnote">
+          <b>What happens either way.</b> The winner becomes one surface behind the
+          rail's icon slot, eleven meanings, still reversible in a single commit.
+          The assistant mark is untouched in both, and rounding is now available
+          to the rest of the app, since it turned out we are not against it.
+          Round one is still on the served page at
+          <a href="./index.html">index.html</a> for comparison.
+        </p>
+      </section>
+    </div>
+
+    <script>
+      // Study control only: flips the page between the app's two token sets.
+      const button = document.getElementById('theme-toggle')
+      button?.addEventListener('click', () => {
+        const dark = document.documentElement.classList.toggle('dark')
+        button.textContent = dark ? 'Switch to light theme' : 'Switch to dark theme'
+      })
+      // The tokens.css root is light by default and .dark opts in, so start dark
+      // to match what the app is likely showing.
+      document.documentElement.classList.add('dark')
+    </script>
+  </body>
+</html>

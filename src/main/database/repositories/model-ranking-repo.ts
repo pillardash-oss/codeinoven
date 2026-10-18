@@ -1,5 +1,6 @@
 import type { Database } from '../database'
-import { MODEL_RANKING_CALC_VERSION } from '../schema'
+import { Logger } from '../../system/logger'
+import { MAX_PLAUSIBLE_SHOT_COST_USD, MODEL_RANKING_CALC_VERSION } from '../schema'
 import type {
   LocalProfileGradingSpend,
   LocalProfileModelRanking,
@@ -46,6 +47,7 @@ export class ModelRankingRepo {
    */
   increment(input: ModelRankingIncrement): void {
     const id = rankingRowId(input)
+    const shotCostUsd = plausibleShotCostUsd(input)
     if (input.shotCategory === 'first_shot') {
       this.db.run(
         `INSERT INTO model_rankings(
@@ -68,7 +70,7 @@ export class ModelRankingRepo {
         input.score,
         1,
         Math.max(0, input.durationMs),
-        input.costUsd ?? 0,
+        shotCostUsd,
         0,
         0,
         0,
@@ -104,7 +106,7 @@ export class ModelRankingRepo {
       input.score,
       1,
       Math.max(0, input.durationMs),
-      input.costUsd ?? 0,
+      shotCostUsd,
       input.rubricVersion,
       MODEL_RANKING_CALC_VERSION,
       Date.now()
@@ -197,6 +199,30 @@ function rankingRowId(input: ModelRankingIncrement): string {
 
 /** Minimum total ranked conversations (one-shot + multi-shot) for a ranking row to be reported. */
 const MIN_RANKING_SAMPLES = 5
+
+/**
+ * Priced cost one shot may contribute to the permanent aggregate.
+ *
+ * A cost sum in this table cannot be decomposed after the fact   the snapshot
+ * it came from is hard-deleted the moment its score lands   so an implausible
+ * addend has to be refused at the door instead of folded in. Anything absent,
+ * negative, non-finite, or above `MAX_PLAUSIBLE_SHOT_COST_USD` is recorded as 0,
+ * exactly how an unpriced session is already recorded, and said out loud in the
+ * dev log so a harness that keeps reporting one stays diagnosable.
+ */
+function plausibleShotCostUsd(input: ModelRankingIncrement): number {
+  const costUsd = input.costUsd
+  if (costUsd === null) return 0
+  if (Number.isFinite(costUsd) && costUsd >= 0 && costUsd <= MAX_PLAUSIBLE_SHOT_COST_USD) {
+    return costUsd
+  }
+  Logger.dev(
+    'Refusing an implausible ranked-conversation cost; recording it as unpriced:',
+    `${input.harnessId}/${input.providerId}/${input.modelId}/${input.thinkingLevel}`,
+    `${input.shotCategory} ${String(costUsd)}`
+  )
+  return 0
+}
 
 /** Sample-weighted combined average across both shot categories; null-safe when a category has no samples. */
 const WEIGHTED_SCORE_SQL = `(

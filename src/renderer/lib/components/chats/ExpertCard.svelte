@@ -1,16 +1,17 @@
 <script lang="ts">
-  import {
-    AudioLines,
-    ChevronRight,
-    Clapperboard,
-    Maximize2,
-    Palette,
-    PencilRuler,
-    Settings2,
-    Sparkles,
-    Users
-  } from '@lucide/svelte'
+  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioDesign from '@pillardash-oss/cio-icon/CioDesign.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+  import type { Component } from 'svelte'
   import Modal from '../ui/Modal.svelte'
+  import { slide } from 'svelte/transition'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import { foldSlide } from '../shared/card-motion'
   import type { ExpertSummary } from '$shared/experts'
   import type { ThreadExpertState } from '$shared/ipc-contract'
   import type { DesignAssignmentOutput } from '$shared/types'
@@ -57,13 +58,14 @@
   }: Props = $props()
 
   let fullscreen = $state(false)
+  let folded = $state(false)
 
   /** The craft's own icon, so a row reads as work rather than as a file type. */
-  const CRAFT_ICON: Record<DesignAssignmentOutput, typeof PencilRuler> = {
-    text: PencilRuler,
-    image: Palette,
-    video: Clapperboard,
-    audio: AudioLines
+  const CRAFT_ICON: Record<DesignAssignmentOutput, Component> = {
+    text: CioDesign,
+    image: CioPalette,
+    video: CioClapper,
+    audio: CioAudioLines
   }
 
   const owners = $derived(expertState.experts.length)
@@ -72,109 +74,115 @@
 
   /**
    * Focus the primary action when the card appears, because the card has no field
-   * to type in and the user's next act is to answer it.
+   * to type in and the user's next act is to answer it. The action renders through
+   * `CardButton`, so the attachment looks for the button inside its host.
    */
-  function focusOnMount(node: HTMLButtonElement): void {
-    node.focus()
+  function focusPrimary(node: HTMLElement): void {
+    queueMicrotask(() => node.querySelector('button')?.focus())
   }
 </script>
 
+<!-- A gate that lives inside the composer: no frame of its own, a dashed rule
+that hands the eye down to the writing surface. The head, the body and the foot
+are the shared card shape. -->
 <div
-  class="mx-3 mt-2.5 rounded-xl border border-accent/30 bg-accent/5 p-4"
+  class="border-b border-dashed border-border-strong bg-transparent"
   role="dialog"
-  aria-labelledby="expert-card-title"
+  aria-label="Your experts can do this work"
 >
-  <div class="flex items-start gap-2.5">
-    <div class="mt-0.5 shrink-0 rounded-lg bg-accent/10 p-1.5 text-accent">
-      <Sparkles size={15} />
-    </div>
-    <div class="min-w-0 flex-1">
-      <div class="flex items-start justify-between gap-2">
-        <p id="expert-card-title" class="text-sm font-semibold text-foreground">
-          Your experts can do this work
+  <CardHead
+    icon={CioDesign}
+    title="Your experts can do this work"
+    chip={{ text: 'Live' }}
+    bind:folded
+    foldLabel="Your experts can do this work"
+  >
+    {#snippet controls()}
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Read every expert and their standing instruction"
+        aria-label="Open the expert list full screen"
+        onclick={() => (fullscreen = true)}
+      >
+        <CioMaximize size={13} />
+      </button>
+    {/snippet}
+  </CardHead>
+
+  {#if !folded}
+    <div transition:slide={foldSlide()}>
+      <div class="flex flex-col gap-2 px-3 py-2.5">
+        <p class="text-xs leading-relaxed text-muted">
+          {countLabel} are staffed for this {sessionLabel}. Your agent hands them the craft work
+          instead of improvising it, so the words and the assets come from the models you chose.
         </p>
-        <button
-          type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Read every expert and their standing instruction"
-          aria-label="Open the expert list full screen"
-          onclick={() => (fullscreen = true)}
-        >
-          <Maximize2 size={13} />
-        </button>
-      </div>
-      <p class="mt-1 text-xs leading-relaxed text-muted">
-        {countLabel} are staffed for this {sessionLabel}. Your agent hands them the craft work
-        instead of improvising it, so the words and the assets come from the models you chose.
-      </p>
-    </div>
-  </div>
-
-  <div class="mt-3 max-h-56 overflow-y-auto rounded-lg border border-border bg-surface">
-    {#each expertState.experts as expert (expert.id)}
-      {@const Icon = CRAFT_ICON[expert.produces]}
-      <div class="flex items-center gap-2.5 border-b border-border px-2.5 py-2 last:border-b-0">
-        <span class="shrink-0 text-dimmed">
-          <Icon size={14} />
-        </span>
-        <div class="min-w-0 flex-1">
-          <p class="truncate text-xs font-medium text-foreground">{expert.label}</p>
-          <p class="truncate text-xs text-dimmed">{modelLabel(expert)}</p>
+        <div class="max-h-56 overflow-y-auto border border-border bg-surface">
+          {#each expertState.experts as expert (expert.id)}
+            {@const Icon = CRAFT_ICON[expert.produces]}
+            <div
+              class="flex items-center gap-2.5 border-b border-border px-2.5 py-2 last:border-b-0"
+            >
+              <span class="shrink-0 text-dimmed">
+                <Icon size={14} />
+              </span>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-xs font-medium text-foreground">{expert.label}</p>
+                <p class="truncate text-xs text-dimmed">{modelLabel(expert)}</p>
+              </div>
+              <span
+                class="shrink-0 bg-elevated px-1.5 py-0.5 text-xs text-muted"
+                title={expert.craftDescription}
+              >
+                {expert.craftLabel}
+              </span>
+            </div>
+          {/each}
         </div>
-        <span
-          class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-xs text-muted"
-          title={expert.craftDescription}
-        >
-          {expert.craftLabel}
-        </span>
       </div>
-    {/each}
-  </div>
 
-  <div class="mt-3 flex flex-wrap items-center gap-2">
-    <button
-      type="button"
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-on-accent transition-colors hover:bg-accent-hover"
-      title="Let this session delegate its craft work to every expert you staffed"
-      onclick={onUse}
-      {@attach focusOnMount}
-    >
-      <Users size={13} /> Use all experts
-    </button>
-    <button
-      type="button"
-      class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium transition-colors hover:bg-overlay"
-      title="Turn the experts off for this thread and send now. They can be turned back on from the design board."
-      onclick={onDisable}
-    >
-      Disable for this thread
-    </button>
-    <button
-      type="button"
-      class="flex h-9 items-center rounded-lg px-2.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Turn the experts off for this thread and stop asking in it"
-      onclick={onNeverAsk}
-    >
-      Don't use experts
-    </button>
-    {#if warming}
-      <span class="ml-auto flex items-center gap-1.5 text-xs text-dimmed" role="status">
-        Starting your harness
-      </span>
-    {/if}
-  </div>
+      <CardFoot>
+        {#snippet left()}
+          <CardButton
+            variant="ghost-danger"
+            label="Disable for this thread"
+            title="Turn the experts off for this thread and send now. They can be turned back on from the design board."
+            onclick={onDisable}
+          />
+          <CardButton
+            variant="ghost"
+            label="Don't use experts"
+            title="Turn the experts off for this thread and stop asking in it"
+            onclick={onNeverAsk}
+          />
+          {#if warming}
+            <span class="flex items-center gap-1.5 text-[0.6875rem] text-dimmed" role="status">
+              Starting your harness
+            </span>
+          {/if}
+        {/snippet}
 
-  <div class="mt-2.5 flex items-center justify-between gap-2">
-    <p class="text-xs text-dimmed">Settings, Design decides who does each craft.</p>
-    <button
-      type="button"
-      class="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open Settings, Design to change who does each craft"
-      onclick={onOpenSettings}
-    >
-      <Settings2 size={12} /> Manage experts <ChevronRight size={12} />
-    </button>
-  </div>
+        {#snippet right()}
+          <CardButton
+            variant="secondary"
+            label="Manage experts"
+            title="Open Settings, Design to change who does each craft"
+            icon={CioTabSettings}
+            onclick={onOpenSettings}
+          />
+          <span {@attach focusPrimary}>
+            <CardButton
+              variant="primary"
+              label="Let experts delegate"
+              title="Let this session delegate its craft work to every expert you staffed"
+              icon={CioDesign}
+              onclick={onUse}
+            />
+          </span>
+        {/snippet}
+      </CardFoot>
+    </div>
+  {/if}
 </div>
 
 {#if fullscreen}
@@ -187,42 +195,39 @@
     open
     title="Your experts"
     description={`The models you staffed for the craft work a ${sessionLabel} needs.`}
-    size="full"
     placement="fullscreen"
+    panelClass="bg-app"
     onClose={() => (fullscreen = false)}
   >
     {#snippet footer()}
       <div class="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-xs font-medium text-on-accent transition-colors hover:bg-accent-hover"
-          title="Let this session delegate its craft work to every expert you staffed"
-          onclick={() => {
-            fullscreen = false
-            onUse()
-          }}
-        >
-          <Users size={13} /> Use all experts
-        </button>
-        <button
-          type="button"
-          class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium transition-colors hover:bg-overlay"
+        <CardButton
+          variant="ghost-danger"
+          label="Disable for this thread"
           title="Turn the experts off for this thread and send now. They can be turned back on from the design board."
           onclick={() => {
             fullscreen = false
             onDisable()
           }}
-        >
-          Disable for this thread
-        </button>
-        <button
-          type="button"
-          class="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        />
+        <CardButton
+          variant="secondary"
+          label="Manage experts"
           title="Open Settings, Design to change who does each craft"
+          icon={CioTabSettings}
+          class="ml-auto"
           onclick={onOpenSettings}
-        >
-          <Settings2 size={12} /> Manage experts
-        </button>
+        />
+        <CardButton
+          variant="primary"
+          label="Let experts delegate"
+          title="Let this session delegate its craft work to every expert you staffed"
+          icon={CioDesign}
+          onclick={() => {
+            fullscreen = false
+            onUse()
+          }}
+        />
       </div>
     {/snippet}
 
@@ -233,15 +238,15 @@
       </p>
       {#each expertState.experts as expert (expert.id)}
         {@const Icon = CRAFT_ICON[expert.produces]}
-        <section class="rounded-xl border border-border bg-surface p-4">
+        <section class="border border-border bg-surface p-4">
           <div class="flex items-start gap-3">
-            <span class="mt-0.5 shrink-0 rounded-lg bg-elevated p-2 text-accent">
+            <span class="mt-0.5 shrink-0 bg-elevated p-2 text-accent">
               <Icon size={16} />
             </span>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
                 <h3 class="text-sm font-semibold text-foreground">{expert.label}</h3>
-                <span class="rounded-md bg-elevated px-1.5 py-0.5 text-xs text-muted">
+                <span class="bg-elevated px-1.5 py-0.5 text-xs text-muted">
                   {expert.craftLabel}
                 </span>
               </div>
@@ -255,7 +260,7 @@
                 {expert.id}
               </p>
               {#if expert.instructions}
-                <div class="mt-3 rounded-lg border border-border bg-app p-3">
+                <div class="mt-3 border border-border bg-app p-3">
                   <p class="text-xs font-medium text-muted">
                     Standing instruction, sent with every call
                   </p>

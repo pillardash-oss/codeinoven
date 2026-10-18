@@ -15,6 +15,17 @@ export function embeddingWorkingContext(contextTokens: number): number {
 }
 
 /**
+ * How long a resident embedding model stays in memory after its last use.
+ *
+ * Five minutes: long enough that one working session keeps the model hot across
+ * searches, short enough that an app left open does not hold the model's memory
+ * for a feature the user has walked away from. The next use boots it again (or a
+ * warm-up does), and the spotlight's search never waits on that boot because its
+ * keyword rows are already on screen.
+ */
+export const EMBEDDING_RUNTIME_IDLE_MS = 5 * 60_000
+
+/**
  * A local embedding runtime: turns text into vectors without leaving the
  * machine. Implementations are selected per installed model's runtime id, so
  * the subsystem is not tied to one format or backend.
@@ -23,10 +34,16 @@ export interface EmbeddingRuntime {
   readonly id: EmbeddingRuntimeId
   /** Whether the runtime can actually run on this machine right now. */
   isAvailable(): Promise<boolean>
+  /**
+   * Whether the model is loaded and a query could embed without a boot.
+   *
+   * A boot is tens of seconds of model loading (measured: 22 s for the shipped
+   * EmbeddingGemma model on CPU), so callers that have to answer an interactive
+   * request ask this first and warm the runtime in the background instead.
+   */
+  isResident(): boolean
   /** Embed a batch of texts. Order of the result matches the input order. */
   embed(texts: readonly string[], signal: AbortSignal): Promise<Float32Array[]>
-  /** Check the model's actual tokenizer and slot window, including special tokens. */
-  fitsContext(text: string, signal: AbortSignal): Promise<boolean>
   contextBudget(): Promise<number>
   dispose(): Promise<void>
 }
@@ -70,13 +87,6 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
     return this.host.llamaServerPath() !== null
   }
 
-  async fitsContext(text: string, signal: AbortSignal): Promise<boolean> {
-    signal.throwIfAborted()
-    await this.ensureServer()
-    const tokens = await this.tokenize(text, signal)
-    return tokens.length < this.tokenBudget
-  }
-
   async contextBudget(): Promise<number> {
     await this.ensureServer()
     return this.tokenBudget - 1
@@ -91,7 +101,7 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
           if (this.idleTimer) clearTimeout(this.idleTimer)
           this.idleTimer = setTimeout(() => {
             void this.dispose()
-          }, 60_000)
+          }, EMBEDDING_RUNTIME_IDLE_MS)
           this.idleTimer.unref()
         }
       }

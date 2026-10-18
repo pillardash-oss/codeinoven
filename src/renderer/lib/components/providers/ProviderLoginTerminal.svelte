@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadTerminalFontFamily } from '$lib/app-typography'
   import type { ITheme, Terminal } from 'ghostty-web'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
@@ -15,15 +16,29 @@
     /** Kill the process after this many ms of complete silence (used for hung updates). */
     idleTimeoutMs?: number
     environment?: Record<string, string>
-    /** Invoked once the login process exits. */
-    onExit: (exitCode: number) => void
+    cancelled?: boolean
+    startingLabel?: string
+    /** Invoked once the login process exits, with what it printed. */
+    onExit: (exitCode: number, output: string) => void
   }
 
-  let { terminalId, command, args, idleTimeoutMs, environment, onExit }: Props = $props()
+  let {
+    terminalId,
+    command,
+    args,
+    idleTimeoutMs,
+    environment,
+    onExit,
+    cancelled = false,
+    startingLabel = 'Starting terminal…'
+  }: Props = $props()
 
   let error = $state('')
   let started = $state(false)
   let destroyed = false
+  /** Tail of what the process printed, so a failure can report the CLI's reason. */
+  let printed = ''
+  const PRINTED_LIMIT = 8_000
 
   function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
     return styles.getPropertyValue(token).trim()
@@ -62,15 +77,17 @@
     try {
       const ghosttyWeb = await loadGhosttyWeb()
       const ghostty = await ghosttyWeb.Ghostty.load()
-      if (destroyed) return
+      if (destroyed || cancelled) return
       await patchSelectionCopy()
+      if (destroyed || cancelled) return
+      const fontFamily = await loadTerminalFontFamily()
+      if (destroyed || cancelled) return
       const terminal = new ghosttyWeb.Terminal({
         ghostty,
         cursorBlink: true,
         cursorStyle: 'bar',
         fontSize: 13,
-        fontFamily:
-          "'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', 'Ubuntu Mono', monospace",
+        fontFamily,
         scrollback: 5000,
         smoothScrollDuration: 80,
         theme: terminalTheme()
@@ -80,8 +97,8 @@
 
       const host = document.createElement('div')
       host.className = 'terminal-host'
+      container.append(host)
       terminal.open(host)
-      container.replaceChildren(host)
       fit.observeResize()
       fit.fit()
 
@@ -119,12 +136,14 @@
           unregisterHost()
         },
         subscribe(`pty:data:${terminalId}`, (data) => {
-          terminal.write(data as string)
+          const chunk = data as string
+          printed = (printed + chunk).slice(-PRINTED_LIMIT)
+          terminal.write(chunk)
         }),
         subscribe(`pty:exit:${terminalId}`, (exitCode) => {
           const code = typeof exitCode === 'number' ? exitCode : 0
           terminal.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
-          onExit(code)
+          onExit(code, printed)
         })
       )
 
@@ -138,6 +157,8 @@
       })
       unsubs.push(() => resizeDisposable.dispose())
 
+      terminal.write('Starting process...\r\n')
+      if (destroyed || cancelled) return
       await invoke(
         'pty:createCommand',
         terminalId,
@@ -148,12 +169,15 @@
         idleTimeoutMs,
         environment
       )
+      if (destroyed || cancelled) {
+        await invoke('pty:destroy', terminalId)
+        return
+      }
       started = true
-      terminal.focus()
     } catch (initError) {
       if (!destroyed) {
-        error =
-          initError instanceof Error ? initError.message : 'The login terminal failed to start.'
+        error = initError instanceof Error ? initError.message : 'The terminal failed to start.'
+        onExit(1, error)
       }
     }
   }
@@ -174,11 +198,15 @@
   tabindex="-1"
   class="login-host relative h-full w-full overflow-hidden bg-app"
   data-floating-document
-  {@attach terminalAttachment}
 >
-  {#if !started && !error}
+  <div class="h-full w-full" {@attach terminalAttachment}></div>
+  {#if cancelled}
     <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
-      Starting sign-in…
+      Process stopped.
+    </div>
+  {:else if !started && !error}
+    <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
+      {startingLabel}
     </div>
   {:else if error}
     <div class="absolute inset-0 flex items-center justify-center bg-app p-6">

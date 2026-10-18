@@ -1,6 +1,11 @@
 <script lang="ts">
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioPause from '@pillardash-oss/cio-icon/CioPause.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
   import { onMount } from 'svelte'
-  import { CircleAlert, LoaderCircle, Pause, Play, Volume2 } from '@lucide/svelte'
+
   import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -73,22 +78,22 @@
   <div class="flex shrink-0 items-center gap-1.5">
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
+      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
       title={buttonTitle}
       aria-label={buttonTitle}
       {disabled}
       onclick={activate}
     >
       {#if ownsSession && playbackState.state === 'preparing'}
-        <LoaderCircle size={13} class="animate-spin" aria-hidden="true" />
+        <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'playing'}
-        <Pause size={13} aria-hidden="true" />
+        <CioPause size={13} aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'paused'}
-        <Play size={13} aria-hidden="true" />
+        <CioPlay size={13} aria-hidden="true" />
       {:else if ownsSession && playbackState.state === 'failed'}
-        <CircleAlert size={13} aria-hidden="true" />
+        <CioAlertCircle size={13} aria-hidden="true" />
       {:else}
-        <Volume2 size={13} aria-hidden="true" />
+        <CioVolume size={13} aria-hidden="true" />
       {/if}
     </button>
     <!-- Separate sibling control, not part of the play/pause button -->
@@ -123,7 +128,6 @@
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
-    border-radius: 9999px;
     background: linear-gradient(
       to right,
       var(--color-primary) 0%,
@@ -141,7 +145,6 @@
     -webkit-appearance: none;
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);
@@ -150,7 +153,6 @@
   .question-tts-seek::-moz-range-thumb {
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);

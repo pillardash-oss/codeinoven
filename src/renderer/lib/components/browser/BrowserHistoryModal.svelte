@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Trash2 } from '@lucide/svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { toast } from 'svelte-sonner'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
   import { openInGlobalBrowserTabOnScreen } from '$lib/open-in-browser'
@@ -72,12 +72,12 @@
     {#snippet rowActions(entry)}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-danger"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-danger"
         aria-label={`Forget ${entry.title}`}
         title="Forget this page"
         onclick={() => (forgettingUrl = entry.url)}
       >
-        <Trash2 size={12} />
+        <CioTrash size={12} />
       </button>
     {/snippet}
   </BrowserHistoryList>
@@ -85,12 +85,12 @@
   {#snippet footer()}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold text-danger hover:bg-danger/10"
+      class="flex h-8 items-center gap-1.5 border px-3 text-xs font-semibold text-danger hover:bg-danger/10"
       title="Remove every page from your browsing history"
       aria-label="Clear all browsing history"
       onclick={() => (confirmingClear = true)}
     >
-      <Trash2 size={13} />
+      <CioTrash size={13} />
       Clear all history
     </button>
   {/snippet}

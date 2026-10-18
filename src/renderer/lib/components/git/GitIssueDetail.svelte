@@ -1,19 +1,17 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    ExternalLink,
-    GitPullRequest,
-    Hammer,
-    Loader2,
-    MessageSquare,
-    Milestone,
-    RotateCcw,
-    Send,
-    Tag,
-    TriangleAlert,
-    UserPlus,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioHammer from '@pillardash-oss/cio-icon/CioHammer.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioMilestone from '@pillardash-oss/cio-icon/CioMilestone.svelte'
+  import CioPersonPlus from '@pillardash-oss/cio-icon/CioPersonPlus.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioSend from '@pillardash-oss/cio-icon/CioSend.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -368,16 +366,16 @@
       {#if onBack}
         <button
           type="button"
-          class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to issues"
           aria-label="Back to issues"
           onclick={onBack}
         >
-          <ChevronLeft size={13} />
+          <CioBack size={13} />
         </button>
       {/if}
       <span
-        class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold {issueStateToneClass(
+        class="flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {issueStateToneClass(
           subject
         )}"
       >
@@ -388,54 +386,54 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex size-6 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Open this issue on GitHub"
         aria-label="Open this issue on GitHub"
         onclick={() => onOpenInBrowser(subject)}
       >
-        <ExternalLink size={12} />
+        <CioExternalLink size={12} />
       </button>
     </div>
     <p class="text-[0.75rem] font-semibold leading-snug text-foreground">{subject.title}</p>
     <div class="flex flex-wrap items-center gap-1">
       <button
         type="button"
-        class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-primary/10 px-2 text-[0.625rem] font-medium text-primary transition-colors hover:bg-primary/20"
+        class="flex h-6 cursor-pointer items-center gap-1 bg-primary/10 px-2 text-[0.625rem] font-medium text-primary transition-colors hover:bg-primary/20"
         title="Open a new agent thread seeded with this issue"
         onclick={() => onWorkOn(subject)}
       >
-        <Hammer size={11} />
+        <CioHammer size={11} />
         Work on this issue
       </button>
       {#if onCreatePr}
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Open a pull request prefilled to close this issue"
           onclick={() => onCreatePr?.(subject)}
         >
-          <GitPullRequest size={11} />
+          <CioPullRequest size={11} />
           Create pull request
         </button>
       {/if}
       {#if subject.state === 'open'}
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10"
           title="Close this issue"
           onclick={() => onRequestClose(subject)}
         >
-          <X size={11} />
+          <CioClose size={11} />
           Close
         </button>
       {:else}
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Reopen this issue"
           onclick={() => onReopen(subject)}
         >
-          <RotateCcw size={11} />
+          <CioUndo size={11} />
           Reopen
         </button>
       {/if}
@@ -445,7 +443,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
     {#if loading}
       <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Loading issue…
       </div>
     {:else}
@@ -454,7 +452,7 @@
         {#each subject.labels ?? [] as label (label.name)}
           <button
             type="button"
-            class="max-w-[14ch] cursor-pointer truncate rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none transition-opacity hover:opacity-80"
+            class="max-w-[14ch] cursor-pointer truncate px-1.5 py-0.5 text-[0.5625rem] font-medium leading-none transition-opacity hover:opacity-80"
             style={prLabelStyle(label.color)}
             title="Edit labels"
             onclick={() => onEditMetadata('labels', subject)}
@@ -464,20 +462,20 @@
         {/each}
         <button
           type="button"
-          class="flex h-5 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-5 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Edit labels"
           onclick={() => onEditMetadata('labels', subject)}
         >
-          <Tag size={9} />
+          <CioTag size={9} />
           Labels
         </button>
         <button
           type="button"
-          class="flex h-5 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-5 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Edit assignees"
           onclick={() => onEditMetadata('assignees', subject)}
         >
-          <UserPlus size={9} />
+          <CioPersonPlus size={9} />
           {#if subject.assignees && subject.assignees.length > 0}
             {subject.assignees.map((entry) => githubDisplayLogin(entry.login)).join(', ')}
           {:else}
@@ -486,11 +484,11 @@
         </button>
         <button
           type="button"
-          class="flex h-5 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-5 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Set milestone"
           onclick={() => onEditMetadata('milestone', subject)}
         >
-          <Milestone size={9} />
+          <CioMilestone size={9} />
           {subject.milestone ? subject.milestone.title : 'Milestone'}
         </button>
         {#if reasonLabel}
@@ -514,7 +512,7 @@
       />
 
       <!-- The issue body, rendered as the author wrote it. -->
-      <div class="mt-2 rounded-lg border border-border bg-surface/60">
+      <div class="mt-2 border border-border bg-surface/60">
         <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
           <PrAvatar login={subject.authorLogin} avatarUrl={subject.authorAvatarUrl} />
           <span class="text-[0.625rem] font-medium text-foreground"
@@ -553,7 +551,7 @@
 
       <!-- The conversation. -->
       <div class="mt-3 flex items-center gap-1.5">
-        <MessageSquare size={11} class="text-dimmed" />
+        <CioMessage size={11} class="text-dimmed" />
         <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
           {comments.length === 1 ? '1 comment' : `${comments.length} comments`}
         </span>
@@ -577,7 +575,7 @@
             {#snippet gutter()}
               <PrAvatar login={comment.authorLogin} avatarUrl={comment.authorAvatarUrl} />
             {/snippet}
-            <div class="rounded-lg border border-border bg-surface/60">
+            <div class="border border-border bg-surface/60">
               <div class="flex items-center gap-1.5 px-2.5 pt-2.5">
                 <span class="text-[0.625rem] font-medium text-foreground"
                   >{githubDisplayLogin(comment.authorLogin)}</span
@@ -603,7 +601,7 @@
                   {#if editingId === comment.id}
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-5 cursor-pointer items-center px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       onclick={() => {
                         editingId = null
                         editingBody = ''
@@ -613,7 +611,7 @@
                     </button>
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                      class="flex h-5 cursor-pointer items-center bg-primary px-1.5 text-[0.5625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
                       disabled={busyCommentId || editingBody.trim().length === 0}
                       onclick={() => void saveEdit()}
                     >
@@ -622,7 +620,7 @@
                   {:else}
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-5 cursor-pointer items-center px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                       title="Edit your comment"
                       onclick={() => {
                         editingId = comment.id
@@ -633,7 +631,7 @@
                     </button>
                     <button
                       type="button"
-                      class="flex h-5 cursor-pointer items-center rounded-md px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
+                      class="flex h-5 cursor-pointer items-center px-1.5 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10"
                       title="Delete your comment"
                       onclick={() => (confirmingDelete = comment)}
                     >
@@ -645,7 +643,7 @@
               {#if editingId === comment.id}
                 <div class="px-2.5 py-2">
                   <textarea
-                    class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
+                    class="min-h-24 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none focus:border-primary"
                     aria-label="Edit comment"
                     bind:value={editingBody}></textarea>
                 </div>
@@ -708,7 +706,7 @@
   {#if !loading}
     <div class="shrink-0 border-t border-border bg-surface/60 p-2">
       <textarea
-        class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="min-h-20 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder="Leave a comment…"
         aria-label="Comment on this issue"
         bind:value={draft}
@@ -717,14 +715,14 @@
         <span class="text-[0.5625rem] text-dimmed">⌘/Ctrl+Enter to post</span>
         <button
           type="button"
-          class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+          class="flex h-7 cursor-pointer items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
           disabled={posting || draft.trim().length === 0}
           onclick={() => void submitComment()}
         >
           {#if posting}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
-          <Send size={12} />
+          <CioSend size={12} />
           Comment
         </button>
       </div>
@@ -746,7 +744,7 @@
   </p>
   {#if confirmingDelete && (confirmingDelete.body ?? '').trim().length > 0}
     <p class="mt-2 flex items-start gap-1.5 text-[0.6875rem] leading-relaxed text-dimmed">
-      <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" />
+      <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" />
       <span class="line-clamp-4">{confirmingDelete.body.trim()}</span>
     </p>
   {/if}

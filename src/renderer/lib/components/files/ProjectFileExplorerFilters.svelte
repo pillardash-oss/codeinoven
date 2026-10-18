@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { FileDiff, GitMerge, Search, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -49,7 +52,7 @@
 
 {#if filterOpen}
   <div
-    class="absolute left-2 right-2 top-7 z-20 rounded-xl border border-border bg-surface shadow-xl"
+    class="absolute left-2 right-2 top-7 z-20 border border-border bg-surface shadow-xl"
     role="search"
     aria-label="Search project files"
   >
@@ -64,11 +67,11 @@
       />
     </div>
     <div class="flex items-center gap-1 p-1.5">
-      <Search size={13} class="shrink-0 text-dimmed" />
+      <CioSearch size={13} class="shrink-0 text-dimmed" />
       <input
         bind:this={filterInput}
         type="search"
-        class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
+        class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
         placeholder="Search files and folders…"
         value={filterQuery}
         oninput={onFilterInput}
@@ -77,12 +80,12 @@
       />
       <button
         type="button"
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground"
         aria-label="Close file search"
         title="Close file search (Escape)"
         onclick={onCloseFilter}
       >
-        <X size={12} />
+        <CioClose size={12} />
       </button>
     </div>
   </div>
@@ -92,7 +95,7 @@
   <button
     type="button"
     class={[
-      'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+      'mt-1.5 flex h-7 w-full items-center gap-1.5 border px-2 text-[0.625rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40',
       lastTurnOnly
         ? 'border-primary/40 bg-primary/10 text-primary'
         : 'border-border text-muted hover:bg-elevated hover:text-foreground'
@@ -103,7 +106,7 @@
     disabled={lastTurnDisabled}
     onclick={onToggleLastTurn}
   >
-    <FileDiff size={12} />
+    <CioDiff size={12} />
     <span class="flex-1 text-left">Last turn</span>
     <span class="tabular-nums text-dimmed">{lastTurnCount}</span>
   </button>
@@ -111,7 +114,7 @@
     <button
       type="button"
       class={[
-        'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[0.625rem] font-medium transition-colors',
+        'mt-1.5 flex h-7 w-full items-center gap-1.5 border px-2 text-[0.625rem] font-medium transition-colors',
         conflictsOnly
           ? 'border-warning/40 bg-warning/10 text-warning'
           : 'border-border text-muted hover:bg-elevated hover:text-foreground'
@@ -121,7 +124,7 @@
       title="Show only files that still need conflict resolution"
       onclick={onToggleConflicts}
     >
-      <GitMerge size={12} />
+      <CioMerge size={12} />
       <span class="flex-1 text-left">Conflicts</span>
       <span class="tabular-nums text-dimmed">{conflictCount}</span>
     </button>

@@ -9,20 +9,17 @@
 </script>
 
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioThreads from '@pillardash-oss/cio-icon/CioThreads.svelte'
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
   import { copyText } from '$lib/copy-text'
-  import {
-    ChevronDown,
-    ChevronRight,
-    Copy,
-    Check,
-    MessageSquare,
-    SquareTerminal,
-    Sparkles,
-    List,
-    AlertTriangle
-  } from '@lucide/svelte'
-
   interface Props {
     ex: DebugExchange
     open?: boolean
@@ -36,12 +33,12 @@
 
   const Icon = $derived(
     ex.channel === 'agent:sendPrompt'
-      ? MessageSquare
+      ? CioMessage
       : ex.channel === 'agent:generateSpec'
-        ? Sparkles
+        ? CioSparkles
         : ex.channel === 'agent:runCommand'
-          ? SquareTerminal
-          : MessageSquare
+          ? CioTerminal
+          : CioMessage
   )
 
   async function copyExchange(): Promise<void> {
@@ -162,9 +159,9 @@
     </span>
     <span class="shrink-0 text-dimmed">
       {#if expanded}
-        <ChevronDown size={12} />
+        <CioChevronDown size={12} />
       {:else}
-        <ChevronRight size={12} />
+        <CioForward size={12} />
       {/if}
     </span>
   </button>
@@ -174,15 +171,15 @@
     <div class="flex flex-wrap gap-1 px-3 pb-2.5">
       {#if ex.status === 'error' && ex.error}
         <span
-          class="flex items-center gap-1 rounded bg-danger/10 px-1.5 py-0.5 font-mono text-[0.5625rem] text-danger"
+          class="flex items-center gap-1 bg-danger/10 px-1.5 py-0.5 font-mono text-[0.5625rem] text-danger"
         >
-          <AlertTriangle size={9} />
+          <CioAttention size={9} />
           {ex.error}
         </span>
       {/if}
       {#if ex.threadId}
         <span
-          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
+          class="bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
           title="Thread"
         >
           {shortId(ex.threadId)}
@@ -190,7 +187,7 @@
       {/if}
       {#if ex.sessionId}
         <span
-          class="rounded bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
+          class="bg-elevated px-1.5 py-0.5 font-mono text-[0.5625rem] text-dimmed"
           title="Session"
         >
           S:{shortId(ex.sessionId)}
@@ -198,9 +195,9 @@
       {/if}
       {#if ex.events.length > 0}
         <span
-          class="flex items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
+          class="flex items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.5625rem] text-dimmed"
         >
-          <List size={9} />
+          <CioThreads size={9} />
           {eventSummary(ex.events)}
         </span>
       {/if}
@@ -212,7 +209,7 @@
     <div class="space-y-1.5 px-3 pb-3">
       <!-- Request data -->
       {#if ex.data}
-        <details class="rounded-md border border-border">
+        <details class="border border-border">
           <summary
             class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-elevated"
           >
@@ -229,7 +226,7 @@
 
       <!-- Response (only for non-starter calls where it's meaningful) -->
       {#if ex.response !== undefined}
-        <details class="rounded-md border border-border">
+        <details class="border border-border">
           <summary
             class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-success hover:bg-elevated"
           >
@@ -246,7 +243,7 @@
 
       <!-- Events -->
       {#if ex.events.length > 0}
-        <details class="rounded-md border border-border" open>
+        <details class="border border-border" open>
           <summary
             class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1.5 text-[0.625rem] font-medium text-muted hover:bg-elevated"
           >
@@ -254,7 +251,7 @@
           </summary>
           <div class="space-y-1 px-2 pb-2">
             {#each ex.events as ev (ev.id)}
-              <details class="rounded border border-border/50">
+              <details class="border border-border/50">
                 <summary
                   class="flex cursor-pointer list-none items-center gap-1.5 px-2 py-1 text-[0.5625rem] {eventBadgeClass(
                     ev.type
@@ -284,10 +281,10 @@
           onclick={() => void copyExchange()}
         >
           {#if copiedId === ex.id}
-            <Check size={9} class="text-success" />
+            <CioCheck size={9} class="text-success" />
             <span class="text-success">Copied</span>
           {:else}
-            <Copy size={9} />
+            <CioCopy size={9} />
             Copy JSON
           {/if}
         </button>

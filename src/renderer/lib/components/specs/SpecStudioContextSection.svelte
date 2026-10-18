@@ -1,16 +1,15 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioPaperclip from '@pillardash-oss/cio-icon/CioPaperclip.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import {
-    Check,
-    FileText,
-    MessageSquareText,
-    Paperclip,
-    Plus,
-    Search,
-    ShieldCheck,
-    Upload,
-    X
-  } from '@lucide/svelte'
+
   import type {
     CapturableSpecContextType,
     SpecContextReference,
@@ -132,7 +131,7 @@
     aria-label="Drop files into specification context"
   >
     <div class="flex flex-col items-center gap-2 text-primary">
-      <Upload size={32} />
+      <CioUpload size={32} />
       <span class="text-base font-medium">Drop files into specification context</span>
     </div>
   </div>
@@ -143,10 +142,10 @@
     <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Context</h2>
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
-        class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-[0.6875rem] hover:bg-overlay"
+        class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] hover:bg-overlay"
         title="Add context to this specification"
       >
-        <Plus size={11} />
+        <CioPlus size={11} />
         Add context
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
@@ -156,11 +155,11 @@
           sideOffset={4}
           collisionPadding={8}
           strategy="fixed"
-          class="z-50 w-64 rounded-lg border border-border bg-surface p-1 shadow-lg"
+          class="z-50 w-64 border border-border bg-surface p-1 shadow-lg"
         >
           {#each contextTypes as item (item.type)}
             <DropdownMenu.Item
-              class="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-left outline-none data-[highlighted]:bg-elevated"
+              class="flex w-full cursor-pointer items-start gap-2 px-2 py-2 text-left outline-none data-[highlighted]:bg-elevated"
               textValue={item.label}
               title={item.description}
               onSelect={() => {
@@ -172,11 +171,11 @@
               }}
             >
               {#if item.type === 'project_file'}
-                <Search size={13} class="mt-0.5 shrink-0 text-muted" />
+                <CioSearch size={13} class="mt-0.5 shrink-0 text-muted" />
               {:else if item.type === 'project_rule'}
-                <ShieldCheck size={13} class="mt-0.5 shrink-0 text-muted" />
+                <CioShieldCheck size={13} class="mt-0.5 shrink-0 text-muted" />
               {:else}
-                <Paperclip size={13} class="mt-0.5 shrink-0 text-muted" />
+                <CioPaperclip size={13} class="mt-0.5 shrink-0 text-muted" />
               {/if}
               <span class="min-w-0">
                 <span class="block text-xs font-medium">{item.label}</span>
@@ -192,7 +191,7 @@
   </div>
   {#if picker.pickerType}
     {@const activeContextPickerType = picker.pickerType}
-    <div class="mt-3 rounded-lg border bg-surface p-3">
+    <div class="mt-3 border border-border bg-surface p-3">
       <div class="flex items-center justify-between gap-3">
         <div>
           <h3 class="text-xs font-semibold">
@@ -204,24 +203,24 @@
         </div>
         <button
           type="button"
-          class="rounded-md p-1 text-dimmed hover:bg-elevated hover:text-foreground"
+          class="p-1 text-dimmed hover:bg-elevated hover:text-foreground"
           title="Close context search"
           aria-label="Close context search"
           onclick={() => picker.close()}
         >
-          <X size={13} />
+          <CioClose size={13} />
         </button>
       </div>
       <label class="relative mt-3 block">
         <span class="sr-only">Search project files</span>
-        <Search
+        <CioSearch
           size={13}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
         <input
           {@attach focusContextSearch}
           value={picker.query}
-          class="h-8 w-full rounded-md border bg-app pl-8 pr-3 text-xs outline-none"
+          class="h-8 w-full border border-border bg-app pl-8 pr-3 text-xs outline-none"
           placeholder={picker.pickerType === 'project_rule'
             ? 'Search AGENTS.md, SKILL.md, rules…'
             : 'Search files by name or path…'}
@@ -244,15 +243,15 @@
             {@const selected = selectedContextPaths.has(entry.path)}
             <button
               type="button"
-              class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-pointer disabled:opacity-60"
+              class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-pointer disabled:opacity-60"
               title={selected ? `${entry.path} is already included` : `Include ${entry.path}`}
               disabled={selected || busy}
               onclick={() => void selectContextPath(activeContextPickerType, entry.path)}
             >
-              <FileText size={12} class="shrink-0 text-muted" />
+              <CioFileText size={12} class="shrink-0 text-muted" />
               <span class="min-w-0 flex-1 truncate">{entry.path}</span>
               {#if selected}
-                <Check size={12} class="shrink-0 text-success" />
+                <CioCheck size={12} class="shrink-0 text-success" />
               {/if}
             </button>
           {/each}
@@ -262,7 +261,7 @@
   {/if}
   <div class="mt-3 grid gap-2 sm:grid-cols-2">
     {#each context as reference (reference.id)}
-      <div class="flex items-center gap-2 rounded-lg border bg-surface px-3 py-2">
+      <div class="flex items-center gap-2 border border-border bg-surface px-3 py-2">
         <span class="min-w-0 flex-1">
           <span class="block truncate text-xs font-medium">{reference.label}</span>
           <span class="block truncate text-[0.625rem] text-dimmed"
@@ -270,25 +269,27 @@
           >
         </span>
         <button
-          class="rounded-md p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
+          class="p-1 text-dimmed hover:bg-danger/10 hover:text-danger"
           aria-label={`Remove context ${reference.label}`}
           title={`Remove ${reference.label}`}
           onclick={() => void onRemoveContext(reference.id)}
         >
-          <X size={12} />
+          <CioClose size={12} />
         </button>
       </div>
     {:else}
-      <p class="col-span-full rounded-lg border border-dashed p-4 text-center text-xs text-dimmed">
+      <p class="col-span-full border border-dashed p-4 text-center text-xs text-dimmed">
         Tag project files, add rules or skills, attach external files, or drop files anywhere in the
         Studio.
       </p>
     {/each}
   </div>
   <div class="mt-6 border-t pt-4">
-    <div class="flex items-center gap-1.5">
-      <MessageSquareText size={13} class="text-muted" />
-      <h3 class="text-xs font-semibold">Previous comments</h3>
+    <div class="flex items-center gap-1.5 border-b border-border pb-1.5">
+      <CioMessage size={13} class="text-muted" />
+      <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+        Previous comments
+      </h3>
     </div>
     {#if decisionComments.length > 0}
       <div class="mt-3 space-y-3">

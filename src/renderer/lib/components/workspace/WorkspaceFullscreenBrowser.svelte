@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import BrowserTabIndicator from '$lib/components/browser/BrowserTabIndicator.svelte'
@@ -7,7 +9,6 @@
   import { browserTabIndicators } from '$lib/stores/browser-tab-status'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
-  import { GlobeCode } from '@lucide/svelte'
 
   interface Props {
     tabId: string | null
@@ -106,14 +107,9 @@
       {#snippet tabIcon(entry)}
         {@const favicon = tabFavicon(entry.id)}
         {#if favicon}
-          <img
-            src={favicon}
-            alt=""
-            class="h-3 w-3 shrink-0 rounded-sm object-contain"
-            aria-hidden="true"
-          />
+          <img src={favicon} alt="" class="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
         {:else}
-          <GlobeCode size={11} class="shrink-0" />
+          <CioThreadBrowser size={ICON_SIZE.inline} class="shrink-0" />
         {/if}
       {/snippet}
       {#snippet tabIndicator(entry)}

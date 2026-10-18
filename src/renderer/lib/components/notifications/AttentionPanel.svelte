@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, MessageSquare, TriangleAlert, X } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
@@ -33,7 +36,7 @@
 
   /**
    * What this panel is showing. The gate is keyed to the conversation on screen,
-   * and through it to the assistant task it ran for and the routine that owns
+   * and through it to the assistant task it ran for and the assistant that owns
    * that task, so a decision made on a scheduled run thread is still visible on
    * the task's own thread.
    */
@@ -43,7 +46,7 @@
     return {
       id: threadId,
       projectId,
-      ...(matches && thread.routineId ? { routineId: thread.routineId } : {}),
+      ...(matches && thread.assistantId ? { assistantId: thread.assistantId } : {}),
       ...(matches && thread.assistantTaskId ? { assistantTaskId: thread.assistantTaskId } : {})
     }
   })
@@ -107,14 +110,14 @@
 
 <div class="flex h-full min-h-0 flex-col bg-app">
   <div class="flex h-10 shrink-0 items-center gap-2 border-b border-border px-3">
-    <TriangleAlert size={14} class="shrink-0 text-warning" />
+    <CioAttention size={14} class="shrink-0 text-warning" />
     <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
       Decisions made for you
     </span>
     {#if unread.length > 1}
       <button
         type="button"
-        class="shrink-0 rounded-lg px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="shrink-0 px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Dismiss all decisions"
         title="Dismiss all decisions"
         onclick={dismissAll}
@@ -128,7 +131,7 @@
     {#if unread.length === 0}
       <div class="flex h-full min-h-0 flex-col">
         <EmptyState
-          icon={TriangleAlert}
+          icon={CioAttention}
           title="Nothing resolved for you on this thread"
           description="When a question, secret request, image decision, or destructive confirmation on this thread is settled without you, it is recorded here so the app never answers silently."
         />
@@ -152,30 +155,32 @@
               </div>
               <button
                 type="button"
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                 aria-label="Open the thread this decision belongs to"
                 title="Open the thread this decision belongs to"
                 disabled={busyId === item.id}
                 onclick={() => void openThread(item)}
               >
-                <MessageSquare size={13} />
+                <CioMessage size={13} />
               </button>
               <button
                 type="button"
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Dismiss this decision"
                 title="Dismiss this decision"
                 onclick={() => dismiss(item)}
               >
-                <X size={13} />
+                <CioClose size={13} />
               </button>
             </div>
 
             <div class="flex flex-col gap-2">
               {#each item.entries as entry, entryIndex (entryIndex)}
-                <div class="rounded-lg border border-border bg-surface px-2.5 py-2">
+                <div class="border border-border bg-surface px-2.5 py-2">
                   {#if entry.header}
-                    <p class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+                    <p
+                      class="mb-1.5 border-b border-border pb-1 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+                    >
                       {entry.header}
                     </p>
                   {/if}
@@ -190,7 +195,7 @@
                             : 'text-muted'}"
                         >
                           {#if option === entry.picked}
-                            <Check size={11} class="mt-0.5 shrink-0" />
+                            <CioCheck size={11} class="mt-0.5 shrink-0" />
                           {:else}
                             <span class="mt-0.5 h-[11px] w-[11px] shrink-0" aria-hidden="true"
                             ></span>

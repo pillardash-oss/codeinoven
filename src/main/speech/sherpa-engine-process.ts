@@ -40,6 +40,9 @@ interface SherpaOfflineStream {
 
 interface SherpaRecognitionResult {
   text?: string
+  tokens?: string[]
+  timestamps?: number[]
+  durations?: number[]
 }
 
 interface SherpaRecognizer {
@@ -171,7 +174,7 @@ function runFfmpeg(decoderPath: string, inputPath: string, wavePath: string): Pr
 
 async function transcribe(
   request: Extract<SpeechWorkerRequest, { kind: 'transcribe' }>
-): Promise<string> {
+): Promise<import('./speech-backend').SpeechTimedTranscript> {
   const decoderPath = await resolveFfmpegPath()
   const wavePath = `${request.audioPath}.decoded.wav`
   try {
@@ -186,6 +189,8 @@ async function transcribe(
       const bytesPerChunk = ASR_CHUNK_SECONDS * ASR_SAMPLE_RATE * ASR_BYTES_PER_SAMPLE
       const chunk = Buffer.allocUnsafe(bytesPerChunk)
       const pieces: string[] = []
+      const words: { text: string; start: number; end: number }[] = []
+      let aligned = true
       for (let offset = 0; offset < dataLength; offset += bytesPerChunk) {
         const byteLength = Math.min(bytesPerChunk, dataLength - offset)
         const { bytesRead } = await file.read(chunk, 0, byteLength, dataOffset + offset)
@@ -198,8 +203,48 @@ async function transcribe(
         const result = await recognizer.decodeAsync(stream)
         const text = result.text?.trim() ?? ''
         if (text) pieces.push(text)
+        const tokens = result.tokens,
+          timestamps = result.timestamps,
+          durations = result.durations
+        if (
+          text &&
+          (!tokens?.length ||
+            timestamps?.length !== tokens.length ||
+            durations?.length !== tokens.length)
+        ) {
+          aligned = false
+        } else if (tokens && timestamps && durations) {
+          const chunkStart = offset / (ASR_SAMPLE_RATE * ASR_BYTES_PER_SAMPLE)
+          const chunkEnd = chunkStart + bytesRead / (ASR_SAMPLE_RATE * ASR_BYTES_PER_SAMPLE)
+          let word: { text: string; start: number; end: number } | undefined
+          for (let index = 0; index < tokens.length; index += 1) {
+            const token = tokens[index]
+            if (/^<.*>$/u.test(token)) continue
+            const tokenStart = chunkStart + timestamps[index]
+            const tokenEnd = Math.min(chunkEnd, tokenStart + durations[index])
+            if (
+              !Number.isFinite(tokenStart) ||
+              !Number.isFinite(tokenEnd) ||
+              tokenEnd <= tokenStart
+            ) {
+              aligned = false
+              continue
+            }
+            const beginsWord = /^[\s▁Ġ]/u.test(token)
+            const clean = token.replace(/^[\s▁Ġ]+/u, '')
+            if (!clean) continue
+            if (!word || beginsWord) {
+              if (word) words.push(word)
+              word = { text: clean, start: tokenStart, end: tokenEnd }
+            } else {
+              word.text += clean
+              word.end = tokenEnd
+            }
+          }
+          if (word) words.push(word)
+        }
       }
-      return pieces.join(' ')
+      return { text: pieces.join(' '), ...(aligned && words.length ? { words } : {}) }
     } finally {
       await file.close()
     }
@@ -228,9 +273,24 @@ async function recognizerFor(
     modelFamily === 'parakeet'
       ? {
           transducer: {
-            encoder: modelPath(modelFiles, modelDirectory, ['encoder.int8.onnx', 'encoder.onnx'], 'encoder'),
-            decoder: modelPath(modelFiles, modelDirectory, ['decoder.int8.onnx', 'decoder.onnx'], 'decoder'),
-            joiner: modelPath(modelFiles, modelDirectory, ['joiner.int8.onnx', 'joiner.onnx'], 'joiner')
+            encoder: modelPath(
+              modelFiles,
+              modelDirectory,
+              ['encoder.int8.onnx', 'encoder.onnx'],
+              'encoder'
+            ),
+            decoder: modelPath(
+              modelFiles,
+              modelDirectory,
+              ['decoder.int8.onnx', 'decoder.onnx'],
+              'decoder'
+            ),
+            joiner: modelPath(
+              modelFiles,
+              modelDirectory,
+              ['joiner.int8.onnx', 'joiner.onnx'],
+              'joiner'
+            )
           },
           tokens: modelPath(modelFiles, modelDirectory, ['tokens.txt'], 'tokens')
         }
@@ -315,7 +375,9 @@ async function punctuationFor(modelDirectory: string): Promise<SherpaPunctuation
   return punctuation
 }
 
-async function cleanup(request: Extract<SpeechWorkerRequest, { kind: 'cleanup' }>): Promise<string> {
+async function cleanup(
+  request: Extract<SpeechWorkerRequest, { kind: 'cleanup' }>
+): Promise<string> {
   const punctuation = await punctuationFor(request.modelDirectory)
   return punctuation.addPunctuation(request.transcript).trim()
 }
@@ -412,7 +474,7 @@ async function handle(request: EngineWorkRequest): Promise<void> {
       return
     }
     if (request.kind === 'transcribe') {
-      emit({ id: request.id, ok: true, kind: 'transcribe', text: await transcribe(request) })
+      emit({ id: request.id, ok: true, kind: 'transcribe', ...(await transcribe(request)) })
       return
     }
     if (request.kind === 'cleanup') {

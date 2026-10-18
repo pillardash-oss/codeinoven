@@ -4,7 +4,8 @@ import type {
   McpConnectionTool,
   McpProbeTarget,
   NativeMcpContent,
-  UtilityCredentialMetadata
+  UtilityCredentialMetadata,
+  UtilityDefinitionFor
 } from '../../lib/types'
 import type { McpTool } from '../agents/mcp-stdio-client'
 import { isComputerUseUtility } from '../../lib/utility-ids'
@@ -12,6 +13,7 @@ import type { UtilityRegistryService } from './utility-registry-service'
 import {
   connectMcpServer,
   credentialEnvironment,
+  mcpOAuthChallengeHeader,
   missingCredentialVariables,
   mcpTargetLabel,
   type McpConnectionConfig
@@ -20,12 +22,26 @@ import {
 /** Tools reported back to the renderer; a server with more still reports its real count. */
 const TOOL_REPORT_LIMIT = 100
 
+/**
+ * The OAuth half a connection test needs: a live bearer token when the utility
+ * is authorized, and a note that the server asked for one when it is not.
+ *
+ * Narrowed to these two calls so the test never depends on the authorization
+ * service's own surface, and stays testable with a stub.
+ */
+export interface McpOAuthTokenSource {
+  accessToken(utility: UtilityDefinitionFor<'mcp'>): Promise<string | null>
+  noteChallenge(utilityId: string, wwwAuthenticate: string | null | undefined): Promise<void>
+}
+
 export interface McpConnectionTestDependencies {
   registry: UtilityRegistryService
   /** Reads a value out of the credential vault. */
   resolveSecret: (secretRef: string) => Promise<string>
   /** Reads a harness-native MCP server from the config file it lives in. */
   readNativeMcp: (source: AgentCapabilitySource) => Promise<NativeMcpContent | null>
+  /** Resolves and records OAuth authorization for an installed remote server. */
+  oauth?: McpOAuthTokenSource
 }
 
 interface ProbeRequest {
@@ -33,6 +49,12 @@ interface ProbeRequest {
   config: McpConnectionConfig
   credentials: readonly UtilityCredentialMetadata[]
   environment: Record<string, string>
+  /** OAuth bearer the utility holds, when it has one. */
+  authorization?: string | null
+  /** Installed utility this probe belongs to, so a challenge can be recorded against it. */
+  utilityId?: string
+  /** Whether the app could complete an OAuth authorization for this server. */
+  authorizable?: boolean
 }
 
 /**
@@ -77,7 +99,11 @@ export class McpConnectionTestService {
       name: utility.name,
       config: utility.config,
       credentials: utility.credentials,
-      environment: await this.credentialEnvironment(utility.credentials)
+      environment: await this.credentialEnvironment(utility.credentials),
+      // The same grant a turn uses, resolved the same way, so a green test is a
+      // server a turn can reach.
+      authorization: (await this.dependencies.oauth?.accessToken(utility)) ?? null,
+      utilityId: utility.id
     })
   }
 
@@ -85,7 +111,8 @@ export class McpConnectionTestService {
     const content = await this.dependencies.readNativeMcp(source)
     if (!content) throw new Error('This MCP server configuration could not be read from disk.')
     // A harness-native server resolves its own credential references, so the app
-    // passes the configured values through exactly as written.
+    // passes the configured values through exactly as written, and cannot
+    // complete an OAuth authorization the server may demand.
     return this.probe({
       name: content.name,
       config: {
@@ -97,7 +124,8 @@ export class McpConnectionTestService {
         headers: content.headers
       },
       credentials: [],
-      environment: {}
+      environment: {},
+      authorizable: false
     })
   }
 
@@ -137,7 +165,12 @@ export class McpConnectionTestService {
       name: base?.name ?? 'MCP server',
       config: target.config,
       credentials,
-      environment
+      environment,
+      // A draft is measured with the saved utility's own grant, so an editor
+      // that has not been saved yet still tests the connection it would open.
+      authorization:
+        base?.kind === 'mcp' ? ((await this.dependencies.oauth?.accessToken(base)) ?? null) : null,
+      ...(base?.kind === 'mcp' ? { utilityId: base.id } : {})
     })
   }
 
@@ -153,6 +186,8 @@ export class McpConnectionTestService {
         config,
         environment,
         credentials,
+        ...(request.authorization ? { authorization: request.authorization } : {}),
+        ...(request.authorizable === undefined ? {} : { authorizable: request.authorizable }),
         owner: { name: request.name, credentials }
       })
       try {
@@ -174,12 +209,29 @@ export class McpConnectionTestService {
         await client.close().catch(() => undefined)
       }
     } catch (error) {
+      const challenge = mcpOAuthChallengeHeader(error)
+      if (challenge && request.utilityId) {
+        // Recorded so the Utilities page can offer authorization for a server
+        // the app has now seen refusing for lack of it.
+        await this.dependencies.oauth
+          ?.noteChallenge(request.utilityId, challenge)
+          .catch(() => undefined)
+      }
       return {
         ...unrun(error),
         transport,
         target,
         latencyMs: Date.now() - startedAt,
-        error: explainRemoteFailure(error, config, credentials, environment),
+        // A refusal that names protected-resource metadata is already explained
+        // by the connection itself, so it is reported rather than re-diagnosed
+        // as a credential problem.
+        error:
+          challenge === null
+            ? explainRemoteFailure(error, config, credentials, environment)
+            : error instanceof Error
+              ? error.message
+              : String(error),
+        ...(challenge === null ? {} : { oauthRequired: true }),
         missingCredentials: missingCredentialVariables(credentials, environment)
       }
     }

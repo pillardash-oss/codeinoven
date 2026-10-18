@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CircleStop, Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioStop from '@pillardash-oss/cio-icon/CioStop.svelte'
   import { toast } from 'svelte-sonner'
   import { showToastError } from '$lib/stores/app-errors.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -66,16 +67,16 @@
 {#if cancellable}
   <button
     type="button"
-    class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-danger/40 px-2 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {className}"
+    class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-danger/40 px-2 text-[0.5625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40 {className}"
     title="Cancel this workflow run and skip its remaining jobs"
     aria-label="Cancel this workflow run"
     disabled={busy}
     onclick={() => (confirmOpen = true)}
   >
     {#if busy}
-      <Loader2 size={11} class="animate-spin" />
+      <CioSpinner size={11} class="animate-spin" />
     {:else}
-      <CircleStop size={11} />
+      <CioStop size={11} />
     {/if}
     {#if !compact}
       <span>Cancel</span>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { RotateCcw } from '@lucide/svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import {
     DEFAULT_VOICE_RECORDING_SHORTCUT,
     MODIFIER_KEY_CODES,
@@ -99,7 +99,7 @@
 <div class="flex shrink-0 items-center gap-1.5">
   <button
     type="button"
-    class="min-w-40 rounded-lg border px-3 py-2 text-xs outline-none transition-colors focus:border-primary {listening
+    class="min-w-40 border px-3 py-2 text-xs outline-none transition-colors focus:border-primary {listening
       ? 'border-primary bg-primary/5 text-dimmed'
       : 'border-border bg-elevated text-foreground hover:border-primary/60'}"
     title="Change the voice recording shortcut"
@@ -115,12 +115,12 @@
   {#if !isDefault}
     <button
       type="button"
-      class="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-elevated text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+      class="flex h-8 w-8 items-center justify-center border border-border bg-elevated text-muted transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
       title="Reset the voice recording shortcut to the default"
       aria-label="Reset voice recording shortcut to default"
       onclick={() => onchange(DEFAULT_VOICE_RECORDING_SHORTCUT)}
     >
-      <RotateCcw size={13} aria-hidden="true" />
+      <CioUndo size={13} aria-hidden="true" />
     </button>
   {/if}
 </div>

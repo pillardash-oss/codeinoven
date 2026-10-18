@@ -1,4 +1,7 @@
-import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
+import {
+  isPlausibleContextWindow,
+  validateModelRuntimeSettings
+} from '../../../lib/model-runtime-settings'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -110,9 +113,10 @@ const CREATE_THREAD_FIELDS = new Set([
   'settings',
   'titleSource',
   'scopeBucketId',
-  'routineId',
+  'assistantId',
   'assistantGettingStarted',
-  'assistantTaskId'
+  'assistantTaskId',
+  'scheduled'
 ])
 
 export function validateThreadStatus(value: unknown): ThreadStatus {
@@ -163,10 +167,11 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     settings.inferenceMode = assertEnum(input.inferenceMode, INFERENCE_MODES, 'inference mode')
   }
   if (input.contextWindow !== undefined) {
-    const tokens = validateBoundedInteger(input.contextWindow, 'context window', 200_000, 1_000_000)
-    if (![200_000, 272_000, 1_000_000].includes(tokens))
+    // The model's own catalog decides which windows are offered, so this only
+    // rejects a value no harness could mean.
+    if (!isPlausibleContextWindow(input.contextWindow))
       throw new TypeError('Invalid context window')
-    settings.contextWindow = tokens
+    settings.contextWindow = input.contextWindow
   }
   if (input.titleMode !== undefined) {
     settings.titleMode = assertEnum(input.titleMode, TITLE_MODES, 'title mode')
@@ -366,8 +371,8 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
   if (input.scopeBucketId !== undefined) {
     sanitized.scopeBucketId = validateEntityId(input.scopeBucketId, 'Scope bucket ID')
   }
-  if (input.routineId !== undefined) {
-    sanitized.routineId = validateEntityId(input.routineId, 'Routine ID')
+  if (input.assistantId !== undefined) {
+    sanitized.assistantId = validateEntityId(input.assistantId, 'Assistant ID')
   }
   if (input.assistantTaskId !== undefined) {
     sanitized.assistantTaskId = validateEntityId(input.assistantTaskId, 'Assistant task ID')
@@ -377,6 +382,12 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
       throw new TypeError('Assistant getting-started flag must be a boolean')
     }
     sanitized.assistantGettingStarted = input.assistantGettingStarted
+  }
+  if (input.scheduled !== undefined) {
+    if (typeof input.scheduled !== 'boolean') {
+      throw new TypeError('Scheduled flag must be a boolean')
+    }
+    sanitized.scheduled = input.scheduled
   }
   return sanitized
 }

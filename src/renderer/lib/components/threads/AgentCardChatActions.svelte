@@ -1,6 +1,15 @@
 <script lang="ts">
-  import { HelpCircle, MessageSquareDashed } from '@lucide/svelte'
-
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import TriangleQuestionMark from '$lib/components/icons/cio/TriangleQuestionMark.svelte'
+  /**
+   * The two context actions a human-decision card carries: explain it, or open a
+   * quick chat about it.
+   *
+   * They live in the card head's quiet cluster at the top right, before the
+   * reading and the fold, so the footer below keeps its room for the card's own
+   * controls. At head size they are glyphs: the tooltip carries the wording, and
+   * each title stays action-specific through `subject`.
+   */
   interface Props {
     /** Opens the explain side chat; omitted hides the action. */
     onExplain?: () => void
@@ -16,50 +25,35 @@
 
   const explainTitle = $derived(`Explain this ${subject} in a temporary read-only chat`)
   const quickChatTitle = $derived(`Start a temporary read-only quick chat about this ${subject}`)
+  const actionClass =
+    'flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40'
 </script>
 
 {#if onExplain || onQuickChat}
-  <div class="flex min-w-0 items-center gap-1">
+  <div class="flex shrink-0 items-center gap-0.5">
     {#if onExplain}
       <button
         type="button"
-        class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        class={actionClass}
         {disabled}
         onclick={onExplain}
         title={explainTitle}
         aria-label={explainTitle}
       >
-        <HelpCircle size={13} class="shrink-0" />
-        <span class="agent-card-footer-action-label min-w-0 truncate">Explain</span>
+        <TriangleQuestionMark size={14} class="shrink-0" />
       </button>
     {/if}
     {#if onQuickChat}
       <button
         type="button"
-        class="flex h-7 min-w-0 shrink items-center gap-1 rounded-lg border border-border px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        class={actionClass}
         {disabled}
         onclick={onQuickChat}
         title={quickChatTitle}
         aria-label={quickChatTitle}
       >
-        <MessageSquareDashed size={13} class="shrink-0" />
-        <span class="agent-card-footer-action-label min-w-0 truncate">Quick chat</span>
+        <CioTemporaryChat size={14} class="shrink-0" />
       </button>
     {/if}
   </div>
 {/if}
-
-<style>
-  /*
-    The hosting card's footer is the query container (see `agent-card-footer` in
-    `AgentQuestionCard` / `AgentSecretCard`). When the row runs out of room the
-    action labels drop first: the glyph and the tooltip still say what each
-    button does, which leaves the card's own controls their space instead of
-    letting one control overlap the other.
-  */
-  @container agent-card-footer (max-width: 40rem) {
-    .agent-card-footer-action-label {
-      display: none;
-    }
-  }
-</style>

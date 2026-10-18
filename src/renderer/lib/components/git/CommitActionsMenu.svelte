@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { GitCommit, RotateCcw, Copy, Info, MessageSquareText, Trash2 } from '@lucide/svelte'
+  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitResetMode } from '$shared/types'
 
@@ -29,23 +34,23 @@
   }: Props = $props()
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
+    'flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
 </script>
 
 {#if onShowInfo}
   <DropdownMenu.Item class={itemClass} onSelect={onShowInfo} disabled={resetBusy || deleteBusy}>
-    <Info size={12} class="shrink-0 text-dimmed" />
+    <CioTabInfo size={12} class="shrink-0 text-dimmed" />
     Commit info
   </DropdownMenu.Item>
   <DropdownMenu.Separator class="my-1 h-px bg-border" />
 {/if}
 
 <DropdownMenu.Item class={itemClass} onSelect={onCopyHash} disabled={resetBusy || deleteBusy}>
-  <Copy size={12} class="shrink-0 text-dimmed" />
+  <CioCopy size={12} class="shrink-0 text-dimmed" />
   Copy commit hash
 </DropdownMenu.Item>
 <DropdownMenu.Item class={itemClass} onSelect={onCopyMessage} disabled={resetBusy || deleteBusy}>
-  <MessageSquareText size={12} class="shrink-0 text-dimmed" />
+  <CioMessage size={12} class="shrink-0 text-dimmed" />
   Copy commit message
 </DropdownMenu.Item>
 
@@ -53,11 +58,11 @@
 
 <DropdownMenu.Sub>
   <DropdownMenu.SubTrigger class={itemClass} disabled={resetBusy || deleteBusy}>
-    <RotateCcw size={12} class="shrink-0 text-dimmed" />
+    <CioUndo size={12} class="shrink-0 text-dimmed" />
     Reset to here…
   </DropdownMenu.SubTrigger>
   <DropdownMenu.SubContent
-    class="z-50 min-w-56 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+    class="z-50 min-w-56 overflow-hidden border border-border bg-surface p-1 shadow-xl"
     sideOffset={4}
   >
     <DropdownMenu.Item class={itemClass} onSelect={() => onReset('soft')} disabled={resetBusy}>
@@ -80,7 +85,7 @@
 
 {#if isHead && onAmend}
   <DropdownMenu.Item class={itemClass} onSelect={onAmend} disabled={resetBusy || deleteBusy}>
-    <GitCommit size={12} class="shrink-0 text-dimmed" />
+    <CioCommit size={12} class="shrink-0 text-dimmed" />
     Amend commit message
   </DropdownMenu.Item>
 {/if}
@@ -88,10 +93,10 @@
 <DropdownMenu.Separator class="my-1 h-px bg-border" />
 
 <DropdownMenu.Item
-  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+  class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
   onSelect={onDelete}
   disabled={deleteBusy || resetBusy}
 >
-  <Trash2 size={12} class="shrink-0" />
+  <CioTrash size={12} class="shrink-0" />
   Delete commit
 </DropdownMenu.Item>

@@ -28,7 +28,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:opacity-50"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:opacity-50"
       title="Keep browser data"
       disabled={browser.clearing}
       onclick={() => browser.cancelDataClear()}
@@ -37,7 +37,7 @@
     </button>
     <button
       type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:opacity-50"
+      class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:opacity-50"
       title="Clear browser cookies and site data"
       disabled={browser.clearing}
       onclick={() => void browser.clearData()}

@@ -10,6 +10,7 @@ import { getAgentIcon } from '$lib/agent-icons/registry'
 import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
 import { generatedTokens, type LiveGenerationRate } from '$lib/token-rate.svelte'
+import { recordedTokenRate } from '$shared/usage-rate'
 import type {
   AgentMessage,
   AgentPart,
@@ -44,6 +45,18 @@ export function explicitMessagePresentation(msg: AgentMessage): UserMessagePrese
       candidate.type === 'user-presentation'
   )
   return part?.presentation ?? null
+}
+
+/**
+ * True when a user message records an app action rather than text the user
+ * typed: an answered agent question, a connection retry, a spec apply. These
+ * carry a `user-presentation` part and no visible text, so the history panel
+ * draws them italic; they are not authored prompts.
+ */
+export function isActionUserMessage(msg: AgentMessage): boolean {
+  if (msg.role !== 'user') return false
+  if (explicitMessagePresentation(msg) === null) return false
+  return rawMessageText(msg).trim().length === 0
 }
 
 export function specActionLabel(action: SpecActionIntent): string {
@@ -126,7 +139,7 @@ function inlineChipHtml(reference: PromptProjectReference): string {
   // A real control, not decoration: the chip names a file the reader can jump
   // to. It carries the same `data-file-chip` path across the message render,
   // and MarkdownView + the citation context menu pick it up by delegation.
-  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
 }
 
 function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
@@ -135,11 +148,13 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
   // active theme (black on light, white on dark). The chip's
   // `text-[0.75rem]` sets the em box the 1em-sized SVG scales into.
   const icon = getVendorIconSvg(APP_NAME)
-  const safeTitle = escapeHtmlForChip(`${APP_NAME} ${tag.chipLabel}`)
+  // The complete tag, not just its short label, so a hover proves which tag a
+  // send actually carried.
+  const safeTitle = escapeHtmlForChip(`${tag.token} · ${tag.description}`)
   const iconHtml = icon
     ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
     : ''
-  return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
+  return `<span class="inline-flex max-w-full items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
 }
 
 export function inlineFileTagsForMessage(
@@ -231,11 +246,13 @@ export interface MessageTokenRateSource {
  *  at turn end when this view observed the turn live, otherwise the message's
  *  generated tokens over its accumulated model-active generation window.
  *
- *  `generationMs` is the only honest denominator: it sums the streaming time of
- *  every request in the message and excludes tool waits. A message whose
- *  generation window was never recorded shows no rate rather than dividing its
- *  tokens by wall-clock time, which counts tool execution as generation.
- *  `null` also when the harness reported no tokens. */
+ *  `generationMs` is the only honest denominator: it sums the measured streaming
+ *  time of every request in the message and excludes tool waits and any output a
+ *  coalesced transport never streamed. A message whose generation window was
+ *  never recorded shows no rate rather than dividing its tokens by wall-clock
+ *  time, which counts tool execution as generation.
+ *  `null` also when the harness reported no tokens, and when the recorded window
+ *  would imply a pace no model reaches (`recordedTokenRate`). */
 export function messageTokenRate(msg: AgentMessage, source: MessageTokenRateSource): number | null {
   const finalized = source.finalizedTokenRates[msg.id]
   if (finalized !== undefined && finalized > 0) return finalized
@@ -243,7 +260,7 @@ export function messageTokenRate(msg: AgentMessage, source: MessageTokenRateSour
   if (generated <= 0) return null
   if (msg.id === source.liveTokenRate.messageId) return source.liveTokenRate.rate()
   if (msg.generationMs !== undefined && msg.generationMs > 0) {
-    return generated / (msg.generationMs / 1000)
+    return recordedTokenRate(generated, msg.generationMs)
   }
   return null
 }

@@ -25,8 +25,9 @@
   lang="ts"
   generics="SectionId extends string, Annotation extends { id: string; quote?: string; body: string }"
 >
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { tick } from 'svelte'
-  import { X } from '@lucide/svelte'
+
   import type { Snippet } from 'svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
 
@@ -152,7 +153,7 @@
       ></div>
     {/if}
     <aside
-      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
+      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
         ? ''
         : 'max-md:hidden'}"
       aria-label={sidebarLabel}
@@ -163,12 +164,12 @@
           {sidebarTitle}
         </p>
         <button
-          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
+          class="flex h-9 w-9 items-center justify-center text-muted"
           aria-label="Close sections"
           title="Close sections"
           onclick={() => (sectionsOpen = false)}
         >
-          <X size={16} />
+          <CioClose size={16} />
         </button>
       </div>
       <div class="flex min-h-0 flex-1 flex-col overscroll-contain">
@@ -181,7 +182,7 @@
         >
           {#each sections as section (section.id)}
             <button
-              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
+              class="flex w-full items-center justify-between gap-2 px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
               section.id
                 ? 'bg-elevated font-semibold text-foreground'
                 : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
@@ -195,7 +196,7 @@
               <span class="flex items-center gap-1">
                 {#each section.badges ?? [] as badge (badge.label)}
                   <span
-                    class="rounded-full px-1.5 text-[0.625rem] whitespace-nowrap {badgeTones[
+                    class="px-1.5 text-[0.625rem] tabular-nums whitespace-nowrap {badgeTones[
                       badge.tone
                     ]} {badge.text ? 'font-semibold' : ''}"
                     title={badge.label}
@@ -214,7 +215,7 @@
         {/if}
 
         <div class="flex min-h-0 flex-1 flex-col border-t p-3">
-          <div class="flex shrink-0 items-center justify-between">
+          <div class="flex shrink-0 items-center justify-between border-b border-border pb-1.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               {annotationsTitle}
             </p>
@@ -223,7 +224,7 @@
           <div class="mt-2 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
             {#each sectionAnnotations(selectedSection) as annotation (annotation.id)}
               <button
-                class="block w-full rounded-lg border bg-elevated px-2.5 py-2 text-left hover:bg-overlay"
+                class="block w-full border border-border bg-elevated px-2.5 py-2 text-left hover:bg-overlay"
                 title="Open annotation"
                 onclick={() => onOpenAnnotation(annotation)}
               >
@@ -237,9 +238,7 @@
                 </div>
               </button>
             {:else}
-              <p
-                class="rounded-lg border border-dashed px-2.5 py-3 text-center text-[0.6875rem] text-dimmed"
-              >
+              <p class="border border-dashed px-2.5 py-3 text-center text-[0.6875rem] text-dimmed">
                 {annotationsEmptyLabel}
               </p>
             {/each}

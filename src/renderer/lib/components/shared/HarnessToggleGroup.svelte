@@ -1,7 +1,7 @@
 <script lang="ts">
+  import CioArrowUpCircle from '@pillardash-oss/cio-icon/CioArrowUpCircle.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { ArrowUpCircle, CheckCircle2 } from '@lucide/svelte'
-
   interface HarnessOption {
     id: string
     name: string
@@ -44,7 +44,7 @@
   {#if onToggleAll}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {allSelected
+      class="flex h-8 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {allSelected
         ? 'border-primary bg-primary text-on-primary'
         : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
       {disabled}
@@ -55,7 +55,7 @@
   {#each options as option (option.id)}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {value.includes(
+      class="flex h-8 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {value.includes(
         option.id
       )
         ? 'border-primary bg-primary text-on-primary'
@@ -68,9 +68,9 @@
       <AgentIcon agentId={option.id} label={option.name} size={14} />
       {option.name}
       {#if option.updateAvailable}
-        <ArrowUpCircle size={12} class="shrink-0 text-info" />
+        <CioArrowUpCircle size={12} class="shrink-0 text-info" />
       {:else if option.installed}
-        <CheckCircle2 size={12} class="shrink-0 text-success" />
+        <CioCheckCircle size={12} class="shrink-0 text-success" />
       {/if}
     </button>
   {/each}

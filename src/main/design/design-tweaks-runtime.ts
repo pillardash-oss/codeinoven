@@ -10,7 +10,7 @@ export function designTweaksRuntimeScript(): string {
     if (!Array.isArray(parameters) || parameters.length > 12) return;
     const panel = document.createElement('aside');
     panel.setAttribute('data-cio-tweaks-panel', ''); panel.setAttribute('aria-label', 'Design controls');
-    panel.style.cssText = 'position:fixed;right:1rem;bottom:1rem;z-index:2147483640;max-width:22rem;max-height:40vh;overflow:auto;padding:.75rem;border:1px solid var(--color-border,GrayText);border-radius:.5rem;background:var(--color-surface,Canvas);color:var(--color-foreground,CanvasText);font:inherit;box-shadow:0 .25rem 1rem color-mix(in srgb,var(--color-border,GrayText) 30%,transparent)';
+    panel.style.cssText = 'position:fixed;right:1rem;bottom:1rem;z-index:2147483640;max-width:22rem;max-height:40vh;overflow:auto;padding:.75rem;border:1px solid var(--color-border,GrayText);background:var(--color-surface,Canvas);color:var(--color-foreground,CanvasText);font:inherit;box-shadow:0 .25rem 1rem color-mix(in srgb,var(--color-border,GrayText) 30%,transparent)';
     const title = document.createElement('summary'); title.textContent = 'Design controls';
     const details = document.createElement('details'); details.append(title); details.open = true;
     const values = Object.create(null);

@@ -137,6 +137,12 @@ export const invokeSpeechContract = {
     [attemptId: string],
     import('../speech/types').SpeechResult<import('../speech/types').SpeechPlaybackAudio>
   >,
+  /** Save a stored recording through the native save dialog. The answer is the
+   *  path it was written to, or null when the user cancelled the dialog. */
+  'speech:exportRecording': {} as Contract<
+    [attemptId: string],
+    import('../speech/types').SpeechResult<string | null>
+  >,
   'speech:retryTranscription': {} as Contract<
     [
       attemptId: string,

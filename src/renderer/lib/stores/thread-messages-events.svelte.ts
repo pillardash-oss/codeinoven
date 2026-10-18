@@ -330,6 +330,7 @@ export class ThreadMessagesEvents {
     switch (event.type) {
       case 'steer.held':
       case 'steer.delivered':
+      case 'steer.released':
       case 'steer.discarded': {
         const entry = this.cache.entry(projectId, threadId)
         if (event.type === 'steer.held') {
@@ -340,6 +341,10 @@ export class ThreadMessagesEvents {
             // The steer never reached the harness, remove the optimistic
             // message so the conversation looks untouched.
             entry.messages = entry.messages.filter((message) => message.id !== event.userMessageId)
+          } else if (event.type === 'steer.delivered' && agentRuns.isBusy(projectId, threadId)) {
+            // The steer reached the harness and now opens its own turn, so
+            // the live working trace moves under it.
+            agentRuns.setBusy(projectId, threadId, true, event.userMessageId)
           }
         }
         this.cache.notify(projectId, threadId)

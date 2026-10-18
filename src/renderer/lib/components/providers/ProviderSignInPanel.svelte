@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import { Loader2, X } from '@lucide/svelte'
+
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
@@ -16,6 +18,7 @@
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import ProviderSignInProgress from './ProviderSignInProgress.svelte'
+  import { loginFailureDetail } from './add-provider-modal-helpers'
   import { ProviderSignInController } from './provider-sign-in.svelte'
 
   /**
@@ -140,9 +143,12 @@
     }
   }
 
-  async function finishTerminal(exitCode: number): Promise<void> {
+  async function finishTerminal(exitCode: number, output: string): Promise<void> {
     if (exitCode !== 0) {
-      error = `Sign-in exited with code ${exitCode}.`
+      // The CLI's own last lines carry the reason, which an exit code alone does
+      // not, and the terminal they were printed in is about to be replaced.
+      const detail = loginFailureDetail(output)
+      error = `Sign-in exited with code ${exitCode}.${detail ? ` ${detail}` : ''}`
       return
     }
     // The process is gone; drop the terminal before confirming so the panel
@@ -160,12 +166,7 @@
    */
   async function resolveCapabilities(): Promise<ProviderAccountAuthCapabilities | null> {
     try {
-      const status = await invoke(
-        'providerAccounts:getAuthStatus',
-        harnessId,
-        undefined,
-        accountId
-      )
+      const status = await invoke('providerAccounts:getAuthStatus', harnessId, undefined, accountId)
       return status.capabilities
     } catch {
       const status = await invoke('providerAccounts:getAuthStatus', harnessId)
@@ -205,9 +206,7 @@
       if (destroyed) return
       mechanism = 'terminal'
       error =
-        resolveError instanceof Error
-          ? resolveError.message
-          : 'The sign-in could not be started.'
+        resolveError instanceof Error ? resolveError.message : 'The sign-in could not be started.'
     }
   }
 
@@ -268,17 +267,17 @@
     {#snippet dock()}
       <DockRow {storageKey} label="Move docked provider sign-in">
         <div
-          class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl"
+          class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl"
           data-region="provider-sign-in-dock"
         >
           <button
             type="button"
-            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+            class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
             title="Show the sign-in for {targetName}"
             aria-label="Show the sign-in for {targetName}"
             onclick={() => (oauth.docked = false)}
           >
-            <Loader2 size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
             <span class="flex min-w-0 flex-col">
               <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
                 Signing in to {targetName}
@@ -294,12 +293,12 @@
           <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
           <button
             type="button"
-            class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Cancel the sign-in"
             title="Cancel the sign-in"
             onclick={close}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         </div>
       </DockRow>
@@ -308,29 +307,32 @@
     {#if oauth.loginId !== null}
       <ProviderSignInProgress {oauth} />
     {:else if error}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+      <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        {error}
+      </p>
     {:else if verifying}
       <p class="flex items-center gap-2 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Confirming sign-in for this account…
       </p>
     {:else}
       <p class="flex items-center gap-2 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Starting sign-in…
       </p>
     {/if}
   </DockableModal>
 {:else}
   <Modal open {title} onClose={close}>
-    <div class="h-[28rem] overflow-hidden rounded-lg border border-border bg-app">
+    <div class="h-[28rem] overflow-hidden border border-border bg-app">
       {#if handoff}
         <ProviderLoginTerminal
           {terminalId}
           command={handoff.command}
           args={handoff.args}
           environment={handoff.environment}
-          onExit={(exitCode) => void finishTerminal(exitCode)}
+          startingLabel="Starting sign-in…"
+          onExit={(exitCode, output) => void finishTerminal(exitCode, output)}
         />
       {:else if error}
         <div class="flex h-full items-center justify-center p-6">
@@ -338,7 +340,7 @@
         </div>
       {:else if verifying}
         <div class="flex h-full items-center justify-center gap-2 text-sm text-muted">
-          <Loader2 size={14} class="animate-spin" />
+          <CioSpinner size={14} class="animate-spin" />
           Confirming sign-in for this account…
         </div>
       {:else}

@@ -1,12 +1,16 @@
 <script lang="ts">
-  import { AlertTriangle, Check, Eye, Settings2, X } from '@lucide/svelte'
-  import type { RoutineConnection } from '$shared/types'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+  import type { AssistantConnection } from '$shared/types'
   import type { ConnectionStatus, ConnectionView } from './assistant-view'
   import { utilityKindIcon, utilityKindLabel } from './utility-kind'
 
   interface Props {
     view: ConnectionView
-    onRemove: (connection: RoutineConnection) => void
+    onRemove: (connection: AssistantConnection) => void
     /** Open the capability modal for this row, seeded with its setup prompt. */
     onSetup: (view: ConnectionView) => void
     /** Open the resolved utility details in its editor. */
@@ -30,10 +34,8 @@
   const needsSetup = $derived(view.status === 'needs-setup' || view.status === 'incomplete')
 </script>
 
-<div class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2">
-  <span
-    class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"
-  >
+<div class="flex items-start gap-2 border border-border px-2.5 py-2">
+  <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center bg-elevated text-muted">
     <KindIcon size={13} strokeWidth={1.8} />
   </span>
 
@@ -43,7 +45,7 @@
         {view.connection.label}
       </span>
       <span
-        class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
+        class="shrink-0 border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
       >
         {utilityKindLabel(view.entry?.kind ?? view.connection.kind ?? view.utility?.kind)}
       </span>
@@ -53,10 +55,10 @@
         title={view.detail}
       >
         {#if view.status === 'ready'}
-          <Check size={11} strokeWidth={2.2} />
+          <CioCheck size={11} strokeWidth={2.2} />
           Ready
         {:else}
-          <AlertTriangle size={11} strokeWidth={2} />
+          <CioAttention size={11} strokeWidth={2} />
           {view.status === 'needs-setup'
             ? 'Needs setup'
             : view.status === 'disabled'
@@ -74,33 +76,33 @@
     {#if view.entry}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="View {view.connection.label} details"
         aria-label="View {view.connection.label} details"
         onclick={() => onView(view)}
       >
-        <Eye size={12} strokeWidth={1.8} />
+        <CioEye size={12} strokeWidth={1.8} />
       </button>
     {/if}
     {#if needsSetup || view.status === 'disabled'}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Set up {view.connection.label}"
         aria-label="Set up {view.connection.label}"
         onclick={() => onSetup(view)}
       >
-        <Settings2 size={12} strokeWidth={1.8} />
+        <CioTabSettings size={12} strokeWidth={1.8} />
       </button>
     {/if}
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-      title="Remove {view.connection.label} from this routine"
-      aria-label="Remove {view.connection.label} from this routine"
+      class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      title="Remove {view.connection.label} from this assistant"
+      aria-label="Remove {view.connection.label} from this assistant"
       onclick={() => onRemove(view.connection)}
     >
-      <X size={12} strokeWidth={1.8} />
+      <CioClose size={12} strokeWidth={1.8} />
     </button>
   </div>
 </div>

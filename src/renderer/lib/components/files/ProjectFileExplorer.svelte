@@ -18,8 +18,9 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
-  import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
+  import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
+  import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
@@ -55,14 +56,14 @@
     projectId: string
     projectName: string
     /** Label beside the root icon; empty when the root names itself with the
-     *  icon alone (a routine root). */
+     *  icon alone (an assistant root). */
     projectLabel?: string
-    /** Root icon image for the tree header (a routine's own icon), or null for
+    /** Root icon image for the tree header (an assistant's own icon), or null for
      *  the generic mark. */
     projectIconUrl?: string | null
-    /** True when the tree's root is a routine, which draws the routine default
-     *  mark when the routine has no icon of its own. */
-    routineRoot?: boolean
+    /** True when the tree's root is an assistant, which draws the assistant default
+     *  mark when the assistant has no icon of its own. */
+    assistantRoot?: boolean
     /** Accent colour of the tree's root identity, or null for the default
      *  accent. */
     projectAccentColor?: string | null
@@ -90,7 +91,7 @@
     projectName,
     projectLabel = projectName,
     projectIconUrl = null,
-    routineRoot = false,
+    assistantRoot = false,
     projectAccentColor = null,
     projectState,
     onWidthChange,
@@ -113,10 +114,6 @@
   /** Backed by the per-project files store so sidebar tab remounts keep it. */
   let lastTurnOnly = $derived(projectState.lastTurnOnly)
   let autoFiltered = $state(false)
-  /** Set when the user manually turns the auto-applied "Last turn" filter
-   *  off. While set, checkpoint navigation must not silently re-enable the
-   *  filter; it clears once the user leaves checkpoint files entirely. */
-  let lastTurnAutoOverride = $state(false)
   let searchRequestId = 0
   /** Directories the user explicitly collapsed while a filter (search query or
    *  last-turn mode) is active. Filtered trees force-render matching folders
@@ -253,7 +250,7 @@
     const checkpointId = activeCheckpointId
     if (checkpointId && checkpointId !== lastAppliedCheckpointId) {
       lastAppliedCheckpointId = checkpointId
-      if (lastTurnAutoOverride) return
+      if (fileExplorerStore.project(projectId).lastTurnAutoOverride) return
       projectFilesWorkspace.setLastTurnOnly(projectId, true)
       autoFiltered = true
     } else if (!checkpointId) {
@@ -262,7 +259,7 @@
         projectFilesWorkspace.setLastTurnOnly(projectId, false)
         autoFiltered = false
       }
-      lastTurnAutoOverride = false
+      fileExplorerStore.update(projectId, { lastTurnAutoOverride: false })
     }
   })
 
@@ -339,7 +336,7 @@
     const next = !lastTurnOnly
     projectFilesWorkspace.setLastTurnOnly(projectId, next)
     if (!next) {
-      if (autoFiltered) lastTurnAutoOverride = true
+      if (autoFiltered) fileExplorerStore.update(projectId, { lastTurnAutoOverride: true })
       autoFiltered = false
     }
     clearCollapsedOverrides()
@@ -415,6 +412,10 @@
 
   onMount(() => {
     if (selectedPath) void projectFilesWorkspace.focusFileInExplorer(projectId, selectedPath)
+    // The rows say whether CIO Cleanup leaves them alone, which is decided by the
+    // project's own work folders, so they are read once per project as the tree
+    // opens rather than on every row.
+    void projectWorkState.ensureRoots(projectId)
   })
 
   async function openFilter(): Promise<void> {
@@ -482,17 +483,66 @@
     if (index !== undefined) scrollTreeIndexIntoView(index)
   }
 
-  async function focusRevealedTreePath(path: string, focusRequest: number): Promise<void> {
+  async function scrollRevealedTreePath(path: string, focusRequest: number): Promise<void> {
     await tick()
     if (projectState.focusRequest !== focusRequest) return
     scrollTreePathIntoView(path)
-    await tick()
-    if (projectState.focusRequest !== focusRequest) return
-    const row = [...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])].find(
-      (element) => element.dataset.treePath === path
-    )
-    row?.focus()
   }
+
+  /** The active file tab this tree has already located. The first run starts
+   *  settled: the mount locates the tab the panel opened on (see `onMount`).
+   *  The read is deliberately a one-off outside any reactive context. */
+  function seedLocatedTabPath(): string | null {
+    return selectedPath
+  }
+
+  let locatedTabPath = seedLocatedTabPath()
+
+  /** Locate a file tab in the tree: load the folders above it, select its row,
+   *  and let the reveal effect below scroll it into view. A file inside a folded
+   *  subfolder is the whole point - it has no row to scroll to until those
+   *  folders are open. */
+  async function locateFileTab(path: string): Promise<void> {
+    const ancestors = collectAncestorDirectories([path])
+    // A locate is an explicit request to see this folder chain, so it releases
+    // the folders the user folded by hand during a filter session: a search
+    // override would keep hiding the row again the moment it is opened.
+    for (const directory of ancestors) collapsedOverrides.delete(directory)
+    // A search session owns the expansions it forces, so folders this locate
+    // opens inside one are recorded as transient and the next filter change
+    // folds them back instead of persisting the detour. Under the Last-turn and
+    // Conflicts filters they stay ordinary tree state, exactly as a manual
+    // expansion there does.
+    const openedFolders = filterQuery.trim()
+      ? ancestors.filter((directory) => !projectState.expandedDirectories[directory])
+      : []
+    await projectFilesWorkspace.focusFileInExplorer(projectId, path)
+    for (const directory of openedFolders) searchExpandedDirectories.add(directory)
+  }
+
+  /** Bring the active file on screen in the tree. The tree header's target
+   *  button and every file tab the user activates both land here. */
+  function locateActiveFileTab(): void {
+    if (!selectedPath) return
+    void locateFileTab(selectedPath)
+  }
+
+  $effect(() => {
+    const tabPath = selectedPath
+    if (!tabPath) {
+      locatedTabPath = null
+      return
+    }
+    if (tabPath === locatedTabPath) return
+    locatedTabPath = tabPath
+    // Activating a file tab outranks a search result the tree was still
+    // pointing at: the tree now follows the file the user is editing.
+    if (revealedSearchPath && revealedSearchPath !== tabPath) revealedSearchPath = null
+    // Already part of the tree: the reveal effect below scrolls its row in, and
+    // a tab switch is no reason to reload the folders above it.
+    if (treeRowIndexByPath.has(tabPath)) return
+    void locateFileTab(tabPath)
+  })
 
   $effect(() => {
     const focusRequest = projectState.focusRequest
@@ -517,7 +567,10 @@
     // still lands when the directory listing and the pointer turn settle.
     consumedFocusRequest = focusRequest
     projectFilesWorkspace.acknowledgeReveal(projectId, focusRequest)
-    void focusRevealedTreePath(path, focusRequest)
+    // Revealing a path updates the viewport, never keyboard ownership. Passive
+    // refreshes and remounts must leave the composer or modal in control.
+    // Direct row interaction and tree keyboard navigation own focus instead.
+    void scrollRevealedTreePath(path, focusRequest)
   })
 
   /** Suppress the auto-reveal scroll for the rest of the current pointer
@@ -604,9 +657,9 @@
   }
 
   function isRowActive(path: string): boolean {
+    if (projectState.selectedPaths.length > 0) return projectState.selectedPaths.includes(path)
     if (revealedSearchPath === path) return true
     if (selectedPath) return selectedPath === path
-    if (projectState.selectedPaths.includes(path)) return true
     return projectState.revealedPath === path
   }
 
@@ -628,6 +681,9 @@
   }
 
   function handleRowClick(entry: ProjectFileEntry, event: MouseEvent): void {
+    // A clicked row owns keyboard navigation, including on platforms where
+    // clicking a button does not give it DOM focus.
+    if (event.currentTarget instanceof HTMLElement) event.currentTarget.focus()
     if (event.metaKey || event.ctrlKey) {
       projectFilesWorkspace.toggleSelection(projectId, entry.path)
       projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
@@ -663,6 +719,18 @@
     })
   }
 
+  function selectKeyboardRow(entry: ProjectFileEntry): void {
+    if (entry.kind === 'file') {
+      void selectEntry(entry, 'preview')
+    } else {
+      // Moving onto a folder selects it without toggling its expansion.
+      projectFilesWorkspace.setRevealedPath(projectId, entry.path)
+      projectFilesWorkspace.setSelection(projectId, [entry.path])
+      projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
+    }
+    focusRow(entry.path)
+  }
+
   /** Directory a newly created file should land in, based on the focused row. */
   function createTargetDirectory(target: EventTarget | null): string {
     const row =
@@ -678,6 +746,18 @@
       return
     }
     const key = event.key
+    if (keymapState.matches('files-delete', event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.repeat || operationPending || deleteTarget) return
+      const paths = [...projectState.selectedPaths]
+      if (paths.length === 0) return
+      deleteTarget = {
+        paths,
+        label: paths.length === 1 ? paths[0] : `${paths.length} items`
+      }
+      return
+    }
     if (keymapState.matches('nav-new-thread', event)) {
       event.preventDefault()
       void startCreate(createTargetDirectory(event.target), 'untitled.txt')
@@ -686,6 +766,7 @@
     if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'ArrowRight' && key !== 'ArrowLeft') {
       return
     }
+    event.stopPropagation()
     if (visibleRows.length === 0) return
 
     let currentIndex = -1
@@ -711,11 +792,10 @@
       if (!entry) return
       if (event.shiftKey) {
         extendSelectionTo(entry.path)
+        focusRow(entry.path)
       } else {
-        projectFilesWorkspace.setSelection(projectId, [entry.path])
-        projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
+        selectKeyboardRow(entry)
       }
-      focusRow(entry.path)
       return
     }
 
@@ -728,10 +808,8 @@
           void toggleDirectoryRow(entry)
         } else {
           const child = visibleRows[currentIndex + 1]
-          if (child) {
-            projectFilesWorkspace.setSelection(projectId, [child.path])
-            projectFilesWorkspace.setSelectionAnchor(projectId, child.path)
-            focusRow(child.path)
+          if (child && parentDirectory(child.path) === entry.path) {
+            selectKeyboardRow(child)
           }
         }
       }
@@ -746,9 +824,7 @@
         const parentIndex = parent ? rowIndexByPath.get(parent) : undefined
         if (parentIndex !== undefined) {
           const parentEntry = visibleRows[parentIndex]
-          projectFilesWorkspace.setSelection(projectId, [parentEntry.path])
-          projectFilesWorkspace.setSelectionAnchor(projectId, parentEntry.path)
-          focusRow(parentEntry.path)
+          selectKeyboardRow(parentEntry)
         }
       }
     }
@@ -896,8 +972,10 @@
     }
   }
 
-  function handleFilePointerDown(entry: ProjectFileEntry): void {
+  function handleFilePointerDown(entry: ProjectFileEntry, event: PointerEvent): void {
     suppressScrollForPointer()
+    // Modified clicks must see the previous selection and range anchor.
+    if (event.metaKey || event.ctrlKey || event.shiftKey) return
     const paths = selectionPathsFor(entry, projectState.selectedPaths)
     if (!projectState.selectedPaths.includes(entry.path)) {
       projectFilesWorkspace.setSelection(projectId, paths)
@@ -1197,7 +1275,7 @@
     {projectName}
     {projectLabel}
     {projectIconUrl}
-    {routineRoot}
+    {assistantRoot}
     {projectAccentColor}
     explorerWidth={projectState.explorerWidth}
     {resizing}
@@ -1209,8 +1287,10 @@
     rootLoading={Boolean(projectState.loadingDirectories[''])}
     onStartResize={startResize}
     onResizeKeydown={handleResizeKeydown}
+    canRevealActiveFile={Boolean(selectedPath)}
     onToggleExpandAll={() => void toggleExpandAll()}
     onToggleFilter={() => (filterOpen ? closeFilter() : void openFilter())}
+    onRevealActiveFile={locateActiveFileTab}
     onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
   />
 
@@ -1250,6 +1330,7 @@
     onOpenInTerminal={() => openEntryInTerminal(null)}
     cioCleanupExcluded={false}
     onToggleCioCleanupExclusion={() => undefined}
+    workRoots={projectWorkState.rootsFor(projectId)}
   >
     <OvenSurfaceOverlay
       active={ovenTree}
@@ -1343,6 +1424,7 @@
                   onOpenInTerminal={openEntryInTerminal}
                   cioCleanupExcluded={isRowCioCleanupExcluded(virtualRow.row)}
                   onToggleCioCleanupExclusion={toggleCioCleanupExclusion}
+                  workRoots={projectWorkState.rootsFor(projectId)}
                   onRowClick={handleRowClick}
                   onRowDoubleClick={handleRowDoubleClick}
                   onRowContextMenu={handleRowContextMenu}

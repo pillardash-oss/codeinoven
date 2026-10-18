@@ -41,25 +41,47 @@
   })
 
   let display = $derived(count > max ? `${max}+` : String(count))
+  /**
+   * A colour mark shows its swatches in place of a glyph.
+   *
+   * It wears the same box as a counted badge, for the same reason that badge
+   * wears one: the mark lands on the item's own glyph, and bare swatches and a
+   * bare digit over a foreground-coloured icon are unreadable at this size. The
+   * box is what makes the mark legible wherever the host anchors it.
+   */
+  let colorOnly = $derived(Boolean(colors?.length))
+  /**
+   * The colour the count is written in: the mark's own.
+   *
+   * A counted badge writes its number in its tone, so a colour mark has to write
+   * its number in the colour it stands for. Without this the number has no colour
+   * at all and inherits whatever hosts the badge, which on the rail is the muted
+   * icon tone: legible nowhere and reading as disabled rather than as a count.
+   */
+  let markColor = $derived(colors?.[0])
 </script>
 
 {#if count > 0}
   {@const Icon = icon}
+  <!-- Every indicator is a filled, bordered chip: the fill lifts the mark off
+       whatever it lands on, which on the rail is the item's own icon. The
+       horizontal padding stays tight because a rail item 32px wide has to hold
+       two of these side by side inside the window. -->
   <span
-    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px rounded-full border border-border bg-elevated px-1 text-[0.5625rem] font-semibold tabular-nums shadow-sm animate-pulse motion-reduce:animate-none {colors?.length
+    class="flex h-3.5 min-w-3.5 items-center justify-center gap-px border border-border bg-elevated px-0.5 text-[0.5625rem] font-semibold tabular-nums shadow-sm {colorOnly
       ? ''
       : toneClass} {className}"
     role="status"
     aria-label={label}
     title={label}
   >
-    {#if colors?.length}
+    {#if colorOnly}
       <span class="flex items-center gap-px" aria-hidden="true">
         {#each colors as accent (accent)}
-          <span class="h-1.5 w-1.5 rounded-full" style:background={accent}></span>
+          <span class="h-1.5 w-1.5" style:background={accent}></span>
         {/each}
       </span>
-      <span class="sr-only">{display}</span>
+      <span style:color={markColor}>{display}</span>
     {:else}
       <Icon size={8} strokeWidth={2.6} aria-hidden="true" />
       {display}

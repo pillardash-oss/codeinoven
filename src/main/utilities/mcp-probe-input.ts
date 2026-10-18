@@ -11,6 +11,7 @@ import {
   validateBoundedString,
   validateEntityId
 } from '../ipc/validation/primitives'
+import { parseMcpOAuthConfig } from './mcp-oauth/mcp-oauth-config'
 
 /** Longest command, argument, URL, or header value a test may be asked to run. */
 const MAX_CONNECTION_FIELD_LENGTH = 4_096
@@ -88,7 +89,7 @@ export function validateMcpConnectionConfig(value: unknown): McpUtilityConfig {
   const config = assertRecord(value, 'MCP connection config')
   rejectUnknownFields(
     config,
-    new Set(['transport', 'command', 'args', 'url', 'environment', 'headers']),
+    new Set(['transport', 'command', 'args', 'url', 'environment', 'headers', 'oauth']),
     'MCP connection config'
   )
   const command = config['command']
@@ -111,7 +112,8 @@ export function validateMcpConnectionConfig(value: unknown): McpUtilityConfig {
       : { environment: validateStringRecord(config['environment'], 'MCP environment') }),
     ...(config['headers'] === undefined
       ? {}
-      : { headers: validateStringRecord(config['headers'], 'MCP header') })
+      : { headers: validateStringRecord(config['headers'], 'MCP header') }),
+    ...(config['oauth'] === undefined ? {} : { oauth: parseMcpOAuthConfig(config['oauth']) })
   }
 }
 

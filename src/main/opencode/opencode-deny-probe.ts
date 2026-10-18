@@ -1,8 +1,12 @@
-import { spawn, execFileSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
+import {
+  openCodeInstallationVersion,
+  resolvedOpenCodeCommand
+} from '../agents/opencode-installation'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 /**
@@ -95,33 +99,20 @@ export interface DenyProbeResult {
   note: string
 }
 
-/** Installed opencode CLI version, or null when the CLI is unavailable. */
-export function openCodeVersion(): string | null {
-  try {
-    const raw = execFileSync('opencode', ['--version'], {
-      encoding: 'utf8',
-      env: buildProcessEnvironment(),
-      timeout: 15_000
-    })
-      .trim()
-      .split(/\r?\n/u)[0]
-      .trim()
-    return raw.length > 0 ? raw : null
-  } catch {
-    return null
-  }
-}
-
 async function startServe(projectDir: string): Promise<{
   baseUrl: string
   child: ReturnType<typeof spawn>
 }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('opencode', ['serve', '--port', '0', '--hostname', '127.0.0.1'], {
-      cwd: projectDir,
-      env: buildProcessEnvironment(),
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
+    const child = spawn(
+      resolvedOpenCodeCommand(),
+      ['serve', '--port', '0', '--hostname', '127.0.0.1'],
+      {
+        cwd: projectDir,
+        env: buildProcessEnvironment(),
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
+    )
     let buffer = ''
     let settled = false
     const timer = setTimeout(() => {
@@ -264,7 +255,9 @@ async function waitForToolCalls(
     const errored = messages.some((message) => {
       const info = message?.['info']
       return (
-        typeof info === 'object' && info !== null && Boolean((info as Record<string, unknown>)['error'])
+        typeof info === 'object' &&
+        info !== null &&
+        Boolean((info as Record<string, unknown>)['error'])
       )
     })
     if (errored) return []
@@ -278,7 +271,7 @@ async function waitForToolCalls(
  * Not for production use   dev measurement and CI gating only.
  */
 export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
-  const version = openCodeVersion()
+  const version = await openCodeInstallationVersion()
   if (version === null) {
     return {
       version: 'unknown',

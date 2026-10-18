@@ -23,6 +23,7 @@ export interface SaveFileInput {
 
 export const invokeAppContract = {
   'network:restored': {} as Contract<[], void>,
+  'network:lost': {} as Contract<[], void>,
   'config:get': {} as Contract<[], AppConfig>,
   'community:getIssueUrl': {} as Contract<[], string>,
   'config:update': {} as Contract<[patch: AppConfigPatch], AppConfig>,
@@ -48,6 +49,11 @@ export const invokeAppContract = {
     { path: string; dataUrl: string }
   >,
   'diagnostics:export': {} as Contract<[], string | null>,
+  /** Name the blob this renderer is about to hand to Chromium, so a save
+   *  through a surface the page does not draw itself (the media controls' own
+   *  Download item) suggests a readable file name instead of the blob URL's
+   *  UUID. Pass `null` to forget the name when the URL is revoked. */
+  'download:nameLocalBlob': {} as Contract<[url: string, fileName: string | null], void>,
   'file:read': {} as Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>,
   'file:readAsDataUrl': {} as Contract<[filePath: string], string | null>,
   'file:readDocumentPreview': {} as Contract<[filePath: string], string | null>,

@@ -27,7 +27,7 @@ function isValidBackgroundRun(value: unknown): value is BackgroundRun {
     typeof record.runThreadId === 'string' &&
     (reason === 'scheduled' || reason === 'caught-up') &&
     typeof record.startedAt === 'number' &&
-    (record.routineId === undefined || typeof record.routineId === 'string') &&
+    (record.assistantId === undefined || typeof record.assistantId === 'string') &&
     (record.settledAt === undefined || typeof record.settledAt === 'number') &&
     (outcome === undefined ||
       outcome === 'completed' ||
@@ -84,7 +84,7 @@ export class BackgroundRunLedger {
    */
   recordStart(input: {
     taskId: string
-    routineId?: string
+    assistantId?: string
     runThreadId: string
     reason: BackgroundRun['reason']
     startedAt?: number
@@ -94,7 +94,7 @@ export class BackgroundRunLedger {
     if (existing) return existing
     const entry: BackgroundRun = {
       taskId: input.taskId,
-      ...(input.routineId !== undefined ? { routineId: input.routineId } : {}),
+      ...(input.assistantId !== undefined ? { assistantId: input.assistantId } : {}),
       runThreadId: input.runThreadId,
       reason: input.reason,
       startedAt: input.startedAt ?? Date.now(),

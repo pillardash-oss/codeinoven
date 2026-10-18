@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { FileDown, Loader2 } from '@lucide/svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -35,7 +36,7 @@
       {chatMode ? 'to the temporary chat directory.' : 'inside the project’s .cio scratch space.'}
     </p>
 
-    <div class="flex items-start gap-3 rounded-xl border bg-elevated px-3 py-3">
+    <div class="flex items-start gap-3 border bg-elevated px-3 py-3">
       <Switch
         checked={includeTrace}
         onchange={(value) => (includeTrace = value)}
@@ -52,18 +53,18 @@
     </div>
 
     <p
-      class="flex items-start gap-1.5 rounded-lg bg-elevated px-3 py-2 text-[0.6875rem] leading-snug text-muted"
+      class="flex items-start gap-1.5 border border-border bg-elevated px-3 py-2 text-[0.6875rem] leading-snug text-muted"
     >
-      <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-accent" />
-      The transcript is exported in the background on a worker thread   the app stays fully responsive
-      and you can keep working while it runs. You'll get a notification when it's ready.
+      <CioSpinner size={12} class="mt-0.5 shrink-0 animate-spin text-accent" />
+      The transcript is exported in the background on a worker thread the app stays fully responsive and
+      you can keep working while it runs. You'll get a notification when it's ready.
     </p>
   </div>
 
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Cancel"
       disabled={busy}
       onclick={onClose}
@@ -72,15 +73,15 @@
     </button>
     <button
       type="button"
-      class="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex items-center gap-1.5 bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
       title="Export the transcript in the background"
       disabled={busy}
       onclick={confirm}
     >
       {#if busy}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {:else}
-        <FileDown size={14} />
+        <CioDownload size={14} />
       {/if}
       Export transcript
     </button>

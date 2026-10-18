@@ -4,7 +4,6 @@ import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
-  isOrchestrationChildThread,
   type AdoptableWorktreeInfo,
   type ManagedWorktreeDescriptor,
   type Project,
@@ -23,13 +22,13 @@ import {
   type ScopeWorktreeSourceInfo,
   type Thread
 } from '$shared/types'
+import type { AuthoredWorkKind } from '$shared/ipc-contract'
 import {
   cloneBoard,
   EMPTY_BOARD,
   loadScopeSnapshot,
   orderedBuckets,
   persistScopeSnapshot,
-  type ProjectBadge,
   type ScopeBucketEdit,
   type ScopeProject,
   type ScopeSidebarContext,
@@ -38,13 +37,7 @@ import {
 import { ScopeThreads } from './scope-threads.svelte'
 import { ScopeWorktrees } from './scope-worktrees.svelte'
 
-export type {
-  ProjectBadge,
-  ScopeBucketEdit,
-  ScopeProject,
-  ScopeSidebarContext,
-  ThreadStage
-} from './scope-board'
+export type { ScopeBucketEdit, ScopeProject, ScopeSidebarContext, ThreadStage } from './scope-board'
 export {
   clearScopeSnapshot,
   STAGE_COLORS,
@@ -154,23 +147,6 @@ class ScopeState {
    */
   async ensureScopeBoardThreadsLoaded(projectId: string): Promise<void> {
     await this.threads.ensureScopeBoardThreadsLoaded(projectId)
-  }
-
-  get projectBadges(): SvelteMap<string, ProjectBadge> {
-    const badges = new SvelteMap<string, ProjectBadge>()
-    for (const project of this.projects) {
-      const projectThreads = this.threads.allScopeThreads.filter(
-        (t) => t.projectId === project.id && !t.archived
-      )
-      const userThreads = projectThreads.filter((t) => !isOrchestrationChildThread(t))
-      badges.set(project.id, {
-        hasWorking: projectThreads.some((t) => t.status === 'planning' || t.status === 'executing'),
-        hasUnread: userThreads.some((t) => t.status === 'completed' && !t.read),
-        hasAttention: userThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
-        hasError: userThreads.some((t) => t.status === 'failed')
-      })
-    }
-    return badges
   }
 
   get buckets(): ScopeBucket[] {
@@ -592,6 +568,16 @@ class ScopeState {
 
   updateThread(updated: Thread): void {
     this.threads.updateThread(updated)
+  }
+
+  /** Patch one thread's authored-work kinds in place (light broadcast). */
+  patchAuthoredWorkKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind,
+    kinds: readonly AuthoredWorkKind[]
+  ): void {
+    this.threads.patchAuthoredWorkKind(projectId, threadId, kind, kinds)
   }
 
   /** Fold a list of thread snapshots into the scope store in one pass. See

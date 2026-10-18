@@ -7,6 +7,7 @@ import { reportError } from './app-errors.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
 import { browserHistory } from './browser-history.svelte'
+import { recentVisits } from './recent-visits.svelte'
 import { threadBrowserTabs } from './thread-browser-tabs.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
 import { MAX_REOPENED_BROWSER_TABS } from './global-browser-types'
@@ -62,8 +63,8 @@ export interface SidebarBrowserTabsHost {
   /**
    * The conversation a thread's browser tabs belong to (see
    * `conversationScopeId`). The sidebar store holds no thread rows, so the
-   * workspace resolves this one identity: a routine's threads share the routine,
-   * a standalone chat or routine-less task owns its own, a project's threads
+   * workspace resolves this one identity: an assistant's threads share the assistant,
+   * a standalone chat or assistant-less task owns its own, a project's threads
    * share the project.
    */
   threadScopeId(projectId: string, threadId: string): string
@@ -158,9 +159,9 @@ export class SidebarBrowserTabs {
    *  project's threads keeps the browser the user was reading. A hidden
    *  conversation container (the inbox, the assistant space) is different: it is
    *  one project holding many independent conversations, so its tabs are scoped
-   *  to the conversation instead. An assistant routine is one such conversation
-   *  whatever thread of it is open   its how-to host and each of its runs share
-   *  the routine (see `conversationScopeId`)   so switching between a routine's
+   *  to the conversation instead. An assistant is one such conversation
+   *  whatever thread of it is open   its knowledge host and each of its runs share
+   *  the assistant (see `conversationScopeId`)   so switching between an assistant's
    *  threads keeps the page those threads opened, instead of closing the browser
    *  on every switch. */
   get activeTabs(): BrowserContextTab[] {
@@ -402,7 +403,7 @@ export class SidebarBrowserTabs {
   /**
    * Whether the sidebar is showing the conversation a tab is opening for. A
    * reveal is delivered to the conversation on screen, which for an assistant
-   * routine is every one of its threads: a run that opens a page while the user
+   * assistant is every one of its threads: a run that opens a page while the user
    * reads its sibling opens it in the browser already on screen.
    */
   private isShownConversation(projectId: string, threadId: string): boolean {
@@ -490,6 +491,15 @@ export class SidebarBrowserTabs {
         state.audible && !state.muted
       )
     }
+    // Composition board views have thread ownership but no browser-strip tab.
+    if (!tab && state.tabId.startsWith('browser:board:')) {
+      browserAudio.reportThreadTab(
+        state.tabId,
+        state.threadId,
+        state.projectId,
+        state.audible && !state.muted
+      )
+    }
     const current = this.runtime.get(state.tabId)
     if (
       current &&
@@ -551,6 +561,7 @@ export class SidebarBrowserTabs {
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = null
     }
+    for (const id of removedIds) recentVisits.forgetPanelTab(id)
     if (this.host.activeProjectId() === projectId) this.visible = false
     this.persist()
     return removedIds
@@ -570,6 +581,7 @@ export class SidebarBrowserTabs {
     if (this.activeTabId && removedIds.includes(this.activeTabId)) {
       this.activeTabId = this.activeTabs.at(-1)?.id ?? null
     }
+    for (const id of removedIds) recentVisits.forgetPanelTab(id)
     if (this.activeTabs.length === 0) this.visible = false
     this.persist()
     return removedIds
@@ -587,6 +599,7 @@ export class SidebarBrowserTabs {
     if (options.recordForReopen !== false) this.rememberClosedTab(closing, browserIndex)
     this.tabs = this.tabs.filter((tab) => tab.id !== id)
     this.forgetRuntime([id])
+    recentVisits.forgetPanelTab(id)
     this.pruneScopeBoxChoices()
     if (this.activeTabId === id) {
       this.activeTabId = this.activeTabs[Math.max(0, activeIndex - 1)]?.id ?? null
@@ -652,7 +665,7 @@ export class SidebarBrowserTabs {
       const activeThreadId = this.host.activeThreadId()
       if (!activeThreadId) return
       // A tab of the active conversation may be focused from any thread that
-      // shares it, which is what lets a routine keep one browser across its
+      // shares it, which is what lets an assistant keep one browser across its
       // threads. A tab of another conversation never is.
       const scopeId = this.host.threadScopeId(tab.projectId, activeThreadId)
       if (this.host.threadScopeId(tab.projectId, tab.threadId) !== scopeId) return
@@ -663,6 +676,9 @@ export class SidebarBrowserTabs {
     // Recency is what a Ctrl+Tab inside the full screen browser walks, so it is
     // recorded here, at the one place a tab becomes the one in use.
     threadBrowserTabs.record(id)
+    // The same focus also feeds the app-wide switcher's own recency order, so a
+    // thread-browser tab competes with threads and other panel tabs for an entry.
+    recentVisits.recordPanelTab(id)
     this.persist()
   }
 

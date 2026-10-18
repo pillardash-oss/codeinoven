@@ -1,8 +1,8 @@
 /// <reference types="node" />
 
 import { lstatSync, realpathSync, existsSync } from 'fs'
-import { writeFile, rename, mkdir, readFile, readdir, rm } from 'fs/promises'
-import { isAbsolute, join, relative, resolve, sep, win32 } from 'path'
+import { writeFile, rename, mkdir, readFile, readdir, rm, open } from 'fs/promises'
+import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'path'
 import { randomBytes } from 'crypto'
 import { APP_SLUG, ORG_SLUG } from './brand'
 
@@ -66,16 +66,112 @@ export function resolveWithinRoot(rootPath: string, relativePath: string): strin
   return resolvedPath
 }
 
-/** Atomic write: write to a unique temporary file then rename it into place. */
-export async function atomicWrite(filePath: string, content: string): Promise<void> {
+/**
+ * Windows can briefly refuse a rename while another process holds the target
+ * open (an antivirus scan, the updater replacing the install, or a reader that
+ * has not released the file yet). These are the error codes the retry covers.
+ */
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EBUSY', 'EACCES'])
+
+/** Total rename attempts (the first try plus four retries) before giving up. */
+const RENAME_MAX_ATTEMPTS = 5
+
+/** First backoff step; each retry waits one more step, so the bound is 20+40+60+80 = 200 ms. */
+const RENAME_RETRY_STEP_MS = 20
+
+function isRetryableRenameError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    RETRYABLE_RENAME_CODES.has(error.code)
+  )
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Rename with a short, bounded backoff on the transient Windows lock errors.
+ * A permanently locked path fails after RENAME_MAX_ATTEMPTS instead of hanging
+ * the caller, and every other error is rethrown immediately.
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await rename(from, to)
+      return
+    } catch (error) {
+      if (!isRetryableRenameError(error) || attempt >= RENAME_MAX_ATTEMPTS) throw error
+      await delay(RENAME_RETRY_STEP_MS * attempt)
+    }
+  }
+}
+
+/**
+ * Best-effort fsync of the directory holding a durable write, so the rename
+ * itself survives a power loss. Not every platform allows a directory to be
+ * opened for syncing (Windows notably does not), so a failure here is ignored.
+ */
+async function syncContainingDirectory(filePath: string): Promise<void> {
+  try {
+    const handle = await open(dirname(filePath), 'r')
+    try {
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  } catch {
+    // Directory fsync is unsupported on some platforms; the file sync above remains.
+  }
+}
+
+/**
+ * Write to a unique temporary file then rename it into place, never leaving the
+ * temporary file behind on any path. `durable` also flushes the temporary file
+ * (and the containing directory) to disk before the rename is reported done.
+ */
+async function writeAtomically(filePath: string, content: string, durable: boolean): Promise<void> {
   const tmpPath = `${filePath}.${process.pid}.${generateId()}.tmp`
   try {
-    await writeFile(tmpPath, content, { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
-    await rename(tmpPath, filePath)
+    if (durable) {
+      const handle = await open(tmpPath, 'wx', 0o600)
+      try {
+        await handle.writeFile(content, { encoding: 'utf-8' })
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+    } else {
+      await writeFile(tmpPath, content, { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+    }
+    await renameWithRetry(tmpPath, filePath)
+    if (durable) await syncContainingDirectory(filePath)
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => undefined)
     throw error
   }
+}
+
+/**
+ * Atomic write: write to a unique temporary file then rename it into place.
+ * Deliberately cheap: no fsync, so it stays safe on the hot JSON write path.
+ * The rename is retried on the transient Windows lock errors (EPERM, EBUSY,
+ * EACCES) with a bounded backoff, so a momentarily held target still lands.
+ */
+export async function atomicWrite(filePath: string, content: string): Promise<void> {
+  await writeAtomically(filePath, content, false)
+}
+
+/**
+ * Durable atomic write: the temporary file is fsynced before the rename, and
+ * the containing directory is fsynced after it, so the content survives a power
+ * loss or a forced kill between the rename and the disk flush. Opt in only for
+ * stores written at boot and shutdown; the default atomicWrite stays cheap.
+ */
+export async function atomicWriteDurable(filePath: string, content: string): Promise<void> {
+  await writeAtomically(filePath, content, true)
 }
 
 /** Read and parse a JSON file, returning null if it doesn't exist */
@@ -139,6 +235,23 @@ export async function removeDir(dirPath: string): Promise<void> {
 export function isUnpackagedElectronLaunch(): boolean {
   const electronProcess = process as NodeJS.Process & { readonly defaultApp?: boolean }
   return electronProcess.defaultApp === true
+}
+
+/**
+ * Is this launch running from a Windows app package (MSIX/AppX) rather than a
+ * traditional installer?
+ *
+ * Electron sets `process.windowsStore` when the process carries Windows package
+ * identity, which is exactly the Store-distributed case. Package identity
+ * changes three things this app cares about: Windows derives the Application
+ * User Model ID from the package instead of from a Start Menu shortcut, the
+ * install directory is read-only, and the Store owns app updates. Shared
+ * utilities cannot import `electron`, so this reads the flag off the process the
+ * same way {@link isUnpackagedElectronLaunch} does.
+ */
+export function isWindowsStorePackage(): boolean {
+  const electronProcess = process as NodeJS.Process & { readonly windowsStore?: boolean }
+  return electronProcess.windowsStore === true
 }
 
 /**
@@ -213,9 +326,9 @@ export function getProjectPath(projectId: string): string {
   return join(getConfigRoot(), 'projects', projectId)
 }
 
-/** Get routine storage path (routine icons and future per-routine artifacts). */
-export function getRoutinePath(routineId: string): string {
-  return join(getConfigRoot(), 'routines', routineId)
+/** Get assistant storage path (assistant icons and future per-assistant artifacts). */
+export function getAssistantPath(assistantId: string): string {
+  return join(getConfigRoot(), 'assistants', assistantId)
 }
 
 const SCOPE_DIRECTORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/

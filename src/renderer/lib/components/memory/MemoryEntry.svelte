@@ -1,4 +1,9 @@
 <script lang="ts">
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import type { MemoryCategory, MemoryEntry, MemoryPriority, Thread } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { locationScopeOf } from '$shared/memory/memory-scopes'
@@ -13,7 +18,6 @@
   import MemoryToggle from './MemoryToggle.svelte'
   import MemoryScopeSelect from './MemoryScopeSelect.svelte'
   import type { MemoryScopeOption } from './memory-routing'
-  import { Trash2, ChevronDown, ChevronUp, Zap, Clock } from '@lucide/svelte'
 
   interface Props {
     entry: MemoryEntry
@@ -115,7 +119,7 @@
 </script>
 
 <div
-  class="rounded-xl border bg-surface transition-opacity {entry.enabled ? '' : 'opacity-50'}"
+  class="border bg-surface transition-opacity {entry.enabled ? '' : 'opacity-50'}"
   role="group"
   aria-label="Memory entry: {entry.label || 'Untitled'}"
 >
@@ -134,7 +138,7 @@
       onclick={() => (expanded = !expanded)}
     >
       <span
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[0.625rem] font-bold {getPriorityColor(
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-[0.625rem] font-bold {getPriorityColor(
           entry.priority
         )} border"
       >
@@ -144,15 +148,13 @@
         {entry.label || 'Untitled'}
       </span>
       {#if entry.source === 'auto-detected'}
-        <span
-          class="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-accent"
-        >
+        <span class="shrink-0 bg-accent/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-accent">
           Auto
         </span>
       {/if}
       {#if entry.frequency > 1}
         <span class="shrink-0 flex items-center gap-0.5 text-[0.625rem] text-dimmed">
-          <Zap size={10} />
+          <CioZap size={10} />
           {entry.frequency}x
         </span>
       {/if}
@@ -160,24 +162,24 @@
 
     <div class="flex items-center gap-1">
       <button
-        class="rounded-md p-1.5 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="p-1.5 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title={expanded ? 'Collapse' : 'Expand'}
         aria-label={expanded ? 'Collapse entry' : 'Expand entry'}
         onclick={() => (expanded = !expanded)}
       >
         {#if expanded}
-          <ChevronUp size={14} />
+          <CioChevronUp size={14} />
         {:else}
-          <ChevronDown size={14} />
+          <CioChevronDown size={14} />
         {/if}
       </button>
       <button
-        class="rounded-md p-1.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+        class="p-1.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
         title="Delete this memory entry"
         aria-label="Delete memory entry"
         onclick={() => onRemove(index)}
       >
-        <Trash2 size={14} />
+        <CioTrash size={14} />
       </button>
     </div>
   </div>
@@ -190,7 +192,7 @@
         </label>
         <input
           id="memory-label-{entry.id}"
-          class="w-full rounded-lg border bg-elevated px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+          class="w-full border bg-elevated px-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
           value={entry.label}
           placeholder="e.g. Preferred language"
           oninput={(e: Event) => {
@@ -208,7 +210,7 @@
           id="memory-content-{entry.id}"
           value={entry.content}
           placeholder="Write the memory content in Markdown..."
-          containerClass="border border-border rounded-lg"
+          containerClass="border border-border"
           class="min-h-24 max-h-48 w-full overflow-y-auto px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
           onValueChange={(value) => onUpdate(index, 'content', value)}
         />
@@ -221,7 +223,7 @@
           </label>
           <select
             id="memory-category-{entry.id}"
-            class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+            class="w-full border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
             value={entry.category}
             onchange={(e: Event) => {
               const target = e.currentTarget as HTMLSelectElement
@@ -240,7 +242,7 @@
           </label>
           <select
             id="memory-priority-{entry.id}"
-            class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+            class="w-full border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
             value={entry.priority}
             onchange={(e: Event) => {
               const target = e.currentTarget as HTMLSelectElement
@@ -318,7 +320,7 @@
       {/if}
 
       {#if entry.category === 'models'}
-        <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">
+        <div class="border border-primary/20 bg-primary/5 p-3">
           <div class="mb-2">
             <p class="text-xs font-medium text-foreground">Models this memory applies to</p>
             <p class="mt-0.5 text-[0.6875rem] text-muted">
@@ -347,12 +349,12 @@
 
       <div class="flex items-center gap-4 text-[0.6875rem] text-dimmed">
         <span class="flex items-center gap-1">
-          <Clock size={10} />
+          <CioClock size={10} />
           Updated {formatDate(entry.updatedAt)}
         </span>
         {#if entry.lastReinforced}
           <span class="flex items-center gap-1">
-            <Zap size={10} />
+            <CioZap size={10} />
             Reinforced {entry.frequency}x
           </span>
         {/if}

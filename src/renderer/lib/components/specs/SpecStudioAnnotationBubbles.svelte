@@ -13,7 +13,7 @@
   <div class="mt-4 flex gap-2 overflow-x-auto pb-1" aria-label="Section annotations">
     {#each annotations as annotation (annotation.id)}
       <button
-        class="max-w-64 shrink-0 rounded-xl border bg-surface px-3 py-2 text-left hover:bg-elevated"
+        class="max-w-64 shrink-0 border border-border bg-surface px-3 py-2 text-left hover:bg-elevated"
         title="Open annotation"
         onclick={() => onOpen(annotation)}
       >

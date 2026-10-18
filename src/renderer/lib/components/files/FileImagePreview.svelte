@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onDestroy } from 'svelte'
-  import { Loader2 } from '@lucide/svelte'
+
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
 
@@ -107,7 +108,7 @@
     <p class="text-xs font-medium text-danger">This image could not be loaded</p>
   {:else}
     <div class="flex items-center justify-center gap-2 text-[0.6875rem] text-dimmed">
-      <Loader2 size={13} class="animate-spin" />
+      <CioSpinner size={13} class="animate-spin" />
       Loading image preview
     </div>
   {/if}

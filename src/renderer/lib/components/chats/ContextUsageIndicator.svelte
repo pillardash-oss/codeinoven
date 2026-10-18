@@ -1,13 +1,10 @@
 <script lang="ts">
-  import {
-    Archive,
-    BatteryCharging,
-    BatteryMedium,
-    Brain,
-    ChevronDown,
-    ChevronRight,
-    Loader2
-  } from '@lucide/svelte'
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioBatteryCharging from '@pillardash-oss/cio-icon/CioBatteryCharging.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { slide } from 'svelte/transition'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -25,6 +22,8 @@
 
   interface Props {
     usage?: AgentContextUsage
+    /** Destination window selected in the composer, for a pre-send preview. */
+    previewContextWindow?: number
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
@@ -44,6 +43,7 @@
 
   let {
     usage,
+    previewContextWindow,
     efficiencyKpis,
     harnessUsage = [],
     canCompact = false,
@@ -55,10 +55,42 @@
     refreshing = false
   }: Props = $props()
 
+  /** The meter's cells, bottom first: five of them, so each one is 20% of the
+   *  context. They are drawn as a column that fills upward, which reads as a
+  /** The meter's cells, bottom first: four of them, so each one is a quarter of
+   *  the context. They are drawn as a column that fills upward, which reads as a
+   *  gauge at a glance where a one-pixel bar had to be measured. */
+  const METER_CELLS = [0, 1, 2, 3] as const
+
+  /** The ring's radius and the arc it takes to fill it, for the popover header. */
+  const RING_RADIUS = 10
+  const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+
+  const displayedContextWindow = $derived(previewContextWindow ?? usage?.contextWindow)
+  const displayedContextPercent = $derived(
+    usage?.contextUsed !== undefined &&
+      displayedContextWindow !== undefined &&
+      displayedContextWindow > 0
+      ? (usage.contextUsed / displayedContextWindow) * 100
+      : previewContextWindow === undefined
+        ? usage?.contextPercent
+        : undefined
+  )
   const boundedPercent = $derived(
-    usage?.contextPercent === undefined
+    displayedContextPercent === undefined
       ? undefined
-      : Math.max(0, Math.min(100, usage.contextPercent))
+      : Math.max(0, Math.min(100, displayedContextPercent))
+  )
+  /**
+   * A zero total only goes unreported when something on the thread was never
+   * priced. A thread whose every cost event is priced at zero is a known zero,
+   * and saying "Cost not reported" over it states the opposite of the record.
+   */
+  const costTotalKnown = $derived(
+    (usage?.costUsd ?? 0) > 0 ||
+      (efficiencyKpis !== undefined &&
+        efficiencyKpis.pricedCostEvents > 0 &&
+        efficiencyKpis.unavailableCostEvents === 0)
   )
   const fillClass = $derived(
     boundedPercent === undefined
@@ -69,7 +101,18 @@
           ? 'bg-warning'
           : 'bg-success'
   )
-  const iconClass = $derived(
+  /** The ring's arc and the number beside it carry the same severity colour, so
+   *  a nearly full context reads amber then red in both. */
+  const ringClass = $derived(
+    boundedPercent === undefined
+      ? 'stroke-dimmed'
+      : boundedPercent >= 90
+        ? 'stroke-danger'
+        : boundedPercent >= 70
+          ? 'stroke-warning'
+          : 'stroke-success'
+  )
+  const ringLabelClass = $derived(
     boundedPercent === undefined
       ? 'text-dimmed'
       : boundedPercent >= 90
@@ -78,8 +121,21 @@
           ? 'text-warning'
           : 'text-success'
   )
+  /** The ring's empty track, under the arc. */
+  const trackClass = 'stroke-overlay'
+  /** The ring's arc, drawn from the top: the shape states the reading, and the
+   *  number beside it states it exactly. */
+  const ringDash = $derived(
+    boundedPercent === undefined ? 0 : (boundedPercent / 100) * RING_CIRCUMFERENCE
+  )
   const percentLabel = $derived(
     boundedPercent === undefined ? '' : `${Math.round(boundedPercent)}%`
+  )
+  /** Cells of the four that are full. Four cells at a quarter each, so the meter
+   *  reads as a gauge rather than a bar: rounding keeps the closest reading, and
+   *  the number beside it carries the exact one. */
+  const filledCells = $derived(
+    boundedPercent === undefined ? 0 : Math.min(METER_CELLS.length, Math.round(boundedPercent / 25))
   )
   const multiHarness = $derived(harnessUsage.length > 1)
   const cacheHitLabel = $derived(
@@ -101,9 +157,9 @@
 </script>
 
 {#snippet bankedResetRow(resets: AgentBankedResets)}
-  <div transition:slide={{ duration: 250 }} class="rounded-md border border-border bg-app/40 p-2.5">
+  <div transition:slide={{ duration: 250 }} class="border border-border bg-app/40 p-2.5">
     <div class="flex items-center gap-2">
-      <BatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
+      <CioBatteryCharging size={16} class="shrink-0 text-info" aria-hidden="true" />
       <span class="text-base leading-none font-semibold tabular-nums text-foreground">
         {resets.availableCount}
       </span>
@@ -122,19 +178,19 @@
     </div>
     <button
       type="button"
-      class="mt-2.5 flex h-6 w-full items-center justify-center gap-1.5 rounded-md border border-border text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      class="mt-2.5 flex h-6 w-full items-center justify-center gap-1.5 border border-border text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
       title="Redeem one banked reset   this immediately resets your usage windows"
       disabled={!onActivateBankedReset}
       onclick={onActivateBankedReset}
     >
-      <BatteryCharging size={11} aria-hidden="true" />
+      <CioBatteryCharging size={11} aria-hidden="true" />
       Reset usage
     </button>
   </div>
 {/snippet}
 
 {#snippet modelRows(models: HarnessModelUsage[])}
-  <div class="rounded-md border border-border bg-app/40 p-2">
+  <div class="border border-border bg-app/40 p-2">
     <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
       Models used
     </p>
@@ -152,11 +208,11 @@
           <span class="truncate font-medium text-foreground">{model.modelId}</span>
           {#if model.thinkingLevel}
             <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1 py-0.5 text-[0.5625rem] capitalize text-muted"
+              class="flex shrink-0 items-center gap-1 border border-border bg-elevated px-1 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"
               title={`Thinking level: ${model.thinkingLevel}`}
               aria-label={`Thinking level: ${model.thinkingLevel}`}
             >
-              <Brain size={9} />
+              <CioMemory size={9} />
               {model.thinkingLevel}
             </span>
           {/if}
@@ -176,23 +232,25 @@
   {@const collapsed = collapsedHarnesses.has(key)}
   {@const icon = getAgentIcon(entry.harnessId)}
   {@const name = icon?.name ?? entry.harnessId}
-  <div class="overflow-hidden rounded-lg border border-border bg-elevated">
+  <div class="overflow-hidden border border-border bg-elevated">
     <button
       type="button"
-      class="flex h-9 w-full items-center gap-1.5 rounded-lg px-2 text-left transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+      class="flex h-9 w-full items-center gap-1.5 px-2 text-left transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
       aria-expanded={!collapsed}
       title={collapsed ? `Expand ${name} quota` : `Collapse ${name} quota`}
       onclick={() => toggleHarness(key)}
     >
       {#if collapsed}
-        <ChevronRight size={13} class="shrink-0 text-dimmed" />
+        <CioForward size={13} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronDown size={13} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={13} class="shrink-0 text-dimmed" />
       {/if}
       <AgentIcon agentId={entry.harnessId} size={16} />
       <span class="min-w-0 truncate text-[0.625rem] font-medium text-foreground">{name}</span>
       <span class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-dimmed">
-        {entry.costUsd > 0 ? `${formatMoney(entry.costUsd)} consumed` : 'Cost not reported'}
+        {entry.costUsd > 0 || entry.pricedCostEvents > 0
+          ? `${formatMoney(entry.costUsd)} consumed`
+          : 'Cost not reported'}
       </span>
     </button>
     {#if !collapsed}
@@ -227,28 +285,60 @@
 {#snippet usageDetail()}
   {#if refreshing}
     <div
-      class="mb-3 h-0.5 overflow-hidden rounded-full bg-overlay"
+      class="mb-3 h-0.5 overflow-hidden bg-overlay"
       role="progressbar"
       aria-label="Fetching live usage"
       aria-valuetext="Fetching live usage"
     >
-      <div class="usage-loading-bar h-full w-1/3 rounded-full bg-info"></div>
+      <div class="usage-loading-bar h-full w-1/3 bg-info"></div>
     </div>
   {/if}
   <div class="flex items-start justify-between gap-3">
     <div>
       <p class="text-xs font-semibold text-foreground">Usage</p>
       <p class="mt-0.5 text-[0.625rem] text-dimmed">
-        {usage && usage.costUsd > 0 ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
+        {usage && costTotalKnown ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
       </p>
     </div>
     <div class="flex items-center gap-2">
       {#if usage && creditsLabel(usage)}
-        <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted">
+        <span
+          class="border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase tabular-nums"
+        >
           {creditsLabel(usage)}
         </span>
       {/if}
-      <BatteryMedium size={15} class={iconClass} />
+      <!-- The ring and the number: the shape states the reading and the number
+           states it exactly. A battery icon in one of three colours said only
+           that something was coloured. -->
+      <span
+        class="flex shrink-0 items-center gap-1.5"
+        title="Context used"
+        aria-label={boundedPercent === undefined
+          ? 'Context usage unavailable'
+          : `Context ${Math.round(boundedPercent)}% used`}
+      >
+        <svg viewBox="0 0 24 24" class="h-4.5 w-4.5 -rotate-90" aria-hidden="true">
+          <circle cx="12" cy="12" r={RING_RADIUS} fill="none" stroke-width="3" class={trackClass}
+          ></circle>
+          {#if boundedPercent !== undefined}
+            <circle
+              cx="12"
+              cy="12"
+              r={RING_RADIUS}
+              fill="none"
+              stroke-width="3"
+              class={ringClass}
+              stroke-dasharray={`${ringDash} ${RING_CIRCUMFERENCE}`}
+            ></circle>
+          {/if}
+        </svg>
+        {#if percentLabel}
+          <span class="text-[0.625rem] font-medium tabular-nums {ringLabelClass}"
+            >{percentLabel}</span
+          >
+        {/if}
+      </span>
     </div>
   </div>
 
@@ -286,13 +376,13 @@
         {usage?.contextUsed !== undefined
           ? `${usage.contextEstimated ? '≈' : ''}${compactCount(usage.contextUsed)}`
           : 'Unavailable'}
-        {#if usage?.contextWindow}
-          / {compactCount(usage.contextWindow)}
+        {#if displayedContextWindow}
+          / {compactCount(displayedContextWindow)}
         {/if}
       </span>
     </div>
     <div
-      class="h-1.5 overflow-hidden rounded-full bg-overlay"
+      class="h-1.5 overflow-hidden bg-overlay"
       role="progressbar"
       aria-label={usage?.contextEstimated ? 'Estimated context used' : 'Context used'}
       aria-valuemin="0"
@@ -300,20 +390,23 @@
       aria-valuenow={Math.round(boundedPercent ?? 0)}
     >
       <div
-        class={`h-full rounded-full ${fillClass} transition-[width] duration-700 ease-out`}
-        style={`width: ${boundedPercent}%`}
+        class={`h-full ${fillClass} transition-[width] duration-700 ease-out`}
+        style={`width: ${boundedPercent ?? 0}%`}
       ></div>
     </div>
-    {#if usage?.contextWindow && usage.contextUsed !== undefined}
+    {#if displayedContextWindow && usage?.contextUsed !== undefined}
       <div class="mt-2 grid grid-cols-3 gap-2 text-[0.5625rem] text-dimmed">
         <span>Used {compactCount(usage.contextUsed)}</span>
-        <span>Available {compactCount(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
-        <span>Window {compactCount(usage.contextWindow)}</span>
+        <span
+          >Available {compactCount(Math.max(0, displayedContextWindow - usage.contextUsed))}</span
+        >
+        <span>Window {compactCount(displayedContextWindow)}</span>
       </div>
     {/if}
     {#if usage?.contextEstimated}
       <p class="mt-1.5 text-[0.5625rem] text-dimmed">
-        Estimated from the composed request because this harness does not report context telemetry.
+        Approximate context usage. The selected harness may adjust it when preparing the next
+        request.
       </p>
     {/if}
     <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[0.5625rem] text-dimmed">
@@ -330,7 +423,7 @@
 
     <button
       type="button"
-      class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border text-[0.6875rem] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      class="mt-3 flex h-8 w-full items-center justify-center gap-2 border border-border text-[0.6875rem] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
       disabled={!canCompact || compacting}
       title={canCompact
         ? 'Summarize older work to free context'
@@ -338,10 +431,10 @@
       onclick={onCompact}
     >
       {#if compacting}
-        <Loader2 size={12} class="animate-spin" />
+        <CioSpinner size={12} class="animate-spin" />
         Compacting…
       {:else}
-        <Archive size={12} />
+        <CioArchive size={12} />
         Compact Work
       {/if}
     </button>
@@ -354,31 +447,39 @@
   aria-label="Context and provider usage"
   onmouseleave={onHide}
 >
+  <!-- Console usage control: a four-cell column and its number, the reading the
+       shoe carries. The cells keep the app's severity colours, so a nearly full
+       context still reads amber then red at a glance. -->
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-dimmed hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+    class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
     onmouseenter={onReveal}
     aria-label={boundedPercent === undefined
       ? 'Context usage unavailable'
       : `Context ${Math.round(boundedPercent)}% used`}
     title="Context and usage"
   >
-    <span class="relative h-3 w-7 rounded-sm border border-current p-0.5" aria-hidden="true">
-      <span
-        class={`block h-full rounded-[1px] ${fillClass}`}
-        style={`width: ${boundedPercent ?? 0}%`}
-      ></span>
-      <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
+    <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
+      {#each METER_CELLS as cell (cell)}
+        <span class="h-0.5 w-3 {cell < filledCells ? fillClass : 'bg-overlay'}"></span>
+      {/each}
     </span>
-    <span class="context-usage-label tabular-nums text-[0.625rem]">{percentLabel}</span>
+    <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
   </button>
 
+  <!-- The panel opens above the control with a gap, and that gap belongs to the
+       hover target: it is this box's own bottom padding, never a margin. A margin
+       there is a dead band the pointer crosses on its way up, and the panel closed
+       under the user's hand the moment they reached for it. Padding keeps the
+       visible offset and leaves nothing to cross outside the target. -->
   <div
-    class="invisible absolute bottom-8 right-0 z-40 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+    class="invisible absolute bottom-full right-0 z-40 w-72 pb-1.5 opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
     role="dialog"
     aria-label="Context and provider usage"
   >
-    {@render usageDetail()}
+    <div class="border border-border bg-surface p-3 shadow-lg">
+      {@render usageDetail()}
+    </div>
   </div>
 </div>
 
@@ -393,12 +494,6 @@
     }
     100% {
       transform: translateX(420%);
-    }
-  }
-
-  @container (max-width: 520px) {
-    .context-usage-label {
-      display: none;
     }
   }
 </style>

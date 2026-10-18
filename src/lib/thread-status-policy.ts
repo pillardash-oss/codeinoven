@@ -1,4 +1,4 @@
-import type { ScopeSlice, ThreadStatus } from './types'
+import type { ScopeSlice, Thread, ThreadStatus } from './types'
 import { harnessSupportsManualCompaction } from '../main/agents/harness-registry'
 
 export type ThreadStatusTone =
@@ -150,6 +150,68 @@ export const THREAD_STATUS_POLICY: Readonly<Record<ThreadStatus, ThreadStatusPol
 export const DONE_THREAD_STATUSES: readonly ThreadStatus[] = THREAD_STATUSES.filter(
   (status) => THREAD_STATUS_POLICY[status].scopeSlice === 'done'
 )
+
+/**
+ * Whether a thread may read as unread at all.
+ *
+ * Unread is reserved for a run that *finished* (`completed`) and that the user
+ * has not opened yet: the work is over, the result is waiting, and nothing else
+ * is asked of them. A failure is not unread. It is a needs-attention state, and
+ * it says so with its own mark, its own group and its own rail pill whether or
+ * not the thread was ever opened, so a red row can never hide behind the green
+ * unread dot. `interrupted` is out for the same reason (the user stopped that
+ * run on purpose), and the live, parked, retrying and spec states are not
+ * settled at all.
+ *
+ * This is the one rule. The view rail's unread count, a project row's state
+ * strip, the sidebar's rows and status groups, the scope board's Unread slice,
+ * and the "Mark as unread" action all read it, so no surface can call a thread
+ * unread while another calls it failed.
+ */
+export function canMarkThreadUnread(status: ThreadStatus): boolean {
+  return status === 'completed'
+}
+
+/**
+ * Whether this thread is parked on `spec` for an independent-audit report rather
+ * than for a specification.
+ *
+ * A ready report parks its thread on `spec`, exactly as a ready specification
+ * does, because both are finished artifacts waiting on the user. The audit's own
+ * card is the announcement for that landing ("Independent audit ready", naming
+ * the auditor's finding), so every surface that would announce "a spec is ready"
+ * for the status stands down for this one: two notices for one moment read as
+ * two events. The spec-based implementation audit keeps the generic notice   it
+ * has no card of its own.
+ *
+ * `auditState` is part of the test on purpose: dismissing the report clears it
+ * while the status stays `spec`, and from that moment the audit card no longer
+ * speaks for the thread.
+ */
+export function threadAwaitsIndependentAuditReview(
+  thread: Pick<Thread, 'status' | 'independentAudit' | 'auditState'>
+): boolean {
+  return (
+    thread.status === 'spec' &&
+    thread.independentAudit === true &&
+    thread.auditState === 'report_ready'
+  )
+}
+
+/**
+ * Whether a settled thread reads as unread until the user opens it.
+ *
+ * A `completed` thread the user has not read shows the unread dot and sits in
+ * the Unread slice, exactly as it did the moment the run settled. A run that
+ * failed never does: it reads as an error from the moment it settles, and stays
+ * one until the user answers it (see `canMarkThreadUnread`).
+ *
+ * `read` is the caller's resolved read state, so a surface that folds in
+ * orchestration children passes its own `effectiveRead`.
+ */
+export function settledThreadReadsUnread(thread: Pick<Thread, 'status'>, read: boolean): boolean {
+  return !read && canMarkThreadUnread(thread.status)
+}
 
 export function threadStatusPolicy(status: ThreadStatus): ThreadStatusPolicy {
   return THREAD_STATUS_POLICY[status]

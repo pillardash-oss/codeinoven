@@ -1,4 +1,12 @@
 <script lang="ts">
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import {
@@ -11,17 +19,34 @@
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import {
-    calculateThreadHoverPopoverPosition,
-    resolveThreadHoverPopoverSize,
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     threadHoverPopoverStyle
   } from '$lib/components/shared/thread-hover-popover-layout'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadIndicatorSlot from '$lib/components/threads/ThreadIndicatorSlot.svelte'
-  import type { ThreadIndicator } from '$lib/components/threads/thread-indicator'
-  import { resolveThreadIndicator } from '$lib/components/threads/thread-indicator'
+  import {
+    threadUsesEngineeringTooling,
+    type ThreadIndicator
+  } from '$lib/components/threads/thread-indicator'
+  import {
+    LIVE_RAIL_DASH_MS,
+    liveRailDashCount,
+    liveRailPaint,
+    markDrawsGlyph,
+    markRailClimbs,
+    markRailStandsLit,
+    RAIL_TRACK_INK,
+    railPaint,
+    THREAD_FOREIGN_MARK,
+    threadRailMark,
+    threadSecondaryMark,
+    threadStateMark,
+    type ThreadRowSecondary
+  } from '$lib/components/threads/thread-state-marks'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { longPress } from '$lib/long-press.svelte'
@@ -44,11 +69,11 @@
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
-  import { threadScopeBucket } from '$lib/threads/thread-scope'
+  import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { AuthoredWorkKind } from '$shared/ipc-contract'
-  import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
   import type { Thread } from '$shared/types'
   import {
     coordinatorHasActiveDelegates,
@@ -58,20 +83,9 @@
     isThreadBusy
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
-  import {
-    AppWindow,
-    Eye,
-    Check,
-    Clock,
-    GitBranch,
-    MessageCircleDashed,
-    Monitor,
-    Pin,
-    Server
-  } from '@lucide/svelte'
+
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
-  import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -88,6 +102,8 @@
     hideProjectName?: boolean
     /** Presentation-only row for searchable thread pickers. */
     picker?: boolean
+    /** Surface label for compact switcher rows. */
+    pickerBadge?: string
     /** Project icon URL to show before the status indicator. */
     projectIconUrl?: string | null
     /** Mark shown in the project-icon slot when the thread's container has no
@@ -100,6 +116,8 @@
     onOpen?: (t: Thread) => void
     onRename?: (t: Thread, newName: string) => Promise<void>
     onTogglePin?: (t: Thread) => void
+    onBookmark?: (t: Thread) => void
+    showBookmark?: boolean
     onDelete?: (t: Thread) => Promise<void>
     onFork?: (t: Thread) => void
     /** Optional callback fired when the rename input changes (for move-on-edit behaviour). */
@@ -115,6 +133,7 @@
     detailed = false,
     hideProjectName = false,
     picker = false,
+    pickerBadge,
     projectIconUrl = null,
     projectIconGlyph = null,
     showChangeScope = true,
@@ -122,6 +141,8 @@
     onOpen = () => {},
     onRename = async () => {},
     onTogglePin = () => {},
+    onBookmark = () => {},
+    showBookmark = false,
     onDelete = async () => {},
     onFork = () => {},
     onRenameInputChange,
@@ -165,7 +186,7 @@
     const ghost = document.createElement('div')
     ghost.textContent = label
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     e.dataTransfer!.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -205,11 +226,13 @@
   /** The ellipsis was revealed by a long press, so closing the menu hides it again. */
   let touchRevealed = $state(false)
   let showMenu = $state(false)
-  let showPopover = $state(false)
-  let rowEl = $state<HTMLDivElement>()
-  let popoverEl = $state<HTMLDivElement>()
-  let popoverPos = $state({ x: 0, y: 0 })
-  let popoverTimer: ReturnType<typeof setTimeout> | undefined
+  /** The row's info popover, shared with every other surface that shows one. */
+  const popover = createThreadHoverPopover({
+    isBlocked: () => showMenu,
+    onDismiss: () => {
+      hovered = false
+    }
+  })
   /** Debounces the message warmup so a fast mouse pass never fires an IPC call. */
   let preloadTimer: ReturnType<typeof setTimeout> | undefined
   const PRELOAD_DEBOUNCE_MS = 200
@@ -305,23 +328,21 @@
   })
 
   const captureRowElement: Attachment<HTMLDivElement> = (element) => {
-    rowEl = element
-    return () => {
-      if (rowEl === element) rowEl = undefined
-    }
+    popover.setRow(element)
+    return () => popover.setRow(undefined)
   }
 
   const capturePopoverElement: Attachment<HTMLDivElement> = (element) => {
-    popoverEl = element
-    return () => {
-      if (popoverEl === element) popoverEl = undefined
-    }
+    popover.setPopover(element)
+    return () => popover.setPopover(undefined)
   }
 
   const actionsMenu = createThreadActionsMenu({
     getThread: () => thread,
     onRename: (t, newName) => onRename(t, newName),
     onTogglePin: (t) => onTogglePin(t),
+    onBookmark: (t) => onBookmark(t),
+    showBookmark: () => showBookmark,
     onFork: (t) => onFork(t),
     onDelete: (t) => onDelete(t),
     onDeleteError: (error) =>
@@ -362,8 +383,6 @@
     | 'spec'
     | 'approval'
     | 'error'
-    | 'scheduled'
-    | 'queued'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot).
    *  Live dictation counts too: from the first mic press through transcription
@@ -374,14 +393,34 @@
       speechController.isCapturingThread(thread.id)
   )
 
-  /** Queued messages get a clock instead of the draft dot, including during live work. */
+  /** Whether the user is typing into this thread's composer right now.
+   *
+   *  Deliberately narrower than `isDraft`: that one also reports a message
+   *  already queued, and the two must stay apart or the row could not tell
+   *  "waiting to send" from "typing now" -- which is the whole reason the
+   *  secondary slot can say which of the two happened last. Live dictation counts
+   *  too: from the first mic press through transcription the user is drafting with
+   *  their voice, so the row reads draft before the transcript reaches the
+   *  composer. */
+  let isTyping = $derived(
+    rendererRecovery.hasTypedContent(thread.projectId, thread.id) ||
+      speechController.isCapturingThread(thread.id)
+  )
+
+  /** Whether a message is waiting behind the thread's own run. */
   let hasQueuedMessage = $derived(
     rendererRecovery.queuedMessageCount(thread.projectId, thread.id) > 0
   )
 
-  /** A message scheduled behind other threads also gets the working-colour clock. */
-  let hasStartAfterPending = $derived(
-    rendererRecovery.hasStartAfterPending(thread.projectId, thread.id)
+  /** Whether the message that will send next is waiting on other threads.
+   *
+   *  The head of the queue is what happens next, so a plain message ahead of a
+   *  start-after keeps the plain clock: it still sends the moment the run stops.
+   *  Only a head that cannot go without another thread finishing reads as
+   *  scheduled. */
+  let queueHeadWaits = $derived(
+    (rendererRecovery.queuedMessageFor(thread.projectId, thread.id)?.startAfterThreads.length ??
+      0) > 0
   )
 
   /** Orchestration worker/auditor threads stay silent: never presented as unread.
@@ -450,37 +489,46 @@
    * playback, so the speech candidates cannot both be live; the speech
    * controller reports when each began and computer use reports the agent's
    * most recent action.
+   *
+   * The durable Engineering mark is not an action in flight. It is pushed last
+   * with the oldest candidate time, so any live action takes the slot and the
+   * mark returns the moment the slot is free.
    */
-  let indicator = $derived.by((): ThreadIndicator | null => {
-    const candidates: Array<{ indicator: ThreadIndicator; at: number }> = []
-    const speechAt = speechController.threadIndicatorActionAt(thread.id) ?? 0
-    if (isRecording) candidates.push({ indicator: 'recording', at: speechAt })
-    if (isSpeaking) candidates.push({ indicator: 'speaking', at: speechAt })
+  /** Every live action on this thread right now, each kept rather than ranked
+   *  away.
+   *
+   *  The old row resolved these to one winner because it had one status slot and
+   *  a spinner, a clock and a vendor mark all had to share it. The state now
+   *  lives on the rail, so the row can afford to say all of it: a thread that is
+   *  recording while a browser tab of its own plays sound shows both, and a
+   *  thread that is engineering while recording keeps its engineering mark. */
+  let activeIndicators = $derived.by((): ThreadIndicator[] => {
+    const live: ThreadIndicator[] = []
+    if (isRecording) live.push('recording')
+    if (isSpeaking) live.push('speaking')
     if (isTranscribing) {
-      candidates.push({
-        indicator:
-          voiceSendStage === 'steer'
-            ? 'transcribing-steer'
-            : voiceSendStage === 'send'
-              ? 'transcribing-send'
-              : 'transcribing',
-        at: speechAt
-      })
+      live.push(
+        voiceSendStage === 'steer'
+          ? 'transcribing-steer'
+          : voiceSendStage === 'send'
+            ? 'transcribing-send'
+            : 'transcribing'
+      )
     }
-    if (isUsingComputerUse) {
-      candidates.push({ indicator: 'computer-use', at: pipState.threadActivityAt(thread.id) })
-    }
-    if (browserAudioAt !== null) {
-      candidates.push({ indicator: 'browser-audio', at: browserAudioAt })
-    }
-    return resolveThreadIndicator(candidates)
+    if (isUsingComputerUse) live.push('computer-use')
+    if (browserAudioAt !== null) live.push('browser-audio')
+    // The Engineering mark covers both halves of the tooling: the lifecycle
+    // marker, and the independent audit, which is locked out of that lifecycle
+    // and therefore carries its own durable flags.
+    if (threadUsesEngineeringTooling(thread)) live.push('engineering')
+    return live
   })
 
   /**
-   * Sending clears the draft, which would otherwise flash the badge back to the
-   * thread's stale status before the harness confirms the working state. Hold
-   * the todo dot for a short grace after the draft clears so the transition
-   * reads as draft → (briefly todo) → working instead of draft → default.
+   * Sending clears the draft, which would otherwise flash the row back to the
+   * thread's stale status before the harness confirms the working state. Hold the
+   * draft mark for a short grace after the composer empties, so the transition
+   * reads as draft -> working instead of draft -> settled -> working.
    */
   let holdingDraft = $state(false)
 
@@ -493,7 +541,7 @@
   }
 
   $effect(() => {
-    if (isDraft) {
+    if (isTyping) {
       holdDraftDot()
       return
     }
@@ -503,9 +551,11 @@
   })
 
   let threadState = $derived.by((): ThreadState => {
+    // A failure needs the user whether or not they have opened it: unread is
+    // reserved for a completed run nobody has opened
+    // (`settledThreadReadsUnread`), so a failed row wears its error mark from the
+    // moment it settles and the green unread dot can never hide it.
     if (thread.status === 'failed') return 'error'
-    if (hasQueuedMessage && thread.status !== 'awaiting_approval' && thread.status !== 'spec')
-      return 'queued'
     if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
@@ -514,31 +564,171 @@
     // of the badge) but shows the unread dot instead of swallowing it.
     // Last action wins between the side chat and the parent thread's own turn:
     // a primary turn that settled after the side chat landed keeps the green
-    // unread dot; otherwise the side-chat unread shows in the working colour
-    // (the temporary-chat icon colour) so it never masquerades as an unread
-    // primary thread. Opening the thread reads the primary turn but leaves the
-    // side chat unread, so the working-coloured dot returns and stays until the
-    // side-chat panel is focused (or the chat expires or is closed).
+    // unread dot, and otherwise the side-chat unread keeps that same dot under
+    // its own state. The marker that says "side chat" is the row's dashed glyph,
+    // so no colour has to carry that meaning. Opening the thread reads the
+    // primary turn but leaves the side chat unread, so the dot returns and stays
+    // until the side-chat panel is focused (or the chat expires or is closed).
     if (hasTemporaryChatUnread) {
       if (!effectiveRead && primarySettledAt > temporaryChatUnreadAt) return 'unread'
       return 'temporary-unread'
     }
-    // A scheduled message (queued behind other threads) reads as pending work
-    // and shows the timer badge   it is a draft in the sorting/pinning sense but
-    // not something still being typed.
-    if (hasStartAfterPending) return 'scheduled'
-    // Drafting (or the brief post-send grace) shows the todo dot.
-    if (holdingDraft) return 'todo'
-    if (isDraft) return 'todo'
     if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
-    if (!effectiveRead) return 'unread'
+    if (settledThreadReadsUnread(thread, effectiveRead)) return 'unread'
     if (thread.status === 'completed') return 'completed'
     if (isBusyIndicator) return 'working'
     if (thread.status === 'created') return 'todo'
     return 'read'
   })
+
+  /** The word a state that wants the user shows in the detailed row's end slot,
+   *  or null when the state is quiet. Four states want them: parked on the user
+   *  (approval), a failed run, a spec ready for review, and a run paused on a
+   *  retry. Every other state keeps its age. */
+  let stateWord = $derived.by((): { label: string; color: string } | null => {
+    switch (threadState) {
+      case 'approval':
+        return { label: 'Your call', color: 'var(--color-warning)' }
+      case 'error':
+        return { label: 'Failed', color: 'var(--color-danger)' }
+      case 'spec':
+        return { label: 'Spec ready', color: 'var(--color-thread-spec)' }
+      case 'working-paused':
+        return { label: 'Retrying', color: 'var(--color-warning)' }
+      default:
+        return null
+    }
+  })
+
+  /** The secondary status riding this row, if any: what is waiting on the thread
+   *  rather than what the thread is doing.
+   *
+   *  The slot is flexible and the last action wins. Typing takes it, sending
+   *  hands it to the queue, and typing the next message takes it back. Typing is
+   *  always the newest action, so it outranks a message already queued behind the
+   *  run; the one case where it does not is a thread nothing has been sent into,
+   *  whose primary status already is that draft. */
+  let secondaryStatus = $derived.by((): ThreadRowSecondary | null => {
+    // Typing first, and the `todo` guard is the one case where the primary status
+    // already says draft: a thread nothing has been sent into, so there is no
+    // second status for the row to report.
+    if (isTyping && threadState !== 'todo') return 'draft'
+    if (hasQueuedMessage) return queueHeadWaits ? 'scheduled' : 'queued'
+    // The post-send grace, which only covers the gap the queue and a confirmed
+    // working state have not filled yet.
+    if (holdingDraft && threadState !== 'todo') return 'draft'
+    return null
+  })
+
+  /** The thread's own status, which the rail carries: the mark that stays true
+   *  whatever is waiting above it.
+   *
+   *  A run another instance owns replaces the working mark outright. It is the
+   *  same state from this window's point of view (the thread is working), but the
+   *  glyph has to say where the work is, because this window holds no stream and
+   *  no stop control for it. Every other state is the thread's own and keeps its
+   *  mark. */
+  let primaryMark = $derived(isForeignRun ? THREAD_FOREIGN_MARK : threadStateMark(threadState))
+
+  /** The secondary status's mark, or null when nothing is waiting. */
+  let secondaryMark = $derived(
+    secondaryStatus === null ? null : threadSecondaryMark(secondaryStatus)
+  )
+
+  /** The glyph: the secondary status when something is waiting, else the primary
+   *  one. The thread's own state never leaves the row, because the rail beneath
+   *  still carries it. */
+  let glyphMark = $derived(secondaryMark ?? primaryMark)
+
+  /** The glyph component itself, so the markup renders whichever mark owns the
+   *  slot directly (a capitalised value is a dynamic component in Svelte). */
+  let GlyphMarkIcon = $derived(glyphMark.icon)
+
+  /** What the whole mark is called: both statuses when the row carries two, so
+   *  assistive technology hears the thread's state and not only its glyph. */
+  let markLabel = $derived(
+    secondaryMark ? `${primaryMark.label} · ${secondaryMark.label}` : primaryMark.label
+  )
+
+  /** The mark whose spine this row draws, or null when it draws no rail.
+   *
+   *  The thread's own state has first claim, and a settled thread has no rail of its
+   *  own. A draft waiting on a settled thread takes the rail over, so a done thread
+   *  the user is typing into shows the spine under its pen; a queued message or a
+   *  start-after draws no rail of its own, so those rows keep their quiet glyph
+   *  alone. `threadRailMark` owns that rule, in the vocabulary beside the marks. */
+  let railMark = $derived(threadRailMark(primaryMark, secondaryMark))
+
+  /** Whether this row draws a rail under its glyph at all. A settled thread with
+   *  nothing waiting on it does not: with nothing left to do it should attract no
+   *  attention, and its glyph stands alone, vertically centred. */
+  let spineRailVisible = $derived(railMark !== null)
+
+  /** Whether the state's glyph is drawn above the rail at all.
+   *
+   *  Live work drops it: a rail whose dashes come alight says "running" every
+   *  cycle, so the working mark spends no height on a pickaxe that would only
+   *  repeat it, and the rail takes the height the glyph held. A secondary status
+   *  keeps the slot, because what is waiting on the thread is not what the rail is
+   *  showing. */
+  let spineGlyphVisible = $derived(markDrawsGlyph(primaryMark, secondaryMark !== null))
+
+  /** Whether the rail's light climbs it: work this window is driving, lighting one
+   *  whole dash at a time from the bottom to the top. */
+  let spineRailClimbs = $derived(railMark !== null && markRailClimbs(railMark))
+
+  /** Whether the rail stands full instead: every dash lit, nothing moving. Work
+   *  another instance is driving, or a draft waiting on a settled thread. */
+  let spineRailStandsLit = $derived(railMark !== null && markRailStandsLit(railMark))
+
+  /** Whether this rail is drawn on the counted live grid rather than the mark's own
+   *  still shape: the climbing light, the standing full rail and a waiting draft are
+   *  the same spine seen different ways, so they share its dashes. */
+  let spineRailOnLiveGrid = $derived(spineRailClimbs || spineRailStandsLit)
+
+  /** The live rail's height as laid out, which is the only thing that decides how
+   *  many dashes it has room for. A rail that has not been measured yet reports
+   *  nothing here and the count answers with the fullest column, so the first frame
+   *  is drawn where the row is about to land. */
+  let spineRailHeight = $state(0)
+
+  /** How many dashes this rail's height has room for: the grid the row paints and
+   *  the steps the light climbs it in, from one decision. */
+  let spineDashCount = $derived(liveRailDashCount(spineRailHeight))
+
+  /** The rail's paint: the rail mark's own colour, in the shape its dash names,
+   *  which is the second carrier beside the hue. The rail is the same width as the
+   *  glyph above it, so the mark reads as one column. */
+  let spineRailPaint = $derived(railMark === null ? '' : railPaint(railMark))
+
+  /** The light on a live rail, or the full face of one that stands: whole dashes at
+   *  full strength, on the grid the reveal animation steps through, so a step lights
+   *  a dash and never leaves a stretched half dash behind it. Both wear the same
+   *  paint, which is what makes them read as one spine. */
+  let spineLivePaint = $derived(railMark === null ? '' : liveRailPaint(railMark, spineDashCount))
+
+  /** The track a live rail lights along: the same dashes on the same grid, in a
+   *  fraction of the state's colour, so the spine keeps its full height and its
+   *  shape between one lit dash and the next. */
+  let spineTrackPaint = $derived(
+    railMark === null ? '' : liveRailPaint(railMark, spineDashCount, RAIL_TRACK_INK)
+  )
+
+  /** The row's own ground, when the state wants the user. A tint is the second
+   *  carrier beside the rail, so approval and error are findable from across the
+   *  sidebar. It is written as an inline style, the same way the scope chip draws
+   *  its mixed border, rather than as an arbitrary utility class: this keeps the
+   *  colour honest against the theme tokens and adds no class the build has to
+   *  discover. It never pulses. */
+  let rowTintStyle = $derived(
+    threadState === 'approval'
+      ? 'background: color-mix(in srgb, var(--color-warning) 8%, transparent);'
+      : threadState === 'error'
+        ? 'background: color-mix(in srgb, var(--color-danger) 8%, transparent);'
+        : ''
+  )
 
   /** Title colour, shared by every row layout. */
   let titleClass = $derived(
@@ -551,10 +741,11 @@
 
   /** Row padding and line rhythm. The detailed row keeps its own lines tight
    *  and spends its space between rows instead, so consecutive entries read as
-   *  separate cards rather than one tall block. */
+   *  separate cards rather than one tall block. Its left padding also clears the
+   *  state rail, which runs the full height of the row. */
   let rowLayoutClass = $derived(
     detailed
-      ? 'gap-1 px-2.5 py-1.5 mb-3'
+      ? 'gap-1 py-1.5 pl-[1.625rem] pr-2.5 mb-3 relative'
       : compact
         ? 'gap-1 px-2 py-1 mb-1'
         : 'gap-1 px-2 py-1.5 mb-1'
@@ -576,6 +767,12 @@
 
   let scopeBucket = $derived(threadScopeBucket(thread))
 
+  /** Whether the scope chip shows at all. The detailed row draws it on its
+   *  context line, beside the project name; the one/two-line row keeps it on its
+   *  footer. `hideScope` is the caller saying the surrounding view is already
+   *  scoped. */
+  let scopeVisible = $derived(scopeBucket !== null && !hideScope)
+
   /** Whether the thread runs on an Oven rather than this computer. */
   let isRemote = $derived(
     Boolean(thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID)
@@ -595,11 +792,13 @@
     if (isRemote) void ovens.ensure()
   })
 
-  /** The authored-work session this thread is in, or null when it is in none.
-   *  Drawn from the persisted thread field: main writes it the moment the thread
-   *  enters a session and pushes the row over `thread:updated`, so no scan and no
-   *  per-row round trip stands behind the marker. */
-  let authoredWorkKind = $derived(thread.authoredWorkKind ?? null)
+  /** The authored-work sessions this thread has entered, in the canonical order
+   *  the markers are drawn in. Drawn from the persisted set: main records every
+   *  session the thread enters, so a thread that designed something and later cut
+   *  a video about it draws both marks rather than the last one over the first. */
+  let authoredWorkKinds = $derived(
+    thread.authoredWorkKinds ?? (thread.authoredWorkKind ? [thread.authoredWorkKind] : [])
+  )
 
   let hasNote = $derived(threadNotesState.has(thread.id))
 
@@ -607,7 +806,7 @@
    *  thread always shows it: the Oven and the branch belong on every row of it,
    *  and a temporary chat's mark lives on that line. */
   let showBottomRow = $derived(
-    authoredWorkKind !== null ||
+    authoredWorkKinds.length > 0 ||
       scopeBucket !== null ||
       harnessIds.length > 1 ||
       hasNote ||
@@ -616,25 +815,27 @@
       branch !== null
   )
 
-  /** The detailed row's own project line, shown only when it has an icon or a
-   *  name to carry. A project's own thread list hides the name and passes no
-   *  icon, so that list skips the line and its rows stay two lines tall. */
+  /** The detailed row's own context line, shown only when it has something to
+   *  carry: a project icon, a project name, or the scope chip. A project's own
+   *  thread list hides the name and brings no icon, but it still shows the scope,
+   *  so the line must survive on the scope alone or the chip would be lost. */
   let showProjectLine = $derived(
-    Boolean(projectIconUrl || projectIconGlyph || (projectName && !hideProjectName))
+    Boolean(projectIconUrl || projectIconGlyph || (projectName && !hideProjectName) || scopeVisible)
   )
 
-  /** Whether the detailed row has anything for its footer line besides the
-   *  last-edited time. With nothing else to show, the time rides on the primary
-   *  line and the row stays a single line. When the project line is shown it
-   *  carries the Oven/branch marks instead, so they no longer count here. */
+  /** Whether the detailed row has anything for its meta line besides the
+   *  last-edited time: what the thread ran with, where it ran, the branch and
+   *  every marker it carries. With none of those, the time rides on the primary
+   *  line and the row stays two lines tall. The scope is not counted here: it
+   *  lives on the context line above, so a thread whose only extra is a scope
+   *  does not open a meta line just to fill it. */
   let hasRowExtras = $derived(
     harnessIds.length > 0 ||
-      (scopeBucket !== null && !hideScope) ||
-      (!showProjectLine && (branch !== null || isRemote)) ||
+      branch !== null ||
+      isRemote ||
       hasNote ||
       hasTemporaryChat ||
-      authoredWorkKind !== null ||
-      indicator !== null
+      authoredWorkKinds.length > 0
   )
 
   let scopeColor = $derived(
@@ -649,23 +850,25 @@
   })
 
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
-  let pinVisible = $derived(hovered)
+  let pinVisible = $derived(hovered || effectivePinned)
 
-  /** Tooltip for the state badge: the only place a collapsed row can explain
-   *  itself, since the badge is a bare dot or spinner. */
+  /** Tooltip for the row's one visible mark in the dot layouts: the only place a
+   *  collapsed row can explain itself, since the badge is a bare dot or icon.
+   *  Both statuses are named when the row carries two, so a collapsed row never
+   *  hides the thread's own state behind the thing waiting on it. */
   let badgeTitle = $derived.by((): string => {
-    if (threadState === 'queued')
-      return isWorking ? 'Working · Queued' : isRetryPaused ? 'Waiting to retry · Queued' : 'Queued'
-    if (isForeignRun) return 'Running in another instance'
-    if (isRetryPaused || isWorking) return stageLabel
-    if (thread.status === 'spec') return 'Spec ready'
-    // A parked thread says what it waits for in the app's own words, and says it
-    // for as long as the status holds   opening or reading the row never
-    // changes it.
-    if (threadState === 'approval') return threadStatusPolicy(thread.status).label
-    if (threadState === 'scheduled') return 'Scheduled'
-    if (threadState === 'temporary-unread') return 'Temporary chat unread'
-    return threadState
+    const primary = isForeignRun
+      ? 'Running in another instance'
+      : isRetryPaused || isWorking
+        ? stageLabel || primaryMark.label
+        : thread.status === 'spec'
+          ? 'Spec ready'
+          : threadState === 'approval'
+            ? threadStatusPolicy(thread.status).label
+            : threadState === 'temporary-unread'
+              ? 'Temporary chat unread'
+              : primaryMark.label
+    return secondaryMark ? `${primary} · ${secondaryMark.label}` : primary
   })
 
   /** Maps ThreadState to StatusBadge props   all colours flow through the
@@ -677,9 +880,15 @@
       kind?: 'completed' | 'attention' | 'error'
       variant?: 'dot' | 'spinner' | 'icon'
       icon?: Component | null
-      animated?: boolean
       color?: string
     } | null => {
+      // The dot layouts have one visible mark, so a wait takes it, exactly as it
+      // takes the glyph in the detailed row.
+      if (secondaryMark) {
+        return secondaryStatus === 'draft'
+          ? { stage: 'todo' }
+          : { variant: 'icon', stage: 'working', icon: secondaryMark.icon }
+      }
       switch (threadState) {
         case 'unread':
           return { stage: 'unread' }
@@ -688,24 +897,23 @@
         case 'working':
           // Work owned by another instance keeps the working colour but gets a
           // distinct, still icon: a spinner here would promise live output this
-          // window never receives.
+          // window never receives. The glyph comes from the primary mark, which
+          // is what the spine draws, so the badge and the rail can never name
+          // the same state with two different icons.
           return isForeignRun
-            ? { variant: 'icon', icon: AppWindow, tone: 'working' }
+            ? { variant: 'icon', icon: primaryMark.icon, tone: 'working' }
             : { variant: 'spinner', stage: 'working' }
-        case 'queued':
-        case 'scheduled':
-          return { variant: 'icon', stage: 'working', icon: Clock }
         case 'working-paused':
           return { variant: 'spinner', tone: 'working-paused' }
         case 'spec':
           return { stage: 'spec' }
         case 'approval':
-          return { kind: 'attention', animated: true }
+          return { kind: 'attention' }
         case 'temporary-unread':
-          // Same circular dot as the primary unread badge but in the
-          // temporary-chat colour so the user reads it as "side chat waiting",
-          // not as an unread primary thread.
-          return { stage: 'unread', color: 'var(--color-temporary-chat)' }
+          // The same circular unread dot as a primary thread: what is waiting, not
+          // which kind of thing is waiting. The row's own dashed side-chat marker
+          // names the side chat, so no second colour does the talking.
+          return { stage: 'unread' }
         case 'error':
           return { kind: 'error' }
         default:
@@ -715,62 +923,29 @@
     }
   )
 
-  /** A busy row's own pulse is the fallback animation for a state whose badge
-   *  cannot animate itself: a queued thread shows a static clock, so the row
-   *  pulses. When the badge already spins (the local working spinner) the pulse
-   *  adds nothing, and animating a whole row subtree is the expensive part.
-   *
-   *  A busy row never paints a working/warning background tint. The badge is the
-   *  authority on the thread's state (spinner, clock, or another instance's
-   *  icon), and selecting the thread is the only thing that changes a row's
-   *  background. A tinted working row reads as "this is the open thread" at a
-   *  glance when it is not, so the tint was removed on purpose. A retry-paused
-   *  or foreign run stays static for the same reason: its badge already carries
-   *  the state. */
-  let rowPulses = $derived(
-    isBusyIndicator && !isRetryPaused && !isForeignRun && badgeProps?.variant !== 'spinner'
-  )
+  /** A busy row never paints a working/warning background tint and never
+   *  pulses. The badge is the authority on the thread's state (spinner, clock,
+   *  or another instance's icon), so selecting the thread is the only thing
+   *  that changes a row's background. A tinted working row reads as "this is
+   *  the open thread" at a glance when it is not, and a running pulse is a
+   *  frame cost for as long as the state lasts, so both were removed on
+   *  purpose. */
 
   // ─── Hover interactions ──────────────────────────────────────────────────
 
-  async function revealPopover(): Promise<void> {
-    if (!rowEl || showMenu || !hovered) return
-
-    const size = resolveThreadHoverPopoverSize()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      size.width,
-      size.height
-    )
-    showPopover = true
-    await tick()
-
-    if (!rowEl || !popoverEl || showMenu || !hovered) return
-    const popoverRect = popoverEl.getBoundingClientRect()
-    popoverPos = calculateThreadHoverPopoverPosition(
-      rowEl.getBoundingClientRect(),
-      popoverRect.width,
-      popoverRect.height
-    )
-  }
-
   function onRowEnter(): void {
     hovered = true
-    clearTimeout(popoverTimer)
+    popover.enter()
     // Warm the cache early   before the popover (550ms)   so the click path
     // into the thread is already fast by the time the user acts.
     clearTimeout(preloadTimer)
     preloadTimer = setTimeout(preloadMessages, PRELOAD_DEBOUNCE_MS)
-    popoverTimer = setTimeout(() => {
-      void revealPopover()
-    }, 550)
   }
 
   function onRowLeave(): void {
     hovered = false
-    clearTimeout(popoverTimer)
+    popover.leave()
     clearTimeout(preloadTimer)
-    showPopover = false
   }
 
   /**
@@ -780,8 +955,7 @@
   function openActionsByTouch(): void {
     touchRevealed = true
     hovered = true
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 
@@ -789,8 +963,7 @@
   function openContextMenu(e: MouseEvent): void {
     e.preventDefault()
     e.stopPropagation()
-    showPopover = false
-    clearTimeout(popoverTimer)
+    popover.hide()
     showMenu = true
   }
 </script>
@@ -801,13 +974,13 @@
       role="img"
       class="flex shrink-0 items-center text-accent"
       title="Peek open in this thread"
-      aria-label="Peek open in this thread"><Eye size={12} /></span
+      aria-label="Peek open in this thread"><CioEye size={12} /></span
     >
   {/if}
 {/snippet}
 
-{#snippet authoredWorkMarker(kind: AuthoredWorkKind | null)}
-  {#if kind}
+{#snippet authoredWorkMarker(kinds: readonly AuthoredWorkKind[])}
+  {#each kinds as kind (kind)}
     {@const WorkIcon = AUTHORED_WORK_ICON_BY_KIND[kind]}
     <span
       class="flex shrink-0 items-center text-muted"
@@ -816,20 +989,21 @@
     >
       <WorkIcon size={11} strokeWidth={1.8} aria-hidden="true" />
     </span>
-  {/if}
+  {/each}
 {/snippet}
 
 {#snippet temporaryChatMarker()}
   {#if hasTemporaryChat}
     <!-- The context sidebar's temporary-chat tab mark, carried onto the row so a
-         side chat is visible from the list that spawned it. -->
+         side chat is visible from the list that spawned it. It keeps the row's
+         neutral icon colour: the dashed circle is the mark, never a hue. -->
     <span
-      class="flex shrink-0 items-center text-temporary-chat"
+      class="flex shrink-0 items-center text-muted"
       role="img"
       aria-label={temporaryChatLabel}
       title={temporaryChatLabel}
     >
-      <MessageCircleDashed size={11} strokeWidth={2} aria-hidden="true" />
+      <CioTemporaryChat size={11} strokeWidth={2} aria-hidden="true" />
     </span>
   {/if}
 {/snippet}
@@ -853,9 +1027,13 @@
         />
       {/if}
       {#if scopeBucket.pinned}
-        <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
+        <CioPin size={8} class="shrink-0 text-accent" aria-hidden="true" />
       {/if}
-      <span class="min-w-0 truncate">{scopeBucket.name}</span>
+      <!-- The scope is shortened at its own punctuation before the chip ever
+           truncates, so a long name keeps its distinguishing head instead of
+           spending the chip's width on a prefix several scopes share. The full
+           name stays in the title. -->
+      <span class="min-w-0 truncate">{abbreviatedScopeName(scopeBucket.name)}</span>
     </span>
   {/if}
 {/snippet}
@@ -876,13 +1054,12 @@
           color={badgeProps.color}
           variant={badgeProps.variant ?? 'dot'}
           icon={badgeProps.icon}
-          animated={badgeProps.animated}
           size="md"
           title={badgeTitle}
         />
       {:else}
         <span
-          class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+          class="h-2 w-2 border border-border-strong bg-transparent"
           aria-label={threadState}
           title={threadState}
         ></span>
@@ -891,7 +1068,7 @@
     <span
       role="button"
       tabindex={-1}
-      class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
+      class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
         ? 'opacity-100'
         : 'pointer-events-none opacity-0'}"
       aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
@@ -908,21 +1085,24 @@
         }
       }}
     >
-      <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
+      {#if thread.bookmarked}<CioBookmark size={11} class="text-accent" />{:else}<CioPin
+          size={11}
+          class={effectivePinned ? 'text-accent' : 'text-dimmed'}
+        />{/if}
     </span>
   </span>
 {/snippet}
 
 {#if picker}
   <div
-    class="flex min-h-11 w-full flex-col gap-1 px-2.5 py-1.5 text-left transition-colors {selected
-      ? 'bg-selected'
-      : ''}"
+    class="flex w-full flex-col justify-center gap-1 px-2.5 py-1.5 {compact
+      ? 'h-9'
+      : 'min-h-11'} text-left transition-colors {selected ? 'bg-selected' : ''}"
     title={displayTitle}
   >
     <span class="flex w-full min-w-0 items-center gap-2">
       {#if projectIconUrl}
-        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
       {:else if projectIconGlyph}
         {@const ContainerIcon = projectIconGlyph}
         <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
@@ -938,13 +1118,12 @@
             color={badgeProps.color}
             variant={badgeProps.variant ?? 'dot'}
             icon={badgeProps.icon}
-            animated={badgeProps.animated}
             size="md"
             title={badgeTitle}
           />
         {:else}
           <span
-            class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+            class="h-2 w-2 border border-border-strong bg-transparent"
             aria-label={threadState}
             title={threadState}
           ></span>
@@ -960,9 +1139,11 @@
         {displayTitle}
       </span>
       {@render peekIndicator()}
-      {#if !showBottomRow}
-        {#if indicator}
-          <ThreadIndicatorSlot {indicator} />
+      {#if compact || !showBottomRow}
+        {#if activeIndicators.length > 0}
+          {#each activeIndicators as live (live)}
+            <ThreadIndicatorSlot indicator={live} />
+          {/each}
         {:else if isBusyIndicator && currentModelProviderName}
           <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
             <VendorIcon
@@ -985,12 +1166,17 @@
           />
         </span>
       {/if}
+      {#if pickerBadge}
+        <StatusPill
+          ><span class={selected ? 'text-accent' : undefined}>{pickerBadge}</span></StatusPill
+        >
+      {/if}
       {#if selected}
-        <Check size={13} class="shrink-0 text-primary" />
+        <CioCheck size={13} class="shrink-0 text-primary" />
       {/if}
     </span>
 
-    {#if showBottomRow}
+    {#if showBottomRow && !compact}
       <!-- Scope is the track that gives way: the harness track keeps its icons
            (`max-content` minimum) and the marks track keeps its own content, so
            a crowded row narrows the scope instead of overlapping it. -->
@@ -1022,7 +1208,7 @@
               {#if oven?.iconUrl}
                 <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
               {:else}
-                <Server size={11} class="shrink-0" />
+                <CioServer size={11} class="shrink-0" />
               {/if}
             </span>
           {/if}
@@ -1031,7 +1217,7 @@
               class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
               title={`Branch: ${branch}`}
             >
-              <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+              <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
               <span>{branchLabel}</span>
             </span>
           {/if}
@@ -1044,10 +1230,11 @@
               <ThreadNoteIcon size={11} />
             </span>
           {/if}
-          {@render authoredWorkMarker(authoredWorkKind)}
-          {#if indicator}
-            <ThreadIndicatorSlot {indicator} />
-          {:else}
+          {@render authoredWorkMarker(authoredWorkKinds)}
+          {#each activeIndicators as live (live)}
+            <ThreadIndicatorSlot indicator={live} />
+          {/each}
+          {#if activeIndicators.length === 0}
             <span class="whitespace-nowrap text-[0.625rem] text-dimmed">
               {formatCompactAge(thread.lastActivity)}
             </span>
@@ -1089,17 +1276,136 @@
   <button
     class="relative flex w-full flex-col text-left transition-colors {rowLayoutClass} {selected
       ? 'bg-selected'
-      : `${rowPulses ? 'animate-pulse ' : ''}hover:bg-elevated`}"
+      : 'hover:bg-elevated'}"
+    style={rowTintStyle}
     title={displayTitle}
     aria-current={selected ? 'true' : undefined}
     onpointerdown={() => preloadMessages()}
     onclick={() => {
-      showPopover = false
-      clearTimeout(popoverTimer)
+      popover.hide()
       onOpen(thread)
     }}
     oncontextmenu={openContextMenu}
   >
+    {#if detailed}
+      <!-- State mark: one column holding the pin, then the glyph, then the rail.
+           The rail is the thread's primary status and always speaks for the
+           thread itself; the glyph above it is the secondary status, the thing
+           waiting on the thread, and falls back to the primary when nothing
+           waits. Both are one centred column, so the title's gutter stays flush
+           and even.
+           A settled thread draws no rail at all: with nothing left to do it
+           should attract no attention, so its row shows the glyph alone.
+           While work is running the rail is live: its dashes light from the
+           bottom of the column to the top, one whole dash at a time, and the
+           working mark drops its own glyph for it, so the column is the pin and
+           then one tall column of dashes coming alight. The state reads as work
+           in progress rather than as a pictogram describing it.
+           The pin is a real control at the top of the column, lit while the
+           pointer is on the row or while the thread is pinned, so pinning is
+           never hidden behind the context menu alone. -->
+      <span
+        class="pointer-events-none absolute inset-y-0 left-0 flex w-[1.125rem] flex-col items-center {spineRailVisible
+          ? ''
+          : 'justify-center'}"
+      >
+        <!-- A role="button" span, not a real <button>: the whole row is one, and a
+             button cannot be nested inside another. `tabindex={-1}` keeps it out of
+             the tab order for the same reason, and the row's own `thread-pin`
+             keymap binding handles the key. -->
+        <span
+          role="button"
+          tabindex={-1}
+          class="flex h-[0.875rem] w-[0.875rem] mb-1 flex-none items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
+            ? 'pointer-events-auto cursor-pointer opacity-100'
+            : 'pointer-events-none opacity-0'}"
+          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
+          aria-hidden={!pinVisible}
+          title={effectivePinned ? 'Unpin' : 'Pin'}
+          onclick={(e: MouseEvent) => {
+            e.stopPropagation()
+            onTogglePin(thread)
+          }}
+          onkeydown={(e: KeyboardEvent) => {
+            if (keymapState.matches('thread-pin', e)) {
+              e.stopPropagation()
+              onTogglePin(thread)
+            }
+          }}
+        >
+          {#if thread.bookmarked}
+            <CioBookmark size={14} class="text-thread-pinned" aria-hidden="true" />
+          {:else}<CioPin
+              size={14}
+              fill={effectivePinned ? 'currentColor' : 'none'}
+              class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
+              aria-hidden="true"
+            />{/if}
+        </span>
+        {#if spineGlyphVisible}
+          <span
+            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center"
+            style="color: {glyphMark.colour};"
+            role="img"
+            title={markLabel}
+            aria-label={markLabel}
+          >
+            <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+          </span>
+        {/if}
+        {#if spineRailVisible}
+          {#if spineRailOnLiveGrid}
+            <!-- The spine: short dashes, never more than four, on a grid that
+                 divides the rail's own box. `bind:clientHeight` is what hands the
+                 grid its count, and it is the measured height of the box, not a
+                 guess at it.
+                 Work this window drives climbs the dashes: the light is a clip
+                 stepped to the same grid, which is what keeps a step from stopping
+                 half way through a dash and stretching it. The box, the row and
+                 every row under it stay put, because only the light inside the box
+                 moves.
+                 Work another instance drives, and a draft waiting on a settled
+                 thread, stand the same dashes full: no track, no motion.
+                 The label sits on this box only when it is the row's whole mark. A
+                 row that also draws a glyph says its state there, and a second copy
+                 here would have the reader hear it twice. -->
+            <span
+              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              bind:clientHeight={spineRailHeight}
+              role={spineGlyphVisible ? undefined : 'img'}
+              title={spineGlyphVisible ? undefined : markLabel}
+              aria-label={spineGlyphVisible ? undefined : markLabel}
+            >
+              {#if spineRailClimbs}
+                <span
+                  class="absolute inset-0"
+                  style="background: {spineTrackPaint};"
+                  aria-hidden="true"
+                ></span>
+                <span
+                  class="spine-lit absolute inset-0"
+                  style="background: {spineLivePaint}; --spine-steps: {spineDashCount}; --spine-beat: {LIVE_RAIL_DASH_MS /
+                    1000}s;"
+                  aria-hidden="true"
+                ></span>
+              {:else}
+                <span
+                  class="absolute inset-0"
+                  style="background: {spineLivePaint};"
+                  aria-hidden="true"
+                ></span>
+              {/if}
+            </span>
+          {:else}
+            <span
+              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1"
+              style="background: {spineRailPaint};"
+              aria-hidden="true"
+            ></span>
+          {/if}
+        {/if}
+      </span>
+    {/if}
     <!-- Clear gradient bottom edge so a row's end is obvious even with 2-colour rows -->
     <span
       class="pointer-events-none absolute inset-x-0 bottom-0 h-px"
@@ -1112,7 +1418,7 @@
       <span class="flex w-full min-w-0 items-center gap-2">
         <!-- Project icon -->
         {#if projectIconUrl}
-          <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+          <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 object-contain" />
         {:else if projectIconGlyph}
           {@const ContainerIcon = projectIconGlyph}
           <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted">
@@ -1132,8 +1438,10 @@
         <!-- Single-line default: time rides on the top line, swapped for the
            working model's provider icon while the thread is working -->
         {#if !showBottomRow}
-          {#if indicator}
-            <ThreadIndicatorSlot {indicator} />
+          {#if activeIndicators.length > 0}
+            {#each activeIndicators as live (live)}
+              <ThreadIndicatorSlot indicator={live} />
+            {/each}
           {:else if isBusyIndicator && currentModelProviderName}
             <span
               class="flex shrink-0 items-center transition-opacity duration-150 {hovered
@@ -1215,7 +1523,7 @@
                 {#if oven?.iconUrl}
                   <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
                 {:else}
-                  <Server size={11} class="shrink-0" />
+                  <CioServer size={11} class="shrink-0" />
                 {/if}
               </span>
             {/if}
@@ -1224,7 +1532,7 @@
                 class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
                 title={`Branch: ${branch}`}
               >
-                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
+                <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
                 <span>{branchLabel}</span>
               </span>
             {/if}
@@ -1238,10 +1546,11 @@
               </span>
             {/if}
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKind)}
-            {#if indicator}
-              <ThreadIndicatorSlot {indicator} />
-            {:else}
+            {@render authoredWorkMarker(authoredWorkKinds)}
+            {#each activeIndicators as live (live)}
+              <ThreadIndicatorSlot indicator={live} />
+            {/each}
+            {#if activeIndicators.length === 0}
               <span
                 class="whitespace-nowrap text-[0.625rem] text-dimmed transition-opacity duration-150 {hovered
                   ? 'opacity-0'
@@ -1256,13 +1565,19 @@
       {/if}
     {:else}
       {#if showProjectLine}
-        <!-- Project line: which project the thread belongs to. A project's own
-             thread list skips it, since the folder above already names it. -->
-        <span class="flex w-full min-w-0 items-center gap-2">
+        <!-- Context line: which project the thread belongs to, and which slice of
+             it this thread works on. The project mark, the project name and the
+             scope all answer that one question, so they share this line, exactly
+             as the project mark and the project name already did. A project's own
+             thread list skips the name, since the folder above already names it. -->
+        <span data-thread-context-line class="flex w-full min-w-0 items-center gap-2">
           {#if projectIconUrl || projectIconGlyph}
+            <!-- The icon box exists only when there is an icon. A project's own
+                 thread list passes none, and an empty box would push the scope
+                 off the left edge it should be flush with. -->
             <span class="flex h-4 w-4 shrink-0 items-center justify-center">
               {#if projectIconUrl}
-                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 rounded object-contain" />
+                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
               {:else if projectIconGlyph}
                 {@const ContainerIcon = projectIconGlyph}
                 <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
@@ -1270,48 +1585,59 @@
             </span>
           {/if}
           {#if projectName && !hideProjectName}
-            <span class="min-w-0 truncate text-[0.6875rem] text-muted" title={projectName}
+            <!-- The name is the line's flexible track: it takes whatever room the
+                 scope leaves, so the scope lands against the row's right edge and
+                 the name gives up width first, truncating, when the two compete. -->
+            <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted" title={projectName}
               >{projectName}</span
             >
           {/if}
-          <!-- Where it runs and its branch ride on this line: the project line
-               has the room the footer does not. -->
-          <span class="ml-auto flex shrink-0 items-center justify-end gap-1.5">
-            <span
-              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
-              title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-              aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-            >
-              {#if isRemote}
-                {#if oven?.iconUrl}
-                  <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
-                {:else}
-                  <Server size={11} class="shrink-0" />
-                {/if}
-              {:else}
-                <Monitor size={10} class="shrink-0" aria-hidden="true" />
-              {/if}
-            </span>
-            {#if branch}
-              <span
-                class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
-                title={`Branch: ${branch}`}
-              >
-                <GitBranch size={10} class="shrink-0" aria-hidden="true" />
-                <span class="truncate">{branchLabel}</span>
-              </span>
-            {/if}
-          </span>
+          {#if scopeVisible}
+            <!-- The scope gives way: the project name truncates first and the
+                 scope chip narrows rather than pushing a neighbour off the line.
+                 With the name hidden (a project's own list) there is nothing for
+                 the scope to sit opposite, so it stays flush left. -->
+            {@render scopeChip(
+              projectName && !hideProjectName
+                ? 'shrink-0 max-w-[6.5rem]'
+                : 'min-w-0 shrink max-w-[6.5rem]'
+            )}
+          {/if}
         </span>
       {/if}
 
-      <!-- Primary line: status, title, current provider, and the time when there
-           is no footer line to carry it -->
+      <!-- Primary line: the title, and the end slot. The rail down the left edge
+           carries the state, so this line spends its width on one thing: every
+           live action the thread has, else the word for a state that wants the
+           user, else the age. Pinning is not here: the row's context menu and
+           the pin keymap already do it, so the line keeps no reserved space. -->
       <span class="flex w-full min-w-0 items-center gap-2">
-        {@render threadStatusSlot(true)}
         <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
         {@render peekIndicator()}
-        {#if currentModelProviderName}
+        {#if activeIndicators.length > 0}
+          <!-- Every live action the thread has, not only the loudest one. A thread
+               can be recording while a browser tab of its own plays sound, and
+               the row must be able to say both at once. -->
+          {#each activeIndicators as live (live)}
+            <span class="flex shrink-0 items-center">
+              <ThreadIndicatorSlot indicator={live} />
+            </span>
+          {/each}
+        {:else if stateWord}
+          <!-- A state that wants the user says so in a word. The hue fills the
+               stamp; the letters stay in the foreground colour, so contrast
+               never depends on an amber or a violet passing AA. -->
+          <span
+            class="flex shrink-0 items-center border-l-2 bg-elevated py-0.5 pl-1 pr-1.5 text-[0.5625rem] font-bold uppercase tracking-[0.08em] text-foreground"
+            style="border-left-color: {stateWord.color};"
+          >
+            {stateWord.label}
+          </span>
+        {:else if currentModelProviderName}
+          <!-- The mark of the model that ran this thread. It sits here whenever
+               nothing louder owns the slot, and the age has the meta line below,
+               so both are on the row at once instead of one displacing the
+               other. -->
           <span
             class="flex shrink-0 items-center transition-opacity duration-150 {hovered
               ? 'opacity-0'
@@ -1325,10 +1651,9 @@
               size={13}
             />
           </span>
-        {/if}
-        {#if !hasRowExtras}
+        {:else if !hasRowExtras}
           <span
-            class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed transition-opacity duration-150 {hovered
+            class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted transition-opacity duration-150 {hovered
               ? 'opacity-0'
               : 'opacity-100'}"
             aria-hidden={hovered}
@@ -1339,15 +1664,14 @@
       </span>
 
       {#if hasRowExtras}
-        <!-- Footer line: what the thread runs with on the left, the scope in
-             the middle, then where it runs, its branch, its markers and its
-             last-edited time on the right. Both side tracks reserve their own
-             content width (`max-content` minimum), so neither the harness icons
-             nor the marks can be squeezed or overlapped; the scope is the track
-             that gives way, and it stays centred whenever the two side tracks
-             have room to stay equal. -->
+        <!-- Footer line: what the thread runs with on the left, then where it
+             runs, its branch, every marker it carries and its last-edited time
+             on the right. Both tracks reserve their own content width
+             (`max-content` minimum), so neither the harness icons nor the marks
+             can be squeezed or overlapped. The scope is no longer here: it moved
+             up to the context line, where it belongs with the project name. -->
         <span
-          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
+          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
         >
           {#if harnessIds.length > 0}
             <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
@@ -1361,40 +1685,32 @@
               {/if}
             </span>
           {/if}
-          {#if !hideScope}
-            {@render scopeChip('col-start-2 max-w-[8rem]')}
-          {/if}
-          <span class="col-start-3 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
-            {#if !showProjectLine}
-              <span
-                class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
-                title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-                aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-              >
-                {#if isRemote}
-                  {#if oven?.iconUrl}
-                    <img
-                      src={oven.iconUrl}
-                      alt=""
-                      class="h-3 w-3 object-contain"
-                      draggable="false"
-                    />
-                  {:else}
-                    <Server size={11} class="shrink-0" />
-                  {/if}
+          <span class="col-start-2 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
+            <!-- Where it runs, and the branch it runs on: both always, so a
+                 branch never disappears just because the row also has a scope. -->
+            <span
+              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+              title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+              aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
+            >
+              {#if isRemote}
+                {#if oven?.iconUrl}
+                  <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
                 {:else}
-                  <Monitor size={10} class="shrink-0" aria-hidden="true" />
+                  <CioServer size={11} class="shrink-0" />
                 {/if}
-              </span>
-              {#if branch}
-                <span
-                  class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
-                  title={`Branch: ${branch}`}
-                >
-                  <GitBranch size={10} class="shrink-0" aria-hidden="true" />
-                  <span class="truncate">{branchLabel}</span>
-                </span>
+              {:else}
+                <CioDisplay size={10} class="shrink-0" aria-hidden="true" />
               {/if}
+            </span>
+            {#if branch}
+              <span
+                class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"
+                title={`Branch: ${branch}`}
+              >
+                <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
+                <span class="truncate">{branchLabel}</span>
+              </span>
             {/if}
             {#if hasNote}
               {@const ThreadNoteIcon = feature('thread-note').icon}
@@ -1406,12 +1722,9 @@
               </span>
             {/if}
             {@render temporaryChatMarker()}
-            {@render authoredWorkMarker(authoredWorkKind)}
-            {#if indicator}
-              <ThreadIndicatorSlot {indicator} />
-            {/if}
+            {@render authoredWorkMarker(authoredWorkKinds)}
             <span
-              class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed"
+              class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted"
               title={`Edited ${formatDateTime(thread.lastActivity)}`}
               >{formatCompactAge(thread.lastActivity)}</span
             >
@@ -1432,8 +1745,7 @@
         items={actionsMenu.items}
         vertical={compact ? showBottomRow : true}
         onOpen={() => {
-          showPopover = false
-          clearTimeout(popoverTimer)
+          popover.hide()
         }}
         onClose={() => {
           if (!touchRevealed) return
@@ -1445,23 +1757,19 @@
   </button>
 
   <!-- Hover popover with thread info -->
-  {#if showPopover}
+  {#if popover.visible}
     <Portal>
       <div
         {@attach capturePopoverElement}
         class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
-        style={threadHoverPopoverStyle(popoverPos.x, popoverPos.y)}
+        style={threadHoverPopoverStyle(popover.position.x, popover.position.y)}
       >
         <ThreadHoverPopover
           {thread}
           {isWorking}
           {isRetryPaused}
           {stageLabel}
-          threadState={threadState === 'queued'
-            ? hasStartAfterPending
-              ? 'scheduled'
-              : 'working'
-            : threadState}
+          threadState={secondaryStatus === 'scheduled' ? 'scheduled' : threadState}
           {isForeignRun}
         />
       </div>
@@ -1470,9 +1778,7 @@
 </div>
 
 {#if actionsMenu.renameError}
-  <div
-    class="fixed bottom-4 right-4 z-60 rounded-lg bg-danger px-4 py-2 text-sm text-white shadow-lg"
-  >
+  <div class="fixed bottom-4 right-4 z-60 bg-danger px-4 py-2 text-sm text-on-danger shadow-lg">
     {actionsMenu.renameError}
   </div>
 {/if}
@@ -1493,7 +1799,7 @@
       <input
         id="thread-rename-input"
         type="text"
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         bind:value={actionsMenu.renameValue}
         oninput={() => onRenameInputChange?.(thread)}
       />
@@ -1503,7 +1809,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       onclick={actionsMenu.cancelRename}
     >
       Cancel
@@ -1511,7 +1817,7 @@
     <button
       type="submit"
       form={renameThreadFormId}
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
       disabled={!actionsMenu.renameValue.trim()}
     >
       Save
@@ -1535,3 +1841,46 @@
     currentBucketId={thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
   />
 {/if}
+
+<style>
+  /*
+   * Live work. The rail's dashes are drawn by the row; this is only the light that
+   * climbs them. The light spans the whole cycle: one whole dash at a time from the
+   * bottom to the top, and the top dash hands straight over to the bottom one. There
+   * is no beat at the top and no beat of dark holding the restart back, because both
+   * read as an invisible fifth dash waiting its turn: 1, 2, 3, 4, 1, 2, 3, 4.
+   *
+   * One dash per `LIVE_RAIL_DASH_MS`, whatever the count, so a two-dash rail keeps
+   * the same rhythm as a four-dash one. The count is measured off the rail's own
+   * height (`liveRailDashCount`) and handed to this rule by the markup, along with
+   * the beat. Steps, not a smooth sweep: a light that moved continuously would leave
+   * the dash it is passing half lit and half stretched.
+   *
+   * A clip animates no box, so nothing in the row or the list below it moves while
+   * the light climbs, and the browser only has to repaint this one small column when
+   * a step lands.
+   */
+  @keyframes cio-spine-light {
+    0% {
+      clip-path: inset(100% 0 0 0);
+    }
+    100% {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+
+  .spine-lit {
+    clip-path: inset(100% 0 0 0);
+    animation: cio-spine-light calc(var(--spine-steps, 4) * var(--spine-beat, 0.45s))
+      steps(var(--spine-steps, 4), start) infinite;
+  }
+
+  /* Reduced motion keeps the state and drops the loop: every dash stands lit, so
+     the rail is the whole dashed spine in the working colour, still. */
+  @media (prefers-reduced-motion: reduce) {
+    .spine-lit {
+      clip-path: none;
+      animation: none;
+    }
+  }
+</style>

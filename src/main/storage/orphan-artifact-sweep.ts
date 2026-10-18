@@ -8,7 +8,7 @@ import type { StorageEngine } from './storage-engine'
 /**
  * Reclaim app-owned directories whose database row is gone.
  *
- * Deleting a thread, a project or a routine removes its directory, but the two
+ * Deleting a thread, a project or an assistant removes its directory, but the two
  * are not one transaction: a crash between the row delete and the disk removal,
  * a database restored from a backup, or a project registered inside the config
  * root by a test run all leave a directory nothing can reach. The database never

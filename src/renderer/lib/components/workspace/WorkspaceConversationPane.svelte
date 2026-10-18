@@ -3,11 +3,13 @@
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
   import WelcomeStart from './WelcomeStart.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import { threadReveal } from '$lib/components/layout/page-reveal'
+  import { fly } from 'svelte/transition'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { routineHowToComplete, type Project, type Thread } from '$shared/types'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import { assistantKnowledgeComplete, type Project, type Thread } from '$shared/types'
   import type { AppConfig, AppConfigPatch, PromptAttachment } from '$shared/types'
 
   interface Props {
@@ -57,14 +59,12 @@
     onRequestAddProject
   }: Props = $props()
 
-  /** Assistant mode reuses the chat thread renderer, but a routine's task
-   *  authors its how-to conversationally, so the view needs the routine. */
-  let assistantRoutineId = $derived(
-    mode === 'assistant' ? (selectedThread?.routineId ?? null) : null
-  )
-  let assistantRoutine = $derived(
-    assistantRoutineId
-      ? (assistantRoutines.routines.find((routine) => routine.id === assistantRoutineId) ?? null)
+  /** Assistant mode reuses the chat thread renderer, but an assistant's task
+   *  authors its knowledge conversationally, so the view needs the assistant. */
+  let assistantId = $derived(mode === 'assistant' ? (selectedThread?.assistantId ?? null) : null)
+  let assistant = $derived(
+    assistantId
+      ? (assistants.assistants.find((assistant) => assistant.id === assistantId) ?? null)
       : null
   )
 
@@ -85,19 +85,25 @@
   data-onboarding="conversation"
 >
   {#if selectedThread}
-    <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      {#key selectedThread.id}
+    {#key selectedThread.id}
+      <!-- The container is the keyed child, so the arriving thread fades and
+           rises in on its own (`threadReveal`) instead of the switch being a hard
+           swap. The reveal is intro-only on purpose: a keyed `out:` would defer
+           ThreadView's teardown past the switch and let it clear the history
+           state the arriving thread just published. -->
+      <div
+        class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+        in:fly={threadReveal()}
+      >
         <svelte:boundary onerror={handleConversationRenderError}>
           <ThreadView
             thread={selectedThread}
             {active}
             chatMode={mode === 'chats' || mode === 'assistant'}
             assistantMode={mode === 'assistant'}
-            {assistantRoutineId}
-            assistantRoutineName={assistantRoutine?.name ?? null}
-            assistantHowToComplete={assistantRoutine
-              ? routineHowToComplete(assistantRoutine)
-              : false}
+            {assistantId}
+            assistantName={assistant?.name ?? null}
+            assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
             {assistantForeignRunThreadId}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
@@ -113,7 +119,7 @@
           {#snippet failed(_error: unknown, reset: () => void)}
             <div class="flex h-full min-h-0 items-center justify-center px-6">
               <div
-                class="w-full max-w-md rounded-xl border border-danger/30 bg-surface px-5 py-4"
+                class="w-full max-w-md border border-danger/30 bg-surface px-5 py-4"
                 role="alert"
               >
                 <p class="text-sm font-semibold text-foreground">
@@ -124,7 +130,7 @@
                 </p>
                 <button
                   type="button"
-                  class="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
+                  class="mt-4 bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
                   onclick={reset}
                 >
                   Reload conversation
@@ -133,8 +139,8 @@
             </div>
           {/snippet}
         </svelte:boundary>
-      {/key}
-    </div>
+      </div>
+    {/key}
   {:else if mode === 'chats'}
     <WelcomeStart
       variant="chats"
@@ -145,11 +151,11 @@
       onShowTour={() => workspaceState.requestViewTour('chats')}
     />
   {:else if mode === 'assistant'}
-    <!-- Assistant empty state   routines and tasks start here, exactly the way a
+    <!-- Assistant empty state   assistants and tasks start here, exactly the way a
          project does in the Projects view. -->
     <WelcomeStart
       variant="assistant"
-      onNewRoutine={() => workspaceState.requestAssistantRoutine()}
+      onNewAssistant={() => workspaceState.requestAssistant()}
       onNewTask={() => workspaceState.requestAssistantTask()}
       onOpenSettings={() => onNavigate('settings')}
       onShowTour={() => workspaceState.requestViewTour('assistant')}

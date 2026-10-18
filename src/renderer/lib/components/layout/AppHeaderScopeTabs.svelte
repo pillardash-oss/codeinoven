@@ -64,7 +64,7 @@
              truncated, then the row scrolls. `overflow-hidden` keeps the active
              underline inside the rounded corners. -->
         <button
-          class="relative flex min-h-8 min-w-[2.5rem] items-center gap-1 overflow-hidden rounded-md px-2 py-0.5 transition-colors {isActiveProject
+          class="relative flex min-h-8 min-w-[2.5rem] items-center gap-1 overflow-hidden px-2 py-0.5 transition-colors {isActiveProject
             ? 'bg-selected text-foreground'
             : 'text-muted hover:bg-elevated hover:text-foreground'}"
           role="tab"
@@ -73,7 +73,7 @@
           onclick={() => void switchProject(project.id)}
         >
           <span
-            class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md"
+            class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden"
             style:background-color={`color-mix(in srgb, ${projectColor} 6%, var(--color-raised))`}
             aria-hidden="true"
           >

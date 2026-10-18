@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <!--
+    The browser marks. Single colour, so they take the theme's ink like every
+    other glyph in the set.
+
+    x-browser         a planet and its ring
+    x-thread-browser  the same, inside a square conversation bubble
+  -->
+  <symbol id="x-browser" viewBox="0 0 24 24" fill="none">
+    <!-- Planet and ring: disc, tilted ring gap, planet inside -->
+    <path fill="currentColor" fill-rule="evenodd" d="M0.700,12A11.300,11.300 0 1 1 23.300,12A11.300,11.300 0 1 1 0.700,12ZM3.504,8.217A9.300,7.000 24 0 0 20.496,15.783A9.300,7.000 24 0 0 3.504,8.217ZM5.422,9.071A7.200,5.419 24 0 0 18.578,14.929A7.200,5.419 24 0 0 5.422,9.071Z" />
+  </symbol>
+  <symbol id="x-thread-browser" viewBox="0 0 24 24" fill="none">
+    <!-- Thread: a square conversation bubble holding the same planet and ring -->
+    <path fill="currentColor" fill-rule="evenodd" d="M23.300,2.700L23.300,21.300L14.800,21.300L10.600,23.400L7.600,21.300L0.700,21.300L0.700,2.700ZM4.144,8.502A8.600,5.900 24 0 0 19.856,15.498A8.600,5.900 24 0 0 4.144,8.502ZM6.062,9.356A6.500,4.459 24 0 0 17.938,14.644A6.500,4.459 24 0 0 6.062,9.356Z" />
+  </symbol>
+</svg>

@@ -1,6 +1,17 @@
 import type { ThinkingLevel } from './common'
 import type { ThinkingPreset } from './agent'
 
+/**
+ * How CodeInOven reads a custom provider's usage route.
+ *
+ * `auto` walks whatever JSON the endpoint returns and maps every object that
+ * looks like a quota. The named formats are presets for providers whose
+ * response shape is idiosyncratic; each one falls back to `auto` when it
+ * recognizes nothing, so a wrong pick degrades instead of showing no bars.
+ */
+export type BaseUrlProviderUsageFormat =
+  'auto' | 'openai' | 'new-api' | 'command-code' | 'zai' | 'kimi'
+
 /** A model exposed by a custom base-URL provider. */
 export interface BaseUrlProviderModel {
   id: string
@@ -44,12 +55,17 @@ export interface BaseUrlProvider {
   /** Models this provider exposes. */
   models: BaseUrlProviderModel[]
   /**
-   * Optional account status/usage route, relative to `baseURL` (e.g. `/status`,
-   * `/usage`) or an absolute URL. Providers backed by a subscription often
-   * expose one; when set, CodeInOven polls it for quota windows shown in the
-   * usage UI. Empty means the provider reports no usage.
+   * Optional usage route, relative to `baseURL` (e.g. `/status`, `/usage`) or an
+   * absolute URL with a query string. Providers backed by a subscription often
+   * expose one; when set, CodeInOven reads it for the quota windows shown on the
+   * battery hover and the Accounts table. Empty means the provider reports no
+   * usage.
    */
   usagePath?: string
+  /**
+   * Response format of `usagePath`. Omitted means `auto`.
+   */
+  usageFormat?: BaseUrlProviderUsageFormat
   /**
    * Optional model-list route relative to `baseURL` (defaults to `/models`) or
    * an absolute URL. Used when discovering/refreshing this provider's models.
@@ -70,8 +86,10 @@ export interface BaseUrlProviderCreateRequest {
   apiKey?: string
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
-  /** Optional account status/usage route relative to `baseURL`, or an absolute URL. */
+  /** Optional usage route relative to `baseURL`, or an absolute URL. */
   usagePath?: string
+  /** Response format of `usagePath`; omitted means `auto`. */
+  usageFormat?: BaseUrlProviderUsageFormat
   /** Optional model-list route relative to `baseURL` (default `/models`), or an absolute URL. */
   modelsPath?: string
   enabled?: boolean
@@ -94,8 +112,10 @@ export interface BaseUrlProviderUpdateRequest {
   removeApiKey?: boolean
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
-  /** Optional account status/usage route; empty string clears it. */
+  /** Optional usage route; empty string clears it. */
   usagePath?: string
+  /** Response format of `usagePath`; empty string clears it (falls back to `auto`). */
+  usageFormat?: BaseUrlProviderUsageFormat | ''
   /** Optional model-list route; empty string clears it (falls back to `/models`). */
   modelsPath?: string
   enabled?: boolean
@@ -112,8 +132,10 @@ export interface BaseUrlProviderCopyClipboardRequest {
   baseURL: string
   apiKey?: string
   headers?: string
-  /** Account status/usage route carried through copy/paste. */
+  /** Usage route carried through copy/paste. */
   usagePath?: string
+  /** Usage response format carried through copy/paste; empty means auto. */
+  usageFormat?: BaseUrlProviderUsageFormat | ''
   /** Model-list route carried through copy/paste. */
   modelsPath?: string
   models: Array<{
@@ -139,6 +161,26 @@ export interface BaseUrlProviderFetchModelsRequest {
   /** Model-list route override; omitted resolves the provider's saved route (default `/models`). */
   modelsPath?: string
   force?: boolean
+}
+
+/** Request to read a usage route while the provider is still a draft. Pass
+ *  `harnessId`+`id` for a saved provider so main can resolve its vaulted API key
+ *  when `apiKey` is omitted. */
+export interface BaseUrlProviderUsagePreviewRequest {
+  harnessId?: string
+  id?: string
+  baseURL: string
+  apiKey?: string
+  headers?: Record<string, string>
+  usagePath: string
+  usageFormat?: BaseUrlProviderUsageFormat
+}
+
+/** Result of a draft usage preview. `usage` is null when the route answered no
+ *  recognizable quota; `message` explains why so the editor can show it. */
+export interface BaseUrlProviderUsagePreview {
+  usage: import('./usage').CustomProviderUsage | null
+  message?: string
 }
 
 /** A model entry discovered from an OpenAI-compatible `/models` endpoint. */

@@ -24,12 +24,15 @@
     children
   }: Props = $props()
 
+  /** Tone fill plus a tone-tinted edge. The edge is what most of the app already
+   *  draws on a status chip, so the canonical primitive carries it too instead of
+   *  being the one status shape in the app without a rule around it. */
   const tones: Record<StatusTone, string> = {
-    success: 'bg-success/10 text-success',
-    danger: 'bg-danger/10 text-danger',
-    warning: 'bg-warning/10 text-warning',
-    info: 'bg-info/10 text-info',
-    neutral: 'bg-elevated text-dimmed'
+    success: 'border-success/30 bg-success/10 text-success',
+    danger: 'border-danger/30 bg-danger/10 text-danger',
+    warning: 'border-warning/30 bg-warning/10 text-warning',
+    info: 'border-info/30 bg-info/10 text-info',
+    neutral: 'border-border bg-elevated text-dimmed'
   }
 
   const dotTones: Record<StatusTone, string> = {
@@ -42,14 +45,14 @@
 </script>
 
 <span
-  class="inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {tones[
+  class="inline-flex shrink-0 items-center gap-1 border px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {tones[
     tone
   ]} {className}"
   {title}
   aria-label={ariaLabel}
 >
   {#if dot}
-    <span class="h-1.5 w-1.5 shrink-0 rounded-full {dotTones[tone]}" aria-hidden="true"></span>
+    <span class="h-1.5 w-1.5 shrink-0 {dotTones[tone]}" aria-hidden="true"></span>
   {/if}
   {#if children}
     {@render children()}

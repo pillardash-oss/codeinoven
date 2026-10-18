@@ -181,24 +181,24 @@ export class NotificationInboxStore {
   }
 
   /**
-   * Heal assistant entries written before the payload carried their routine.
+   * Heal assistant entries written before the payload carried their assistant.
    *
-   * `routineId` joined the payload after this store had already been in use, so
-   * entries written by an older build carry no routine and the panel grouped
-   * every one of those routine runs under "Tasks without a routine". The run
-   * thread has always known its routine, so `resolve` reads it back from there.
+   * `assistantId` joined the payload after this store had already been in use, so
+   * entries written by an older build carry no assistant and the panel grouped
+   * every one of those assistant runs under "Tasks without an assistant". The run
+   * thread has always known its assistant, so `resolve` reads it back from there.
    *
-   * Only distinct thread ids that are genuinely missing the routine are queried,
+   * Only distinct thread ids that are genuinely missing the assistant are queried,
    * each entry is written once, and the file is rewritten a single time, so this
    * is a no-op from the second launch on. A thread that has since been purged
    * resolves to null and its entry is left alone rather than guessed by name.
    */
-  async resolveMissingRoutineIds(
+  async resolveMissingAssistantIds(
     resolve: (threadId: string) => Promise<string | null>
   ): Promise<void> {
     const byThread = new Map<string, PersistedAgentNotification[]>()
     for (const entry of this.notifications.values()) {
-      if (entry.source !== 'assistant' || entry.routineId) continue
+      if (entry.source !== 'assistant' || entry.assistantId) continue
       const bucket = byThread.get(entry.threadId)
       if (bucket) bucket.push(entry)
       else byThread.set(entry.threadId, [entry])
@@ -209,14 +209,14 @@ export class NotificationInboxStore {
     await Promise.all(
       [...byThread].map(async ([threadId, entries]) => {
         try {
-          const routineId = await resolve(threadId)
-          if (!routineId) return
+          const assistantId = await resolve(threadId)
+          if (!assistantId) return
           for (const entry of entries) {
-            this.notifications.set(entry.id, { ...entry, routineId })
+            this.notifications.set(entry.id, { ...entry, assistantId })
           }
           healed = true
         } catch (error) {
-          Logger.dev('Assistant notification routine backfill failed:', error)
+          Logger.dev('Assistant notification assistant backfill failed:', error)
         }
       })
     )

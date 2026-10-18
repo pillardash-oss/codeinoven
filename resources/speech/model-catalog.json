@@ -6,12 +6,13 @@
       "id": "parakeet",
       "capability": "asr",
       "label": "Parakeet",
-      "description": "NVIDIA NeMo Parakeet TDT transducer models   compact, accurate streaming ASR with separately qualified variants.",
+      "description": "Parakeet TDT transducer models: NVIDIA NeMo releases and the compressed conversions built on them, each variant separately qualified.",
       "artifactIds": [
         "parakeet-tdt-v2-sherpa-onnx-int8",
         "parakeet-tdt-v3-sherpa-onnx-int8",
         "parakeet-tdt-v2-coreml",
-        "parakeet-tdt-v3-coreml"
+        "parakeet-tdt-v3-coreml",
+        "fluid-speech-mini-coreml"
       ]
     },
     {
@@ -512,6 +513,180 @@
         "benchmark": {
           "status": "pending",
           "notes": "Requires packaged Core ML runtime latency, memory, and transcription-quality measurements on Apple Silicon."
+        }
+      }
+    },
+    {
+      "id": "fluid-speech-mini-coreml",
+      "familyId": "parakeet",
+      "capability": "asr",
+      "runtime": "coreml",
+      "label": "Fluid Speech Mini · Core ML",
+      "description": "English-only transducer for Apple Silicon Core ML, compressed from Parakeet TDT 0.6B v3 and Moondream Parakeet Ultra: the smallest Parakeet-family English option here. Published English accuracy is close to the larger Parakeet models, with its clearest edge when another voice is in the room.",
+      "tier": "quality",
+      "version": "v1.1.0",
+      "repositoryRevision": "d81c3160dfe5a5e1f8f7267164a07d30617a3a1a",
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "languages": [
+        "en"
+      ],
+      "voices": [],
+      "files": [
+        {
+          "path": "Decoder.mlmodelc/analytics/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Decoder.mlmodelc/analytics/coremldata.bin",
+          "byteSize": 243,
+          "sha256": "d4beee43a6eab29b2adcc298f2e8582e8fb79d5fe3aa9f1ab692ade681ca369d"
+        },
+        {
+          "path": "Decoder.mlmodelc/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Decoder.mlmodelc/coremldata.bin",
+          "byteSize": 491,
+          "sha256": "6094d06d05c1ca4599c7b13c9a4ca7c00826ee2396796cf3084ce602a9884468"
+        },
+        {
+          "path": "Decoder.mlmodelc/metadata.json",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Decoder.mlmodelc/metadata.json",
+          "byteSize": 3373,
+          "sha256": "13fcb358af8b028703dc7f424fd149ce9524642de510f3d682b75d471b1a001d"
+        },
+        {
+          "path": "Decoder.mlmodelc/model.mil",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Decoder.mlmodelc/model.mil",
+          "byteSize": 13411,
+          "sha256": "4ccd8ecbc7eb59bed7ad38d471bf6b78ef52a24500bf64619c549ed45fbee4e9"
+        },
+        {
+          "path": "Decoder.mlmodelc/weights/weight.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Decoder.mlmodelc/weights/weight.bin",
+          "byteSize": 11845120,
+          "sha256": "d173e381488d07fd7648e2ccecbfb1bceff0457d75461550b26ba7fa2d23309a"
+        },
+        {
+          "path": "Encoder.mlmodelc/analytics/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Encoder.mlmodelc/analytics/coremldata.bin",
+          "byteSize": 243,
+          "sha256": "3a3caa2c6aec983d94a5659eff09a00f77077147ea6726b8ddfdf022f0238ce9"
+        },
+        {
+          "path": "Encoder.mlmodelc/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Encoder.mlmodelc/coremldata.bin",
+          "byteSize": 427,
+          "sha256": "494d8e2ce30b37bcdf494b3ba7ddf6e1bc921b9a59e369a9efd44d013ca3bf7d"
+        },
+        {
+          "path": "Encoder.mlmodelc/metadata.json",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Encoder.mlmodelc/metadata.json",
+          "byteSize": 2906,
+          "sha256": "1a2229e2cc4c271e4876715c9e36aef18bc7287e35690022c7f3939d85260ea9"
+        },
+        {
+          "path": "Encoder.mlmodelc/model.mil",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Encoder.mlmodelc/model.mil",
+          "byteSize": 712643,
+          "sha256": "f96b7707936ea7ce5517c5b0f5c15cc634006bc58af1fe2587ac5979dd180343"
+        },
+        {
+          "path": "Encoder.mlmodelc/weights/weight.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Encoder.mlmodelc/weights/weight.bin",
+          "byteSize": 233096704,
+          "sha256": "cf0b61022de8c698984a8c7185c2d093fa744694621881ff062c46fee2546131"
+        },
+        {
+          "path": "JointDecision.mlmodelc/analytics/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/JointDecision.mlmodelc/analytics/coremldata.bin",
+          "byteSize": 243,
+          "sha256": "9e767d69e1092b27b28d9f236b9cbcded58ff3891e320cba7855e2c24e803d69"
+        },
+        {
+          "path": "JointDecision.mlmodelc/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/JointDecision.mlmodelc/coremldata.bin",
+          "byteSize": 462,
+          "sha256": "284b235c08cd4769202af017f854deace69c0209c29f2253a2073bb68d58d38d"
+        },
+        {
+          "path": "JointDecision.mlmodelc/metadata.json",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/JointDecision.mlmodelc/metadata.json",
+          "byteSize": 2790,
+          "sha256": "fe1ce083f9ff57524926a92fc264b0cf7d88f3ba9852f7acf9f59dcdf427e01f"
+        },
+        {
+          "path": "JointDecision.mlmodelc/model.mil",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/JointDecision.mlmodelc/model.mil",
+          "byteSize": 7547,
+          "sha256": "1109ce72f6d014a6b99e49b41e83b3082d7555d74a6275838e7cbea42a6bd0ee"
+        },
+        {
+          "path": "JointDecision.mlmodelc/weights/weight.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/JointDecision.mlmodelc/weights/weight.bin",
+          "byteSize": 6350284,
+          "sha256": "f991f65979c1b3fee3db39a645aa87e6bef1a304ed1816d074b17479bea797fc"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/analytics/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Preprocessor.mlmodelc/analytics/coremldata.bin",
+          "byteSize": 243,
+          "sha256": "c9beeb989c8d66f8be11df59bc6df277ec76cee404f6865b46243835ef562f6d"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/coremldata.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Preprocessor.mlmodelc/coremldata.bin",
+          "byteSize": 486,
+          "sha256": "dbde3f2300842c1fd51ef3ff948a0bcffe65ffd2dca10707f2509f32c1d65b1d"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/metadata.json",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Preprocessor.mlmodelc/metadata.json",
+          "byteSize": 2841,
+          "sha256": "2a98699e22d279dd37fa1d238aeb1c6db1df0d6fad687775324157689d8f3acf"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/model.mil",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Preprocessor.mlmodelc/model.mil",
+          "byteSize": 28181,
+          "sha256": "4b8518a956450fec57f06c2a21bdffc26973f7f1fa6842fb38fe917f896b6b93"
+        },
+        {
+          "path": "Preprocessor.mlmodelc/weights/weight.bin",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/Preprocessor.mlmodelc/weights/weight.bin",
+          "byteSize": 491072,
+          "sha256": "129b76e3aeafa8afa3ea76d995b964b145fe83700d579f6ff42c4c38fa0968ea"
+        },
+        {
+          "path": "parakeet_vocab.json",
+          "sourceUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml/resolve/d81c3160dfe5a5e1f8f7267164a07d30617a3a1a/parakeet_vocab.json",
+          "byteSize": 151122,
+          "sha256": "7ec60e05f1b24480736ec0eed40900f4626bce1fa9a60fd700ec7e2a59198735"
+        }
+      ],
+      "byteSize": 252710832,
+      "license": "CC-BY-4.0",
+      "attribution": "Fluid Speech Mini by FluidVoice (FluidVoice Labs). Built on NVIDIA Parakeet TDT 0.6B v3 (NVIDIA) and Moondream Parakeet Ultra (Moondream), with the audio preprocessor from FluidInference's Parakeet TDT 0.6B v3 Core ML package. All CC BY 4.0.",
+      "sourcePageUrl": "https://huggingface.co/FluidVoice-Labs/fluid-speech-mini-coreml",
+      "minimumMemoryBytes": 536870912,
+      "qualification": {
+        "status": "qualified",
+        "reviewedAt": 1791992661000,
+        "reviewer": "CodeInOven engineering qualification",
+        "licenseReviewed": true,
+        "compatibilityReviewed": true,
+        "checksumReviewed": true,
+        "benchmark": {
+          "status": "passed",
+          "measuredAt": 1791992661000,
+          "hardware": "Apple M1 Pro, 16 GB",
+          "operatingSystem": "macOS 27.0.1 arm64",
+          "peakMemoryBytes": 324255744,
+          "latencyMs": 158,
+          "realTimeFactor": 0.031,
+          "qualityMetric": "Single-fixture intelligibility review",
+          "qualityScore": 1,
+          "notes": "The packaged Core ML worker loaded the bundle from its installed directory and transcribed a generated 5.05 s English fixture, correctly apart from the product name CodeInOven, which it rendered as 'code in oven'. Transcription latency over three runs was 143 to 223 ms, median 158 ms, so the real-time factor is 0.031 (about 32 audio seconds per second of compute). The first load compiles the 233 MB encoder for the Neural Engine and takes about 30 s with a 324 MB peak; later loads reuse the Core ML bundle cache and take about 2 s, which is what the resident-model policy is for."
         }
       }
     },

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import type { Snippet } from 'svelte'
   import Modal from './Modal.svelte'
 
@@ -27,12 +27,12 @@
     <p class="text-[0.625rem] font-semibold uppercase tracking-[0.16em] text-dimmed">{title}</p>
     <button
       type="button"
-      class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
+      class="flex h-9 w-9 cursor-pointer items-center justify-center text-muted transition-colors active:bg-elevated"
       aria-label="Close {title}"
       title="Close"
       onclick={onClose}
     >
-      <X size={16} />
+      <CioClose size={16} />
     </button>
   </div>
   <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">{@render children()}</div>

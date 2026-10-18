@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Clock } from '@lucide/svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
   import { browserLibraryHost, type BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { formatCompactAge } from '$shared/date-time-format'
 
@@ -43,7 +43,7 @@
   <p
     class="flex items-center gap-1.5 px-2.5 pb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
   >
-    <Clock size={10} aria-hidden="true" />
+    <CioClock size={10} aria-hidden="true" />
     History
   </p>
   <!-- A listbox driven by the field above: the arrows move the highlight, so the
@@ -56,7 +56,7 @@
         role="option"
         aria-selected={index === highlight}
         class={[
-          'cursor-pointer flex w-full items-center gap-2.5 rounded-lg px-2.5 text-left outline-none transition-colors',
+          'cursor-pointer flex w-full items-center gap-2.5 px-2.5 text-left outline-none transition-colors',
           compact ? 'py-1' : 'py-1.5',
           index === highlight ? 'bg-overlay text-foreground' : 'text-muted hover:bg-elevated'
         ]}

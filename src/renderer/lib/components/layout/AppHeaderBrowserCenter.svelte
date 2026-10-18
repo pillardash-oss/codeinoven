@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Globe, Loader2, Mic, Volume2, VolumeX } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pillardash-oss/cio-icon/CioVolumeX.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { BROWSER_TAB_CAPTURE_LABEL, browserTabMuteLabel } from '$lib/stores/browser-tab-status'
 
@@ -26,11 +30,11 @@
     >
       <span class="flex h-4 w-4 shrink-0 items-center justify-center">
         {#if runtime.loading}
-          <Loader2 size={13} class="animate-spin text-muted" />
+          <CioSpinner size={13} class="animate-spin text-muted" />
         {:else if tab.favicon}
-          <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+          <img src={tab.favicon} alt="" class="h-4 w-4 object-contain" />
         {:else}
-          <Globe size={13} class="text-dimmed" />
+          <CioBrowser size={13} class="text-dimmed" />
         {/if}
       </span>
       <h1
@@ -46,22 +50,22 @@
           title={BROWSER_TAB_CAPTURE_LABEL}
           aria-label={BROWSER_TAB_CAPTURE_LABEL}
         >
-          <Mic size={13} />
+          <CioMic size={13} />
         </span>
       {/if}
       {#if runtime.audible || runtime.muted}
         <button
           type="button"
-          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated"
+          class="flex h-5 w-5 shrink-0 items-center justify-center text-accent transition-colors hover:bg-elevated"
           aria-pressed={runtime.muted}
           title={browserTabMuteLabel(runtime.muted)}
           aria-label={browserTabMuteLabel(runtime.muted)}
           onclick={() => globalBrowser.toggleMute(tab.id)}
         >
           {#if runtime.muted}
-            <VolumeX size={13} />
+            <CioVolumeX size={13} />
           {:else}
-            <Volume2 size={13} />
+            <CioVolume size={13} />
           {/if}
         </button>
       {/if}

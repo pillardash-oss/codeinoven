@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CheckCircle2, X } from '@lucide/svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
@@ -47,11 +48,11 @@
 
 {#if recoveryNotice}
   <div
-    class="flex items-start gap-2.5 rounded-xl border border-success/25 bg-success/5 px-3 py-2.5"
+    class="flex items-start gap-2.5 border border-success/25 bg-success/5 px-3 py-2.5"
     role="status"
     aria-live="polite"
   >
-    <CheckCircle2 size={14} class="mt-0.5 shrink-0 text-success" />
+    <CioCheckCircle size={14} class="mt-0.5 shrink-0 text-success" />
     <div class="min-w-0 flex-1">
       <p class="text-xs font-semibold text-foreground">Sub-agent connection recovered</p>
       <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
@@ -63,18 +64,18 @@
     </div>
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="Dismiss sub-agent recovery notice"
       title="Dismiss sub-agent recovery notice"
       onclick={onDismissRecovery}
     >
-      <X size={13} />
+      <CioClose size={13} />
     </button>
   </div>
 {/if}
 
 {#if actionError && !noticeDismissals.isDismissed(actionErrorId, actionErrorCondition)}
-  <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
+  <div class="border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
     <div class="flex items-start gap-2.5">
       <div class="min-w-0 flex-1">
         <p class="text-xs font-medium text-danger">Sub-agent action failed</p>

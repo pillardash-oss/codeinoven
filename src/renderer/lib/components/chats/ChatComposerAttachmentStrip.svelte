@@ -1,18 +1,23 @@
 <script lang="ts">
-  import {
-    AudioLines,
-    Clock,
-    FileText,
-    HardDrive,
-    Image as ImageIcon,
-    MessageSquare,
-    SquareDashedMousePointer,
-    Video,
-    X
-  } from '@lucide/svelte'
-  import { attachmentPreviewKind } from '$lib/mime'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDisk from '@pillardash-oss/cio-icon/CioDisk.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioMarquee from '@pillardash-oss/cio-icon/CioMarquee.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import AttachmentPill from './AttachmentPill.svelte'
+  import ComposerRelocationMenu from './ComposerRelocationMenu.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import { summarizeComposerReferences } from './composer-reference-summary'
+  import {
+    isRelocatableReference,
+    relocationItemName,
+    relocationNoun,
+    type ComposerRelocationItem,
+    type ComposerRelocationRequest
+  } from './composer-relocation'
   import type { StartAfterSelection } from './chat-composer-attachments'
   import type { PromptAttachment, PromptReference } from '$shared/types'
 
@@ -44,6 +49,13 @@
     onEditReference?: (id: string) => void
     onRemoveReference?: (id: string) => void
     onRemoveAllReferences?: () => void
+    /** Carry an attachment, a doc comment or an inspector comment to another
+     *  chat of the same project. Absent on a surface with no project to move
+     *  into (chats, assistant tasks, browser conversations, read-only views). */
+    onRelocateItem?: ComposerRelocationRequest
+    /** Reports a reference row's relocation menu opening and closing, so the
+     *  reference popover stays open while the menu is up. */
+    onReferenceMenuOpenChange?: (open: boolean) => void
   }
 
   let {
@@ -70,12 +82,38 @@
     onCloseSelectionPopover,
     onEditReference,
     onRemoveReference,
-    onRemoveAllReferences
+    onRemoveAllReferences,
+    onRelocateItem,
+    onReferenceMenuOpenChange
   }: Props = $props()
 
   /** Wording for the reference count, which carries both response selections and
    *  picked design elements. */
   const referenceSummary = $derived(summarizeComposerReferences(references))
+
+  /**
+   * The attached references that belong to the project rather than to this
+   * conversation: the doc comments and the inspector comments. The chip is the
+   * handle for the whole group, so right-clicking it carries every one of them,
+   * exactly as its close button clears every attached reference.
+   */
+  const relocatableReferences = $derived(references.filter(isRelocatableReference))
+
+  /** The noun the chip's own menu names that group by, or null when the chip
+   *  holds nothing this project can hand to another chat. */
+  const referenceRelocationNoun = $derived(
+    relocatableReferences.length > 0
+      ? relocationNoun({ kind: 'references', references: relocatableReferences })
+      : null
+  )
+
+  function requestReferenceRelocation(mode: 'relocate' | 'copy'): void {
+    const item: ComposerRelocationItem | null =
+      relocatableReferences.length === 1
+        ? { kind: 'reference', reference: relocatableReferences[0]! }
+        : { kind: 'references', references: relocatableReferences }
+    if (item) onRelocateItem?.(item, mode)
+  }
 </script>
 
 <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
@@ -86,9 +124,9 @@
         <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
           {#if fileSystemMode}
             <span
-              class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.625rem] text-info"
+              class="flex shrink-0 items-center gap-1 border border-info/30 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-info uppercase"
             >
-              <HardDrive size={9} class="shrink-0" />
+              <CioDisk size={9} class="shrink-0" />
               <span>File System</span>
               <button
                 type="button"
@@ -97,7 +135,7 @@
                 aria-label="Turn off File System"
                 onclick={onToggleFileSystemMode}
               >
-                <X size={9} />
+                <CioClose size={9} />
               </button>
             </span>
           {/if}
@@ -112,11 +150,11 @@
           onmouseleave={onScheduleStartAfterPopoverClose}
         >
           <div
-            class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[0.625rem] font-medium text-info transition-colors hover:bg-info/15"
+            class="flex items-center border border-info/30 bg-info/10 text-[0.625rem] font-medium text-info transition-colors hover:bg-info/15"
           >
             <button
               type="button"
-              class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
+              class="flex items-center gap-1.5 px-2 py-1"
               title={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}   hover to manage`}
               aria-label={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`}
               aria-expanded={startAfterPopoverOpen}
@@ -125,7 +163,7 @@
                 else onOpenStartAfterPopover()
               }}
             >
-              <Clock size={10} class="shrink-0" />
+              <CioClock size={10} class="shrink-0" />
               <span
                 >Start after{startAfterThreads.length > 1
                   ? ` · ${startAfterThreads.length}`
@@ -134,17 +172,17 @@
             </button>
             <button
               type="button"
-              class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-info/70 transition-colors hover:text-danger"
+              class="flex h-full items-center pl-0.5 pr-1.5 text-info/70 transition-colors hover:text-danger"
               title="Remove all Start after threads"
               aria-label="Remove all Start after threads"
               onclick={onClearStartAfterThreads}
             >
-              <X size={10} />
+              <CioClose size={10} />
             </button>
           </div>
           {#if startAfterPopoverOpen}
             <div
-              class="absolute bottom-full left-0 z-50 mb-1.5 w-72 rounded-xl border border-border bg-surface p-2 shadow-lg"
+              class="absolute bottom-full left-0 z-50 mb-1.5 w-72 border border-border bg-surface p-2 shadow-lg"
               role="dialog"
               aria-label="Start after details"
               tabindex="0"
@@ -160,24 +198,24 @@
                 <div class="flex items-center gap-1">
                   <button
                     type="button"
-                    class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                    class="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
                     title={'Open ' + selectedStartAfterThread.title}
                     aria-label={'Open ' + selectedStartAfterThread.title}
                     onclick={() => void onOpenStartAfterThread?.(selectedStartAfterThread.id)}
                   >
-                    <Clock size={12} class="shrink-0 text-info" />
+                    <CioClock size={12} class="shrink-0 text-info" />
                     <span class="min-w-0 flex-1 truncate">
                       {selectedStartAfterThread.title}
                     </span>
                   </button>
                   <button
                     type="button"
-                    class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                    class="flex h-6 shrink-0 items-center px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
                     title={`Remove ${selectedStartAfterThread.title} from Start after`}
                     aria-label={`Remove ${selectedStartAfterThread.title} from Start after`}
                     onclick={() => onRemoveStartAfterThread(selectedStartAfterThread.id)}
                   >
-                    <X size={11} />
+                    <CioClose size={11} />
                   </button>
                 </div>
               {/each}
@@ -194,44 +232,56 @@
         onmouseenter={onOpenSelectionPopover}
         onmouseleave={onScheduleSelectionPopoverClose}
       >
-        <div
-          class="flex items-center rounded-lg border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
+        <ComposerRelocationMenu
+          noun={onRelocateItem ? referenceRelocationNoun : null}
+          name={referenceSummary.label}
+          onOpenChange={onReferenceMenuOpenChange}
+          onRelocate={() => requestReferenceRelocation('relocate')}
+          onCopy={() => requestReferenceRelocation('copy')}
         >
-          <button
-            type="button"
-            class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
-            title={`${referenceSummary.aria}   hover to manage`}
-            aria-label={referenceSummary.aria}
-            aria-expanded={selectionPopoverOpen}
-            onclick={onToggleSelectionPopover}
+          <div
+            class="flex items-center border border-accent/30 bg-accent/10 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent/15"
           >
-            {#if referenceSummary.elements > 0 && referenceSummary.selections === 0 && referenceSummary.annotations === 0}
-              <SquareDashedMousePointer size={11} class="shrink-0 text-accent" />
-            {:else if referenceSummary.annotations > 0 && referenceSummary.elements === 0 && referenceSummary.selections === 0}
-              <FileText size={11} class="shrink-0 text-accent" />
-            {:else}
-              <MessageSquare size={11} class="shrink-0 text-accent" />
-            {/if}
-            <span>
-              {referenceSummary.label}
-            </span>
-          </button>
-          {#if onRemoveAllReferences}
             <button
               type="button"
-              class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
-              title={referenceSummary.elements > 0
-                ? 'Delete all attached references'
-                : 'Delete all selections'}
-              aria-label={referenceSummary.elements > 0
-                ? 'Delete all attached references'
-                : 'Delete all selections'}
-              onclick={onRemoveAllReferences}
+              class="flex items-center gap-1.5 px-2 py-1"
+              title={`${referenceSummary.aria}   hover to manage`}
+              aria-label={referenceSummary.aria}
+              aria-expanded={selectionPopoverOpen}
+              onclick={onToggleSelectionPopover}
             >
-              <X size={11} />
+              {#if referenceSummary.noun === 'element'}
+                <CioMarquee size={11} class="shrink-0 text-accent" />
+              {:else if referenceSummary.noun === 'annotation'}
+                <CioFileText size={11} class="shrink-0 text-accent" />
+              {:else if referenceSummary.noun === 'note'}
+                <CioClapper size={11} class="shrink-0 text-accent" />
+              {:else if referenceSummary.noun === 'mark'}
+                <CioPencil size={11} class="shrink-0 text-accent" />
+              {:else}
+                <CioMessage size={11} class="shrink-0 text-accent" />
+              {/if}
+              <span>
+                {referenceSummary.label}
+              </span>
             </button>
-          {/if}
-        </div>
+            {#if onRemoveAllReferences}
+              <button
+                type="button"
+                class="flex h-full items-center pl-0.5 pr-1.5 text-dimmed transition-colors hover:text-danger"
+                title={referenceSummary.noun === 'selection'
+                  ? 'Delete all selections'
+                  : 'Delete all attached references'}
+                aria-label={referenceSummary.noun === 'selection'
+                  ? 'Delete all selections'
+                  : 'Delete all attached references'}
+                onclick={onRemoveAllReferences}
+              >
+                <CioClose size={11} />
+              </button>
+            {/if}
+          </div>
+        </ComposerRelocationMenu>
         {#if selectionPopoverOpen}
           <div class="absolute bottom-full left-0 z-50 mb-1.5">
             <SelectionListPopover
@@ -242,6 +292,8 @@
               }}
               onRemove={(id) => onRemoveReference?.(id)}
               onRemoveAll={onRemoveAllReferences}
+              {onRelocateItem}
+              onMenuOpenChange={onReferenceMenuOpenChange}
             />
           </div>
         {/if}
@@ -252,53 +304,20 @@
         <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
              unique across drops, picks, pastes, and restored drafts. -->
         {#each attachments as file, i (file.url)}
-          {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
-          <div
-            class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[0.6875rem] text-muted transition-colors"
+          <ComposerRelocationMenu
+            noun={onRelocateItem ? relocationNoun({ kind: 'attachment', attachment: file }) : null}
+            name={relocationItemName({ kind: 'attachment', attachment: file })}
+            onRelocate={() =>
+              onRelocateItem?.({ kind: 'attachment', attachment: file }, 'relocate')}
+            onCopy={() => onRelocateItem?.({ kind: 'attachment', attachment: file }, 'copy')}
           >
-            {#if previewKind}
-              <button
-                type="button"
-                class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 text-left transition-colors hover:text-foreground"
-                title="Click to preview"
-                aria-label="Preview {file.filename ?? 'file'}"
-                onclick={() => onPreviewAttachment(file)}
-              >
-                {#if previewKind === 'image'}
-                  {#if previewUrls[file.url]}
-                    <img
-                      src={previewUrls[file.url]}
-                      alt={file.filename ?? 'file'}
-                      class="h-5 w-5 shrink-0 rounded object-cover"
-                    />
-                  {:else}
-                    <ImageIcon size={11} class="shrink-0" />
-                  {/if}
-                {:else if previewKind === 'video'}
-                  <Video size={11} class="shrink-0" />
-                {:else if previewKind === 'audio'}
-                  <AudioLines size={11} class="shrink-0" />
-                {:else}
-                  <FileText size={11} class="shrink-0" />
-                {/if}
-                <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
-              </button>
-            {:else}
-              <span class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2">
-                <FileText size={11} class="shrink-0" />
-                <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
-              </span>
-            {/if}
-            <button
-              type="button"
-              class="flex shrink-0 items-center justify-center border-l border-border px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-              title="Remove attachment"
-              aria-label="Remove attachment"
-              onclick={() => onRemoveAttachment(i)}
-            >
-              <X size={11} />
-            </button>
-          </div>
+            <AttachmentPill
+              attachment={file}
+              previewUrl={previewUrls[file.url]}
+              onPreview={onPreviewAttachment}
+              onRemove={() => onRemoveAttachment(i)}
+            />
+          </ComposerRelocationMenu>
         {/each}
       </div>
     {/if}

@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { Check, ChevronDown, Loader2, Pencil, RotateCcw, Save, X } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { WorkerNameSettings } from '$shared/assignment/worker-names'
@@ -80,7 +86,7 @@
   }
 </script>
 
-<section class="mt-4 rounded-xl border bg-surface" aria-labelledby="worker-names-heading">
+<section class="mt-4 border bg-surface" aria-labelledby="worker-names-heading">
   <div class="flex items-start justify-between gap-4 p-4">
     <div>
       <h2 id="worker-names-heading" class="text-sm font-semibold">Worker name pool</h2>
@@ -91,13 +97,13 @@
     {#if !editing}
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         title="Edit the worker name pool"
         aria-label="Edit the worker name pool"
         disabled={!settingsReady || loading}
         onclick={startEditing}
       >
-        <Pencil size={13} />
+        <CioPencil size={13} />
         Edit names
       </button>
     {/if}
@@ -105,7 +111,7 @@
 
   {#if loading}
     <div class="flex items-center gap-2 border-t px-4 py-3 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading worker names…
+      <CioSpinner size={14} class="animate-spin" /> Loading worker names…
     </div>
   {:else}
     <details class="border-t group">
@@ -115,7 +121,7 @@
         <span
           ><strong class="text-foreground">{settings.defaults.length}</strong> default names</span
         >
-        <ChevronDown size={14} class="transition-transform group-open:rotate-180" />
+        <CioChevronDown size={14} class="transition-transform group-open:rotate-180" />
       </summary>
       <div
         class="grid grid-cols-2 gap-x-4 gap-y-1 border-t px-4 py-3 text-xs text-muted sm:grid-cols-3"
@@ -146,39 +152,39 @@
       <p class="mt-1 text-xs text-muted">Use a JSON array containing one string per worker name.</p>
       <textarea
         id="worker-names-json"
-        class="mt-3 min-h-56 w-full resize-y rounded-lg border bg-elevated p-3 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary"
+        class="mt-3 min-h-56 w-full resize-y border bg-elevated p-3 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary"
         bind:value={draft}
         spellcheck="false"></textarea>
       <div class="mt-3 flex items-center justify-between gap-3">
         <div class="min-h-5 text-xs" aria-live="polite">
           {#if error}<span class="text-danger">{error}</span>{:else if saved}<span
-              class="flex items-center gap-1 text-primary"><Check size={13} /> Saved</span
+              class="flex items-center gap-1 text-primary"><CioCheck size={13} /> Saved</span
             >{/if}
         </div>
         <div class="flex gap-2">
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-elevated"
+            class="flex items-center gap-1.5 border px-3 py-1.5 text-xs hover:bg-elevated"
             title="Cancel editing worker names"
             aria-label="Cancel editing worker names"
             onclick={cancelEditing}
-            disabled={saving}><X size={13} /> Cancel</button
+            disabled={saving}><CioClose size={13} /> Cancel</button
           >
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs hover:bg-elevated"
+            class="flex items-center gap-1.5 border px-3 py-1.5 text-xs hover:bg-elevated"
             title="Reset custom JSON to the defaults"
             aria-label="Reset custom JSON to the defaults"
             onclick={() => (draft = JSON.stringify(settings.defaults, null, 2))}
-            disabled={saving}><RotateCcw size={13} /> Reset</button
+            disabled={saving}><CioUndo size={13} /> Reset</button
           >
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs text-on-primary hover:bg-primary-hover disabled:opacity-50"
             title="Save custom worker names"
             aria-label="Save custom worker names"
             onclick={() => void save()}
-            disabled={saving}><Save size={13} /> Save</button
+            disabled={saving}><CioSave size={13} /> Save</button
           >
         </div>
       </div>

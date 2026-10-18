@@ -58,9 +58,9 @@ export type BehaviorMode = 'brainstorm' | 'implement' | 'chat' | 'assistant'
 /**
  * Runtime scope deciding whether the user-editable Agent behavior is applicable.
  *
- * `'assistant'` is its own class: a routine run is neither a project thread nor
+ * `'assistant'` is its own class: an assistant run is neither a project thread nor
  * a chat, so it carries the app-owned assistant prompt instead of the
- * engineering work-ethics prompt, and its workspace is the routine's own
+ * engineering work-ethics prompt, and its workspace is the assistant's own
  * app-storage directory rather than a project the user opened.
  */
 export type BehaviorExecutionScope =
@@ -72,7 +72,7 @@ export type BehaviorExecutionScope =
  * - `'abbreviated'`: a compact scope guard for trimmed modes that still run
  *   inside a real project directory (file-system chat, ephemeral, brainstorm,
  *   PR compose)   the control-plane guarantee is kept, not silently dropped.
- * - `'assistant'`: the assistant's own guard, which names the routine's
+ * - `'assistant'`: the assistant's own guard, which names the assistant's
  *   app-storage workspace instead of claiming a project the user never opened,
  *   and keeps the harness boundary and the citation rules.
  * - `'omitted'`: no guard at all for pure inbox chat (no project scope) and
@@ -127,7 +127,7 @@ export class PromptAssembler {
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
     workspaceScope: WorkspaceScopeMode = 'full',
-    routineId?: string
+    assistantId?: string
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
@@ -186,7 +186,12 @@ export class PromptAssembler {
       })
     )
 
-    const memory = await this.memoryService.formatCurrent(projectId, threadId, modelKey, routineId)
+    const memory = await this.memoryService.formatCurrent(
+      projectId,
+      threadId,
+      modelKey,
+      assistantId
+    )
     layers.push(
       withLayerAccounting({
         title: 'Memory',
@@ -238,7 +243,7 @@ export class PromptAssembler {
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
     workspaceScope: WorkspaceScopeMode = 'full',
-    routineId?: string
+    assistantId?: string
   ): Promise<string> {
     return (
       await this.getAssembledPromptWithLayers(
@@ -253,7 +258,7 @@ export class PromptAssembler {
         modelKey,
         executionScope,
         workspaceScope,
-        routineId
+        assistantId
       )
     ).prompt
   }
@@ -279,7 +284,7 @@ export class PromptAssembler {
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
     workspaceScope: WorkspaceScopeMode = 'full',
-    routineId?: string
+    assistantId?: string
   ): Promise<{ prompt: string; layers: BehaviorLayer[] }> {
     const layers = await this.getLayers(
       projectId,
@@ -292,7 +297,7 @@ export class PromptAssembler {
       modelKey,
       executionScope,
       workspaceScope,
-      routineId
+      assistantId
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)
@@ -335,10 +340,11 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     '',
     'AGENT SCRATCH SPACE   where non-source outputs live:',
     `1. The project's \`.cio/\` folder is the agent scratch pad. ${APP_NAME} creates it when the project is added and gitignores it from day one, so nothing inside it is ever committed.`,
-    '2. Unless the user explicitly asks otherwise, route every artifact that is not part of the application source into the `.cio/` subfolder rule 3 names for it: context documents, walkthroughs, reports, and test output. Disposable scratch, probes, and intermediate files belong in `.cio/tmp/`. Never write files at the `.cio/` root, and name every file so a human can read it at a glance.',
+    '2. Unless the user explicitly asks otherwise, route every artifact that is not part of the application source, and is not authored work (rule 6), into the `.cio/` subfolder rule 3 names for it: context documents, walkthroughs, reports, and test output. Disposable scratch, probes, and intermediate files belong in `.cio/tmp/`. Never write files at the `.cio/` root, and name every file so a human can read it at a glance.',
     '3. Scratch routing is mode-dependent: only Engineering mode (`engineer`, `assignment`, or `achievement`) may use CodeInOven-managed lifecycle files (spec.md, plan.md, progress.md, Assignment, audit, and task evidence) under `.cio/specs/<feature-slug>/`. Regular chats and every other mode must not create, modify, or use `.cio/specs/`; put their non-source work (including walkthroughs, reports, test output, and any chat plan/progress notes) in `.cio/work/<feature>/`.',
     '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
     '5. In Engineering mode, the platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite those platform-owned files. In regular chats, `.cio/specs/` is out of scope and must not be created or overwritten.',
+    "6. Authored work is not scratch: a design or a composition is a deliverable the user reviews on a board that lists this project's design and video folders, so it is written into the project's own design or video folder (`.cio/designs` and `.cio/videos` by default, or whichever folder the project was pointed at for that kind) and never into `.cio/work`, which the board does not read. A design under `.cio/work` is work the user cannot find.",
     '',
     'CITATION & SOURCE RULES   apply to every report, answer, and artifact you produce:',
     '1. Cite the source of every factual claim. Files must be cited with their project-rooted relative path, e.g. `src/app.html`   never a bare filename like `app.html` and never a full absolute filesystem path, because the relative form is what renders as a clickable citation in the app UI.',
@@ -366,6 +372,7 @@ export function abbreviatedWorkspaceGuard(driver: DriverInfo | null, projectPath
     projectLine,
     'Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.',
     "Keep every non-source output inside the project's `.cio/` scratch space, with disposable scratch under `.cio/tmp/`; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).",
+    "Authored work is the exception: a design or a composition goes in this project's design or video folder, which is the only place the app's board lists it from, never in the scratch space.",
     'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.'
   ].join(' ')
 }
@@ -373,7 +380,7 @@ export function abbreviatedWorkspaceGuard(driver: DriverInfo | null, projectPath
 /**
  * Scope guard for an assistant task.
  *
- * A routine is neither a project thread nor a chat, so this names the routine's
+ * An assistant is neither a project thread nor a chat, so this names the assistant's
  * own workspace in app storage instead of claiming a project the user never
  * opened, and keeps the two guarantees that still apply: the harness is only the
  * execution engine, and every report cites its sources.
@@ -383,13 +390,13 @@ export function assistantWorkspaceGuard(driver: DriverInfo | null, projectPath: 
     ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs this session   it is NOT your project or the user's target.`
     : 'No agent harness is selected; this session may be limited.'
   const workspaceLine = projectPath.trim()
-    ? `Your workspace is ${projectPath}   this routine's own app-storage directory. Work inside it only.`
-    : 'Work only inside this routine\u2019s own workspace directory.'
+    ? `Your workspace is ${projectPath}   this assistant's own app-storage directory. Work inside it only.`
+    : 'Work only inside this assistant\u2019s own workspace directory.'
   return [
     harnessLine,
     workspaceLine,
     "Never read or write the user's other projects, and never inspect the agent harness's own repository or global configuration.",
-    'Keep every artifact the routine produces inside that workspace, and cite the source of every factual claim: a file by its path inside the workspace, an external reference as a Markdown link (e.g. `[issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a bare filename.'
+    'Keep every artifact the assistant produces inside that workspace, and cite the source of every factual claim: a file by its path inside the workspace, an external reference as a Markdown link (e.g. `[issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a bare filename.'
   ].join(' ')
 }
 

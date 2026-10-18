@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageSquarePlus } from '@lucide/svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
   import type {
     CapturableSpecContextType,
     EngineeringSpec,
@@ -53,7 +53,7 @@
     <section id="spec-section-tldr" class="scroll-mt-5">
       <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
       <EditableMarkdown
-        class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+        class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
         text={draft.content.resolutionSummary}
         ariaLabel="Specification TL;DR"
         onChange={(value) => edits.setString('resolutionSummary', value)}
@@ -67,13 +67,13 @@
         onclick={(event: MouseEvent) => onAnnotate('problem', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Problem</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />
       </button>
       <EditableMarkdown
-        class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+        class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
         text={draft.content.problem}
         ariaLabel="Problem statement"
         onChange={(value) => edits.setString('problem', value)}
@@ -111,13 +111,13 @@
         onclick={(event: MouseEvent) => onAnnotate('test_strategy', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Test strategy</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />
       </button>
       <EditableMarkdown
-        class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+        class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
         text={draft.content.testStrategy}
         ariaLabel="Test strategy"
         onChange={(value) => edits.setString('testStrategy', value)}
@@ -152,13 +152,13 @@
           onclick={(event: MouseEvent) => onAnnotate('additional_info', event)}
         >
           <span class="text-xl font-semibold tracking-tight">Additional info</span>
-          <MessageSquarePlus
+          <CioMessagePlus
             size={14}
             class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
           />
         </button>
         <EditableMarkdown
-          class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+          class="mt-3 whitespace-pre-wrap px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
           text={draft.content.additionalInfo}
           ariaLabel="Additional info"
           onChange={(value) => edits.setString('additionalInfo', value)}
@@ -182,13 +182,13 @@
         onclick={(event: MouseEvent) => onAnnotate('commit_pattern', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Commit pattern</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />
       </button>
       <EditableMarkdown
-        class="mt-3 block rounded-lg bg-surface px-3 py-2 font-mono text-xs outline-none"
+        class="mt-3 block border border-border bg-surface px-3 py-2 font-mono text-xs outline-none"
         text={draft.content.commitPattern}
         ariaLabel="Commit pattern"
         onChange={(value) => edits.setString('commitPattern', value)}
@@ -210,7 +210,7 @@
         onclick={(event: MouseEvent) => onAnnotate('constraints_risks', event)}
       >
         <span class="text-xl font-semibold tracking-tight">Constraints & risks</span>
-        <MessageSquarePlus
+        <CioMessagePlus
           size={14}
           class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />

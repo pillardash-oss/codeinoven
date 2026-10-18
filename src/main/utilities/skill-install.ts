@@ -19,7 +19,7 @@ import type { UtilityScopeFootprintService } from './utility-scope-footprint'
 import { UtilityRegistryService } from './utility-registry-service'
 
 /**
- * The one routine that puts a marketplace skill where the install card says.
+ * The one assistant that puts a marketplace skill where the install card says.
  *
  * Install and update both go through it, so a background update can never land
  * a skill somewhere the card does not advertise, and the install record it

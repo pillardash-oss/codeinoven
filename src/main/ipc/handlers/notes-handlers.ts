@@ -210,6 +210,15 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
     )
   )
   ipcMain.handle(
+    'thread:setBookmarked',
+    (_, projectId: unknown, threadId: unknown, bookmarked: unknown) =>
+      threadManager.setBookmarked(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateBoolean(bookmarked, 'Bookmarked')
+      )
+  )
+  ipcMain.handle(
     'thread:setContextUsage',
     async (_, projectId: unknown, threadId: unknown, usage: unknown) => {
       const parsed = parseThreadContextUsage(usage)
@@ -234,6 +243,10 @@ export function registerNotesHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
     return threadManager.markRead(projectId, safeThreadId)
+  })
+  ipcMain.handle('thread:markUnread', async (_, projectId: string, threadId: string) => {
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    return threadManager.markUnread(projectId, safeThreadId)
   })
   ipcMain.handle(
     'thread:draftActivity',

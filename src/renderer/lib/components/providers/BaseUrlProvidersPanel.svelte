@@ -1,17 +1,16 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFilter from '@pillardash-oss/cio-icon/CioFilter.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import {
-    AlertTriangle,
-    ListFilter,
-    Loader2,
-    Pencil,
-    Plus,
-    RefreshCw,
-    Server,
-    Trash2,
-    X
-  } from '@lucide/svelte'
+
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -144,7 +143,7 @@
 
 <section class="space-y-4">
   {#if baseUrlProviderStore.error}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {baseUrlProviderStore.error}
     </p>
   {/if}
@@ -160,20 +159,20 @@
           >
             <button
               type="button"
-              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
+              class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
               aria-pressed={!harnessFilterActive}
               title="Show providers for all harnesses"
               onclick={clearHarnessFilter}
             >
-              <ListFilter size={11} class="shrink-0" />
+              <CioFilter size={11} class="shrink-0" />
               All
             </button>
             {#each filterHarnesses as harness (harness.id)}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
+                class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
                   harness.id
                 )
                   ? 'border-primary bg-primary text-on-primary'
@@ -189,11 +188,11 @@
             {#if harnessFilterActive}
               <button
                 type="button"
-                class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
+                class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
                 title="Clear harness filter"
                 onclick={clearHarnessFilter}
               >
-                <X size={11} /> Clear
+                <CioClose size={11} /> Clear
               </button>
             {/if}
           </div>
@@ -201,38 +200,38 @@
       </div>
       <div class="flex gap-2">
         <button
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-8 shrink-0 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Refresh base URL providers"
           disabled={baseUrlProviderStore.loading}
           onclick={() => void baseUrlProviderStore.load()}
         >
-          <RefreshCw size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
+          <CioRefresh size={13} class={baseUrlProviderStore.loading ? 'animate-spin' : ''} /> Refresh
         </button>
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          class="flex h-8 items-center gap-1.5 bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
           title="Add base URL provider"
           onclick={openCreate}
         >
-          <Plus size={13} /> Add provider
+          <CioPlus size={13} /> Add provider
         </button>
       </div>
     </div>
 
     {#if baseUrlProviderStore.loading && baseUrlProviderStore.providers.length === 0}
-      <div class="rounded-xl border border-dashed p-6 text-center">
-        <Loader2 size={17} class="mx-auto animate-spin text-dimmed" />
+      <div class="border border-dashed p-6 text-center">
+        <CioSpinner size={17} class="mx-auto animate-spin text-dimmed" />
       </div>
     {:else if baseUrlProviderStore.providers.length === 0}
-      <div class="rounded-xl border border-dashed p-5 text-center">
-        <Server size={17} class="mx-auto mb-1.5 text-dimmed" />
+      <div class="border border-dashed p-5 text-center">
+        <CioServer size={17} class="mx-auto mb-1.5 text-dimmed" />
         <p class="text-xs text-muted">No custom base URL providers yet.</p>
         <button class="mt-2 text-xs font-medium text-primary hover:underline" onclick={openCreate}>
           Add the first provider
         </button>
       </div>
     {:else if filteredGroups.length === 0}
-      <div class="rounded-xl border border-dashed p-5 text-center">
-        <ListFilter size={17} class="mx-auto mb-1.5 text-dimmed" />
+      <div class="border border-dashed p-5 text-center">
+        <CioFilter size={17} class="mx-auto mb-1.5 text-dimmed" />
         <p class="text-xs text-muted">No providers match the selected harnesses.</p>
         <button
           class="mt-2 text-xs font-medium text-primary hover:underline"
@@ -242,7 +241,7 @@
         </button>
       </div>
     {:else}
-      <div class="overflow-hidden rounded-xl border bg-surface">
+      <div class="overflow-hidden border bg-surface">
         {#each filteredGroups as group (group[0].id)}
           {@const provider = group[0]}
           <div
@@ -252,7 +251,7 @@
               <div class="flex items-center gap-2">
                 <p class="truncate text-xs font-semibold">{provider.name}</p>
                 <span
-                  class="rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium {provider.enabled
+                  class="border border-border px-1.5 py-0.5 text-[0.625rem] font-medium {provider.enabled
                     ? 'bg-success/10 text-success'
                     : 'bg-raised text-dimmed'}"
                 >
@@ -262,7 +261,7 @@
               <div class="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
                 {#each group as member (member.harnessId)}
                   <span
-                    class="flex items-center gap-1 rounded-full bg-raised px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+                    class="flex items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] text-dimmed"
                     title={providerName(member.harnessId)}
                   >
                     <AgentIcon
@@ -284,20 +283,20 @@
             </p>
             <div class="flex items-center gap-1">
               <button
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-overlay hover:text-foreground"
+                class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                 aria-label="Edit {provider.name}"
                 title="Edit {provider.name}"
                 onclick={() => openEdit(group)}
               >
-                <Pencil size={13} />
+                <CioPencil size={13} />
               </button>
               <button
-                class="flex h-7 w-7 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                class="flex h-7 w-7 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
                 aria-label="Delete {provider.name}"
                 title="Delete {provider.name}"
                 onclick={() => (deleteTarget = group)}
               >
-                <Trash2 size={13} />
+                <CioTrash size={13} />
               </button>
             </div>
           </div>
@@ -314,19 +313,19 @@
 >
   {#snippet footer()}
     <button
-      class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
       type="button"
       onclick={() => (deleteTarget = null)}
     >
       Cancel
     </button>
     <button
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+      class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
       type="button"
       disabled={baseUrlProviderStore.saving}
       onclick={() => void removeProvider()}
     >
-      {#if baseUrlProviderStore.saving}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+      {#if baseUrlProviderStore.saving}<CioSpinner size={13} class="animate-spin" />{:else}<CioTrash
           size={13}
         />{/if}
       Delete provider
@@ -334,12 +333,12 @@
   {/snippet}
 
   {#if editorError}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {editorError}
     </p>
   {/if}
   <div class="flex gap-2 text-sm text-muted">
-    <AlertTriangle size={16} class="mt-0.5 shrink-0 text-warning" />
+    <CioAttention size={16} class="mt-0.5 shrink-0 text-warning" />
     <p>
       Delete <strong class="text-foreground">{deleteTarget?.[0]?.name}</strong>?
       {#if deleteTarget && deleteTarget.length > 1}

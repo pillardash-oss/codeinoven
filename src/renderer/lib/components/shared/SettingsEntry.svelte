@@ -4,7 +4,7 @@
 </script>
 
 <div
-  class="rounded-xl border bg-surface p-4 transition-colors {expanded
+  class="border bg-surface p-4 transition-colors {expanded
     ? 'border-l-[3px] border-l-primary'
     : ''}"
 >

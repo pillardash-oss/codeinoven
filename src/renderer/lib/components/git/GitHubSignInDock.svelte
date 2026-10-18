@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Loader2, TimerOff, TriangleAlert, X } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTimerOff from '@pillardash-oss/cio-icon/CioTimerOff.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -63,10 +67,10 @@
 >
   {#snippet dock()}
     <DockRow {storageKey} label="Move docked GitHub sign-in">
-      <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+      <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
         <button
           type="button"
-          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
           title={restoreLabel}
           aria-label={restoreLabel}
           onclick={() => githubSignIn.expand()}
@@ -79,24 +83,24 @@
             </span>
           </span>
           {#if githubSignIn.waiting}
-            <Loader2 size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+            <CioSpinner size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
           {:else if githubSignIn.phase === 'authorized'}
-            <Check size={11} class="shrink-0 text-success" aria-hidden="true" />
+            <CioCheck size={11} class="shrink-0 text-success" aria-hidden="true" />
           {:else if githubSignIn.phase === 'expired'}
-            <TimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
+            <CioTimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
           {:else}
-            <TriangleAlert size={11} class="shrink-0 text-danger" aria-hidden="true" />
+            <CioAttention size={11} class="shrink-0 text-danger" aria-hidden="true" />
           {/if}
         </button>
         <span class="h-5 w-px bg-border"></span>
         <button
           type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={dismissLabel}
           title={dismissLabel}
           onclick={() => githubSignIn.close()}
         >
-          <X size={14} />
+          <CioClose size={14} />
         </button>
       </div>
     </DockRow>

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Copy } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
   import { copyText } from '$lib/copy-text'
   import Modal from '../ui/Modal.svelte'
 
@@ -45,28 +46,28 @@
       Follow this to produce the answer. Select any part you need, or copy the whole instruction.
     </p>
     <pre
-      class="max-h-[60dvh] overflow-auto rounded-lg border bg-elevated px-3 py-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground select-text">{instruction}</pre>
+      class="max-h-[60dvh] overflow-auto border bg-elevated px-3 py-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground select-text">{instruction}</pre>
   </div>
 
   {#snippet footer()}
     <button
       type="button"
       data-modal-dismiss
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       onclick={onClose}
     >
       Close
     </button>
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary transition-opacity hover:opacity-90"
+      class="flex items-center gap-1.5 bg-primary px-3 py-2 text-sm font-semibold text-on-primary transition-opacity hover:opacity-90"
       onclick={() => void copy()}
     >
       {#if copied}
-        <Check size={14} />
+        <CioCheck size={14} />
         Copied
       {:else}
-        <Copy size={14} />
+        <CioCopy size={14} />
         Copy instruction
       {/if}
     </button>

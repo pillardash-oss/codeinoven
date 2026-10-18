@@ -129,14 +129,14 @@ export function inspectorInstallScript(key: string): string {
     const CSS = [
       ':host{all:initial}',
       '.cio-layer{position:fixed;inset:0;pointer-events:none;z-index:2147483646}',
-      '.cio-box{position:fixed;box-sizing:border-box;border-radius:2px;pointer-events:none}',
+      '.cio-box{position:fixed;box-sizing:border-box;pointer-events:none}',
       '.cio-hover{background:color-mix(in srgb,var(--cio-accent,#d4af37) 18%,transparent);outline:1px solid var(--cio-accent,#d4af37)}',
-      '.cio-marked{position:fixed;box-sizing:border-box;border-radius:2px;pointer-events:none;outline:1px solid color-mix(in srgb,var(--cio-accent,#d4af37) 50%,transparent);transition:background-color .12s ease,outline-color .12s ease}',
+      '.cio-marked{position:fixed;box-sizing:border-box;pointer-events:none;outline:1px solid color-mix(in srgb,var(--cio-accent,#d4af37) 50%,transparent);transition:background-color .12s ease,outline-color .12s ease}',
       '.cio-marked[data-hover="1"]{background:color-mix(in srgb,var(--cio-accent,#d4af37) 14%,transparent);outline:2px solid var(--cio-accent,#d4af37)}',
       '.cio-marked[data-active="1"]{background:color-mix(in srgb,var(--cio-accent,#d4af37) 10%,transparent);outline:2px solid var(--cio-accent,#d4af37)}',
-      '.cio-label{position:fixed;pointer-events:none;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;border-radius:2px;background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:400 12px/1.33 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 12px 28px rgba(0,0,0,.22),0 2px 6px rgba(0,0,0,.14)}',
+      '.cio-label{position:fixed;pointer-events:none;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:400 12px/1.33 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 12px 28px rgba(0,0,0,.22),0 2px 6px rgba(0,0,0,.14)}',
       '.cio-label .d{opacity:.66}',
-      '.cio-pin{position:fixed;pointer-events:auto;cursor:pointer;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:999px;border:1px solid var(--cio-foreground,#081825);background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:600 11px/1 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 2px 10px rgba(0,0,0,.28);transition:border-color .12s ease,color .12s ease}',
+      '.cio-pin{position:fixed;pointer-events:auto;cursor:pointer;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--cio-foreground,#081825);background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:600 11px/1 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 2px 10px rgba(0,0,0,.28);transition:border-color .12s ease,color .12s ease}',
       '.cio-pin svg{width:12px;height:12px;flex:none}',
       '.cio-pin[data-comment="1"]{border-color:var(--cio-accent,#d4af37);color:var(--cio-accent,#d4af37)}',
       '.cio-pin[data-active="1"]{outline:2px solid var(--cio-accent,#d4af37);outline-offset:1px}'

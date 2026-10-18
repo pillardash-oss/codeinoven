@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Eye, Globe, Loader2, Mic, Moon, Pin, Volume2, VolumeX, X } from '@lucide/svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
+  import CioMoon from '@pillardash-oss/cio-icon/CioMoon.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pillardash-oss/cio-icon/CioVolumeX.svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -19,7 +27,8 @@
   import {
     browserAppearanceAccent,
     browserAppearanceHasIcon,
-    browserAppearanceIconUrl
+    browserAppearanceIconUrl,
+    browserGroupAccent
   } from './browser-group-appearance'
 
   interface Props {
@@ -99,6 +108,30 @@
     return { harnessId, providerId, providerName }
   })
   const groups = $derived(globalBrowser.groups)
+  /** The group this row's tab is filed under, when it has one. */
+  const group = $derived(
+    tab.groupId ? (groups.find((entry) => entry.id === tab.groupId) ?? null) : null
+  )
+  /**
+   * The colour the tab on screen wears. A tab's own colour wins, and a tab with
+   * none borrows its group's accent, so an active tab filed under a group reads
+   * as that group the way a thread reads as its project. A tab with neither has
+   * no colour to fill with and falls back to the plain elevated surface.
+   */
+  const activeAccent = $derived(accent ?? (group ? browserGroupAccent(group) : null))
+  /**
+   * The fill of the active row. The group's identity is a left border, so the
+   * active tab is the only place colour fills: the tab's own accent is mixed
+   * into the elevated surface to make the page on screen the prominent block,
+   * exactly as the selected thread row is the prominent one in the thread list.
+   */
+  const activeRowStyle = $derived(
+    active
+      ? activeAccent
+        ? `background-color: color-mix(in srgb, ${activeAccent} 30%, var(--color-elevated))`
+        : 'background-color: var(--color-elevated)'
+      : undefined
+  )
   /** The box this tab runs in, or null in the default jar. Drives the row's box
    *  badge and the menu's reopen targets. */
   const box = $derived(tab.boxId ? globalBrowser.boxById(tab.boxId) : null)
@@ -312,11 +345,14 @@
 </script>
 
 <div
-  class="group flex items-center rounded-md transition-colors {dropTarget
+  class="group flex items-center transition-colors {dropTarget
     ? 'bg-info/10'
-    : highlighted
-      ? 'bg-elevated'
-      : 'hover:bg-elevated'}"
+    : active
+      ? ''
+      : highlighted
+        ? 'bg-elevated'
+        : 'hover:bg-elevated'}"
+  style={activeRowStyle}
   role="group"
   aria-label={`${label} tab row`}
   data-browser-tab-id={tab.id}
@@ -324,7 +360,7 @@
 >
   <button
     type="button"
-    class="flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 pl-2 text-left"
+    class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 pl-2 text-left"
     aria-current={active}
     aria-pressed={selected}
     title={tab.url || label}
@@ -344,13 +380,13 @@
   >
     <span class="flex h-4 w-4 shrink-0 items-center justify-center">
       {#if customIconUrl}
-        <img src={customIconUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+        <img src={customIconUrl} alt="" class="h-4 w-4 object-contain" />
       {:else if runtime.loading}
-        <Loader2 size={13} class="animate-spin text-muted" />
+        <CioSpinner size={13} class="animate-spin text-muted" />
       {:else if tab.favicon}
-        <img src={tab.favicon} alt="" class="h-4 w-4 rounded-sm object-contain" />
+        <img src={tab.favicon} alt="" class="h-4 w-4 object-contain" />
       {:else}
-        <Globe size={12} class="text-dimmed" />
+        <CioBrowser size={12} class="text-dimmed" />
       {/if}
     </span>
     <span class="flex min-w-0 flex-1 flex-col">
@@ -358,7 +394,7 @@
         class="truncate text-xs {tab.hibernated && !highlighted
           ? 'text-dimmed'
           : 'text-foreground'} {highlighted ? 'font-medium' : ''}"
-        style={accent ? `color: ${accent}` : undefined}
+        style={!active && accent ? `color: ${accent}` : undefined}
       >
         {label}
       </span>
@@ -388,9 +424,9 @@
         aria-label={`In box ${box.name}`}
       >
         {#if boxIcon}
-          <img src={boxIcon} alt="" class="h-3 w-3 rounded-sm object-contain" />
+          <img src={boxIcon} alt="" class="h-3 w-3 object-contain" />
         {:else}
-          <span class="h-2.5 w-2.5 rounded-full" style="background-color: {boxAccent}"></span>
+          <span class="h-2.5 w-2.5" style="background-color: {boxAccent}"></span>
         {/if}
       </span>
     {/if}
@@ -401,7 +437,7 @@
         title="Pinned tab"
         aria-label="Pinned tab"
       >
-        <Pin size={12} />
+        <CioPin size={12} />
       </span>
     {/if}
     {#if threadNotesState.has(tab.id)}
@@ -420,7 +456,7 @@
         role="img"
         class="flex h-6 w-6 items-center justify-center text-accent"
         title="Peek open on this tab"
-        aria-label="Peek open on this tab"><Eye size={12} /></span
+        aria-label="Peek open on this tab"><CioEye size={12} /></span
       >
     {/if}
     {#if runtime.capturing}
@@ -430,13 +466,13 @@
         title={BROWSER_TAB_CAPTURE_LABEL}
         aria-label={BROWSER_TAB_CAPTURE_LABEL}
       >
-        <Mic size={12} />
+        <CioMic size={12} />
       </span>
     {/if}
     {#if runtime.audible || runtime.muted}
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded-md text-accent transition-colors hover:bg-overlay"
+        class="flex h-6 w-6 items-center justify-center text-accent transition-colors hover:bg-overlay"
         aria-pressed={runtime.muted}
         title={browserTabMuteLabel(runtime.muted)}
         aria-label={browserTabMuteLabel(runtime.muted)}
@@ -446,9 +482,9 @@
         }}
       >
         {#if runtime.muted}
-          <VolumeX size={12} />
+          <CioVolumeX size={12} />
         {:else}
-          <Volume2 size={12} />
+          <CioVolume size={12} />
         {/if}
       </button>
     {:else if tab.hibernated}
@@ -458,17 +494,17 @@
         title="Hibernated to save memory. Open the tab to reload it."
         aria-label="Hibernated tab"
       >
-        <Moon size={12} />
+        <CioMoon size={12} />
       </span>
     {/if}
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-md text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
+      class="flex h-6 w-6 items-center justify-center text-muted opacity-0 transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100"
       aria-label={`Close ${label}`}
       title={`Close ${label}`}
       onclick={closeTab}
     >
-      <X size={12} />
+      <CioClose size={12} />
     </button>
   </div>
 </div>

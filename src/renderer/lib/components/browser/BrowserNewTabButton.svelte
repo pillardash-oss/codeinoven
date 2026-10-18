@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Plus } from '@lucide/svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
@@ -27,13 +27,13 @@
   {#snippet trigger()}
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
       aria-label="New browser tab"
       title="New tab"
       data-shortcut={keymapState.keysFor('browser-new-tab').join(',')}
       onclick={() => globalBrowser.openNewTabAddress()}
     >
-      <Plus size={15} strokeWidth={1.8} />
+      <CioPlus size={15} strokeWidth={1.8} />
     </button>
   {/snippet}
 </BrowserNewTabMenu>

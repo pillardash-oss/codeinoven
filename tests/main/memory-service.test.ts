@@ -222,24 +222,24 @@ describe('MemoryService', () => {
 
   it('loads routine memory only for tasks of that routine', async () => {
     const { service } = await openMemoryService()
-    await service.addEntry('Routine A rule', 'Applies to routine A tasks.', {
+    await service.addEntry('Assistant A rule', 'Applies to routine A tasks.', {
       scopes: ['routine'],
-      routineId: 'routine-a'
+      assistantId: 'assistant-a'
     })
 
-    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-1', 'routine-a'))).toContain(
-      'Routine A rule'
+    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-1', 'assistant-a'))).toContain(
+      'Assistant A rule'
     )
-    expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-2', 'routine-b'))).not.toContain(
-      'Routine A rule'
-    )
+    expect(
+      labels(await service.current(ASSISTANT_SPACE_ID, 'task-2', 'assistant-b'))
+    ).not.toContain('Assistant A rule')
     // A task whose routine is unknown never receives another routine's memory.
     expect(labels(await service.current(ASSISTANT_SPACE_ID, 'task-3'))).not.toContain(
-      'Routine A rule'
+      'Assistant A rule'
     )
     // Routine memory never leaks into a project context, even with a matching id.
-    expect(labels(await service.current('project-1', 'thread-1', 'routine-a'))).not.toContain(
-      'Routine A rule'
+    expect(labels(await service.current('project-1', 'thread-1', 'assistant-a'))).not.toContain(
+      'Assistant A rule'
     )
   })
 

@@ -3,8 +3,10 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
+import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
+import { installForceRestartMenu } from './system/force-restart'
 import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
@@ -48,7 +50,12 @@ import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
-import { computeAttention, hasUpcomingWork } from './system/background-work-state'
+import {
+  computeAttention,
+  countWorkingThreads,
+  hasUpcomingWork,
+  residencyReason
+} from './system/background-work-state'
 import { handleFatalStartup } from './bootstrap/fatal-startup'
 import { startStartupUpdater } from './bootstrap/startup-updater'
 import { getMainBundleDirectory } from './bootstrap/bundle-directory'
@@ -77,7 +84,12 @@ app.enableSandbox()
 // Custom scheme must be registered as privileged before the app is ready so
 // Chromium recognizes it when the renderer frames `appfile://` previews.
 registerFilePreviewScheme()
-if (process.platform === 'win32') {
+// A packaged (MSIX) build already has an Application User Model ID that Windows
+// derives from its package identity, and Windows attributes toasts and taskbar
+// pinning to whichever AUMID the process claims. Overriding it there would
+// detach notifications from the package that owns them, so the explicit
+// reverse-DNS id is only set for the traditionally installed build.
+if (process.platform === 'win32' && !isWindowsStorePackage()) {
   app.setAppUserModelId(APP_ID)
 }
 if (app.isPackaged) {
@@ -191,6 +203,10 @@ const featuresReadyPromise = new Promise<void>((resolve) => {
 function markWorkspaceReadyIfInteractive(): void {
   if (!state.rendererReadyReported || !state.featuresReady) return
   startupTelemetry.mark('workspace:ready')
+  // The app is interactive: boot the embedding model behind the settled
+  // workspace so the first Cmd+K thread search ranks semantically instead of
+  // paying the model load inside its answer. No-op unless intent search is on.
+  state.searchService?.warm()
   void completeStartupIfReady()
 }
 
@@ -288,23 +304,40 @@ function getAppIconPath(): string {
     : join(mainBundleDirectory, '../renderer/icon.png')
 }
 
-/** macOS-specific icon artwork, sized per Apple guidelines. */
-function getMacIconPath(): string {
-  return !isProduction && is.dev
-    ? join(app.getAppPath(), 'src/renderer/static/macos/AppIcon512.png')
-    : join(mainBundleDirectory, '../renderer/macos/AppIcon512.png')
-}
-
 /**
  * Menu bar template art. macOS derives the tint from the alpha channel of a
  * `...Template.png` file, so the attention variant is a second asset rather
  * than a second colour.
  */
-function getTrayIconPath(attention: boolean): string {
+function getTrayIconPath(attention: boolean, darkTaskbar = false): string {
+  if (process.platform === 'win32') {
+    const name = `tray${attention ? 'Attention' : ''}-${darkTaskbar ? 'dark' : 'light'}.ico`
+    return !isProduction && is.dev
+      ? join(app.getAppPath(), 'src/renderer/static/windows', name)
+      : join(mainBundleDirectory, '../renderer/windows', name)
+  }
   const name = attention ? 'trayAttentionTemplate.png' : 'trayTemplate.png'
   return !isProduction && is.dev
     ? join(app.getAppPath(), 'src/renderer/static/macos', name)
     : join(mainBundleDirectory, '../renderer/macos', name)
+}
+
+/**
+ * The menu bar working-figure strip: the plain resolution and its Retina pair.
+ *
+ * One file per resolution holds every figure as a cell (see
+ * `src/lib/tray-count-art.ts`), which is what keeps the repository from
+ * carrying a template per count. Only macOS reads it.
+ */
+function getTrayCountStripPaths(): { base: string; retina: string } {
+  const directory =
+    !isProduction && is.dev
+      ? join(app.getAppPath(), 'src/renderer/static/macos')
+      : join(mainBundleDirectory, '../renderer/macos')
+  return {
+    base: join(directory, 'trayCountTemplate.png'),
+    retina: join(directory, 'trayCountTemplate@2x.png')
+  }
 }
 
 /**
@@ -358,15 +391,21 @@ const backgroundLifecycle = new BackgroundLifecycleService({
     }
   },
   hasUpcomingWork: () => hasUpcomingWork(state, database),
+  // The other half of the park decision: a windowless process only keeps its
+  // menu bar icon, its SQLite handle and its schedule alive for as long as this
+  // returns a reason (see `BackgroundLifecycleService.evaluateResidency`).
+  residencyReason: () => residencyReason(state, database),
   computeAttention: () => computeAttention(database),
+  countWorkingThreads: () => countWorkingThreads(database),
   onBecameOwner: () => {
     // A survivor that inherited the schedule picks up the slots missed while
     // nobody owned the scheduler.
-    void state.routineScheduler
+    void state.assistantScheduler
       ?.runPendingMisses()
       .catch((error) => Logger.error('Take-over catch-up failed:', error))
   },
-  resolveTrayIcon: (attention) => getTrayIconPath(attention)
+  resolveTrayIcon: (attention, darkTaskbar) => getTrayIconPath(attention, darkTaskbar),
+  resolveTrayCountStrip: () => getTrayCountStripPaths()
 })
 state.backgroundLifecycle = backgroundLifecycle
 
@@ -461,13 +500,30 @@ function createWindow(): BrowserWindow {
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
-    if (!state.quitCleanupStarted) {
-      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
-        state,
-        database,
-        storage
+    if (state.quitCleanupStarted) return
+    // A renderer that left on its own, or one that was asked to stop, did not
+    // fail to start. `clean-exit` is the renderer walking away (a window
+    // teardown, a navigation that swapped processes), and `killed` with the
+    // SIGTERM exit code is somebody ending it politely: the OS taking the tree
+    // down, a scripted stop, `kill`. Neither is a crash   a real renderer
+    // failure reports `crashed`, `oom`, or an abnormal exit. Judging a stop as a
+    // startup failure painted "The workspace could not open" over a workspace
+    // that had been open for hours, on every stop of `scripts/probe.ts`, and the
+    // dialog then held the dying process until something killed it.
+    const stopped =
+      details.reason === 'clean-exit' || (details.reason === 'killed' && details.exitCode === 15)
+    if (stopped) {
+      Logger.dev('Workspace renderer was stopped; the app is not asking for recovery', {
+        reason: details.reason,
+        exitCode: details.exitCode
       })
+      return
     }
+    void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+      state,
+      database,
+      storage
+    })
   })
   const floatingPanels = new NativeFloatingPanelWindow(window)
 
@@ -493,6 +549,13 @@ function createWindow(): BrowserWindow {
     if (state.quitConfirmed || state.quitCleanupStarted) return
     event.preventDefault()
     const park = !state.quitForUpdate && (state.backgroundLifecycle?.shouldPark() ?? false)
+    // Worth a line: a close that does not park is a quit, and the reason is the
+    // whole decision. Without it, "why did it quit" and "why is it still in the
+    // menu bar" are both unanswerable from outside the process.
+    Logger.dev('Close requested', {
+      park,
+      reason: state.backgroundLifecycle?.residencyReason() ?? null
+    })
     requestCloseConfirmation({ state, database, window: state.mainWindow, park })
   })
 
@@ -750,16 +813,7 @@ void app
     if (isProduction) {
       installProductionApplicationMenu(APP_NAME)
     }
-
-    // In dev the raw Electron binary lacks a bundled icon   set it explicitly.
-    // Cosmetic: must never abort the startup chain if the artwork is missing.
-    if (process.platform === 'darwin' && app.dock) {
-      try {
-        app.dock.setIcon(getMacIconPath())
-      } catch (error) {
-        Logger.error('dock icon setup failed (non-fatal):', error)
-      }
-    }
+    installForceRestartMenu(quitAppDirectly)
 
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([

@@ -1,13 +1,11 @@
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronRight,
-    FolderTree,
-    GripVertical,
-    Pin,
-    Plus,
-    TriangleAlert
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioGrip from '@pillardash-oss/cio-icon/CioGrip.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import StageContainer from './StageContainer.svelte'
   import ScopeHealthNotice from './ScopeHealthNotice.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
@@ -118,7 +116,7 @@
 </script>
 
 <section
-  class="relative flex w-full min-w-0 flex-col rounded-xl border {isArchived
+  class="relative flex w-full min-w-0 flex-col border {isArchived
     ? 'border-border bg-elevated/40'
     : 'bg-surface'} {bucket.collapsed ? 'h-10' : fill ? 'h-full' : 'h-120'} {scopeDropPosition
     ? 'ring-2 ring-primary/30'
@@ -131,30 +129,30 @@
   ondrop={handleScopeDrop}
 >
   <div
-    class="sticky top-0 z-40 flex h-10 shrink-0 items-center rounded-t-xl {isArchived
+    class="sticky top-0 z-40 flex h-10 shrink-0 items-center border-b border-border {isArchived
       ? 'bg-elevated/40'
       : 'bg-surface'} px-3"
   >
     <button
-      class="mr-1 flex h-7 w-5 shrink-0 cursor-grab items-center justify-center rounded-md text-dimmed hover:bg-elevated hover:text-foreground active:cursor-grabbing"
+      class="mr-1 flex h-7 w-5 shrink-0 cursor-grab items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground active:cursor-grabbing"
       aria-label="Move {bucket.name}"
       title="Drag to move scope"
       draggable="true"
       ondragstart={startScopeDrag}
       ondragend={() => (scopeDropPosition = null)}
     >
-      <GripVertical size={13} />
+      <CioGrip size={13} />
     </button>
     <button
-      class="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-elevated"
+      class="flex min-w-0 flex-1 items-center gap-2 px-1 py-1 text-left transition-colors hover:bg-elevated"
       aria-expanded={!bucket.collapsed}
       title="{bucket.collapsed ? 'Expand' : 'Collapse'} {bucket.name}"
       onclick={onToggle}
     >
       {#if bucket.collapsed}
-        <ChevronRight size={14} class="shrink-0 text-dimmed" />
+        <CioForward size={14} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronDown size={14} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={14} class="shrink-0 text-dimmed" />
       {/if}
       {#if bucket.iconType}
         <img
@@ -184,15 +182,15 @@
           aria-label="Pinned scope: threads never auto-clean and do not count toward the thread limit"
           title="Pinned scope: threads never auto-clean and do not count toward the thread limit"
         >
-          <Pin size={11} />
+          <CioPin size={11} />
         </span>
       {/if}
       {#if bucket.root.kind === 'worktree'}
         <span
-          class="flex shrink-0 items-center gap-1 rounded border border-overlay bg-overlay px-1 py-0.5 font-mono text-[0.5625rem] leading-none text-muted"
+          class="flex shrink-0 items-center gap-1 border border-overlay bg-overlay px-1 py-0.5 font-mono text-[0.5625rem] leading-none text-muted"
           title="Managed Git worktree scope on {bucket.root.branch}"
         >
-          <FolderTree size={9} class="text-warning" />
+          <CioFiles size={9} class="text-warning" />
           {bucket.root.branch}
         </span>
       {/if}
@@ -201,7 +199,7 @@
 
     {#if unhealthy}
       <button
-        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-warning transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 shrink-0 items-center justify-center text-warning transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Worktree problem in {bucket.name}: {healthDetail}. {repairable
           ? 'Click to repair.'
           : ''}"
@@ -210,17 +208,17 @@
           if (repairable) void actions.repairWorktree(bucket)
         }}
       >
-        <TriangleAlert size={13} />
+        <CioAttention size={13} />
       </button>
     {/if}
 
     <button
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="New thread in {bucket.name}"
       title="New thread in {bucket.name}"
       onclick={onCreateThread}
     >
-      <Plus size={14} />
+      <CioPlus size={14} />
     </button>
 
     <ScopeActionsMenu {bucket} {actions} />

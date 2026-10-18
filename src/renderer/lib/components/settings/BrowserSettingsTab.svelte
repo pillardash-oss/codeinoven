@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import { onMount } from 'svelte'
-  import { Plus, X } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import {
     DEFAULT_BROWSER_SEARCH_ENGINE_ID,
@@ -182,8 +184,12 @@
 
   <div class="space-y-4">
     <!-- Link routing -->
-    <div id="settings-block-browser-links" class="rounded-xl border bg-surface p-4">
-      <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Links</h3>
+    <div id="settings-block-browser-links" class="border bg-surface p-4">
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Links
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">Open localhost on CIO's browser</p>
@@ -220,8 +226,12 @@
     </div>
 
     <!-- Search engine -->
-    <div id="settings-block-browser-search" class="rounded-xl border bg-surface p-4">
-      <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Search</h3>
+    <div id="settings-block-browser-search" class="border bg-surface p-4">
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Search
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">Search engine</p>
@@ -230,7 +240,7 @@
           </p>
         </div>
         <select
-          class="max-w-[14rem] rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+          class="max-w-[14rem] border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
           value={config.browserSearchEngine}
           disabled={!settingsReady}
           aria-label="Default search engine"
@@ -246,22 +256,20 @@
         {#if customEngines.length > 0}
           <ul class="mb-3 space-y-2">
             {#each customEngines as engine (engine.id)}
-              <li
-                class="flex items-center justify-between gap-3 rounded-lg border bg-elevated px-3 py-2"
-              >
+              <li class="flex items-center justify-between gap-3 border bg-elevated px-3 py-2">
                 <div class="min-w-0">
                   <p class="truncate text-sm font-medium">{engine.name}</p>
                   <p class="truncate font-mono text-xs text-dimmed">{engine.searchUrlTemplate}</p>
                 </div>
                 <button
                   type="button"
-                  class="shrink-0 rounded p-1 text-muted hover:bg-overlay hover:text-foreground disabled:opacity-50"
+                  class="shrink-0 p-1 text-muted hover:bg-overlay hover:text-foreground disabled:opacity-50"
                   title={`Remove the ${engine.name} search engine`}
                   aria-label={`Remove the ${engine.name} search engine`}
                   disabled={!settingsReady}
                   onclick={() => removeEngine(engine.id)}
                 >
-                  <X size={13} />
+                  <CioClose size={13} />
                 </button>
               </li>
             {/each}
@@ -272,7 +280,7 @@
           <div class="flex flex-col gap-2 sm:flex-row">
             <input
               type="text"
-              class="h-9 min-w-0 flex-1 rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+              class="h-9 min-w-0 flex-1 border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
               placeholder="Engine name"
               aria-label="Custom search engine name"
               bind:value={engineName}
@@ -280,7 +288,7 @@
             />
             <input
               type="text"
-              class="h-9 min-w-0 flex-1 rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary disabled:opacity-50"
+              class="h-9 min-w-0 flex-1 border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary disabled:opacity-50"
               placeholder="https://example.com/search?q=%s"
               aria-label="Custom search engine URL, using %s for the query"
               spellcheck="false"
@@ -290,12 +298,12 @@
             />
             <button
               type="submit"
-              class="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium outline-none hover:bg-overlay focus:border-primary disabled:opacity-50"
+              class="flex h-9 shrink-0 items-center justify-center gap-1.5 border bg-elevated px-3 text-xs font-medium outline-none hover:bg-overlay focus:border-primary disabled:opacity-50"
               title="Add this search engine"
               aria-label="Add this search engine"
               disabled={!settingsReady || !canAddEngine}
             >
-              <Plus size={13} />
+              <CioPlus size={13} />
               Add
             </button>
           </div>
@@ -308,8 +316,12 @@
     </div>
 
     <!-- Tabs -->
-    <div id="settings-block-browser-tabs" class="rounded-xl border bg-surface p-4">
-      <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Tabs</h3>
+    <div id="settings-block-browser-tabs" class="border bg-surface p-4">
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Tabs
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">Hibernate inactive tabs</p>
@@ -320,7 +332,7 @@
         </div>
         <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
           <input
-            class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+            class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
             type="number"
             min={MIN_BROWSER_HIBERNATION_MINUTES}
             max={MAX_BROWSER_HIBERNATION_MINUTES}
@@ -333,11 +345,36 @@
           minutes
         </label>
       </div>
+      <div class="mt-4 border-t pt-4">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium">Let websites override app shortcuts</p>
+            <p class="text-xs leading-relaxed text-dimmed">
+              A page's own shortcut wins a key the app also binds, and a key the page does not
+              handle still falls through to the app. Turn this off to make the app win every
+              shortcut, whether or not the page is focused.
+            </p>
+          </div>
+          <Switch
+            checked={config.browserAllowSiteKeymapOverride}
+            onchange={() =>
+              void updateConfig({
+                browserAllowSiteKeymapOverride: !config.browserAllowSiteKeymapOverride
+              })}
+            aria-label="Toggle letting websites override application shortcuts"
+            disabled={!settingsReady}
+          />
+        </div>
+      </div>
     </div>
 
     <!-- Browsing data -->
-    <div id="settings-block-browser-library" class="rounded-xl border bg-surface p-4">
-      <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Browsing data</h3>
+    <div id="settings-block-browser-library" class="border bg-surface p-4">
+      <h3
+        class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Browsing data
+      </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
           <p class="text-sm font-medium">History size</p>
@@ -349,7 +386,7 @@
         </div>
         <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
           <input
-            class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+            class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
             type="number"
             min={MIN_BROWSER_HISTORY_LIMIT}
             max={MAX_BROWSER_HISTORY_LIMIT}
@@ -373,7 +410,7 @@
           </div>
           <button
             type="button"
-            class="h-8 shrink-0 rounded-lg border bg-elevated px-3 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
+            class="h-8 shrink-0 border bg-elevated px-3 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
             disabled={!settingsReady}
             title="View and edit your browsing history"
             aria-label="View and edit browsing history"
@@ -393,7 +430,7 @@
           </div>
           <button
             type="button"
-            class="flex h-8 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
+            class="flex h-8 shrink-0 items-center gap-2 border px-3 text-xs font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
             disabled={!settingsReady || historyCount === 0}
             title="Clear every page from your browsing history"
             aria-label="Clear browsing history"
@@ -413,7 +450,7 @@
           </div>
           <button
             type="button"
-            class="flex h-8 shrink-0 items-center gap-2 rounded-lg border px-3 text-xs font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
+            class="flex h-8 shrink-0 items-center gap-2 border px-3 text-xs font-semibold text-danger hover:bg-danger/10 disabled:opacity-50"
             disabled={!settingsReady || bookmarkCount === 0}
             title="Remove every saved page"
             aria-label="Clear bookmarks"

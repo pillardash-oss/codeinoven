@@ -160,21 +160,6 @@ function reportVoiceDeliveryFailure(message: string, cause?: unknown): void {
 }
 
 /**
- * Send whatever the recording thread still holds in its composer, right now.
- * Used when the user escalates an armed dictation to "steer what I already
- * typed, and send the transcript after it".
- */
-export async function sendUnsentComposerContentNow(scope: SpeechScope): Promise<void> {
-  const content = unsentComposerContent(scope)
-  if (!content) return
-  try {
-    await dispatchUnsentContent(scope, content, true)
-  } catch (cause) {
-    reportVoiceDeliveryFailure('The queued message could not be steered.', cause)
-  }
-}
-
-/**
  * Deliver a transcript that landed while its composer was not mounted, so the
  * message reaches the thread even though the user is somewhere else entirely.
  * Resolves with the text the thread received, or null when nothing was handed

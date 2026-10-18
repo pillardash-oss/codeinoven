@@ -1,4 +1,5 @@
-import { net, app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
+import { dialog } from '../../system/file-dialogs'
+import { net, app, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import { lstat, readFile, writeFile, mkdir } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
@@ -20,6 +21,7 @@ import {
   validateRemoteImageUrls
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
+import { rememberLocalDownloadName } from '../../system/local-download-names'
 import type { SaveFileInput } from '../../../lib/ipc/invoke-app'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import type { IpcHandlerContext } from './context'
@@ -51,8 +53,18 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     return url.toString()
   })
 
+  // The renderer's connection events are announcements, not verdicts: both
+  // route into the connectivity tracker, which answers with a real round trip
+  // before any waiting thread is resumed. The Chromium hint stays as the
+  // fallback for the (never expected) boot where the tracker is missing.
   ipcMain.handle('network:restored', () => {
-    if (net.isOnline()) ctx.chatEngine?.connectionRestored()
+    if (ctx.connectivity) ctx.connectivity.signal('renderer online event')
+    else if (net.isOnline()) ctx.chatEngine?.connectionRestored()
+  })
+
+  ipcMain.handle('network:lost', () => {
+    if (ctx.connectivity) ctx.connectivity.signal('renderer offline event')
+    else if (!net.isOnline()) ctx.chatEngine?.connectionRestored()
   })
 
   // ─── System dialogs ────────────────────────────────────────────────────────
@@ -171,6 +183,25 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       Logger.error('dialog:saveFile failed:', error)
       return null
     }
+  })
+
+  // Name the blob this renderer is handing to Chromium. A save of one of our own
+  // blob URLs is allowed through the session's download guard, and the name
+  // registered here is what its save dialog suggests (a blob URL alone is a
+  // bare UUID). Nothing is saved by this call, so it needs no privilege beyond
+  // the trusted-sender check every renderer channel already pays.
+  ipcMain.handle('download:nameLocalBlob', (_event, rawUrl: unknown, rawFileName: unknown) => {
+    const url = requireString(rawUrl, 'Blob URL')
+    if (!url.startsWith('blob:') || url.length > 2048)
+      throw new TypeError('A blob URL is required.')
+    if (rawFileName === null) {
+      rememberLocalDownloadName(url, null)
+      return
+    }
+    const fileName = requireString(rawFileName, 'File name')
+    if (fileName.length > 255 || /[\\/\0\r\n]/u.test(fileName))
+      throw new TypeError('Choose a plain file name without a path.')
+    rememberLocalDownloadName(url, fileName)
   })
 
   ipcMain.handle('dialog:pickFile', async (_event, rawScope: unknown) => {

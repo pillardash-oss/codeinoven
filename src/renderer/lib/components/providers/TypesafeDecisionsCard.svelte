@@ -1,14 +1,13 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
-  import {
-    CircleCheck,
-    ExternalLink,
-    KeyRound,
-    Loader2,
-    RefreshCw,
-    TriangleAlert
-  } from '@lucide/svelte'
+
   import type { TypesafeCheckResult, TypesafeStatus } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -174,30 +173,27 @@
   </div>
 
   {#if loading}
-    <div class="flex items-center gap-2 rounded-xl border bg-surface px-4 py-3 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading TypeSafe settings…
+    <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
+      <CioSpinner size={14} class="animate-spin" /> Loading TypeSafe settings…
     </div>
   {:else}
     {#if loadError}
-      <p
-        class="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger"
-        role="alert"
-      >
+      <p class="border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger" role="alert">
         {loadError}
       </p>
     {/if}
 
-    <div class="space-y-3 rounded-xl border bg-surface p-4">
+    <div class="space-y-3 border bg-surface p-4">
       {#if sourceLabel}
         <p class="flex items-center gap-1.5 text-xs text-muted">
-          <CircleCheck size={14} class="shrink-0 text-success" />
+          <CioCheckCircle size={14} class="shrink-0 text-success" />
           <span>CodeInOven is using {sourceLabel}.</span>
         </p>
       {/if}
 
       {#if lastFailure}
         <div class="flex items-start gap-1.5 text-xs text-danger" role="alert">
-          <TriangleAlert size={14} class="mt-0.5 shrink-0" />
+          <CioAttention size={14} class="mt-0.5 shrink-0" />
           <span>
             {lastFailure.detail}
             {#if lastFailure.requestId}
@@ -210,10 +206,10 @@
       <div class="flex flex-wrap items-end gap-2">
         <label class="min-w-64 flex-1 space-y-1 text-xs font-medium">
           <span class="flex items-center gap-1.5">
-            <KeyRound size={14} class="shrink-0" /> API key
+            <CioKey size={14} class="shrink-0" /> API key
           </span>
           <input
-            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+            class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
             type="password"
             autocomplete="off"
             placeholder={status?.hasKey
@@ -225,13 +221,13 @@
         </label>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Store this key on this device"
           disabled={!keyDraft.trim() || saving || !status?.secureStorageAvailable}
           onclick={() => void saveKey()}
         >
           {#if saving}
-            <Loader2 size={14} class="animate-spin" />
+            <CioSpinner size={14} class="animate-spin" />
           {/if}
           Save key
         </button>
@@ -250,31 +246,31 @@
       <div class="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
           title="Test the key with a live TypeSafe request"
           disabled={checking || !status?.hasKey}
           onclick={() => void check()}
         >
           {#if checking}
-            <Loader2 size={14} class="animate-spin" />
+            <CioSpinner size={14} class="animate-spin" />
           {:else}
-            <RefreshCw size={14} />
+            <CioRefresh size={14} />
           {/if}
           Check connection
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the TypeSafe console to manage keys and credits"
           data-external-url={TYPESAFE_CONSOLE_URL}
           onclick={() => void openInBrowser(TYPESAFE_CONSOLE_URL)}
         >
-          <ExternalLink size={14} /> TypeSafe console
+          <CioExternalLink size={14} /> TypeSafe console
         </button>
         {#if status?.keySource === 'device'}
           <button
             type="button"
-            class="flex h-9 items-center gap-2 rounded-lg border border-danger/30 px-3 text-xs font-medium text-danger hover:bg-danger/10"
+            class="flex h-9 items-center gap-2 border border-danger/30 px-3 text-xs font-medium text-danger hover:bg-danger/10"
             title="Remove the key stored on this device"
             onclick={() => (confirmingRemove = true)}
           >
@@ -285,12 +281,12 @@
 
       {#if checkResult?.ok}
         <p class="flex items-center gap-1.5 text-xs text-success">
-          <CircleCheck size={14} class="shrink-0" />
+          <CioCheckCircle size={14} class="shrink-0" />
           <span>{checkResult.model} answered in {checkResult.latencyMs} ms.</span>
         </p>
       {:else if checkResult}
         <p class="flex items-start gap-1.5 text-xs text-danger" role="alert">
-          <TriangleAlert size={14} class="mt-0.5 shrink-0" />
+          <CioAttention size={14} class="mt-0.5 shrink-0" />
           <span>
             {checkResult.detail}
             {#if checkResult.requestId}

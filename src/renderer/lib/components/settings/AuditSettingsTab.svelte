@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { BrainCircuit, Eye, Hammer, Loader2, RefreshCw, ShieldCheck, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioHammer from '@pillardash-oss/cio-icon/CioHammer.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -31,25 +37,25 @@
       id: 'seniorEngineer',
       label: 'Sr. Engineer',
       description: 'Plans the specification and coordinates Assignment work.',
-      icon: BrainCircuit
+      icon: CioMemory
     },
     {
       id: 'worker',
       label: 'Worker',
       description: 'Implements Assignment tasks when a task or phase has no override.',
-      icon: Hammer
+      icon: CioHammer
     },
     {
       id: 'auditor',
       label: 'Auditor',
       description: 'Independently audits completed Engineering and Achievement work.',
-      icon: ShieldCheck
+      icon: CioShieldCheck
     }
   ] satisfies Array<{
     id: AgentRole
     label: string
     description: string
-    icon: typeof BrainCircuit
+    icon: typeof CioMemory
   }>
 
   let providers = $state<ProviderCatalog[]>([])
@@ -288,13 +294,13 @@
     </p>
   </div>
 
-  <section class="mb-4 rounded-xl border bg-surface" aria-label="Agent defaults">
+  <section class="mb-4 border bg-surface" aria-label="Agent defaults">
     <div class="divide-y">
       {#each roles as role (role.id)}
         {@const Icon = role.icon}
         {@const selection = selectionFor(role.id)}
         <div class="flex items-center gap-4 p-4">
-          <div class="rounded-lg bg-primary/10 p-2 text-primary"><Icon size={18} /></div>
+          <div class="bg-primary/10 p-2 text-primary"><Icon size={18} /></div>
           <div class="min-w-0 flex-1">
             <h2 class="text-sm font-semibold text-foreground">{role.label}</h2>
             <p class="mt-0.5 text-xs text-muted">{role.description}</p>
@@ -335,12 +341,12 @@
             {#if selection}
               <button
                 type="button"
-                class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+                class="p-2 text-dimmed hover:bg-elevated hover:text-foreground"
                 title={`Clear ${role.label} default`}
                 aria-label={`Clear ${role.label} default`}
                 onclick={() => void clearModel(role.id)}
               >
-                <X size={14} />
+                <CioClose size={14} />
               </button>
             {/if}
           </div>
@@ -350,7 +356,7 @@
 
     {#if loading}
       <div class="flex items-center gap-2 border-t px-4 py-3 text-xs text-muted">
-        <Loader2 size={14} class="animate-spin" /> Loading models…
+        <CioSpinner size={14} class="animate-spin" /> Loading models…
       </div>
     {:else if providers.length === 0}
       <p class="border-t px-4 py-3 text-xs text-muted">
@@ -376,9 +382,9 @@
     </div>
   </section>
 
-  <section class="rounded-xl border bg-surface" aria-label="Image descriptor default">
+  <section class="border bg-surface" aria-label="Image descriptor default">
     <div class="flex items-center gap-4 p-4">
-      <div class="rounded-lg bg-primary/10 p-2 text-primary"><Eye size={18} /></div>
+      <div class="bg-primary/10 p-2 text-primary"><CioEye size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Image descriptor</h2>
         <p class="mt-0.5 text-xs text-muted">
@@ -424,18 +430,18 @@
         {#if defaults.imageDescriptor}
           <button
             type="button"
-            class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+            class="p-2 text-dimmed hover:bg-elevated hover:text-foreground"
             title="Clear image descriptor default"
             aria-label="Clear image descriptor default"
             onclick={() => void clearImageDescriptor()}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         {/if}
       </div>
     </div>
     <div class="flex items-center gap-4 border-t p-4">
-      <div class="rounded-lg bg-elevated p-2 text-muted"><RefreshCw size={18} /></div>
+      <div class="bg-elevated p-2 text-muted"><CioRefresh size={18} /></div>
       <div class="min-w-0 flex-1">
         <h2 class="text-sm font-semibold text-foreground">Fallback</h2>
         <p class="mt-0.5 text-xs text-muted">
@@ -485,12 +491,12 @@
         {#if defaults.imageDescriptorFallback}
           <button
             type="button"
-            class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+            class="p-2 text-dimmed hover:bg-elevated hover:text-foreground"
             title="Clear image descriptor fallback default"
             aria-label="Clear image descriptor fallback default"
             onclick={() => void clearImageDescriptorFallback()}
           >
-            <X size={14} />
+            <CioClose size={14} />
           </button>
         {/if}
       </div>

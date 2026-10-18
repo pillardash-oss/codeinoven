@@ -16,10 +16,36 @@
     /** Detach the entire selection (highlight, bubble, and comment) from the chat. */
     onRemove: () => void
     onClose: () => void
+    /**
+     * What is being commented on, so the bubble names it correctly.
+     *
+     * Every annotation in the app is written in the same popover; only the
+     * wording says what the comment is about. A response selection, a mark drawn
+     * on a picture and an element picked inside an inline SVG all open this
+     * component, so the caller supplies the words rather than the component
+     * assuming a selection.
+     */
+    title?: string
+    dragHandleTitle?: string
+    closeLabel?: string
+    removeTitle?: string
   }
 
-  let { x, y, initialComment, targetId, scope, onDraftChange, onDone, onRemove, onClose }: Props =
-    $props()
+  let {
+    x,
+    y,
+    initialComment,
+    targetId,
+    scope,
+    onDraftChange,
+    onDone,
+    onRemove,
+    onClose,
+    title = 'Comment on selection',
+    dragHandleTitle = 'Move selection comment',
+    closeLabel = 'Close selection comment',
+    removeTitle
+  }: Props = $props()
 
   const POPOVER_WIDTH = 400
 
@@ -30,7 +56,7 @@
 <button
   type="button"
   class="fixed inset-0 z-40 cursor-default"
-  aria-label="Close selection comment"
+  aria-label={closeLabel}
   onclick={onClose}
 ></button>
 
@@ -40,8 +66,8 @@
   {@attach draggablePopover({ x: preferredLeft, y: preferredTop })}
 >
   <CommentBubble
-    title="Comment on selection"
-    dragHandleTitle="Move selection comment"
+    {title}
+    {dragHandleTitle}
     {initialComment}
     {targetId}
     {scope}
@@ -49,5 +75,6 @@
     {onDone}
     {onRemove}
     {onClose}
+    {removeTitle}
   />
 </div>

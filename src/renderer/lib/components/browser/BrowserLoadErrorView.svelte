@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ArrowLeft, LoaderCircle, RotateCw } from '@lucide/svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { BrowserLoadError } from '$shared/ipc-contract'
   import {
     browserLoadErrorCopy,
@@ -46,7 +48,7 @@
     role="alert"
     data-region="browser-load-error"
   >
-    <div class="flex h-11 w-11 items-center justify-center rounded-full bg-elevated">
+    <div class="flex h-11 w-11 items-center justify-center bg-elevated">
       <copy.icon size={20} class="text-dimmed" />
     </div>
     <div class="flex flex-col gap-1">
@@ -57,7 +59,7 @@
       {#if onEditAddress}
         <button
           type="button"
-          class="max-w-full cursor-pointer truncate rounded-lg border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:bg-overlay"
+          class="max-w-full cursor-pointer truncate border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:bg-overlay"
           title={url}
           aria-label={`Edit address ${url}`}
           onclick={onEditAddress}
@@ -66,7 +68,7 @@
         </button>
       {:else}
         <p
-          class="max-w-full truncate rounded-lg border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
+          class="max-w-full truncate border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
           title={url}
         >
           {url}
@@ -77,27 +79,27 @@
     <div class="mt-1 flex items-center gap-2">
       <button
         type="button"
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         title="Reload this page"
         disabled={loading}
         onclick={onRetry}
       >
         {#if loading}
-          <LoaderCircle size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Reloading
         {:else}
-          <RotateCw size={13} />
+          <CioRefresh size={13} />
           Reload
         {/if}
       </button>
       {#if canGoBack && onGoBack}
         <button
           type="button"
-          class="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-3 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+          class="flex h-8 items-center gap-1.5 border border-border bg-elevated px-3 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
           title="Go back to the previous page"
           onclick={onGoBack}
         >
-          <ArrowLeft size={13} />
+          <CioArrowLeft size={13} />
           Go back
         </button>
       {/if}

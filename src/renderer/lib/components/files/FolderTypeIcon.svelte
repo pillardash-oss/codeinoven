@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Folder, FolderOpen } from '@lucide/svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
   import { getFolderTypeIconDataUri } from './file-type-icons'
   import { CIO_ICON_DATA_URI, isCioFolderName } from './cio-folder-icons'
 
@@ -39,7 +40,7 @@
 {#if iconUri}
   <img src={iconUri} alt="" width={size} height={size} class="shrink-0 {className}" />
 {:else if open}
-  <FolderOpen {size} class="shrink-0 text-muted {className}" />
+  <CioFolderOpen {size} class="shrink-0 text-muted {className}" />
 {:else}
-  <Folder {size} class="shrink-0 text-muted {className}" />
+  <CioFolder {size} class="shrink-0 text-muted {className}" />
 {/if}

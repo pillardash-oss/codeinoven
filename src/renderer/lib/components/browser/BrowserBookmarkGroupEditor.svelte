@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Check, Trash2 } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -184,7 +185,7 @@
     <span class="mb-1.5 block text-xs font-medium text-muted">Name</span>
     <input
       type="text"
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
+      class="h-9 w-full border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
       placeholder="Reading list"
       maxlength={MAX_BROWSER_GROUP_NAME_LENGTH}
       bind:value={name}
@@ -197,18 +198,18 @@
     {#if existing}
       <button
         type="button"
-        class="mr-auto flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+        class="mr-auto flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
         title="Delete this group. Its bookmarks stay saved."
         onclick={() => (confirmDelete = true)}
       >
-        <Trash2 size={13} />
+        <CioTrash size={13} />
         Delete
       </button>
     {/if}
     {#if hasAppearance}
       <button
         type="button"
-        class="rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+        class="px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
         title="Reset appearance"
         onclick={resetAppearance}
       >
@@ -217,12 +218,12 @@
     {/if}
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+      class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
       disabled={!canSave}
       title={existing ? 'Save this group' : 'Create this group'}
       onclick={save}
     >
-      <Check size={13} />
+      <CioCheck size={13} />
       {existing ? 'Save' : 'Create'}
     </button>
   </div>

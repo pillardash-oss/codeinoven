@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Redo2, SquarePen, Trash2, Undo2 } from '@lucide/svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioRedo from '@pillardash-oss/cio-icon/CioRedo.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
@@ -71,29 +74,29 @@
     {#if tab.mode === 'read'}
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Edit note"
         title="Edit note"
         onclick={startEdit}
       >
-        <SquarePen size={13} />
+        <CioPencil size={13} />
         Edit
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40"
+        class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Delete note"
         title={tab.savedBody === null ? 'No note to delete yet' : 'Delete this note'}
         disabled={tab.savedBody === null || tab.saving}
         onclick={() => (showDeleteConfirm = true)}
       >
-        <Trash2 size={13} />
+        <CioTrash size={13} />
         Delete
       </button>
     {:else}
       <button
         type="button"
-        class="rounded-lg px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        class="px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Discard changes"
         title="Discard changes"
         disabled={tab.savedBody === null && !hasContent}
@@ -104,27 +107,27 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Undo note edit"
         title="Undo note edit"
         disabled={!historyController || !canUndo || tab.saving}
         onclick={() => historyController?.undo()}
       >
-        <Undo2 size={13} />
+        <CioUndo size={13} />
       </button>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Redo note edit"
         title="Redo note edit"
         disabled={!historyController || !canRedo || tab.saving}
         onclick={() => historyController?.redo()}
       >
-        <Redo2 size={13} />
+        <CioRedo size={13} />
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
         aria-label="Save note"
         title="Save note"
         disabled={!dirty || !hasContent || tab.saving}
@@ -179,14 +182,14 @@
     {#snippet footer()}
       <button
         type="button"
-        class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+        class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
         onclick={() => (showDeleteConfirm = false)}
       >
         Cancel
       </button>
       <button
         type="button"
-        class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
+        class="bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
         disabled={tab.saving}
         onclick={() => void confirmDelete()}
       >

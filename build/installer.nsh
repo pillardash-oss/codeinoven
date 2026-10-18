@@ -20,6 +20,43 @@
 ; to default to CodeInOven, so double-clicking a folder or document keeps its
 ; current behavior.
 
+!define CIO_CLOSE_APP_SCRIPT "${__FILEDIR__}\close-windows-app.ps1"
+
+; The native launcher and Electron runtime have different executable names.
+; Override the single-image fallback so the runtime cannot retain old files
+; after the launcher is stopped. Match exact paths, not every app with that name.
+!macro customCheckAppRunning
+  InitPluginsDir
+  File /oname=$PLUGINSDIR\close-windows-app.ps1 "${CIO_CLOSE_APP_SCRIPT}"
+  ${If} ${isUpdated}
+    ; The app's shutdown pipeline starts before NSIS, but finishes asynchronously.
+    Sleep 5000
+  ${EndIf}
+  ${Do}
+    nsExec::ExecToStack /TIMEOUT=30000 '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\close-windows-app.ps1" -InstallDirectory "$INSTDIR" -LauncherFileName "${APP_EXECUTABLE_FILENAME}"'
+    Pop $R0
+    Pop $R2
+    ${If} $R0 == 0
+      ${ExitDo}
+    ${EndIf}
+    ${If} $R0 == 10
+      ; Anything still running may have unsaved work. Confirm before force cleanup.
+      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(appRunning)" /SD IDCANCEL IDOK +2
+      Quit
+      DetailPrint "$(appClosing)"
+      nsExec::ExecToStack /TIMEOUT=30000 '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\close-windows-app.ps1" -InstallDirectory "$INSTDIR" -LauncherFileName "${APP_EXECUTABLE_FILENAME}" -Stop'
+      Pop $R0
+      Pop $R2
+      ${If} $R0 == 0
+        ${ExitDo}
+      ${EndIf}
+    ${EndIf}
+    DetailPrint "$R2"
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY +2
+    Quit
+  ${Loop}
+!macroend
+
 !macro CodeInOvenShellVerbRegister KEY LABEL ARGUMENT
   WriteRegStr SHELL_CONTEXT "${KEY}" "" "${LABEL}"
   WriteRegStr SHELL_CONTEXT "${KEY}" "Icon" "$appExe,0"

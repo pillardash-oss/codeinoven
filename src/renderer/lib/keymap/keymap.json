@@ -51,7 +51,7 @@
           "id": "nav-assistant",
           "keys": ["mod", "9"],
           "label": "Assistant view",
-          "description": "Opens the Assistant view with its routines and tasks.",
+          "description": "Opens the Assistant view with its assistants and tasks.",
           "scenario": "Anywhere in the app."
         },
         {
@@ -130,14 +130,14 @@
           "id": "assistant-new-task",
           "keys": ["mod", "n"],
           "label": "New task",
-          "description": "Creates an assistant task: inside a routine it lands in that routine, otherwise it is a routine-less task.",
+          "description": "Creates an assistant task: inside an assistant it lands in that assistant, otherwise it is an assistant-less task.",
           "scenario": "Assistant view."
         },
         {
-          "id": "assistant-new-routine",
+          "id": "assistant-new-assistant",
           "keys": ["mod", "shift", "n"],
-          "label": "New routine",
-          "description": "Starts the new-routine flow, which seeds a first task and opens its how-to.",
+          "label": "New assistant",
+          "description": "Starts the new-assistant flow, which seeds a first task and opens its knowledge.",
           "scenario": "Assistant view."
         },
         {
@@ -727,6 +727,14 @@
           "scenario": "File tree inline input."
         },
         {
+          "id": "files-delete",
+          "keys": ["mod", "backspace"],
+          "platformKeys": { "other": ["delete"] },
+          "label": "Delete selected files",
+          "description": "Opens the Trash confirmation for the selected files and folders. Cmd+Delete on macOS, Delete on Windows and Linux.",
+          "scenario": "File tree focused, outside an inline input."
+        },
+        {
           "id": "files-deployment-find",
           "keys": ["mod", "f"],
           "label": "Search deployment logs",
@@ -885,6 +893,13 @@
           "scenario": "A modal overlay is open."
         },
         {
+          "id": "video-primary-action",
+          "keys": ["mod", "enter"],
+          "label": "Run video primary action",
+          "description": "Saves edited video controls, or exports MP4 when there are no unsaved changes.",
+          "scenario": "Focus is inside Video controls."
+        },
+        {
           "id": "ui-close-modal",
           "keys": ["escape"],
           "label": "Close modal / sheet",
@@ -897,6 +912,33 @@
           "label": "Close media preview",
           "description": "Closes the attachment or media preview.",
           "scenario": "A media preview is open."
+        }
+      ]
+    },
+    {
+      "id": "guides",
+      "label": "View Guides",
+      "shortcuts": [
+        {
+          "id": "guide-next",
+          "keys": [],
+          "label": "Next guide stop",
+          "description": "Advances the running view guide to its next stop. Unbound by default so the arrow keys keep working in the composer the guide may be pointing at; bind a chord here if you want one.",
+          "scenario": "A view guide is running."
+        },
+        {
+          "id": "guide-back",
+          "keys": [],
+          "label": "Previous guide stop",
+          "description": "Steps the running view guide back one stop. Unbound by default for the same reason as the next-stop action.",
+          "scenario": "A view guide is running."
+        },
+        {
+          "id": "guide-close",
+          "keys": [],
+          "label": "Close the view guide",
+          "description": "Leaves the running view guide without finishing it, so it stays unseen and can be walked again later. Escape already closes a guide, so this entry is for a second chord of your own.",
+          "scenario": "A view guide is running."
         }
       ]
     },

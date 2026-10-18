@@ -1,7 +1,8 @@
 <script lang="ts">
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { AppWindow } from '@lucide/svelte'
+
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
@@ -255,7 +256,7 @@
   {/key}
 {:else}
   <EmptyState
-    icon={AppWindow}
+    icon={CioWindow}
     title="No popups right now"
     description="A page's popup window and an extension's own popup both show up here, each as its own tab."
   />

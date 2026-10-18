@@ -1,15 +1,14 @@
 <script lang="ts">
+  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { onDestroy, onMount } from 'svelte'
-  import {
-    BookOpen,
-    Brain,
-    GlobeCode,
-    Image as ImageIcon,
-    Loader2,
-    Search,
-    Server,
-    SquareTerminal
-  } from '@lucide/svelte'
   import { isImageMime, fileUrlToPath } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type {
@@ -249,8 +248,8 @@
    *
    * The panel reads the same three files the engine does and then applies the
    * shared surface rule, so this list can never show memory the agent would not
-   * be sent: an assistant task sees assistant, routine and task memory only,
-   * and a routine entry shows up only for the tasks of its own routine.
+   * be sent: an assistant task sees assistant, assistant and task memory only,
+   * and an assistant entry shows up only for the tasks of its own assistant.
    */
   async function loadContextMemoryEntries(
     containerId: string,
@@ -262,10 +261,10 @@
       : containerId === INBOX_PROJECT_ID
         ? 'sidebar-chats'
         : 'sidebar-projects'
-    // An assistant task's routine decides which routine-scoped entries apply,
+    // An assistant task's assistant decides which assistant-scoped entries apply,
     // so it is read from the thread rather than guessed from the panel.
-    const routineId = isAssistant
-      ? (await invoke('thread:get', containerId, containerThreadId))?.routineId
+    const assistantId = isAssistant
+      ? (await invoke('thread:get', containerId, containerThreadId))?.assistantId
       : undefined
     const [rootEntries, containerEntries, threadEntries] = await Promise.all([
       invoke('memory:getEntries'),
@@ -277,7 +276,7 @@
         surface,
         projectId: containerId,
         threadId: containerThreadId,
-        routineId
+        assistantId
       })
     )
   }
@@ -460,17 +459,17 @@
           title="No sources yet"
           description="Attach files or ask the agent to research the web. Sources will appear here as they are used."
         >
-          {#snippet icon()}<GlobeCode size={18} />{/snippet}
+          {#snippet icon()}<CioBrowser size={ICON_SIZE.control} />{/snippet}
         </SourcesPanelEmptyState>
       {:else if filteredSources.length === 0}
         <SourcesPanelEmptyState
           title={`No ${sourceFilterLabel(sourceFilter)} sources`}
           description="Nothing in this conversation matches the active filter."
         >
-          {#snippet icon()}<Search size={18} />{/snippet}
+          {#snippet icon()}<CioSearch size={18} />{/snippet}
           <button
             type="button"
-            class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Clear the active source filter"
             onclick={() => (sourceFilter = 'all')}
           >
@@ -500,10 +499,10 @@
           title="No MCP servers"
           description="No Model Context Protocol servers match this filter."
         >
-          {#snippet icon()}<Server size={18} />{/snippet}
+          {#snippet icon()}<CioServer size={18} />{/snippet}
           <button
             type="button"
-            class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Open utility settings"
             onclick={openUtilitiesSettings}
           >
@@ -530,10 +529,10 @@
           title="No skills"
           description="No reusable skills match this filter."
         >
-          {#snippet icon()}<BookOpen size={18} />{/snippet}
+          {#snippet icon()}<CioBook size={18} />{/snippet}
           <button
             type="button"
-            class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Open utility settings"
             onclick={openUtilitiesSettings}
           >
@@ -560,7 +559,7 @@
           title="No generated artifacts"
           description="Images produced during this conversation will appear here, even when the agent does not mention their saved path."
         >
-          {#snippet icon()}<ImageIcon size={18} />{/snippet}
+          {#snippet icon()}<CioImage size={18} />{/snippet}
         </SourcesPanelEmptyState>
       {:else}
         {#if artifactsError}
@@ -587,11 +586,11 @@
           title="No memory"
           description="Enabled memory entries for this conversation will appear here."
         >
-          {#snippet icon()}<Brain size={18} />{/snippet}
+          {#snippet icon()}<CioMemory size={18} />{/snippet}
           {#if projectId && threadId}
             <button
               type="button"
-              class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+              class="mt-3 border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
               title="Open active memory"
               onclick={openActiveFacts}
             >
@@ -608,7 +607,7 @@
         <div class="border-b border-border px-4 py-2">
           <button
             type="button"
-            class="rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            class="border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
             title="Manage active memory"
             onclick={openActiveFacts}
           >
@@ -629,7 +628,7 @@
           title="No running processes"
           description="Commands started by the agent will appear here while they are still running."
         >
-          {#snippet icon()}<SquareTerminal size={18} />{/snippet}
+          {#snippet icon()}<CioTerminal size={18} />{/snippet}
         </SourcesPanelEmptyState>
       {:else}
         {#if processesError}
@@ -649,7 +648,7 @@
         {#if appProcesses.length > 0}
           <div class="border-b border-border bg-elevated/60 px-4 py-3">
             <div class="flex items-center gap-2">
-              <GlobeCode size={13} class="shrink-0 text-dimmed" />
+              <CioBrowser size={ICON_SIZE.inline} class="shrink-0 text-dimmed" />
               <p class="text-[0.6875rem] font-semibold text-foreground">App-wide processes</p>
             </div>
             <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
@@ -689,25 +688,28 @@
         : 'This removes the MCP server from its configuration file.'}
     </p>
     {#if deleteError}
-      <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      <p
+        class="mt-3 border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+        role="alert"
+      >
         {deleteError}
       </p>
     {/if}
     {#snippet footer()}
       <button
-        class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+        class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
         type="button"
         onclick={() => (deleteTarget = null)}
       >
         Cancel
       </button>
       <button
-        class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex h-9 items-center gap-1.5 bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         type="button"
         disabled={deleting}
         onclick={() => void confirmDelete()}
       >
-        {#if deleting}<Loader2 size={13} class="animate-spin" />{/if}
+        {#if deleting}<CioSpinner size={13} class="animate-spin" />{/if}
         Delete
       </button>
     {/snippet}

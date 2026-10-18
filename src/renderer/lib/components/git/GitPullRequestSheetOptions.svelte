@@ -20,7 +20,7 @@
   }: Props = $props()
 </script>
 
-<div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
+<div class="space-y-3 border border-border bg-surface p-2.5">
   <div class="flex items-center justify-between gap-2">
     <div class="min-w-0">
       <span class="text-[0.625rem] text-muted">Push local commits</span>

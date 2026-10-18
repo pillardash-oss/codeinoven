@@ -59,10 +59,7 @@ function recoverWatchdogIssueOf(
 }
 
 function setDriver(engine: ChatEngine, id: string, driver: Record<string, unknown>): void {
-  const drivers = (engine as unknown as Record<string, unknown>)['drivers'] as Map<
-    string,
-    unknown
-  >
+  const drivers = (engine as unknown as Record<string, unknown>)['drivers'] as Map<string, unknown>
   drivers.set(id, driver)
 }
 

@@ -37,13 +37,13 @@ describe('DesignService conversation container state', () => {
       browser: () => null
     })
 
-    await expect(service.stateFor(ASSISTANT_SPACE_ID, 'routine-thread')).resolves.toMatchObject({
+    await expect(service.stateFor(ASSISTANT_SPACE_ID, 'assistant-thread')).resolves.toMatchObject({
       projectId: ASSISTANT_SPACE_ID,
-      threadId: 'routine-thread',
+      threadId: 'assistant-thread',
       active: false,
       current: null,
       items: []
     })
-    await expect(service.authoredWorkKindFor('routine-thread')).resolves.toBeNull()
+    await expect(service.authoredWorkKindFor('assistant-thread')).resolves.toBeNull()
   })
 })

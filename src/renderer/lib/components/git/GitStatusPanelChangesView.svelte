@@ -1,7 +1,11 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
-  import { ChevronDown, ChevronRight, Folder, FolderOpen } from '@lucide/svelte'
-  import { GitCommit, Loader2 } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type {
     GitCommitInfo,
     GitDiff,
@@ -43,6 +47,7 @@
     stagePathsAction: (paths: string[], staged: boolean) => void
     requestStashFor: (paths: string[]) => void
     openInEditor: (path: string) => void
+    openDirectory: (path: string) => void
     ignorePathsAction: (paths: string[]) => void
     requestDiscard: (paths: string[]) => void
     routeConflictResolution: (initial?: string) => void
@@ -82,6 +87,7 @@
     stagePathsAction,
     requestStashFor,
     openInEditor,
+    openDirectory,
     ignorePathsAction,
     requestDiscard,
     routeConflictResolution,
@@ -111,11 +117,11 @@
       onclick={() => toggleCommitDir(dir.path)}
     >
       {#if dirCollapsed}
-        <ChevronRight size={12} class="shrink-0 text-dimmed" />
-        <Folder size={13} class="shrink-0 text-dimmed" />
+        <CioForward size={12} class="shrink-0 text-dimmed" />
+        <CioFolder size={13} class="shrink-0 text-dimmed" />
       {:else}
-        <ChevronDown size={12} class="shrink-0 text-dimmed" />
-        <FolderOpen size={13} class="shrink-0 text-dimmed" />
+        <CioChevronDown size={12} class="shrink-0 text-dimmed" />
+        <CioFolderOpen size={13} class="shrink-0 text-dimmed" />
       {/if}
       <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">{dir.name}</span>
     </button>
@@ -153,17 +159,17 @@
   <div class="p-2">
     {#if loadingCommitDiff}
       <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
         Loading diff
       </div>
     {:else if commitDiffChanges.length === 0}
       <div class="flex flex-col items-center justify-center py-12 text-center">
-        <GitCommit size={22} class="mx-auto mb-2 text-dimmed" />
+        <CioCommit size={22} class="mx-auto mb-2 text-dimmed" />
         <p class="text-xs font-medium text-muted">No file changes</p>
         <p class="mt-1 text-[0.625rem] text-dimmed">This commit has no changes.</p>
       </div>
     {:else}
-      <div class="overflow-hidden rounded-lg border border-border bg-surface">
+      <div class="overflow-hidden border border-border bg-surface">
         <div class="flex items-center gap-1.5 bg-elevated/50 px-2.5 py-1">
           <span
             class="shrink-0"
@@ -228,8 +234,8 @@
   <div class={['flex flex-col', changes.length === 0 ? 'h-full min-h-0' : null]}>
     {#if status && changes.length === 0 && status.clean}
       <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
-        <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10">
-          <Check size={18} class="text-success" />
+        <div class="mb-2 flex h-10 w-10 items-center justify-center bg-success/10">
+          <CioCheck size={18} class="text-success" />
         </div>
         <p class="text-xs font-medium text-muted">Working tree is clean</p>
         <p class="mt-1 max-w-[26ch] text-[0.625rem] leading-relaxed text-dimmed">
@@ -264,12 +270,13 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
                 onResolveConflict={(path) => routeConflictResolution(path)}
               />
             {:else}
-              <div class="overflow-hidden rounded-lg border border-warning/25 bg-surface">
+              <div class="overflow-hidden border border-warning/25 bg-surface">
                 {#each conflictSections as section, si (section.title)}
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   <div class="flex items-center gap-1.5 bg-warning/10 px-2.5 py-1">
@@ -315,11 +322,12 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />
             {:else}
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
+              <div class="overflow-hidden border border-border bg-surface">
                 {#each stagedSections as section, si (section.title)}
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   {@const sectionAllSelected =
@@ -393,11 +401,12 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />
             {:else}
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
+              <div class="overflow-hidden border border-border bg-surface">
                 {#each workingSections as section, si (section.title)}
                   {#if si > 0}<div class="border-t border-border"></div>{/if}
                   {@const sectionAllSelected =

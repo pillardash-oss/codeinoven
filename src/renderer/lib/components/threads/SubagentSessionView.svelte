@@ -6,11 +6,13 @@
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
   import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
+  import { latestWorkingTraceParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { subagentTaskDetail, subagentTaskLabel } from '$lib/subagent-presentation'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import MessageTimestamp from '../shared/MessageTimestamp.svelte'
+  import WorkingTrace from './WorkingTrace.svelte'
   import SubagentSessionViewHeader from './SubagentSessionViewHeader.svelte'
   import SubagentSessionViewLoadState from './SubagentSessionViewLoadState.svelte'
-  import SubagentSessionViewMessage from './SubagentSessionViewMessage.svelte'
   import SubagentSessionViewNotices from './SubagentSessionViewNotices.svelte'
   import {
     applyStreamedDelta,
@@ -26,6 +28,8 @@
     subagentFallbackIssue,
     subagentHeaderStatus,
     subagentProviderStatus,
+    subagentSessionRun,
+    textParts,
     TRANSCRIPT_POLL_INTERVAL_MS,
     unknownProviderIssue,
     upsertStreamedPart,
@@ -96,6 +100,14 @@
   let providerName = $derived(catalogProviderName(tab.activity, providers))
   let providerLabel = $derived(providerName ?? tab.activity.providerId ?? 'Provider')
   const visibleMessages = $derived(filterVisibleMessages(messages, tab.activity.prompt))
+  /** Any user message the delegated-prompt filter left behind (a steer into the
+   *  worker's session), rendered as its own bubble above the run. */
+  const userMessages = $derived(visibleMessages.filter((message) => message.role === 'user'))
+  /** The whole run as one trace plus the closing statement that leaves it. A
+   *  busy run owns its newest text; a settled one hands it to the transcript. */
+  const sessionRun = $derived(subagentSessionRun(visibleMessages, busy))
+  const runParts = $derived(latestWorkingTraceParts(sessionRun.parts))
+  const showWorkingTrace = $derived(shouldMountWorkingTrace(runParts.length, busy))
   const finalOutput = $derived(tab.activity.output?.trim() ?? '')
   const showCapturedOutput = $derived(
     shouldShowCapturedOutput(finalOutput, busy, loading, loadError, messages)
@@ -336,7 +348,7 @@
           >
             Delegated by parent
           </p>
-          <div class="rounded-xl rounded-br-sm bg-elevated px-3 py-2.5 text-xs text-foreground">
+          <div class="bg-elevated px-3 py-2.5 text-xs text-foreground">
             <MarkdownView text={tab.activity.prompt} />
           </div>
         </div>
@@ -361,16 +373,38 @@
         onRetry={() => void loadMessages()}
       />
 
-      {#each visibleMessages as message (message.id)}
-        <SubagentSessionViewMessage
-          {message}
+      {#each userMessages as message (message.id)}
+        <div class="ml-auto max-w-[90%]">
+          <div class="bg-elevated px-3 py-2.5 text-xs text-foreground">
+            {#each textParts(message) as part (part.id)}
+              <MarkdownView text={part.text} />
+            {/each}
+          </div>
+          <p class="mt-1 text-right text-[0.5625rem] text-dimmed">
+            <MessageTimestamp at={message.createdAt} />
+          </p>
+        </div>
+      {/each}
+
+      {#if showWorkingTrace}
+        <WorkingTrace
+          parts={runParts}
+          open={busy}
           {busy}
+          done={!busy}
           startTime={tab.activity.time?.start}
           {modelLabel}
           {providerName}
+          providerId={tab.activity.providerId}
           {onOpenSubagent}
         />
-      {/each}
+      {/if}
+
+      {#if sessionRun.closing}
+        <div class="text-xs text-foreground">
+          <MarkdownView text={sessionRun.closing.text} />
+        </div>
+      {/if}
 
       {#if showCapturedOutput}
         <div class="text-xs text-foreground">

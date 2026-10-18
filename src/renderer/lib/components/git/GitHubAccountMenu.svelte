@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { Bell, Check, ExternalLink, GitFork, LogOut, Plus, User } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioLogOut from '@pillardash-oss/cio-icon/CioLogOut.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import { DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -72,12 +78,12 @@
 {#if github.connected}
   <DropdownMenu.Root bind:open>
     <DropdownMenu.Trigger
-      class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+      class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
       title="GitHub account   {activeName}{activeLogin ? ` (@${activeLogin})` : ''}"
       aria-label={activeLogin ? `GitHub account for ${activeLogin}` : 'GitHub account'}
     >
       {#if user?.avatarUrl}
-        <img src={user.avatarUrl} alt="" class="h-5 w-5 rounded-full bg-elevated" />
+        <img src={user.avatarUrl} alt="" class="h-5 w-5 bg-elevated" />
       {:else}
         <VendorIcon name="GitHub" size={14} />
       {/if}
@@ -89,15 +95,13 @@
         align="start"
         sideOffset={4}
         collisionPadding={8}
-        class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
+        class="z-50 w-60 overflow-hidden border border-border bg-surface shadow-xl"
       >
         <div class="flex items-center gap-2 border-b border-border px-3 py-2">
           {#if user?.avatarUrl}
-            <img src={user.avatarUrl} alt="" class="h-7 w-7 shrink-0 rounded-full bg-elevated" />
+            <img src={user.avatarUrl} alt="" class="h-7 w-7 shrink-0 bg-elevated" />
           {:else}
-            <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated"
-            >
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center bg-elevated">
               <VendorIcon name="GitHub" size={14} />
             </span>
           {/if}
@@ -130,7 +134,7 @@
               >
                 <span class="flex h-3 w-3 shrink-0 items-center justify-center">
                   {#if account.active}
-                    <Check size={12} class="text-primary" aria-hidden="true" />
+                    <CioCheck size={12} class="text-primary" aria-hidden="true" />
                   {/if}
                 </span>
                 <span class="min-w-0 flex-1 truncate">
@@ -148,7 +152,7 @@
               data-external-url={remoteWebUrl}
               onSelect={() => void openUrl(remoteWebUrl)}
             >
-              <ExternalLink size={12} class="shrink-0 text-dimmed" />
+              <CioExternalLink size={12} class="shrink-0 text-dimmed" />
               Open repository on GitHub
             </DropdownMenu.Item>
           {/if}
@@ -157,7 +161,7 @@
             data-external-url={profileUrl}
             onSelect={() => void openUrl(profileUrl)}
           >
-            <User size={12} class="shrink-0 text-dimmed" />
+            <CioPerson size={12} class="shrink-0 text-dimmed" />
             View my GitHub profile
           </DropdownMenu.Item>
           <DropdownMenu.Item
@@ -165,7 +169,7 @@
             data-external-url={myPullRequestsUrl}
             onSelect={() => void openUrl(myPullRequestsUrl)}
           >
-            <GitFork size={12} class="shrink-0 text-dimmed" />
+            <CioFork size={12} class="shrink-0 text-dimmed" />
             My pull requests
           </DropdownMenu.Item>
           <DropdownMenu.Item
@@ -175,7 +179,7 @@
               onOpenNotifications()
             }}
           >
-            <Bell size={12} class="shrink-0 text-dimmed" />
+            <CioNotifications size={12} class="shrink-0 text-dimmed" />
             Notifications
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="my-1 h-px bg-border" />
@@ -192,7 +196,7 @@
               onSignIn()
             }}
           >
-            <Plus size={12} class="shrink-0 text-dimmed" />
+            <CioPlus size={12} class="shrink-0 text-dimmed" />
             Add another account
           </DropdownMenu.Item>
           <DropdownMenu.Item
@@ -203,7 +207,7 @@
               onSignOut()
             }}
           >
-            <LogOut size={12} class="shrink-0" />
+            <CioLogOut size={12} class="shrink-0" />
             Sign out of {activeLogin ? `@${activeLogin}` : 'GitHub'}
           </DropdownMenu.Item>
         </div>
@@ -213,7 +217,7 @@
 {:else if github.configured}
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
     title="Sign in to GitHub"
     aria-label="Sign in to GitHub"
     onclick={onSignIn}

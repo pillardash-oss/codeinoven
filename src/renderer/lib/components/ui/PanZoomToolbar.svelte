@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { RotateCcw, ZoomIn, ZoomOut } from '@lucide/svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import CioZoomIn from '@pillardash-oss/cio-icon/CioZoomIn.svelte'
+  import CioZoomOut from '@pillardash-oss/cio-icon/CioZoomOut.svelte'
   import type { PanZoom } from '$lib/pan-zoom.svelte'
 
   interface Props {
@@ -10,46 +12,62 @@
   }
 
   let { panZoom, viewport, class: className }: Props = $props()
+
+  /** A control here never lets its own click reach the surface behind the
+   *  toolbar: the fullscreen previews dismiss on a click of their backdrop, so a
+   *  zoom step used to close the very preview it was zooming. `PreviewPager`
+   *  wraps its own step the same way, so both floating control groups behave
+   *  alike. */
+  function press(event: MouseEvent, act: () => void): void {
+    event.stopPropagation()
+    act()
+  }
 </script>
 
 <div
   class={[
-    'flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
+    'flex items-center gap-0.5 border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm',
     className
   ]}
+  role="group"
+  aria-label="Zoom controls"
+  onpointerdown={(event) => event.stopPropagation()}
+  onpointerup={(event) => event.stopPropagation()}
+  onpointercancel={(event) => event.stopPropagation()}
+  ondblclick={(event) => event.stopPropagation()}
 >
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Zoom out"
     title="Zoom out"
     disabled={panZoom.zoom <= panZoom.min}
-    onclick={() => panZoom.zoomByButton(1 / 1.4, viewport)}
+    onclick={(event) => press(event, () => panZoom.zoomByButtonStep('out', viewport))}
   >
-    <ZoomOut size={14} />
+    <CioZoomOut size={14} />
   </button>
   <span class="w-10 text-center font-mono text-[0.625rem] text-dimmed">
     {Math.round(panZoom.zoom * 100)}%
   </span>
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Zoom in"
     title="Zoom in"
     disabled={panZoom.zoom >= panZoom.max}
-    onclick={() => panZoom.zoomByButton(1.4, viewport)}
+    onclick={(event) => press(event, () => panZoom.zoomByButtonStep('in', viewport))}
   >
-    <ZoomIn size={14} />
+    <CioZoomIn size={14} />
   </button>
   <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
   <button
     type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+    class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
     aria-label="Reset zoom and pan"
     title="Reset zoom and pan"
     disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}
-    onclick={() => panZoom.reset()}
+    onclick={(event) => press(event, () => panZoom.reset())}
   >
-    <RotateCcw size={14} />
+    <CioUndo size={14} />
   </button>
 </div>

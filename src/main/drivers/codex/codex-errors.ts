@@ -23,25 +23,48 @@ export function isCodexRetryRecoveryActivity(method: string): boolean {
   )
 }
 
+/**
+ * Codex reports a retry with a bare counter as its `message`
+ * (`Reconnecting... 2/5`) and puts the actionable cause in `additionalDetails`
+ * (`workspace routing discovery unauthorized (401)`). Classifying on the
+ * counter alone left an expired credential looking like an interrupted
+ * connection, so the thread showed a retry-wait card with no way to sign in
+ * while every reconnecting attempt re-failed the same 401.
+ *
+ * Returns the message plus the details line when both carry distinct text, or
+ * the one that exists. The same text is what the Raw Error view shows.
+ */
+export function codexRetryDetail(error: Record<string, unknown> | null, rawError: string): string {
+  const details = stringValue(error?.['additionalDetails'])?.trim()
+  const message = rawError.trim()
+  if (!details) return message || rawError
+  if (!message || message === details) return details
+  return `${message}\n${details}`
+}
+
 export function codexRetryIssue(
   error: Record<string, unknown> | null,
   rawError: string
 ): AgentProviderIssue {
   const errorInfo = error?.['codexErrorInfo']
   const statusCode = codexErrorStatusCode(errorInfo)
-  const kind = codexRetryIssueKind(errorInfo, rawError, statusCode)
+  const detail = codexRetryDetail(error, rawError)
+  const kind = codexRetryIssueKind(errorInfo, detail, statusCode)
   const messages: Partial<Record<AgentProviderIssue['kind'], string>> = {
     network: 'The Codex connection was interrupted. Codex is retrying automatically.',
     provider_unavailable: 'Codex is temporarily unavailable and is retrying automatically.',
     rate_limit: 'Codex is waiting before retrying the provider request.',
-    quota: 'Codex is waiting before retrying the provider request.'
+    quota: 'Codex is waiting before retrying the provider request.',
+    authentication: 'Codex sign-in expired. Sign in again, then retry this message.'
   }
   return {
     kind,
     message: messages[kind] ?? 'Codex is retrying the provider request.',
-    rawError,
+    rawError: detail,
     harnessId: 'codex',
-    retryable: true,
+    // An expired credential is not transient: every reconnecting attempt
+    // re-fails the same 401 until the user signs in, so it is never auto-retried.
+    retryable: kind !== 'authentication',
     ...(statusCode === undefined ? {} : { statusCode })
   }
 }

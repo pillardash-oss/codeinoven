@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import AnnotationCommentForm from './AnnotationCommentForm.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -41,6 +41,10 @@
     onRemove: () => void
     onClose: () => void
     attach?: Attachment<HTMLDivElement>
+    /** What the field asks for; the caller knows what is being commented on. */
+    placeholder?: string
+    removeTitle?: string
+    doneTitle?: string
   }
 
   let {
@@ -55,7 +59,10 @@
     onDone,
     onRemove,
     onClose,
-    attach
+    attach,
+    placeholder,
+    removeTitle,
+    doneTitle
   }: Props = $props()
 </script>
 
@@ -81,7 +88,7 @@
       aria-label="Close comment"
       onclick={onClose}
     >
-      <X size={13} />
+      <CioClose size={13} />
     </button>
   </div>
   <AnnotationCommentForm
@@ -92,5 +99,8 @@
     {onDone}
     {onRemove}
     {onClose}
+    {placeholder}
+    {removeTitle}
+    {doneTitle}
   />
 </div>

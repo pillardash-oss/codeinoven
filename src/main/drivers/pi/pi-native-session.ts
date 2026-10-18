@@ -15,8 +15,18 @@ import { messageTimestamp, record, stringValue } from './pi-values'
 
 /** Pi's native session JSONL transcripts: discovery, prefill, parsing, reconciliation. */
 
-function piAgentDir(): string {
-  const envDir = process.env.PI_CODING_AGENT_DIR
+/**
+ * Resolve the pi agent directory a session's transcripts live under.
+ *
+ * `agentDirectory` is the account's own container when the driver serves a
+ * managed account, and undefined for the harness-global account. Pi always
+ * writes a session inside the agent directory its own process was launched
+ * with, so a reader that resolves this from the app's process environment
+ * alone looks in the wrong directory for every managed account, and each
+ * resume for that account silently cold-starts on a brand new session.
+ */
+function piAgentDir(agentDirectory?: string): string {
+  const envDir = agentDirectory?.trim() || process.env.PI_CODING_AGENT_DIR
   if (envDir) {
     if (envDir === '~') return homedir()
     if (envDir.startsWith('~/')) return join(homedir(), envDir.slice(2))
@@ -26,9 +36,9 @@ function piAgentDir(): string {
 }
 
 /** Mirror pi's own session-dir encoding (`--<cwd>--` under the agent dir). */
-function nativePiSessionDir(projectPath: string): string {
+function nativePiSessionDir(projectPath: string, agentDirectory?: string): string {
   const safePath = `--${projectPath.replace(/^[/\\]/u, '').replace(/[/\\:]/gu, '-')}--`
-  return join(piAgentDir(), 'sessions', safePath)
+  return join(piAgentDir(agentDirectory), 'sessions', safePath)
 }
 
 /**
@@ -37,9 +47,10 @@ function nativePiSessionDir(projectPath: string): string {
  */
 async function findNativePiSessionFile(
   projectPath: string,
-  sessionId: string
+  sessionId: string,
+  agentDirectory?: string
 ): Promise<string | null> {
-  const dir = nativePiSessionDir(projectPath)
+  const dir = nativePiSessionDir(projectPath, agentDirectory)
   let entries: string[]
   try {
     entries = await readdir(dir)
@@ -61,9 +72,10 @@ async function findNativePiSessionFile(
 async function waitForNativePiSessionFile(
   projectPath: string,
   sessionId: string,
-  timeoutMs = 10_000
+  timeoutMs = 10_000,
+  agentDirectory?: string
 ): Promise<string | null> {
-  const dir = nativePiSessionDir(projectPath)
+  const dir = nativePiSessionDir(projectPath, agentDirectory)
   const suffix = `_${sessionId}.jsonl`
   const deadline = Date.now() + timeoutMs
   // A sub-agent can spawn before the primary session's first flush has
@@ -96,7 +108,7 @@ async function waitForNativePiSessionFile(
     // The transcript may have been flushed between the caller's existence
     // check and the watcher attaching   no rename event would fire for it.
     // Attach the watcher first, then re-check so neither window is missed.
-    void findNativePiSessionFile(projectPath, sessionId).then((file) => {
+    void findNativePiSessionFile(projectPath, sessionId, agentDirectory).then((file) => {
       if (file) finish(file)
     })
   })
@@ -292,7 +304,8 @@ export {
 export async function loadNativeSubagentMessages(
   projectPath: string,
   sessionId: string,
-  waitForFlush: boolean
+  waitForFlush: boolean,
+  agentDirectory?: string
 ): Promise<AgentMessage[] | null> {
   // The chat engine captures a sub-agent's transcript the moment the spawn
   // tool reports its childSessionId   but pi defers a new session's first
@@ -304,9 +317,12 @@ export async function loadNativeSubagentMessages(
   // guarantees the child is no longer live (`waitForFlush: false`) a
   // missing file is final   watching would only burn seconds waiting for
   // a transcript that can never appear, on every tab reopen.
-  const existing = await findNativePiSessionFile(projectPath, sessionId)
+  const existing = await findNativePiSessionFile(projectPath, sessionId, agentDirectory)
   const file =
-    existing ?? (waitForFlush ? await waitForNativePiSessionFile(projectPath, sessionId) : null)
+    existing ??
+    (waitForFlush
+      ? await waitForNativePiSessionFile(projectPath, sessionId, 10_000, agentDirectory)
+      : null)
   if (!file) return null
   // pi writes the flushed file synchronously before closing it, but keep a
   // short stabilization window in case the create event lands mid-flush.
@@ -347,11 +363,12 @@ export async function loadNativeSubagentMessages(
 export async function reconcileNativeCompactions(
   session: PersistentCliSession,
   projectPath: string | undefined,
-  merge: (messages: AgentMessage[]) => void
+  merge: (messages: AgentMessage[]) => void,
+  agentDirectory?: string
 ): Promise<void> {
   const nativeSessionId = session.nativeSessionId
   if (!projectPath || !nativeSessionId) return
-  const file = await findNativePiSessionFile(projectPath, nativeSessionId)
+  const file = await findNativePiSessionFile(projectPath, nativeSessionId, agentDirectory)
   if (!file) return
   const compactionEntries: {
     summary: string

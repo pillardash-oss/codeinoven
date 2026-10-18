@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { pickAppearanceImage } from '$lib/appearance-image.svelte'
@@ -178,7 +178,7 @@
     <span class="mb-1.5 block text-xs font-medium text-muted">Title</span>
     <input
       type="text"
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
+      class="h-9 w-full border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
       maxlength={MAX_BROWSER_TAB_PAGE_TITLE_LENGTH}
       spellcheck="false"
       autocomplete="off"
@@ -195,7 +195,7 @@
     <span class="mb-1.5 block text-xs font-medium text-muted">Address</span>
     <input
       type="text"
-      class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
+      class="h-9 w-full border bg-elevated px-3 text-sm text-foreground outline-none focus:border-primary"
       maxlength={MAX_BROWSER_TAB_URL_LENGTH}
       spellcheck="false"
       autocomplete="off"
@@ -209,14 +209,14 @@
   </label>
 
   {#if saveError}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{saveError}</p>
+    <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{saveError}</p>
   {/if}
 
   <div class="flex items-center justify-end gap-1">
     {#if hasAppearance}
       <button
         type="button"
-        class="rounded-lg px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+        class="px-2.5 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
         title="Reset the icon to the page's own"
         onclick={resetAppearance}
       >
@@ -225,11 +225,11 @@
     {/if}
     <button
       type="button"
-      class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
       title="Save this bookmark"
       onclick={save}
     >
-      <Check size={13} />
+      <CioCheck size={13} />
       Save
     </button>
   </div>

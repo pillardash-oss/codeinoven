@@ -1,27 +1,25 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioPackage from '@pillardash-oss/cio-icon/CioPackage.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
+  import CioWrench from '@pillardash-oss/cio-icon/CioWrench.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    BookOpen,
-    Bookmark,
-    Boxes,
-    ChevronDown,
-    Globe2,
-    KeyRound,
-    Loader2,
-    Monitor,
-    Package,
-    Pencil,
-    Plus,
-    Puzzle,
-    RefreshCw,
-    Search,
-    Server,
-    Trash2,
-    Upload,
-    Wrench,
-    X
-  } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -399,12 +397,12 @@
     if (tab === 'bookmarks') void loadPluginBookmarks()
   }
 
-  function rowIcon(row: UtilityRowItem): typeof BookOpen {
+  function rowIcon(row: UtilityRowItem): typeof CioBook {
     const kind = row.src === 'registry' ? row.utility.kind : row.entry.kind
-    if (kind === 'skill') return BookOpen
-    if (kind === 'mcp') return Server
-    if (kind === 'computer_use') return Monitor
-    return Globe2
+    if (kind === 'skill') return CioBook
+    if (kind === 'mcp') return CioServer
+    if (kind === 'computer_use') return CioDisplay
+    return CioBrowser
   }
 
   /** An MCP server is a live connection, so its row offers a reachability test. */
@@ -740,10 +738,7 @@
 
 {#snippet tagChip(tag: string)}
   {#if tag === 'App'}
-    <span
-      class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm"
-      title={APP_NAME}
-    >
+    <span class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" title={APP_NAME}>
       <img class="h-full w-full object-contain" src={cioIconUrl} alt="" />
     </span>
     <span>{scopeTagLabel(tag)}</span>
@@ -757,13 +752,11 @@
 
 {#snippet bookmarkRow(row: BookmarkRowItem)}
   <div class="flex items-start gap-3 p-4">
-    <div
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-accent"
-    >
-      <Bookmark size={15} fill="currentColor" />
+    <div class="flex h-8 w-8 shrink-0 items-center justify-center bg-elevated text-accent">
+      <CioBookmark size={15} fill="currentColor" />
     </div>
     <button
-      class="min-w-0 flex-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      class="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
       type="button"
       title="Open {row.name}"
       onclick={() => openBookmark(row)}
@@ -771,7 +764,7 @@
       <span class="flex flex-wrap items-center gap-2">
         <span class="truncate font-mono text-sm font-semibold">{row.name}</span>
         <span
-          class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+          class="border border-border bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
         >
           Marketplace
         </span>
@@ -779,13 +772,13 @@
           <SkillInstalledBadge />
         {:else if row.kind === 'plugin' && row.entry.installed}
           <span
-            class="rounded-md bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
+            class="border border-success/30 bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success"
             >Installed</span
           >
         {/if}
         {#if row.kind === 'skill' && row.entry.isOfficial}
           <span
-            class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+            class="border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
           >
             Official
           </span>
@@ -808,7 +801,7 @@
         <SkillBookmarkButton entry={row.entry} title={skillBookmarkTitle(row.name, true)} />
       {:else}
         <button
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-accent hover:bg-elevated"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-accent hover:bg-elevated"
           type="button"
           title="Remove bookmark for {row.name}"
           aria-label="Remove bookmark for {row.name}"
@@ -819,7 +812,7 @@
             void removePluginBookmark(row.entry)
           }}
         >
-          <Bookmark size={14} fill="currentColor" />
+          <CioBookmark size={14} fill="currentColor" />
         </button>
       {/if}
     </div>
@@ -829,22 +822,20 @@
 {#snippet utilityRow(row: UtilityRowItem)}
   {@const Icon = rowIcon(row)}
   <div class="flex items-start gap-3 p-4">
-    <div
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
-    >
+    <div class="flex h-8 w-8 shrink-0 items-center justify-center bg-elevated text-muted">
       <Icon size={15} />
     </div>
     <div class="min-w-0 flex-1">
       <div class="flex flex-wrap items-center gap-2">
         <p class="text-sm font-semibold">{row.name}</p>
         <span
-          class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+          class="border border-border bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
         >
           {rowKindBadge(row)}
         </span>
         {#if row.src === 'registry' && row.appOwned}
           <span
-            class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
+            class="border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-primary"
             title={canToggleUtilityEnabled(row.utility)
               ? 'Built into the app. It cannot be deleted, and you can switch it off so it stops competing with your own skill for a topic.'
               : 'Built into the app and always available; it cannot be deleted'}
@@ -867,14 +858,14 @@
       <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-dimmed">
         {#each row.tags as tag (tag)}
           <span
-            class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
+            class="flex h-6 items-center gap-1.5 border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
           >
             {@render tagChip(tag)}
           </span>
         {/each}
         {#if row.src === 'registry' && row.utility.credentials.length}
           <span class="flex items-center gap-1">
-            <KeyRound size={11} />
+            <CioKey size={11} />
             {row.utility.credentials.length}
             {row.utility.credentials.length === 1 ? 'credential' : 'credentials'}
           </span>
@@ -901,22 +892,22 @@
       {/if}
       {#if !row.appOwned || (row.src === 'registry' && canToggleUtilityEnabled(row.utility))}
         <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
+          class="flex h-8 w-8 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
           aria-label="Edit {row.name}"
           title="Edit {row.name}"
           onclick={() => openEdit(row)}
         >
-          <Pencil size={14} />
+          <CioPencil size={14} />
         </button>
       {/if}
       {#if !row.appOwned}
         <button
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+          class="flex h-8 w-8 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
           aria-label="Delete {row.name}"
           title="Delete {row.name}"
           onclick={() => (deleteTarget = row)}
         >
-          <Trash2 size={14} />
+          <CioTrash size={14} />
         </button>
       {/if}
     </div>
@@ -933,21 +924,21 @@
     </div>
     <div class="flex shrink-0 flex-wrap items-center gap-2">
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
         title="Add a skill, MCP server, or other utility"
         onclick={openCreate}
       >
-        <Plus size={13} /> Add utility
+        <CioPlus size={13} /> Add utility
       </button>
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         disabled={activeTab === 'tools'
           ? agentToolsStore.loading || agentToolsStore.refreshing
           : loading}
         title="Refresh utilities"
         onclick={refreshActiveTab}
       >
-        <RefreshCw
+        <CioRefresh
           size={13}
           class={(
             activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
@@ -958,18 +949,18 @@
       </button>
       {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks'}
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the skills marketplace"
           onclick={onOpenMarketplace}
         >
-          <Search size={13} /> Skills marketplace
+          <CioSearch size={13} /> Skills marketplace
         </button>
         <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           title="Open the agent plugin marketplace"
           onclick={onOpenPluginMarketplace}
         >
-          <Package size={13} /> Agent plugins
+          <CioPackage size={13} /> Agent plugins
         </button>
       {/if}
     </div>
@@ -980,14 +971,14 @@
        and the background check reads as page housekeeping, not page action. -->
   <div class="mt-5 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
     <div
-      class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+      class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
       role="tablist"
       aria-label="Utilities sections"
     >
       {#each tabs as tab (tab.id)}
         <button
-          class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors {activeTab === tab.id
-            ? 'bg-surface text-foreground shadow-sm'
+          class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === tab.id
+            ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           role="tab"
           aria-selected={activeTab === tab.id}
@@ -1011,12 +1002,12 @@
         </span>
         <button
           type="button"
-          class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
+          class="flex h-7 shrink-0 items-center gap-1.5 border bg-elevated px-2.5 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
           disabled={skillUpdateState.status.running}
           title="Check the skills installed by CodeInOven for updates now"
           onclick={() => void skillUpdateState.checkNow()}
         >
-          <RefreshCw size={11} class={skillUpdateState.status.running ? 'animate-spin' : ''} /> Update
+          <CioRefresh size={11} class={skillUpdateState.status.running ? 'animate-spin' : ''} /> Update
           utilities
         </button>
       </div>
@@ -1027,7 +1018,7 @@
     <!-- Search and the entry count: one row, same place for every list tab. -->
     <div class="mt-4 flex items-center gap-3">
       <label class="relative block min-w-0 flex-1">
-        <Search
+        <CioSearch
           size={14}
           class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -1036,7 +1027,7 @@
         </span>
         <input
           bind:this={searchInputEl}
-          class="h-9 w-full rounded-lg border bg-elevated pl-9 pr-9 text-sm outline-none transition-colors placeholder:text-dimmed focus:border-primary"
+          class="h-9 w-full border bg-elevated pl-9 pr-9 text-sm outline-none transition-colors placeholder:text-dimmed focus:border-primary"
           type="text"
           placeholder={SEARCH_PLACEHOLDER[activeTab]}
           bind:value={query}
@@ -1044,12 +1035,12 @@
         {#if query}
           <button
             type="button"
-            class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+            class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
             aria-label="Clear search"
             title="Clear search"
             onclick={clearSearch}
           >
-            <X size={12} />
+            <CioClose size={12} />
           </button>
         {/if}
       </label>
@@ -1069,7 +1060,7 @@
     <div class="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filters">
       {#if activeTab === 'tools'}
         <select
-          class="h-7 rounded-lg border bg-elevated px-2 text-[0.6875rem] font-medium outline-none focus:border-primary"
+          class="h-7 border bg-elevated px-2 text-[0.6875rem] font-medium outline-none focus:border-primary"
           aria-label="Filter tools by source"
           value={agentToolsStore.selectedSource}
           onchange={(event: Event) =>
@@ -1082,7 +1073,7 @@
         {#if toolHarnesses.length && agentToolsStore.selectedSource !== 'application'}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
+            class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
             null
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1095,7 +1086,7 @@
           {#each toolHarnesses as harness (harness.id)}
             <button
               type="button"
-              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
+              class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {agentToolsStore.selectedHarness ===
               harness.id
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1113,7 +1104,7 @@
         {#if activeTab !== 'bookmarks' && builtInRowCount > 0}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {utilitiesViewPrefs.hideBuiltIn
+            class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {utilitiesViewPrefs.hideBuiltIn
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
             aria-pressed={utilitiesViewPrefs.hideBuiltIn}
@@ -1132,7 +1123,7 @@
         {#if availableTags.length > 0 && activeTab !== 'bookmarks'}
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
+            class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
             'all'
               ? 'border-primary bg-primary text-on-primary'
               : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1144,7 +1135,7 @@
           {#each availableTags as tag (tag)}
             <button
               type="button"
-              class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
+              class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {activeTagFilter ===
               tag
                 ? 'border-primary bg-primary text-on-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -1164,34 +1155,34 @@
     {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'bookmarks' || activeTab === 'mcp' || activeTab === 'web'}
       {#if (activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp') && !secureStorageAvailable}
         <div
-          class="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+          class="mb-4 flex items-start gap-2 border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
         >
-          <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+          <CioAttention size={14} class="mt-0.5 shrink-0" />
           <span>Secure storage is unavailable. Credentials cannot be saved on this device.</span>
         </div>
       {/if}
       {#if error}
-        <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {error}
         </p>
       {/if}
 
       {#if (loading || (activeTab === 'bookmarks' && pluginBookmarksLoading)) && tabRows.length === 0}
-        <div class="rounded-xl border border-dashed p-8 text-center">
-          <Loader2 size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
+        <div class="border border-dashed p-8 text-center">
+          <CioSpinner size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
           <p class="text-xs text-dimmed">Loading…</p>
         </div>
       {:else if filteredRows.length === 0}
-        <div class="rounded-xl border border-dashed p-8 text-center">
+        <div class="border border-dashed p-8 text-center">
           {#if hiddenBuiltInCount > 0}
-            <Package size={18} class="mx-auto mb-2 text-dimmed" />
+            <CioPackage size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">Built-in utilities are hidden</p>
             <p class="mt-1 text-xs text-dimmed">
               Your filter hides {hiddenBuiltInCount} built-in
               {hiddenBuiltInCount === 1 ? 'utility' : 'utilities'} from this list.
             </p>
             <button
-              class="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="mt-4 inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               type="button"
               title="Show the utilities built into CodeInOven"
               onclick={() => utilitiesViewPrefs.setHideBuiltIn(false)}
@@ -1199,40 +1190,40 @@
               Show built-in
             </button>
           {:else if activeTab === 'bookmarks' && !pluginBookmarksLoaded}
-            <Bookmark size={18} class="mx-auto mb-2 text-dimmed" />
+            <CioBookmark size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">Saved plugins could not load</p>
             <button
-              class="mt-4 inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+              class="mt-4 inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
               type="button"
               title="Retry loading saved plugins"
               onclick={() => void loadPluginBookmarks()}
             >
-              <RefreshCw size={13} /> Retry
+              <CioRefresh size={13} /> Retry
             </button>
           {:else if activeTab === 'bookmarks' && pluginBookmarksLoaded}
-            <Bookmark size={18} class="mx-auto mb-2 text-dimmed" />
+            <CioBookmark size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">No saved skills or plugins</p>
             <p class="mt-1 text-xs text-dimmed">Bookmark a skill or plugin to keep it here.</p>
             <div class="mt-4 flex justify-center gap-2">
               <button
-                class="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                class="inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
                 type="button"
                 title="Open the skills marketplace"
                 onclick={onOpenMarketplace}
               >
-                <Search size={13} /> Skills marketplace
+                <CioSearch size={13} /> Skills marketplace
               </button>
               <button
-                class="inline-flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+                class="inline-flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
                 type="button"
                 title="Open the plugin marketplace"
                 onclick={onOpenPluginMarketplace}
               >
-                <Search size={13} /> Plugin marketplace
+                <CioSearch size={13} /> Plugin marketplace
               </button>
             </div>
           {:else}
-            <Puzzle size={18} class="mx-auto mb-2 text-dimmed" />
+            <CioTabExtensions size={18} class="mx-auto mb-2 text-dimmed" />
             <p class="text-sm font-medium">No matching entries</p>
             <p class="mt-1 text-xs text-dimmed">Add a utility or change the filters.</p>
           {/if}
@@ -1244,13 +1235,13 @@
             <section aria-label={group.vendor.label}>
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-1 py-1.5 text-left transition-colors hover:bg-overlay"
+                class="flex w-full items-center gap-2 px-1 py-1.5 text-left transition-colors hover:bg-overlay"
                 aria-expanded={!folded}
                 aria-label="{folded ? 'Expand' : 'Fold'} {group.vendor.label}"
                 title="{folded ? 'Expand' : 'Fold'} {group.vendor.label}"
                 onclick={() => utilitiesViewPrefs.toggleVendorFold(group.vendor.id)}
               >
-                <ChevronDown
+                <CioChevronDown
                   size={12}
                   class="shrink-0 text-dimmed transition-transform {folded ? '-rotate-90' : ''}"
                   aria-hidden="true"
@@ -1266,7 +1257,7 @@
                 {:else if group.vendor.kind === 'marketplace'}
                   <VendorIcon name={group.vendor.label} id={group.vendor.iconName} size={14} />
                 {:else}
-                  <Package size={13} class="shrink-0 text-dimmed" />
+                  <CioPackage size={13} class="shrink-0 text-dimmed" />
                 {/if}
                 <h2 class="text-xs font-semibold">{group.vendor.label}</h2>
                 <span class="text-[0.6875rem] tabular-nums text-dimmed">{group.rows.length}</span>
@@ -1277,7 +1268,7 @@
                 {/if}
               </button>
               {#if !folded}
-                <div class="divide-y rounded-xl border bg-surface">
+                <div class="divide-y border bg-surface">
                   {#each group.rows as row (row.id)}
                     {#if row.src === 'bookmark'}
                       {@render bookmarkRow(row)}
@@ -1292,9 +1283,9 @@
         </div>
       {/if}
     {:else if activeTab === 'plugins'}
-      <div class="rounded-xl border bg-surface p-5">
-        <div class="rounded-xl border border-dashed bg-elevated p-5">
-          <Boxes size={20} class="mb-3 text-muted" />
+      <div class="border bg-surface p-5">
+        <div class="border border-dashed bg-elevated p-5">
+          <CioTabBoxes size={20} class="mb-3 text-muted" />
           <p class="text-sm font-semibold">Import a plugin bundle</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
             A plugin bundle can install several MCP servers, skills, and web utilities together.
@@ -1302,7 +1293,7 @@
             capabilities appear on their respective tabs.
           </p>
           <label
-            class="mt-4 inline-flex h-9 cursor-pointer items-center rounded-lg border bg-surface px-3 text-xs font-medium hover:bg-overlay"
+            class="mt-4 inline-flex h-9 cursor-pointer items-center border bg-surface px-3 text-xs font-medium hover:bg-overlay"
           >
             Choose JSON file
             <input
@@ -1314,71 +1305,71 @@
           </label>
         </div>
         {#if error}
-          <p class="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p class="mt-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {error}
           </p>
         {/if}
         <label class="mt-4 block space-y-1 text-xs font-medium">
           <span>Or paste the manifest</span>
           <textarea
-            class="min-h-64 w-full resize-y rounded-xl border bg-raised px-3 py-2 font-mono text-xs outline-none focus:border-primary"
+            class="min-h-64 w-full resize-y border bg-raised px-3 py-2 font-mono text-xs outline-none focus:border-primary"
             placeholder={'{\n  "name": "My plugin",\n  "utilities": [\n    { "definition": { ... }, "credentials": [] }\n  ]\n}'}
             bind:value={pluginManifest}></textarea>
         </label>
         <button
-          class="mt-3 flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="mt-3 flex h-9 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="button"
           disabled={!pluginManifest.trim()}
           onclick={() => void importPluginBundle()}
         >
-          <Upload size={13} /> Install bundle
+          <CioUpload size={13} /> Install bundle
         </button>
       </div>
     {:else if activeTab === 'tools'}
       {#if agentToolsStore.catalog?.notices.length}
         <div class="mb-4 space-y-2">
           {#each agentToolsStore.catalog.notices as notice (notice)}
-            <p class="rounded-lg border bg-elevated px-3 py-2 text-xs text-muted">
+            <p class="border bg-elevated px-3 py-2 text-xs text-muted">
               {notice}
             </p>
           {/each}
         </div>
       {/if}
       {#if agentToolsStore.error}
-        <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {agentToolsStore.error}
         </p>
       {/if}
 
       {#if agentToolsStore.loading && !agentToolsStore.catalog}
-        <div class="rounded-xl border border-dashed p-8 text-center">
-          <RefreshCw size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
+        <div class="border border-dashed p-8 text-center">
+          <CioRefresh size={18} class="mx-auto mb-2 animate-spin text-dimmed" />
           <p class="text-xs text-dimmed">Loading agent tools…</p>
         </div>
       {:else if filteredToolGroups.length}
         <div class="space-y-2">
           {#each filteredToolGroups as group (group.key)}
             {@const tool = group.definition}
-            <details class="group rounded-xl border bg-surface">
+            <details class="group border bg-surface">
               <summary
                 class="flex cursor-pointer list-none items-start gap-3 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 <span
-                  class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
+                  class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center bg-elevated text-muted"
                 >
-                  <Wrench size={14} />
+                  <CioWrench size={14} />
                 </span>
                 <span class="min-w-0 flex-1">
                   <span class="flex flex-wrap items-center gap-2">
                     <span class="font-mono text-sm font-semibold">{tool.name}</span>
                     <span
-                      class="rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
+                      class="border border-border bg-elevated px-1.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wide text-muted"
                     >
                       {tool.source}
                     </span>
                     {#each group.harnessIds as harnessId (harnessId)}
                       <span
-                        class="flex h-6 items-center gap-1.5 rounded-md border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
+                        class="flex h-6 items-center gap-1.5 border bg-elevated px-2 text-[0.625rem] font-medium text-muted"
                       >
                         <AgentIcon
                           agentId={harnessId}
@@ -1407,7 +1398,7 @@
                   Input / parameter schema
                 </p>
                 <pre
-                  class="max-h-128 overflow-auto rounded-lg bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-foreground"><code
+                  class="max-h-128 overflow-auto bg-raised p-3 font-mono text-[0.6875rem] leading-relaxed text-foreground"><code
                     >{schemaText(tool)}</code
                   ></pre>
               </div>
@@ -1415,8 +1406,8 @@
           {/each}
         </div>
       {:else}
-        <div class="rounded-xl border border-dashed p-8 text-center">
-          <Wrench size={18} class="mx-auto mb-2 text-dimmed" />
+        <div class="border border-dashed p-8 text-center">
+          <CioWrench size={18} class="mx-auto mb-2 text-dimmed" />
           <p class="text-sm font-medium">
             {selectedToolHarnessDetails?.status === 'unsupported' ||
             selectedToolHarnessDetails?.status === 'unavailable'

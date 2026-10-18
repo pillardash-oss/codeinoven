@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Flag, Loader2, Tag, User } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioFlag from '@pillardash-oss/cio-icon/CioFlag.svelte'
+  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { gitState } from '$lib/stores/git.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -244,7 +248,7 @@
 )}
   <button
     type="button"
-    class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors {checked
+    class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left transition-colors {checked
       ? 'bg-primary/10'
       : 'hover:bg-elevated'}"
     aria-pressed={checked}
@@ -252,10 +256,9 @@
     onclick={onToggle}
   >
     {#if swatch}
-      <span class="h-3 w-3 shrink-0 rounded-full" style={prLabelStyle(swatch)} aria-hidden="true"
-      ></span>
+      <span class="h-3 w-3 shrink-0" style={prLabelStyle(swatch)} aria-hidden="true"></span>
     {:else}
-      <User size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+      <CioPerson size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
     {/if}
     <span class="min-w-0 flex-1">
       <span class="block truncate font-mono text-[0.6875rem] text-foreground">{label}</span>
@@ -264,7 +267,7 @@
       {/if}
     </span>
     {#if checked}
-      <Check size={13} class="shrink-0 text-primary" />
+      <CioCheck size={13} class="shrink-0 text-primary" />
     {/if}
   </button>
 {/snippet}
@@ -272,16 +275,16 @@
 <Modal open {title} {onClose}>
   <div class="space-y-3">
     <input
-      class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+      class="h-8 w-full border border-border bg-elevated px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
       placeholder={searchPlaceholder}
       aria-label={searchPlaceholder}
       bind:value={query}
     />
 
-    <div class="max-h-72 min-h-24 overflow-y-auto rounded-lg border border-border p-1">
+    <div class="max-h-72 min-h-24 overflow-y-auto border border-border p-1">
       {#if loading && labelRows.length === 0 && accountRows.length === 0 && milestoneRows.length === 0}
         <p class="flex items-center justify-center gap-2 py-6 text-[0.6875rem] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
           Loading…
         </p>
       {:else if mode === 'labels'}
@@ -328,7 +331,7 @@
         -->
         <button
           type="button"
-          class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors {draftMilestone ===
+          class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left transition-colors {draftMilestone ===
           null
             ? 'bg-primary/10'
             : 'hover:bg-elevated'}"
@@ -336,10 +339,10 @@
           title="Clear the milestone"
           onclick={() => chooseMilestone(null)}
         >
-          <Flag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioFlag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
           <span class="min-w-0 flex-1 text-[0.6875rem] text-foreground">No milestone</span>
           {#if draftMilestone === null}
-            <Check size={13} class="shrink-0 text-primary" />
+            <CioCheck size={13} class="shrink-0 text-primary" />
           {/if}
         </button>
         <div class="my-1 h-px bg-border"></div>
@@ -353,7 +356,7 @@
           {#each milestoneRows as milestone (milestone.number)}
             <button
               type="button"
-              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors {draftMilestone ===
+              class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left transition-colors {draftMilestone ===
               milestone.number
                 ? 'bg-primary/10'
                 : 'hover:bg-elevated'}"
@@ -361,7 +364,7 @@
               title={`Attach ${milestone.title}`}
               onclick={() => chooseMilestone(milestone.number)}
             >
-              <Tag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+              <CioTag size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-[0.6875rem] text-foreground">
                   {milestone.title}
@@ -374,7 +377,7 @@
                 </span>
               </span>
               {#if draftMilestone === milestone.number}
-                <Check size={13} class="shrink-0 text-primary" />
+                <CioCheck size={13} class="shrink-0 text-primary" />
               {/if}
             </button>
           {/each}
@@ -390,7 +393,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
       data-modal-dismiss
       onclick={onClose}
     >
@@ -398,12 +401,12 @@
     </button>
     <button
       type="button"
-      class="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+      class="inline-flex items-center gap-2 bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
       disabled={!changed || busy}
       onclick={() => void save()}
     >
       {#if busy}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {/if}
       Save
     </button>

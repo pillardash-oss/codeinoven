@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { Check, Code2, Copy, Expand, MessageSquarePlus } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCode from '@pillardash-oss/cio-icon/CioCode.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
   import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
   import { PanZoom } from '$lib/pan-zoom.svelte'
@@ -165,16 +169,13 @@
   </div>
 {/snippet}
 
-<div
-  class="overflow-hidden rounded-lg border bg-elevated"
-  {@attach renderDiagram(code.trim(), retryKey)}
->
+<div class="overflow-hidden border bg-elevated" {@attach renderDiagram(code.trim(), retryKey)}>
   <div class="flex h-8 items-center justify-between border-b px-2">
     <span class="px-1 font-mono text-[0.625rem] uppercase tracking-wide text-dimmed">Mermaid</span>
     <div class="flex items-center gap-0.5">
       {#if onAnnotate}
         <button
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label="Annotate Mermaid diagram"
           title="Annotate Mermaid diagram"
           onclick={(event: MouseEvent) => {
@@ -182,12 +183,12 @@
             onAnnotate(code, event)
           }}
         >
-          <MessageSquarePlus size={13} />
+          <CioMessagePlus size={13} />
         </button>
       {/if}
       <button
         class={[
-          'rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground',
+          'p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground',
           sourceVisible && 'bg-overlay text-foreground'
         ]}
         aria-label={sourceVisible ? 'Hide Mermaid source' : 'Show Mermaid source'}
@@ -195,28 +196,28 @@
         aria-pressed={sourceVisible}
         onclick={() => (sourceVisible = !sourceVisible)}
       >
-        <Code2 size={13} />
+        <CioCode size={13} />
       </button>
       <button
-        class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+        class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
         aria-label="Copy Mermaid source"
         title="Copy Mermaid source"
         onclick={() => void copySource()}
       >
         {#if copied}
-          <Check size={13} class="text-success" />
+          <CioCheck size={13} class="text-success" />
         {:else}
-          <Copy size={13} />
+          <CioCopy size={13} />
         {/if}
       </button>
       {#if svg}
         <button
-          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label="Expand Mermaid diagram"
           title="Expand Mermaid diagram"
           onclick={() => (expanded = true)}
         >
-          <Expand size={13} />
+          <CioMaximize size={13} />
         </button>
       {/if}
     </div>
@@ -238,7 +239,7 @@
         </div>
         <button
           type="button"
-          class="shrink-0 rounded-md border border-danger/30 bg-danger/10 px-2 py-1 text-[0.625rem] font-semibold text-danger transition-colors hover:bg-danger/20"
+          class="shrink-0 border border-danger/30 bg-danger/10 px-2 py-1 text-[0.625rem] font-semibold text-danger transition-colors hover:bg-danger/20"
           title="Try rendering this Mermaid diagram again"
           aria-label="Try rendering this Mermaid diagram again"
           onclick={() => (retryKey += 1)}
@@ -254,7 +255,7 @@
   {/if}
 
   {#if sourceVisible || error}
-    <div class="[&>div]:rounded-none [&>div]:border-0 [&>div]:border-t">
+    <div class="[&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang="mermaid" />
     </div>
   {/if}
@@ -264,8 +265,8 @@
   open={expanded}
   title="Mermaid diagram"
   onClose={() => (expanded = false)}
-  size="full"
-  fill
+  placement="fullscreen"
+  panelClass="bg-surface"
   contentClass="flex flex-col overflow-hidden p-0"
 >
   <div class="min-h-0 flex-1">

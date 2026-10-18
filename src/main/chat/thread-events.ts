@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import type { AgentEvent, Thread } from '../../lib/types'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -12,11 +13,12 @@ type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }
  * The service that owns the menu bar icon. Injected as a narrow port rather
  * than imported, because this module is loaded by the chat engine and must not
  * pull in the whole background lifecycle: every persisted thread update is
- * exactly the moment the icon's error state can have changed.
+ * exactly the moment the icon's error state and its working-thread figure can
+ * have changed.
  */
-interface BackgroundAttentionPort {
+interface BackgroundTrayPort {
   /** Coalesced, so calling it on every thread update is cheap. */
-  requestAttentionRefresh: () => void
+  requestTrayRefresh: () => void
 }
 
 interface ThreadCorpusListener {
@@ -35,7 +37,7 @@ export function subscribeThreadCorpus(listener: ThreadCorpusListener): () => voi
 
 let _notificationService: NotificationService | null = null
 let _powerWakeService: PowerWakeService | null = null
-let _backgroundAttention: BackgroundAttentionPort | null = null
+let _backgroundTray: BackgroundTrayPort | null = null
 
 export function setNotificationService(service: NotificationService | null): void {
   _notificationService = service
@@ -45,8 +47,8 @@ export function setPowerWakeService(service: PowerWakeService | null): void {
   _powerWakeService = service
 }
 
-export function setBackgroundAttention(port: BackgroundAttentionPort | null): void {
-  _backgroundAttention = port
+export function setBackgroundTray(port: BackgroundTrayPort | null): void {
+  _backgroundTray = port
 }
 
 export function markNotificationAborting(projectId: string, threadId: string): void {
@@ -81,10 +83,60 @@ export function broadcastThreadUpdate(thread: Thread): void {
     dismissThreadNotifications(thread.projectId, thread.id)
   }
   _powerWakeService?.onThreadUpdate(thread)
-  // The menu bar mirrors the thread's error card, so every persisted status or
-  // read change is a moment its state can have changed.
-  _backgroundAttention?.requestAttentionRefresh()
+  // The menu bar mirrors the thread's error card and carries the number of
+  // working threads, so every persisted status or read change is a moment the
+  // icon's state can have changed.
+  _backgroundTray?.requestTrayRefresh()
   void _notificationService?.notify(thread)
+  // The row is shared with every other instance, and none of them receives this
+  // fan-out, so the change is also announced for a sibling to re-read.
+  instanceRegistry.publishThreadChanged(thread.projectId, thread.id, 'row')
+}
+
+/**
+ * Tell every renderer window that this thread's mirrored conversation changed.
+ *
+ * The mirror over the same database is what a sibling instance writes into, so
+ * its rows are already there: a window only has to re-read the tail it shows.
+ * Deliberately not a `thread:updated` push, which would also re-run the whole
+ * row reconcile (working state, notices, draft label) for a change that never
+ * touched the row.
+ */
+export function broadcastThreadMessagesChanged(projectId: string, threadId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:messagesChanged', projectId, threadId)
+  }
+}
+
+/**
+ * Push a thread snapshot another instance settled to every renderer window.
+ *
+ * Deliberately narrower than `broadcastThreadUpdate`: the change was produced by
+ * the sibling that owns the run, and that process already notified the user,
+ * rang its OS card, badged the icon and updated the power policy for it. Doing
+ * any of that again here would tell the user twice about one finished run. What
+ * this window owes its own renderer is the corrected row, so its sidebar, status
+ * counts and badges stop showing work that is no longer happening.
+ */
+export function broadcastCrossInstanceThreadUpdate(thread: Thread): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:updated', thread)
+  }
+  // The menu bar mirrors the thread states of the shared database, so a row
+  // corrected from a sibling's write is a moment its own state can have changed.
+  _backgroundTray?.requestTrayRefresh()
+}
+
+/**
+ * Announce to every other instance that this process wrote this thread's mirror.
+ *
+ * Wired into the transcript store once at boot, so every durable message write
+ * says so whichever flow made it. The announcement carries no messages at all:
+ * a sibling re-reads the shared rows, which is why a coalesced batch is enough
+ * and why a lost one costs only freshness.
+ */
+export function publishThreadMessagesChanged(projectId: string, threadId: string): void {
+  instanceRegistry.publishThreadChanged(projectId, threadId, 'messages')
 }
 
 /**
@@ -105,6 +157,9 @@ export function broadcastThreadDraftUpdated(
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:draftUpdated', projectId, threadId, drafting, draftJson)
   }
+  // Draft state lives on the shared row, so a sibling instance reads it from
+  // there; this announces that the row moved.
+  instanceRegistry.publishThreadChanged(projectId, threadId, 'row')
 }
 
 /**
@@ -129,8 +184,51 @@ export function broadcastThreadBranchUpdated(thread: Thread): void {
   }
 }
 
+/**
+ * Push just a thread's authored-work markers to every renderer window.
+ *
+ * Deliberately lighter than `broadcastThreadUpdate`, for the same reason as the
+ * branch update above: the markers land the moment a design or video preview
+ * records the session, which is mid-turn, and routing it through the full
+ * `thread:updated` fan-out would force ThreadView's message reconcile to reload
+ * and re-merge the whole transcript at that moment. Only surfaces that draw the
+ * markers need to react, and they patch the fields in place.
+ *
+ * Both facts travel: `kind` is the session the thread is in now and `kinds` is
+ * every session it has entered, which is what the row draws one marker per.
+ */
+export function broadcastThreadAuthoredWorkUpdated(
+  projectId: string,
+  threadId: string,
+  kind: AuthoredWorkKind,
+  kinds: readonly AuthoredWorkKind[]
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:authoredWorkUpdated', projectId, threadId, kind, [
+      ...kinds
+    ])
+  }
+}
+
 /** Push permanent task deletion so every renderer view drops it. */
 export function broadcastThreadDeleted(thread: Pick<Thread, 'projectId' | 'id'>): void {
+  broadcastCrossInstanceThreadDeleted(thread)
+  // Nothing in this instance can re-read a row that is gone, so the deletion
+  // itself is what siblings are told: without it a window keeps a row for a
+  // thread that no longer exists.
+  instanceRegistry.publishThreadChanged(thread.projectId, thread.id, 'deleted')
+}
+
+/**
+ * Drop a thread from this instance's renderers after another instance deleted it.
+ *
+ * This is the local half of `broadcastThreadDeleted`, deliberately without its
+ * cross-instance announcement: re-announcing a sibling's deletion would send the
+ * two instances to each other forever.
+ */
+export function broadcastCrossInstanceThreadDeleted(
+  thread: Pick<Thread, 'projectId' | 'id'>
+): void {
   for (const listener of corpusListeners) listener.deleted(thread)
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:deleted', thread.projectId, thread.id)

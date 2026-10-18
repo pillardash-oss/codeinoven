@@ -1,5 +1,6 @@
+import { dialog } from '../system/file-dialogs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { BrowserWindow, dialog, shell } from 'electron'
+import { BrowserWindow, shell } from 'electron'
 import { basename, dirname } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import type { ThreadManager } from '../../lib/engines/thread-manager'

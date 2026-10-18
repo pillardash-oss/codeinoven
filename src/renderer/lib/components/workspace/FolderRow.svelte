@@ -1,9 +1,15 @@
 <script lang="ts">
-  import { Folder, ChevronRight } from '@lucide/svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import type { Project } from '$shared/types'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
+  import {
+    emptyThreadStateCounts,
+    hasThreadStateCounts,
+    type ThreadStateCounts as ThreadStateCountsValue
+  } from '$lib/thread-state-counts'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
 
@@ -12,8 +18,8 @@
     /** Data URL of the project's custom icon. */
     iconUrl?: string | null
     expanded: boolean
-    /** How many threads inside this folder are currently being worked on. */
-    workingCount?: number
+    /** How this folder's threads break down: working, attention, and errors. */
+    stateCounts?: ThreadStateCountsValue
     onToggle: () => void
     /** Hover actions rendered on the right (e.g. new-thread button, ellipsis menu). */
     actions?: Snippet
@@ -28,30 +34,60 @@
     onContextMenu?: (e: MouseEvent, projectId: string) => void
     /** Show location metadata when this name collides with another visible project. */
     showLocation?: boolean
+    /**
+     * Keep the folder row at the top of the sidebar's scroller while its own
+     * threads pass underneath, so the project that owns the rows stays named
+     * while the reader is inside them.
+     *
+     *  The folder row and its thread list share one parent in the sidebar, so
+     *  the row's containing block is that pair: it sticks for exactly as long as
+     *  its own threads are on screen and is pushed out by the next project as
+     *  that project takes the top. A stuck row must be opaque, so the 70% tint an
+     *  expanded folder wears becomes its solid form while it is stuck.
+     */
+    sticky?: boolean
   }
 
   let {
     project,
     iconUrl = null,
     expanded,
-    workingCount = 0,
+    stateCounts = emptyThreadStateCounts(),
     onToggle,
     actions,
     actionsPinned = false,
     onMoveProject,
     onContextMenu,
-    showLocation = false
+    showLocation = false,
+    sticky = false
   }: Props = $props()
 
   const resolvedIcon = $derived(getProjectIcon(project, iconUrl ?? undefined))
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
 
+  /**
+   * The row's own background.
+   *
+   *  An expanded folder wears a 70% tint and a collapsed one wears none, both of
+   *  which let the rows behind a stuck row show through. A stuck row must be
+   *  opaque, so it takes the solid form of whatever it was wearing.
+   */
+  const rootBackgroundClass = $derived(
+    expanded
+      ? sticky
+        ? 'bg-elevated hover:bg-overlay'
+        : 'bg-elevated/70 hover:bg-elevated'
+      : sticky
+        ? 'bg-surface hover:bg-elevated'
+        : 'hover:bg-elevated'
+  )
+
   function setDragImage(e: DragEvent, label: string): void {
     const ghost = document.createElement('div')
     ghost.textContent = label
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     e.dataTransfer!.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -93,9 +129,9 @@
 </script>
 
 <div
-  class="group relative flex items-center gap-1 border-l-2 px-1.5 py-1.5 transition-colors {expanded
-    ? 'bg-elevated/70 hover:bg-elevated'
-    : 'hover:bg-elevated'}"
+  class="group relative flex items-center gap-1 border-l-2 px-1.5 py-1.5 transition-colors {rootBackgroundClass} {sticky
+    ? 'sticky -top-2 z-10'
+    : ''}"
   style={project.color
     ? `border-color: ${project.color}`
     : expanded
@@ -145,14 +181,14 @@
             onerror={projectIconOnError(project)}
           />
         {:else}
-          <Folder size={14} class="text-muted" />
+          <CioFolder size={14} class="text-muted" />
         {/if}
       </span>
       <span
         class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100"
         aria-hidden="true"
       >
-        <ChevronRight
+        <CioForward
           size={13}
           class="text-dimmed transition-transform duration-150 {expanded ? 'rotate-90' : ''}"
         />
@@ -168,22 +204,15 @@
     />
   </button>
 
-  <!-- The working badge and the hover actions float over the right edge of the row
-       instead of reserving width in the flex flow, so the project name always keeps
-       the full width of the row until the actions are actually visible. The left-to-right
-       fade keeps the overlaid controls legible over a long name. -->
-  {#if workingCount > 0}
+  <!-- The state indicator and the hover actions float over the right edge of the
+       row instead of reserving width in the flex flow, so the project name always
+       keeps the full width of the row until the actions are actually visible. The
+       left-to-right fade keeps the overlaid controls legible over a long name. -->
+  {#if hasThreadStateCounts(stateCounts)}
     <span
-      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center gap-1 bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
     >
-      <StatusBadge
-        stage="working"
-        animated
-        title="{workingCount} {workingCount === 1 ? 'thread' : 'threads'} working"
-      />
-      <span class="text-[0.5625rem] font-semibold tabular-nums text-thread-working">
-        {workingCount}
-      </span>
+      <ThreadStateCounts counts={stateCounts} />
     </span>
   {/if}
 

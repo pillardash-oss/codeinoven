@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { LoaderCircle, CheckCircle2, AlertCircle, Info } from '@lucide/svelte'
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import type { ModelPathValidationResult, ParsedModelIdentity } from '../../../../lib/speech/types'
   import {
     buildParsedIdentityForValidation,
@@ -165,7 +168,7 @@
       Model path
       <input
         id="paste-model-path-input"
-        class="mt-1 w-full rounded-lg border bg-elevated px-3 py-2.5 font-mono text-xs outline-none focus:border-primary"
+        class="mt-1 w-full border bg-elevated px-3 py-2.5 font-mono text-xs outline-none focus:border-primary"
         type="text"
         {placeholder}
         autocomplete="off"
@@ -177,13 +180,13 @@
 
     {#if showNormalizedHint}
       <p class="flex items-center gap-1.5 text-[0.6875rem] text-dimmed">
-        <Info size={12} aria-hidden="true" />
+        <CioTabInfo size={12} aria-hidden="true" />
         Trimmed surrounding quotes and whitespace before validation.
       </p>
     {/if}
 
     <div
-      class="min-h-6 rounded-lg px-3 py-2 text-xs"
+      class="min-h-6 px-3 py-2 text-xs"
       class:bg-success-soft={validation?.ok}
       class:text-success={validation?.ok}
       class:bg-danger-soft={validation !== null && !validation.ok && validation.code !== 'empty'}
@@ -201,22 +204,22 @@
     >
       {#if validating}
         <span class="inline-flex items-center gap-1.5">
-          <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+          <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
           Validating path…
         </span>
       {:else if validation?.ok}
         <span class="inline-flex items-center gap-1.5">
-          <CheckCircle2 size={12} aria-hidden="true" />
+          <CioCheckCircle size={12} aria-hidden="true" />
           {validation.reason}
         </span>
       {:else if validation !== null && validation.code === 'empty'}
         <span class="inline-flex items-center gap-1.5">
-          <Info size={12} aria-hidden="true" />
+          <CioTabInfo size={12} aria-hidden="true" />
           {validation.reason}
         </span>
       {:else if validation !== null}
         <span class="inline-flex items-center gap-1.5">
-          <AlertCircle size={12} aria-hidden="true" />
+          <CioAlertCircle size={12} aria-hidden="true" />
           {validation.reason}
         </span>
       {:else}
@@ -225,24 +228,24 @@
     </div>
 
     {#if hasBreakup && liveParsed}
-      <div class="rounded-xl border bg-surface p-3">
+      <div class="border bg-surface p-3">
         <p
           class="mb-2 flex items-center justify-between text-[0.6875rem] font-semibold uppercase tracking-wide text-muted"
         >
           <span>Detected model</span>
           {#if liveParsed.confidence === 'high'}
             <span
-              class="rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success"
+              class="border border-success/30 bg-success/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success"
               >High confidence</span
             >
           {:else if liveParsed.confidence === 'medium'}
             <span
-              class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[0.625rem] font-medium text-amber-600"
+              class="border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-amber-600"
               >Medium confidence</span
             >
           {:else}
             <span
-              class="rounded-full bg-surface-hover px-2 py-0.5 text-[0.625rem] font-medium text-dimmed"
+              class="border border-border bg-surface-hover px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
               >Low confidence</span
             >
           {/if}
@@ -259,7 +262,7 @@
         <div class="mt-2 flex flex-wrap gap-1.5">
           {#each liveParsed.details as d (d.label)}
             <span
-              class="inline-flex items-center gap-1 rounded-full border bg-elevated px-2 py-0.5 text-[0.6875rem]"
+              class="inline-flex items-center gap-1 border bg-elevated px-2 py-0.5 text-[0.6875rem]"
             >
               <span class="font-medium text-muted">{d.label}:</span>
               <span class="font-semibold">{d.value}</span>
@@ -270,7 +273,7 @@
           <p class="mt-2 flex flex-wrap items-center gap-1 text-[0.6875rem] text-dimmed">
             <span class="text-[0.625rem] uppercase tracking-wide">Breakup:</span>
             {#each liveParsed.tokens as tok, i (i)}
-              <code class="rounded bg-elevated px-1 py-0.5 font-mono text-[0.6875rem]">{tok}</code>
+              <code class="bg-elevated px-1 py-0.5 font-mono text-[0.6875rem]">{tok}</code>
               {#if i < liveParsed.tokens.length - 1}<span class="opacity-40">·</span>{/if}
             {/each}
           </p>
@@ -280,9 +283,9 @@
 
     {#if validation !== null && !validation.ok && validation.code === 'unsupported-format'}
       <p class="text-[0.6875rem] text-dimmed">
-        Tip: use an absolute path. On macOS/Linux use <code class="rounded bg-elevated px-1"
+        Tip: use an absolute path. On macOS/Linux use <code class="bg-elevated px-1"
           >/path/to/model</code
-        >, on Windows use <code class="rounded bg-elevated px-1">C:\path\to\model</code>. Case is
+        >, on Windows use <code class="bg-elevated px-1">C:\path\to\model</code>. Case is
         platform-dependent.
       </p>
     {/if}
@@ -299,18 +302,18 @@
   </div>
 
   {#snippet footer()}
-    <button type="button" class="rounded-lg border px-3 py-1.5 text-sm" onclick={resetAndClose}>
+    <button type="button" class="border px-3 py-1.5 text-sm" onclick={resetAndClose}>
       Cancel
     </button>
     <button
       type="button"
-      class="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-on-primary disabled:opacity-40"
+      class="bg-primary px-3 py-1.5 text-sm font-medium text-on-primary disabled:opacity-40"
       disabled={!canImport}
       data-modal-primary
       onclick={() => void handleImport()}
     >
       {#if importing}
-        <LoaderCircle size={13} class="mr-1 inline animate-spin" aria-hidden="true" />
+        <CioSpinner size={13} class="mr-1 inline animate-spin" aria-hidden="true" />
       {/if}
       Import
     </button>

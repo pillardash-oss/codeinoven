@@ -13,7 +13,7 @@ export const INBOX_PROJECT_ID = 'inbox'
 export const DRAFT_CHAT_THREAD_ID = 'new-chat'
 
 /**
- * Fixed id of the hidden container that holds assistant-space threads (routine
+ * Fixed id of the hidden container that holds assistant-space threads (assistant
  * tasks). Like the inbox it is a hidden project, so assistant threads never
  * leak into the Projects or Chats lists.
  */
@@ -50,7 +50,7 @@ export const CHATS_CWD_DIR = 'chats-cwd'
 
 /**
  * App-storage root holding one workspace directory per assistant-space task.
- * `assistant-cwd/<routineId ?? threadId>` is the directory the task's session
+ * `assistant-cwd/<assistantId ?? threadId>` is the directory the task's session
  * runs in, the mount root of its file tree, and the task's own scratch
  * directory. The name lives here for the same reason `CHATS_CWD_DIR` does: the
  * renderer needs the same segment to turn a path an agent cited back into a
@@ -69,8 +69,8 @@ export const BROWSER_CWD_DIR = 'browser-cwd'
  * Fixed hidden containers that hold many independent conversations under one
  * project id. Every per-conversation surface keys off the open thread's
  * conversation scope inside them: a standalone chat owns its own file mount and
- * its own browser tabs, while an assistant routine's threads (its how-to host
- * and the runs it fires) share one of each, because a routine is one container
+ * its own browser tabs, while an assistant's threads (its knowledge host
+ * and the runs it fires) share one of each, because an assistant is one container
  * the user set up. Switching conversations swaps the scope instead of leaking
  * one conversation's state into another. A real project keeps one shared
  * surface across all of its threads.
@@ -82,18 +82,18 @@ export function isConversationContainer(projectId: string): boolean {
 /**
  * The conversation a thread's browser tabs belong to. A project's threads share
  * the project, exactly as they share its workspace. An assistant thread shares
- * its routine with that routine's other threads, which is the same owner the
- * `assistant-cwd/<routineId ?? threadId>` mount uses, so a browser opened by one
- * run of a routine stays on screen in its how-to host and in its other runs. A
- * routine-less assistant task and an inbox chat are independent conversations
+ * its assistant with that assistant's other threads, which is the same owner the
+ * `assistant-cwd/<assistantId ?? threadId>` mount uses, so a browser opened by one
+ * run of an assistant stays on screen in its knowledge host and in its other runs. A
+ * assistant-less assistant task and an inbox chat are independent conversations
  * and each own their own.
  */
 export function conversationScopeId(
   projectId: string,
   threadId: string,
-  routineId?: string | null
+  assistantId?: string | null
 ): string {
-  if (projectId === ASSISTANT_SPACE_ID) return routineId ?? threadId
+  if (projectId === ASSISTANT_SPACE_ID) return assistantId ?? threadId
   if (projectId === INBOX_PROJECT_ID) return threadId
   return projectId
 }
@@ -101,7 +101,7 @@ export function conversationScopeId(
 /**
  * Whether a conversation browses its own app-owned workspace directory instead
  * of a project root: standalone chats mount `chats-cwd/<threadId>` and
- * assistant tasks mount `assistant-cwd/<routineId ?? threadId>`, and browser
+ * assistant tasks mount `assistant-cwd/<assistantId ?? threadId>`, and browser
  * conversations mount `browser-cwd/<threadId>`. Every file
  * surface keys the mount off the open thread for exactly these containers.
  */
@@ -113,7 +113,7 @@ export function usesThreadWorkspaceMount(projectId: string): boolean {
  * Storage-root-relative workspace directory one conversation's file tree is
  * mounted on, or `null` when the container mounts on a project root instead. A
  * chat mounts `chats-cwd/<threadId>`, an assistant task mounts
- * `assistant-cwd/<routineId ?? threadId>`, and a browser tab mounts
+ * `assistant-cwd/<assistantId ?? threadId>`, and a browser tab mounts
  * `browser-cwd/<threadId>`.
  *
  * Shared so the renderer strips exactly the directory the main process resolves
@@ -124,10 +124,10 @@ export function usesThreadWorkspaceMount(projectId: string): boolean {
 export function conversationWorkspaceDirectory(
   projectId: string,
   threadId: string,
-  routineId?: string | null
+  assistantId?: string | null
 ): string | null {
   if (projectId === INBOX_PROJECT_ID) return `${CHATS_CWD_DIR}/${threadId}`
-  if (projectId === ASSISTANT_SPACE_ID) return `${ASSISTANT_CWD_DIR}/${routineId ?? threadId}`
+  if (projectId === ASSISTANT_SPACE_ID) return `${ASSISTANT_CWD_DIR}/${assistantId ?? threadId}`
   if (projectId === GLOBAL_BROWSER_PROJECT_ID) return `${BROWSER_CWD_DIR}/${threadId}`
   return null
 }

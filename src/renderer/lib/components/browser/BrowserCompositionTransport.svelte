@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { ChevronLeft, ChevronRight, Pause, Play, Repeat, Square } from '@lucide/svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioPause from '@pillardash-oss/cio-icon/CioPause.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSquare from '@pillardash-oss/cio-icon/CioSquare.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     BrowserCompositionPlayback,
@@ -16,9 +21,11 @@
      * has anyone to show the playhead to, so nothing runs while it is false.
      */
     active: boolean
+    /** Board playback must stop when its surface goes away. */
+    pauseWhenHidden?: boolean
   }
 
-  let { tabId, composition, active }: Props = $props()
+  let { tabId, composition, active, pauseWhenHidden = false }: Props = $props()
 
   /** How often the scrubber catches up with the page it is driving. */
   const POLL_MS = 250
@@ -112,9 +119,14 @@
   // cannot restart the timer it just fed.
   $effect(() => {
     if (!active) return
+    const playbackTabId = tabId
+    const pauseOnHide = pauseWhenHidden
     void refresh()
     const timer = setInterval(() => void refresh(), POLL_MS)
-    return () => clearInterval(timer)
+    return () => {
+      clearInterval(timer)
+      if (pauseOnHide) void invoke('browser:transport', playbackTabId, 'pause', 0).catch(() => {})
+    }
   })
 </script>
 
@@ -125,43 +137,43 @@
 >
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={playing ? 'Pause the composition' : 'Play the composition'}
     title={playing ? 'Pause the composition' : 'Play the composition'}
     onclick={togglePlay}
   >
     {#if playing}
-      <Pause size={14} />
+      <CioPause size={14} />
     {:else}
-      <Play size={14} />
+      <CioPlay size={14} />
     {/if}
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Stop and return to the start"
     title="Stop and return to the start"
     onclick={stop}
   >
-    <Square size={12} />
+    <CioSquare size={12} />
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Step back one frame"
     title={`Step back one frame (${composition.fps} fps)`}
     onclick={() => step(-1)}
   >
-    <ChevronLeft size={14} />
+    <CioBack size={14} />
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     aria-label="Step forward one frame"
     title={`Step forward one frame (${composition.fps} fps)`}
     onclick={() => step(1)}
   >
-    <ChevronRight size={14} />
+    <CioForward size={14} />
   </button>
   <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed">{format(shown)}</span>
   <input
@@ -184,7 +196,7 @@
   <button
     type="button"
     class={[
-      'flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors',
+      'flex h-7 w-7 shrink-0 items-center justify-center transition-colors',
       loop ? 'bg-elevated text-foreground' : 'text-dimmed hover:bg-elevated hover:text-foreground'
     ]}
     aria-label={loop ? 'Stop looping at the end' : 'Loop the composition'}
@@ -192,7 +204,7 @@
     title={loop ? 'Looping: play again at the end' : 'Play once and hold the last frame'}
     onclick={toggleLoop}
   >
-    <Repeat size={13} />
+    <CioRefresh size={13} />
   </button>
 </div>
 {#if error}
@@ -211,7 +223,6 @@
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
-    border-radius: 9999px;
     background: linear-gradient(
       to right,
       var(--color-primary) 0%,
@@ -229,7 +240,6 @@
     -webkit-appearance: none;
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);
@@ -238,7 +248,6 @@
   .composition-seek::-moz-range-thumb {
     height: 10px;
     width: 10px;
-    border-radius: 9999px;
     background: var(--color-primary);
     border: none;
     box-shadow: 0 0 0 1px var(--color-app);

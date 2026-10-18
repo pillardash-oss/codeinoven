@@ -1,4 +1,23 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioFolderInput from '@pillardash-oss/cio-icon/CioFolderInput.svelte'
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import {
     latestWorkingTraceParts,
@@ -6,6 +25,8 @@
     shouldMountWorkingTrace
   } from '$lib/working-trace-parts'
   import { formatDurationMs } from '$lib/format/duration'
+  import { formatKeyCombo } from '$lib/keymap/keymap'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
   import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly, slide } from 'svelte/transition'
@@ -17,39 +38,22 @@
     CONVERSATION_METADATA_ICONS
   } from './conversation-metadata-badges'
 
-  import {
-    AudioLines,
-    ArrowUpRight,
-    Check,
-    ChevronDown,
-    Clock,
-    Copy,
-    Ellipsis,
-    FileText,
-    FileDown,
-    FolderInput,
-    GitFork,
-    Info,
-    Loader2,
-    MessageSquare,
-    Network,
-    Pencil,
-    Plus,
-    ShieldCheck,
-    Target,
-    Trash2,
-    Undo2,
-    Video,
-    X,
-    Zap
-  } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import ForeignRunCard from './ForeignRunCard.svelte'
-  import type { ComposerScopeShoe } from '../chats/ComposerShoe.svelte'
+  import type { ComposerShoeData } from '../chats/ComposerShoe.svelte'
+  import type { ComposerIdentity } from '../chats/ComposerIdentity.svelte'
   import { temporaryChatContext } from '$lib/temporary-chat-context'
   import { normalizeComposerMessage } from '../chats/composer-mentions'
   import { COMPOSER_DRAFT_SELECTOR } from '../chats/chat-composer-draft-surface'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
+  import RelocateThreadPicker from '../chats/RelocateThreadPicker.svelte'
+  import {
+    applyComposerRelocation,
+    relocationActionLabel,
+    relocationNoun,
+    type ComposerRelocationItem,
+    type ComposerRelocationMode
+  } from '../chats/composer-relocation'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
@@ -59,8 +63,13 @@
   import type { PreviewPagerState } from '../ui/PreviewPager.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardNotice from '../shared/CardNotice.svelte'
+  import ClampedText from '../shared/ClampedText.svelte'
+  import { cardArrive, dismissSlide } from '../shared/card-motion'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
@@ -68,6 +77,7 @@
   import { speechController } from '../../speech/speech-controller.svelte'
   import { onVoiceComposerReset } from '../../speech/voice-send'
   import WorkingTrace from './WorkingTrace.svelte'
+  import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
@@ -78,12 +88,15 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
+  import ComposerQueuedCard from './ComposerQueuedCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
   import InlineMediaFigure from './InlineMediaFigure.svelte'
   import InlineImageFigure from './InlineImageFigure.svelte'
+  import ArtifactImageAnnotator from './ArtifactImageAnnotator.svelte'
+  import ArtifactVideoAnnotator from './ArtifactVideoAnnotator.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from './AiAccountSetupCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
@@ -134,6 +147,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { classifyProviderIssue, isUsageResetWaitIssue } from '$shared/provider-issue'
+  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -163,17 +177,24 @@
   } from '$lib/stores/provider-connect-flow.svelte'
   import { threadNeedsAiAccount } from '$lib/ai-account'
   import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { logRendererDev } from '$lib/system/renderer-logger'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import {
+    assistantDisplayText,
     connectionsFromPlan,
-    extractHowToDraft,
-    isRoutineConfirmation,
-    latestRoutinePlanDraft as latestRoutinePlanDraftIn,
-    type RoutinePlanDraft
+    isAssistantConfirmation,
+    type AssistantPlanDraft
   } from '$lib/components/assistant/assistant-view'
-  import RoutineRecapCard from '$lib/components/assistant/RoutineRecapCard.svelte'
+  import {
+    latestAssistantRecap,
+    assistantSetupRecapIssue
+  } from '$lib/components/assistant/assistant-recap'
+  import { assistantResultText } from '$shared/assistant-result'
+  import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
+  import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import {
     coordinatorDockState,
@@ -187,6 +208,7 @@
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
+  import { playHistoryArrive, promptArrive } from '$lib/motion'
   import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
@@ -202,6 +224,7 @@
   } from '$lib/stores/response-references.svelte'
   import { isTodoToolPart, latestAgentTodo, todoSnapshotMatchesTurn } from '$lib/agent-todos'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
+  import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { toPosixPath } from '$shared/paths'
@@ -214,18 +237,26 @@
   } from '$lib/reveal-file'
   import { openPassageInNewThread } from '$lib/quoted-passage'
   import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
+  import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
+  import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
+  import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { routineDeliveryLabel, routinePriorityLabel } from '$shared/routine-reporting'
+  import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
   import {
+    ASSISTANT_PLACEHOLDER_NAME,
+    ASSISTANT_SPACE_ID,
     DEFAULT_SCOPE_BUCKET_ID,
+    GLOBAL_BROWSER_PROJECT_ID,
     describeSchedule,
     isAssistantSetupThread,
     isOrchestrationChildThread,
-    routineIsScheduled,
-    WORKING_TRACE_PAGE_SIZE
+    usesThreadWorkspaceMount,
+    assistantIsScheduled,
+    WORKING_TRACE_PAGE_SIZE,
+    COMPLETED_TURN_PAGE_SIZE
   } from '$shared/types'
   import type {
     Thread,
@@ -240,6 +271,7 @@
     AgentEvent,
     AgentContextUsage,
     AgentHarnessUsage,
+    ProviderModel,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -284,6 +316,7 @@
     ImageDescriptorReplyAction,
     TurnStreamPartsChange,
     TurnStreamPartsPage,
+    TurnStreamCompletedTurn,
     AttachmentStorageScope,
     UserMessagePresentation,
     UserMessageSummary,
@@ -308,6 +341,11 @@
   } from '$shared/pending-request'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { LiveGenerationRate, formatTokenRate, generatedTokens } from '$lib/token-rate.svelte'
+  import {
+    generationDetails,
+    type GenerationMessageUsage,
+    type GenerationObservation
+  } from '$lib/generation-details'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
@@ -319,13 +357,15 @@
     hasRenderableWorkingParts,
     isActivityOnlyUserMessage,
     isTurnCompleted,
+    isTurnTransparentUserMessage,
     lastTurnStartIndex,
     pendingTurnAnchorIndex,
     resolvedSubagentPart,
     streamWorkingPartsForTurn,
     turnEndsOnQuestion,
     turnStartPromptsBefore,
-    type SubagentPart
+    type SubagentPart,
+    type TranscriptIndex
   } from './thread-turn-parts'
   import {
     annotationFallbackAnchor,
@@ -357,7 +397,11 @@
     specActionLabel,
     tracePreviewByUserMessage
   } from './thread-message-presentation'
-  import { mergeContextUsage, providerReportedWindows } from './thread-usage-merge'
+  import {
+    composerContextUsage,
+    mergeContextUsage,
+    providerReportedWindows
+  } from './thread-usage-merge'
   import {
     HISTORY_WINDOW_SIZE,
     mergedUserMessageSummaries,
@@ -381,14 +425,14 @@
     thread: Thread
     /** True on the Chats tab   hides engineering tooling. */
     chatMode?: boolean
-    /** True in Assistant View   the thread authors a routine's how-to. */
+    /** True in Assistant View   the thread authors an assistant's knowledge. */
     assistantMode?: boolean
-    /** Routine the assistant task belongs to, when any. */
-    assistantRoutineId?: string | null
-    /** Routine name, shown in the authoring head start. */
-    assistantRoutineName?: string | null
-    /** Whether the routine already has a saved how-to. */
-    assistantHowToComplete?: boolean
+    /** Assistant the assistant task belongs to, when any. */
+    assistantId?: string | null
+    /** Assistant name, shown in the authoring head start. */
+    assistantName?: string | null
+    /** Whether the assistant already has a saved knowledge. */
+    assistantKnowledgeComplete?: boolean
     /**
      * A run of this assistant task that another instance is streaming, when the
      * task itself is not foreign. A run executes on its own thread, so the task
@@ -439,8 +483,8 @@
     promptSuggestions?: readonly string[]
     /**
      * The composer's placeholder once nothing more specific applies. The states
-     * that describe what is happening right now (a run in flight, a routine's
-     * how-to, a plan being prepared) all outrank it.
+     * that describe what is happening right now (a run in flight, an assistant's
+     * knowledge, a plan being prepared) all outrank it.
      */
     composerPlaceholder?: string
     /** Opens the scoped projects view with the sidebar focused on this thread
@@ -457,9 +501,9 @@
     thread: threadProp,
     chatMode = false,
     assistantMode = false,
-    assistantRoutineId = null,
-    assistantRoutineName = null,
-    assistantHowToComplete = false,
+    assistantId = null,
+    assistantName = null,
+    assistantKnowledgeComplete = false,
     assistantForeignRunThreadId = null,
     onForked,
     projects = [],
@@ -504,6 +548,11 @@
   // Intentional initial-value captures   Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
+  /** When this view attached. A prompt is only brand new to this view when it was
+   *  created after this stamp: a message that predates it is history this view
+   *  mounted, and history must not play the arrival it never had (see
+   *  `promptArrive`). The view is keyed by thread, so a switch stamps again. */
+  const viewAttachedAt = Date.now()
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
   /** Minimum first paint: only the newest few messages mount on the first
    *  frame, so a long thread paints instantly on switch. */
@@ -525,7 +574,7 @@
    *  tail with the newest `mountedCount` messages. */
   let windowStartId = $state<string | null>(null)
   /** Absolute index of the first mounted message. If the anchored message
-   *  left the store (truncated/deleted), fall back without touching state  
+   *  left the store (truncated/deleted), fall back without touching state
    *  deriveds must stay pure. A minimum of TWO pages is always mounted: the
    *  current working page ([prompt][trace][output]) and the previous page,
    *  even when it sits out of the viewport. */
@@ -570,9 +619,27 @@
    * the last turn starts, what the user has already asked   reads this instead
    * of the live `messages` array and stops recomputing at the stream cadence.
    */
-  let structureMessages = $derived(
-    hasController ? messages : threadMessages.structureMessages(thread.projectId, thread.id)
-  )
+  let structureMessages = $derived.by(() => {
+    const source = hasController
+      ? messages
+      : threadMessages.structureMessages(thread.projectId, thread.id)
+    // A held steer has not reached the harness, so it must not open a turn: the
+    // turn it steers keeps its own trace above the message instead of splitting
+    // into a new one below it. Mark the in-memory copy transparent until the
+    // steer is delivered, when the message becomes a turn of its own.
+    let marked: AgentMessage[] | null = null
+    for (let index = 0; index < source.length; index++) {
+      const message = source[index]
+      if (
+        message?.role === 'user' &&
+        threadMessages.isSteerHeld(thread.projectId, conversationId, message.id)
+      ) {
+        marked ??= source.slice()
+        marked[index] = { ...message, turnTransparent: true }
+      }
+    }
+    return marked ?? source
+  })
   /**
    * Every per-message turn question, answered once per structural change. The
    * transcript asks these once per mounted message per render; reading them from
@@ -580,6 +647,19 @@
    * rescanned on every streamed frame.
    */
   let transcriptIndex = $derived(buildTranscriptIndex(structureMessages, checkpoints))
+
+  /**
+   * A user message transparent to the turn span the live parts are read with: an
+   * activity notice, or a steer still held for its undo window. Held state is not
+   * on the message, so it is checked here; the persisted rule covers reloads.
+   */
+  function isTransparentTurnMessage(message: AgentMessage): boolean {
+    return (
+      isTurnTransparentUserMessage(message) ||
+      (message.role === 'user' &&
+        threadMessages.isSteerHeld(thread.projectId, conversationId, message.id))
+    )
+  }
 
   const projectSuggestedPrompts = [
     'Summarize this project: architecture, key modules, and entry points',
@@ -667,7 +747,7 @@
     controller?.hasOlder ?? (olderMessagesAvailable || mountedStartIndex > 0)
   )
   /** Composer recall texts: the merged full history, minus blank entries that
-   *  would only produce an empty recall step. Keyed on the structure snapshot  
+   *  would only produce an empty recall step. Keyed on the structure snapshot
    *  a user message's text only ever changes through a merge that reports
    *  itself structural, so recall never lags behind what the user typed. */
   let composerHistoryTexts = $derived(
@@ -707,6 +787,13 @@
     if (!conversationBusy || brainstormReportRefreshing) return null
     const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
     if (!userMessageId) return null
+    // A steer still held for its undo window has not reached the harness yet, so
+    // it must not open a pending turn of its own. Whatever streams while it is
+    // held is work on the turn it steers, and that turn's own live trace owns it
+    // above the message. Opening a second trace here is what rendered the new
+    // working trace above the steered message instead of under it once the
+    // harness took it.
+    if (threadMessages.isSteerHeld(thread.projectId, conversationId, userMessageId)) return null
     const userMessageIndex = structureMessages.findIndex((message) => message.id === userMessageId)
     const userMessage = structureMessages[userMessageIndex]
     if (
@@ -723,6 +810,43 @@
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
   })
   let pendingLiveTurnParts = $derived(pendingLiveTurn ? streamWorkingPartsForPendingTurn() : [])
+  /** Absolute index of a held steer in view, or -1. A held steer has not
+   *  reached the harness yet, so it does not open a turn: the live trace still
+   *  belongs to the turn it steers and must render above the message. */
+  let heldSteerAbsIndex = $derived.by(() => {
+    for (let index = structureMessages.length - 1; index >= 0; index--) {
+      const message = structureMessages[index]
+      if (message?.role !== 'user') continue
+      if (threadMessages.isSteerHeld(thread.projectId, conversationId, message.id)) return index
+    }
+    return -1
+  })
+
+  /**
+   * Whether no assistant row renders the work of the turn ending at `index`.
+   *
+   * A turn's trace normally mounts inside its own assistant message. A run that
+   * has not mirrored one yet   a follow-up before its first assistant row, or a
+   * steer still held under the running trace   has no such mount point, so its
+   * trace has to render on its own. Reading this prevents mounting a second copy
+   * beside the assistant row that already carries it.
+   */
+  function turnAboveHasAssistantRow(index: number): boolean {
+    for (let i = index - 1; i >= 0; i--) {
+      const message = structureMessages[i]
+      if (!message) break
+      if (message.role === 'assistant') return true
+      if (message.role === 'user' && !isTransparentTurnMessage(message)) break
+    }
+    return false
+  }
+
+  /** Durable parts for a turn whose work is on screen with no assistant row to
+   *  render it: a live follow-up before its first assistant row lands, or a
+   *  steer still held under the running trace. */
+  let unmirroredTraceParts = $derived(
+    pendingLiveTurn || heldSteerAbsIndex !== -1 ? streamWorkingPartsForPendingTurn() : []
+  )
   /**
    * The durable work of a turn that settled without ever mirroring an assistant
    * message: a provider error, a user stop, a paused will-retry wait.
@@ -767,7 +891,8 @@
     const { leading, body } = getTurnWorkingParts(
       messages,
       latestTurnInfo.startIndex,
-      conversationBusy && latestTurnInfo.active
+      conversationBusy && latestTurnInfo.active,
+      isTransparentTurnMessage
     )
     return [...leading, ...body]
   })
@@ -784,11 +909,11 @@
    * rather than flashing through the reading position and jumping back out.
    */
   function closingStatementVisible(endIndex: number, isLastTurnEnd: boolean): boolean {
-    const closing = getTurnFinalText(messages, endIndex)
+    const closing = getTurnFinalText(messages, endIndex, isTransparentTurnMessage)
     if (!closing) return false
     if (closing.phase === 'final_answer') return true
     if (!conversationBusy || !isLastTurnEnd) return true
-    return turnEndsOnQuestion(messages, endIndex)
+    return turnEndsOnQuestion(messages, endIndex, isTransparentTurnMessage)
   }
 
   // A persisted in-flight status is only a recovery hint. Start every mount in
@@ -806,7 +931,10 @@
   ) {
     agentRuns.setIdle(thread.projectId, conversationId)
   }
-  /** When the current busy run started; authoritative source for the live timer. */
+  /** When this window learned the current run was busy, from the run store or a
+   *  controller. In-memory only   a refresh re-seeds it at reconnect time   so it
+   *  is the fallback for the live timer, not its authority: the persisted turn
+   *  anchor below outranks it wherever the transcript still holds the prompt. */
   const activeTurnStartTime = $derived(
     controller?.activeTurnStartTime ??
       (() => {
@@ -814,6 +942,16 @@
         return since && since > 0 ? since : undefined
       })()
   )
+  /** When the work of a trace that has no assistant row began.
+   *
+   * The transcript's turn anchor outranks the run store's start above, which is
+   * in-memory only: a refresh clears it and re-seeds it from whatever live
+   * activity arrives next, so a trace measuring from it restarted its duration
+   * at zero instead of resuming it. The anchor is persisted, and it is the same
+   * instant the mirrored trace measures from (`getTurnStartTime`) and the turn
+   * audit line reports as the turn's duration, so a live trace now agrees with
+   * the duration that turn shows once it settles. */
+  const unmirroredTraceStartTime = $derived(turnAnchorCreatedAt() ?? activeTurnStartTime)
   // Intentional initial-value capture   view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
   let sessionId = $state(thread.sessionId ?? '')
@@ -835,6 +973,80 @@
   const liveTokenRate = new LiveGenerationRate()
   /** Finalized per-message rates, recorded when a live turn settles. */
   let finalizedTokenRates = $state<Record<string, number>>({})
+  let finalizedGenerationObservation = $state<{
+    messageId: string
+    observation: GenerationObservation
+  } | null>(null)
+  let streamedGenerationUsage = $state<{ messageId: string; usage: GenerationMessageUsage } | null>(
+    null
+  )
+
+  function recordGenerationUsage(
+    event: Extract<AgentEvent, { type: 'message.completed' | 'usage.updated' }>
+  ): void {
+    const previous =
+      streamedGenerationUsage?.messageId === event.messageId
+        ? streamedGenerationUsage.usage
+        : undefined
+    streamedGenerationUsage = {
+      messageId: event.messageId,
+      usage: {
+        ...previous,
+        ...(event.harnessId ? { harnessId: event.harnessId } : {}),
+        ...(event.providerId ? { providerId: event.providerId } : {}),
+        ...(event.tokens ? { tokens: event.tokens } : {}),
+        ...(event.normalizedUsage ? { normalizedUsage: event.normalizedUsage } : {}),
+        tokenUsageScope: event.tokenUsageScope ?? 'message'
+      }
+    }
+  }
+  const lastCompletedGeneration = $derived.by(() => {
+    if (busy) return null
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message.role !== 'assistant') continue
+      const rate = messageTokenRate(message, { finalizedTokenRates, liveTokenRate })
+      if (rate !== null) return { message, rate }
+    }
+    return null
+  })
+  /** The figure the shoe carries: the live reading when its window supports one,
+   *  the last figure measured when it does not, and the settled message's own rate
+   *  once the turn ends. A reading is only replaced by a newer one. */
+  const composerGenerationRate = $derived.by(() => {
+    if (!busy) {
+      const settled = lastCompletedGeneration?.rate
+      if (settled != null) return settled
+    }
+    return liveTokenRate.displayRate()
+  })
+  const composerGenerationDetails = $derived.by(() => {
+    const id = busy ? liveTokenRate.messageId : lastCompletedGeneration?.message.id
+    const message = busy
+      ? messages.findLast((entry) => entry.id === id)
+      : lastCompletedGeneration?.message
+    // The catalogs own the operator-facing names, so the panel can draw the
+    // harness and the vendor the model ran through instead of printing ids.
+    const provider = message ? messageProvider(message, providers) : undefined
+    return generationDetails({
+      message: {
+        ...message,
+        ...(streamedGenerationUsage?.messageId === id ? streamedGenerationUsage?.usage : {})
+      },
+      observation: busy
+        ? liveTokenRate.observation()
+        : finalizedGenerationObservation?.messageId === id
+          ? finalizedGenerationObservation?.observation
+          : undefined,
+      attribution: message
+        ? {
+            harnessName: messageHarnessName(message, messageHarnessFallback),
+            providerName: provider?.name,
+            modelLabel: messageModelLabel(message, allModels) ?? undefined
+          }
+        : undefined
+    })
+  })
   $effect(() => {
     liveTokenRate.begin(sessionId)
   })
@@ -1070,7 +1282,7 @@
   }
 
   /** Stop the Engineering lifecycle from the prominent failure card. The failed
-   *  stage already ended, so no in-flight turn needs the replacement guard  
+   *  stage already ended, so no in-flight turn needs the replacement guard
    *  cancelling reveals the normal card for the stage underneath. */
   async function cancelEngineeringFailure(): Promise<void> {
     try {
@@ -1108,14 +1320,22 @@
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
+  /** Older backing entries one inner-scroll page pulls in. Bigger than the
+   *  render page so a scroll gesture reveals a useful run of steps, small enough
+   *  that mounting them never stalls a frame; the main process clamps it. */
+  const STREAM_OLDER_PAGE_SIZE = 60
   /** Durable working-trace parts loaded from the SSE log. They fill gaps in
-   *  the live mirror and restore the latest trace after an app refresh. Only a
-   *  bounded window is ever held here: the newest page plus whatever older pages
-   *  the reader has actually paged into, so opening a long running thread never
-   *  pulls (or parses) a whole turn's worth of streamed work. */
+   *  the live mirror and restore the latest trace after an app refresh. A trace
+   *  that is on screen pages older entries in as the reader scrolls its top, one
+   *  page per gesture; a trace nobody is watching holds only the newest page. */
   let streamParts = $state<AgentPart[]>([])
   /** True when the durable log still folds entries older than `streamParts[0]`. */
   let streamHasOlder = $state(false)
+  /** Thinking and tool steps the whole turn holds, from the durable fold. The
+   *  trace header shows this while only a bounded window of steps is mounted,
+   *  so the count states the turn's real size instead of climbing as older
+   *  pages load. */
+  let streamTotalSteps = $state(0)
   /** Newest durable task-list parts for the turn. They never render in the
    *  trace, so they ride beside the trace window and keep the task card correct
    *  no matter which page of the trace is mounted. */
@@ -1132,16 +1352,146 @@
    *  An older-page read started before it must not resurrect entries from the
    *  turn the reader has left. */
   let streamFoldVersion = 0
+  /** Which logical turn the mounted fold belongs to, from the page that
+   *  delivered it. The boundary moves when the harness takes a steer, and that
+   *  move is the signal that the turn on screen is over and a new one opened. */
+  let streamTurnStartTs = $state<number | null>(null)
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
     streamFoldVersion += 1
     streamParts = []
     streamHasOlder = false
+    streamTotalSteps = 0
     streamTodoParts = []
     streamTodoTurnStart = null
     streamCursor = null
+    streamTurnStartTs = null
+    completedTurns = []
+    completedTurnsGeneration += 1
   }
+
+  /** True when a read landed on a different logical turn than the one mounted:
+   *  the harness took a steer, and the boundary moved with it. */
+  function foldBoundaryMoved(page: TurnStreamPartsPage | TurnStreamPartsChange): boolean {
+    if (typeof page.turnStartTs !== 'number') return false
+    if (streamTurnStartTs === null) return false
+    return page.turnStartTs !== streamTurnStartTs
+  }
+
+  /**
+   * The fold moved to a new turn: the harness took the steer.
+   *
+   * The turn that was running closes here. Its trace is re-read from the durable
+   * log as a completed turn, so the work stays on screen above the message that
+   * closed it and stays readable after a reload, and the new turn mounts its own
+   * fold with its own first step.
+   */
+  async function handleFoldBoundaryMove(
+    nextTurnStartTs: number,
+    generation: number
+  ): Promise<void> {
+    streamTurnStartTs = nextTurnStartTs
+    void loadCompletedTurns()
+    await remountNewestStreamParts(generation)
+  }
+
+  /**
+   * Turns a prompt closed whose work the transcript has not mirrored, oldest
+   * first: what the durable log holds of a run in flight.
+   *
+   * A steer opens a turn of its own, so the fold moves to it and the work before
+   * it leaves the newest-turn window. The provider transcript only reaches the
+   * mirror in batches at sync points, so until that lands the interrupted turn
+   * has no assistant row at all and this record is the only copy of its trace.
+   * Reading it is what keeps that work auditable across a reload.
+   */
+  let completedTurns = $state<TurnStreamCompletedTurn[]>([])
+  let completedTurnsGeneration = 0
+
+  async function loadCompletedTurns(): Promise<void> {
+    const { projectId, id } = thread
+    const generation = ++completedTurnsGeneration
+    try {
+      const result = await invoke('thread:loadStreamParts', projectId, id, {
+        completedTurns: true
+      })
+      if (!alive || generation !== completedTurnsGeneration) return
+      if (result.kind !== 'completedTurns') return
+      completedTurns = result.turns
+    } catch {
+      // Best-effort: the transcript still renders whatever the mirror carries.
+    }
+  }
+
+  /**
+   * Page a closed turn's older entries.
+   *
+   * A closed turn can hold hundreds of steps, so it ships its newest window and
+   * reads the rest only when the reader opens it, exactly as the live trace
+   * does.
+   */
+  async function loadOlderCompletedTurnParts(endTs: number): Promise<void> {
+    const turn = completedTurns.find((candidate) => candidate.endTs === endTs)
+    const oldest = turn?.parts[0]
+    if (!turn || !turn.hasOlder || !oldest) return
+    const generation = completedTurnsGeneration
+    try {
+      const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
+        turnEndTs: endTs,
+        beforeId: oldest.id,
+        limit: COMPLETED_TURN_PAGE_SIZE
+      })
+      if (!alive || generation !== completedTurnsGeneration) return
+      if (page.kind !== 'window' || page.completedTurn !== true) return
+      completedTurns = completedTurns.map((candidate) =>
+        candidate.endTs === endTs
+          ? {
+              ...candidate,
+              parts: [...page.parts, ...candidate.parts],
+              start: page.start,
+              hasOlder: page.hasOlder,
+              total: page.total,
+              totalSteps: page.totalSteps
+            }
+          : candidate
+      )
+    } catch {
+      // The reader keeps the window they have; the next open retries.
+    }
+  }
+
+  /**
+   * Each closed turn paired with the message that closed it (the steer), which
+   * is where its trace renders.
+   *
+   * A turn the transcript has meanwhile mirrored is dropped, because its own
+   * assistant rows already render that work: the log's copy would show the same
+   * steps twice. A turn whose anchor is not on screen yet has no place to render
+   * either, so it waits until the transcript reaches it.
+   */
+  let completedTurnViews = $derived.by(() => {
+    if (completedTurns.length === 0) return []
+    const views: Array<{ turn: TurnStreamCompletedTurn; anchorId: string }> = []
+    for (const turn of completedTurns) {
+      const anchorIndex = structureMessages.findIndex(
+        (message) => message.role === 'user' && (message.createdAt ?? 0) >= turn.endTs
+      )
+      if (anchorIndex === -1) continue
+      const mirrored = structureMessages
+        .slice(0, anchorIndex)
+        .some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.visibility !== 'subagent_trace' &&
+            (message.createdAt ?? 0) >= turn.startTs &&
+            (message.createdAt ?? 0) < turn.endTs
+        )
+      if (mirrored) continue
+      views.push({ turn, anchorId: structureMessages[anchorIndex].id })
+    }
+    return views
+  })
 
   /** Adopt a durable read's task-list snapshot together with the turn it was
    *  folded for, so the card can reject it once the transcript moves on. */
@@ -1274,8 +1624,50 @@
     await tick()
     await ovenControl?.openPicker()
   }
-  let scopeShoe = $derived.by((): ComposerScopeShoe | undefined => {
-    if (chatMode) return undefined
+  /**
+   * What the composer is writing into, which the shoe names once.
+   *
+   * The thread's own project id already says what it is: the assistant space
+   * holds assistant tasks and their runs, the hidden browser container holds one
+   * conversation per browser tab, and everything else is a project thread   or a
+   * plain chat, which is what a chat in the chats view is: a conversation with no
+   * project, no assistant and no page behind it.
+   */
+  function composerIdentity(target: Thread, isNewThread: boolean): ComposerIdentity {
+    if (target.projectId === ASSISTANT_SPACE_ID) {
+      // A run inherits its task's assistant, so this resolves for a task and each
+      // of its runs alike; an assistant-less task is named by itself.
+      const assistant = assistants.assistantForTask(target)
+      if (assistant) return { kind: 'assistant', assistant }
+      return { kind: 'task', task: target }
+    }
+    if (target.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+      const tabId = browserAssistant.chatForThread(target.id)?.browserTabId
+      if (tabId) return { kind: 'browser-tab', tabId }
+      return { kind: 'chat' }
+    }
+    if (!chatMode && project) {
+      return {
+        kind: 'project',
+        activeProjectId: target.projectId,
+        project: {
+          name: project.name,
+          path: project.path,
+          source: project.source,
+          host: project.host,
+          iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
+          branch: target.branch
+        },
+        interactive: isNewThread,
+        onSwitchProject: (pid: string) => void switchProject(pid)
+      }
+    }
+    return { kind: 'chat' }
+  }
+
+  /** The scope segment's data, for a project thread that has a scope on the board. */
+  function composerScope(identity: ComposerIdentity, isNewThread: boolean) {
+    if (identity.kind !== 'project') return undefined
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     // Resolve against the thread's own project board like scope.bucketForThread.
     const board = scopeState.boards.get(thread.projectId) ?? scopeState.board
@@ -1285,24 +1677,20 @@
       projectId: thread.projectId,
       threadId: thread.id,
       bucket,
-      source: project?.source,
-      host: project?.host,
+      isNewThread,
+      onOpenScopeView: () => onOpenScopeView?.(thread)
+    }
+  }
+
+  let composerShoe = $derived.by((): ComposerShoeData => {
+    const isNewThread = messages.length === 0 && !busy
+    const identity = composerIdentity(thread, isNewThread)
+    return {
+      identity,
+      scope: composerScope(identity, isNewThread),
+      isWorking: busy,
       oven: ovenPicker,
       onOpenOven: () => void openOvenPicker(),
-      project: project
-        ? {
-            name: project.name,
-            path: project.path,
-            source: project.source,
-            host: project.host,
-            iconUrl: getProjectIcon(project, projectIconUrl ?? undefined),
-            branch: thread.branch
-          }
-        : undefined,
-      isNewThread: messages.length === 0 && !busy,
-      isWorking: busy,
-      onOpenScopeView: () => onOpenScopeView?.(thread),
-      onSwitchProject: (pid: string) => void switchProject(pid),
       // Only a worker has a coordinator to report to, so only a worker gets the
       // control. Reporting stays on unless this thread switched it off, which
       // keeps the worker in a private iteration loop the user drives.
@@ -1729,19 +2117,27 @@
       ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
     })
 
-    // Assistant authoring: the agent drafts the routine how-to in conversation
+    // Assistant authoring: the agent drafts the assistant knowledge in conversation
     // and asks the user to confirm the recap. The recap card commits the agreed
     // draft in one click; this command is only the fallback for when that path
     // cannot run, so it appears only while a draft is waiting to be committed
-    // and disappears for good once the routine is saved.
-    if (assistantRoutineDraft) {
+    // and disappears for good once the assistant is saved.
+    if (assistantDraft) {
       actions.push({
-        id: 'command:save-how-to',
-        title: '/save-how-to',
-        description: 'Fallback: save the how-to the agent drafted for this routine',
+        id: 'command:save-knowledge',
+        title: '/save-knowledge',
+        description: 'Fallback: save the knowledge the agent drafted for this assistant',
         category: 'command',
         source: applicationActionSource,
-        keywords: ['how-to', 'howto', 'save', 'routine', 'commit', 'assistant', 'fallback'],
+        keywords: [
+          'knowledge',
+          'knowledge',
+          'save',
+          'assistant',
+          'commit',
+          'assistant',
+          'fallback'
+        ],
         slashCommand: true,
         ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
       })
@@ -1781,6 +2177,36 @@
 
     return actions
   })
+  /** The model currently selected for the thread, resolved from the catalog. */
+  const selectedModel = $derived.by((): ProviderModel | undefined => {
+    const provider =
+      providers.find(
+        (candidate) =>
+          candidate.id === settings.providerId && candidate.harnessId === settings.harnessId
+      ) ?? providers.find((candidate) => candidate.id === settings.providerId)
+    return provider?.models.find((candidate) => candidate.id === settings.modelId)
+  })
+  /**
+   * The context window the app has configured for a model: the thread's runtime
+   * override when the model advertises it, otherwise the catalog's window
+   * (which, for a custom base-URL provider, is the window the user authored).
+   *
+   * This is the window the meter must show. It deliberately outranks the window
+   * a harness reported on its latest turn, because a live harness session keeps
+   * reporting the window it started with: after a custom model's window (or a
+   * thread's runtime window) is edited, the old reading would otherwise keep
+   * driving the battery until the session restarts. The harness-reported window
+   * stays the fallback for models whose window the catalog does not state.
+   */
+  function configuredContextWindowFor(model: ProviderModel | undefined): number | undefined {
+    const runtimeWindow =
+      settings.contextWindow !== undefined &&
+      model?.contextWindows?.includes(settings.contextWindow)
+        ? settings.contextWindow
+        : undefined
+    return runtimeWindow ?? model?.contextWindow
+  }
+  const configuredContextWindow = $derived(configuredContextWindowFor(selectedModel))
   const contextUsage = $derived.by((): AgentContextUsage | undefined => {
     let latestMessage: AgentMessage | undefined
     let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
@@ -1892,7 +2318,7 @@
         (provider) => provider.id === providerId && provider.harnessId === harnessId
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
-    const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
+    const contextWindow = configuredContextWindowFor(model) ?? latestMessage?.contextWindow
     // Only the explicit composed-request estimate is an estimate. Falling back
     // to the harness's own reported token total is a provider reading   the
     // last request's prompt plus completion is the occupancy the provider
@@ -1946,6 +2372,8 @@
           providerId: row.providerId,
           ...(row.modelId ? { modelId: row.modelId } : {}),
           costUsd: row.costUsd,
+          pricedCostEvents: row.pricedCostEvents,
+          unavailableCostEvents: row.unavailableCostEvents,
           rateLimits: [],
           tokens: row.tokens,
           messageCount: row.messageCount,
@@ -1986,13 +2414,23 @@
       if (message.role !== 'assistant') continue
       const harnessId = message.harnessId ?? settings.harnessId
       const providerId = message.providerId ?? settings.providerId
-      const stepCost = message.parts.reduce(
-        (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
-        0
-      )
+      let stepCost = 0
+      let hasStepCost = false
+      for (const part of message.parts) {
+        if (part.type === 'step-finish' && typeof part.cost === 'number') {
+          stepCost += part.cost
+          hasStepCost = true
+        }
+      }
+      // An in-memory message carries no `cost_status`; a numeric cost (or a
+      // step-finish cost) is the only signal that it was priced. The stored
+      // thread rollup replaces these counts whenever a `harness_usage` row
+      // exists, so this fallback applies only to messages with no stored row.
+      const priced = typeof message.cost === 'number' || hasStepCost
       const entry = byHarness[harnessId]
       if (entry) {
         entry.costUsd += message.cost ?? stepCost
+        if (priced) entry.pricedCostEvents += 1
         if (message.rateLimits?.length) entry.rateLimits = message.rateLimits
         if (message.credits) entry.credits = message.credits
         if (message.bankedResets) entry.bankedResets = message.bankedResets
@@ -2004,6 +2442,8 @@
         providerId,
         ...(message.modelId ? { modelId: message.modelId } : {}),
         costUsd: message.cost ?? stepCost,
+        pricedCostEvents: priced ? 1 : 0,
+        unavailableCostEvents: 0,
         rateLimits: message.rateLimits ?? [],
         ...(message.credits ? { credits: message.credits } : {}),
         ...(message.bankedResets ? { bankedResets: message.bankedResets } : {})
@@ -2017,6 +2457,8 @@
       const entry = tableByHarness[stored.harnessId]
       if (entry) {
         entry.costUsd += stored.costUsd
+        entry.pricedCostEvents += stored.pricedCostEvents
+        entry.unavailableCostEvents += stored.unavailableCostEvents
         if (stored.tokens) {
           entry.tokens = {
             input: (entry.tokens?.input ?? 0) + stored.tokens.input,
@@ -2041,6 +2483,8 @@
       const entry = byHarness[harnessId]
       if (entry) {
         entry.costUsd = stored.costUsd
+        entry.pricedCostEvents = stored.pricedCostEvents
+        entry.unavailableCostEvents = stored.unavailableCostEvents
         if (stored.modelId) entry.modelId = stored.modelId
         if (stored.tokens) entry.tokens = stored.tokens
         if (stored.messageCount !== undefined) entry.messageCount = stored.messageCount
@@ -2063,6 +2507,8 @@
           harnessId: usage.harnessId,
           providerId: usage.providerId,
           costUsd: 0,
+          pricedCostEvents: 0,
+          unavailableCostEvents: 0,
           rateLimits: usage.rateLimits,
           ...(usage.credits ? { credits: usage.credits } : {}),
           ...(usage.bankedResets ? { bankedResets: usage.bankedResets } : {})
@@ -2113,6 +2559,13 @@
   /** Snapshot of usage actually rendered   it settles at the end of a turn or
    *  after a quiet period, and flushes to the latest value on hover. */
   let contextUsageDisplay = $state<AgentContextUsage | undefined>(undefined)
+  const composerUsage = $derived(
+    composerContextUsage(contextUsageDisplay, messages, thread.contextUsage, {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      contextWindow: configuredContextWindow
+    })
+  )
   let contextUsageCommittedAt = 0
   let contextUsageSettleTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -2168,7 +2621,10 @@
     const currentUsage = usageList.find(
       (usage) =>
         usage.harnessId === settings.harnessId &&
-        usage.accountId === (settings.accountId ?? `${settings.harnessId}.default`) &&
+        usage.accountId ===
+          (isCodeInOvenCustomProviderId(settings.providerId)
+            ? settings.providerId
+            : (settings.accountId ?? `${settings.harnessId}.default`)) &&
         usage.providerId === settings.providerId
     )
     if (currentUsage) {
@@ -2181,7 +2637,10 @@
           rateLimits: []
         }),
         rateLimits: currentUsage.rateLimits,
-        ...(currentUsage.contextWindow !== undefined
+        // A harness reading only supplies the window when the app has none for
+        // this model   a live session's stale window must never replace the
+        // window the user just configured.
+        ...(configuredContextWindow === undefined && currentUsage.contextWindow !== undefined
           ? { contextWindow: currentUsage.contextWindow }
           : {}),
         ...(currentUsage.contextUsed !== undefined
@@ -2232,10 +2691,29 @@
   /** Fullscreen preview for a message attachment: the same cache the composer
    *  previews attachments with, keyed by the attachment's `file://` URL. */
   const attachmentPreview = createComposerAttachmentPreview()
+  /**
+   * The queued message's own files, open fullscreen. They are files the user
+   * attached rather than material the agent delivered, so they carry no
+   * annotation surface and they render through the same cache that feeds the
+   * chips' thumbnails.
+   */
+  let queuedAttachmentViewer = $state<{ items: PromptAttachment[]; index: number } | null>(null)
   /** The message file parts a fullscreen preview can render, and which one is
    *  open. Parts no preview can render stay out of `items`, so the pager walks
    *  only the attachments that can be shown. */
-  let messageViewer = $state<{ items: PreviewableFilePart[]; index: number } | null>(null)
+  let messageViewer = $state<{
+    items: PreviewableFilePart[]
+    index: number
+    /** The message the parts came from, so a mark can name what it was drawn on. */
+    messageId: string
+    /**
+     * Whether this message published its parts as an inline artifact, which is
+     * what makes its pictures annotatable. A mark is answered back to the agent
+     * as an attachment beside the comment, so the lane is for the material the
+     * agent delivered, not for what the user attached themselves.
+     */
+    annotatable: boolean
+  } | null>(null)
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
@@ -2253,6 +2731,15 @@
    *  measured still has an anchor its editor can open at. */
   let responseBubblePositions = $state<Record<string, AnnotationBubblePosition>>({})
   let commentEditorReferenceId = $state<string | null>(null)
+  /**
+   * The mark on an inline picture whose comment editor is open.
+   *
+   * Kept apart from `commentEditorReferenceId` on purpose: that one draws the
+   * app's range-anchored editor, which a mark has no range for. The picture's
+   * viewer owns the mark's editor, so an edit requested from the composer only
+   * has to name the mark and open that viewer on the picture.
+   */
+  let imageMarkEditorId = $state<string | null>(null)
   let messageEditEditor = $state<RichMarkdownEditor>()
 
   function messageEditSpeechTarget() {
@@ -2454,10 +2941,52 @@
   function saveResponseReferenceComment(id: string, comment: string): void {
     responseReferencesState.updateComment(thread.projectId, thread.id, id, comment)
     commentEditorReferenceId = null
+    // Saving closes the editor that held the caret, so the comment is now only
+    // attached to the chat component. Hand focus back to the composer: the very
+    // next primary-modifier Enter sends the comment as the message it annotates.
+    focusVisibleComposer()
   }
 
   function persistResponseReferenceCommentDraft(id: string, comment: string): void {
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
+  }
+
+  /**
+   * Bring a noted video moment back in front of the reader: show the video board,
+   * put the composition preview on the exact frame the note was written at, and
+   * let the timeline open the note itself. A tab the user has since closed still
+   * has a timeline to land on, so the seek is best effort.
+   */
+  /**
+   * Bring a noted video moment back in front of the reader: show the video board,
+   * open the composition the moment belongs to, put its preview on the exact frame
+   * the note was written at, and let the timeline open the note itself.
+   *
+   * Opening the composition is what moves the board onto that folder, and the
+   * timeline that can take the request only exists once it has.
+   */
+  function editVideoNote(reference: ResponseReferenceAnchor): void {
+    const seconds = reference.seconds ?? 0
+    const directory = reference.directory ?? ''
+    videoNoteFocusState.request({
+      projectId: thread.projectId,
+      threadId: thread.id,
+      referenceId: reference.id,
+      seconds,
+      directory
+    })
+    designCoordinatorState.openBoard(thread.projectId, thread.id, 'video')
+    if (!directory) return
+    void invoke('design:open', thread.projectId, thread.id, directory, null, true, 'video')
+      .then((opened) => {
+        contextSidebarState.focus(opened.tabId)
+        return invoke('browser:transport', opened.tabId, 'seek', seconds).catch(() => undefined)
+      })
+      .catch(() => {
+        toast.error('The composition this note was written on could not be opened.', {
+          description: directory
+        })
+      })
   }
 
   /**
@@ -2478,6 +3007,49 @@
       }
       documentAnnotationFocusState.request(thread.projectId, thread.id, reference.id)
     })
+  }
+
+  /**
+   * The marks drawn on one inline artifact part, in composer order.
+   *
+   * A mark names the media part it belongs to by its URL, so a picture is pinned
+   * only by the marks actually drawn on it and two artifacts in the same
+   * conversation can never share a mark. A video frame annotation is the same
+   * reference, so it is found the same way.
+   */
+  function marksFor(mediaUrl: string): ResponseReferenceAnchor[] {
+    return responseReferences.filter(
+      (reference) => reference.kind === 'image' && reference.mediaUrl === mediaUrl
+    )
+  }
+
+  /** The comment editor of a mark closed, so its edit request is spent. */
+  function clearImageMarkEditor(): void {
+    imageMarkEditorId = null
+  }
+
+  /**
+   * Bring a marked picture back in front of the reader and open the mark's comment.
+   *
+   * A mark is drawn on a picture in the fullscreen viewer and its badge lives
+   * there, so the edit action opens that viewer on the very part the mark names:
+   * the reference carries the message and the media URL it was drawn on, and the
+   * viewer hands the mark to the picture's surface, which opens the editor once
+   * its badge is measured. A frame mark's surface also seeks its video to the
+   * mark's second before the editor opens, because a comment about a moment has
+   * to be written over that moment.
+   */
+  async function editMediaMark(reference: ResponseReferenceAnchor): Promise<void> {
+    if (reference.messageId) await jumpToMessage(reference.messageId)
+    if (!alive) return
+    const message = messages.find((entry) => entry.id === reference.messageId)
+    const part = message?.parts.find(
+      (entry): entry is Extract<AgentPart, { type: 'file' }> =>
+        entry.type === 'file' && entry.url === reference.mediaUrl
+    )
+    if (!message || !part) return
+    openMessageViewer(message, part)
+    imageMarkEditorId = reference.id
   }
 
   /**
@@ -2518,6 +3090,22 @@
    * message is then brought on screen, the range rebuilt, and the highlight
    * scrolled to.
    */
+  /**
+   * Bring a commented SVG element back in front of the reader.
+   *
+   * The pin and the comment editor are drawn by the artifact card that renders
+   * the SVG, so the edit action scrolls that card into view and hands it the
+   * pick. The key an artifact carries is derived from its own source and is
+   * always `[a-z0-9-]`, so it needs no selector escaping.
+   */
+  function editSvgElement(reference: ResponseReferenceAnchor): void {
+    const key = reference.artifactKey
+    if (!key) return
+    const card = document.querySelector(`[data-artifact-key="${key}"]`)
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    artifactElementFocusState.request(thread.projectId, thread.id, key, reference.id)
+  }
+
   async function editResponseReference(id: string): Promise<void> {
     const reference = responseReferences.find((candidate) => candidate.id === id)
     if (!reference) return
@@ -2530,6 +3118,24 @@
     }
     if (reference.kind === 'design') {
       editDesignAnnotation(reference)
+      return
+    }
+    if (reference.kind === 'video') {
+      editVideoNote(reference)
+      return
+    }
+    // A mark on an inline picture is drawn by the picture's own surface, so its
+    // edit action brings that picture back on screen and lets the surface open
+    // the comment: the reference has no text range to jump to.
+    if (reference.kind === 'image') {
+      await editMediaMark(reference)
+      return
+    }
+    // An element picked inside an inline SVG is pinned by the artifact card that
+    // draws it, so its edit action brings that card up and lets it open the
+    // comment.
+    if (reference.kind === 'svg') {
+      editSvgElement(reference)
       return
     }
     if (!isResponseSelection(reference)) return
@@ -2637,11 +3243,19 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, and may have annotated passages of a project document in the file panel. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, may have annotated passages of a project document in the file panel, may have noted moments on a video composition timeline in the video board, and may have drawn numbered marks on a picture you rendered in the conversation. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. An image reference names a picture you rendered, describes the area the user marked on it, and is attached as the same picture with every mark drawn on it as its number, so read that attachment and change the picture where each numbered mark points rather than treating the mark as a separate request. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         const tag =
-          reference.kind === 'design' ? 'element' : reference.kind === 'file' ? 'file' : 'selection'
+          reference.kind === 'design' || reference.kind === 'svg'
+            ? 'element'
+            : reference.kind === 'file'
+              ? 'file'
+              : reference.kind === 'video'
+                ? 'video'
+                : reference.kind === 'image'
+                  ? 'image'
+                  : 'selection'
         return `[${reference.label}]\n${comment}<${tag}>\n${reference.text}\n</${tag}>`
       })
     ].join('\n\n')
@@ -2677,15 +3291,15 @@
     // owns the commit: save the pending draft, then have the agent post its
     // next-steps list. The yes is consumed as the confirmation and never sent,
     // so it cannot become a user bubble or re-open the recap.
-    if (assistantRoutineDraft && isRoutineConfirmation(text)) {
-      void confirmRoutineSave()
+    if (assistantDraft && isAssistantConfirmation(text)) {
+      void confirmAssistantSave()
       return
     }
-    // The primary is, by definition, the model the user triggers the how-to with.
-    // While the how-to is still being written, keep it in step with the composer,
-    // so a model picked or switched before the first turn becomes the routine's
+    // The primary is, by definition, the model the user triggers the knowledge with.
+    // While the knowledge is still being written, keep it in step with the composer,
+    // so a model picked or switched before the first turn becomes the assistant's
     // primary   a fresh install has no last-used model to default from.
-    syncRoutinePrimaryToCurrentModel()
+    syncAssistantPrimaryToCurrentModel()
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
       return task
@@ -2707,9 +3321,9 @@
             JSON.stringify(currentTaskReferences)
           ].join('\n')
         : undefined
-    // The assistant how-to authoring contract is not assembled here: the chat
-    // engine attaches it to every user turn in a routine that still has no
-    // how-to, so a resend from the message editor or a queued delivery can
+    // The assistant knowledge authoring contract is not assembled here: the chat
+    // engine attaches it to every user turn in an assistant that still has no
+    // knowledge, so a resend from the message editor or a queued delivery can
     // never drop it.
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
@@ -3057,6 +3671,7 @@
       thread.assignmentRole === undefined) ||
       thread.achievementRole === 'auditor'
   )
+
   /** Workers and auditors are orchestration internals driven by their
    *  coordinator: identical view, but they never enable engineering mode
    *  themselves, so the composer hides the toolbox and lifecycle actions. */
@@ -3335,7 +3950,8 @@
       projectId: thread.projectId,
       threadId: coordinatorDockThreadId,
       label,
-      icon: kind === 'assignment' ? Network : kind === 'achievement' ? Target : ShieldCheck,
+      icon:
+        kind === 'assignment' ? CioNetwork : kind === 'achievement' ? CioTarget : CioShieldCheck,
       panel
     })
     // Docks itself the first time a thread starts coordinating, unless the user
@@ -3693,20 +4309,46 @@
       })
   })
 
+  /**
+   * Bring one message element into view. A window that had to be remounted for
+   * the jump may not have rendered on the first tick, so the lookup retries
+   * across a few frames instead of giving up: the reader clicks once and
+   * expects the message, not a first click that loads it and a later one that
+   * finally reveals it.
+   */
+  async function revealMessageById(id: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await tick()
+      const element = document.getElementById(`msg-${id}`)
+      if (element) {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        return
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    }
+  }
+
   /** Jump target for the header's history dropdown   loads a window around the
    *  target when it lies outside the currently loaded cache, then scrolls to it. */
   async function jumpToMessage(id: string): Promise<void> {
     const { projectId, id: threadId } = thread
     if (jumpLoading) return
+    // A jump is a deliberate leave from the live tail. Detach the follow lock
+    // and mark the open as restored BEFORE the window mounts and the scroll
+    // begins: a far-back jump mounts a large stretch of the transcript, and
+    // the ResizeObserver that re-anchors a following reader would otherwise
+    // snap the viewport straight back to the bottom   the reason the first
+    // (and second) click loaded the target without revealing it.
+    userScrolledAway = true
+    scrollRestored = true
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
       // The store holds the target but the mounted window may not   move the
       // anchor back to cover it (plus context) before scrolling.
       if (!hasController && mountedStartIndex > cachedIndex) {
         windowStartId = messages[Math.max(0, cachedIndex - 8)]?.id ?? null
-        await tick()
       }
-      document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      await revealMessageById(id)
       return
     }
     jumpLoading = true
@@ -3726,10 +4368,7 @@
         if (!hasController && mountedStartIndex > targetIndex) {
           windowStartId = messages[Math.max(0, targetIndex - 8)]?.id ?? null
         }
-        await tick()
-        document
-          .getElementById(`msg-${id}`)
-          ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        await revealMessageById(id)
       }
       // Page forward in the background so the transcript stays contiguous down
       // to the already-loaded thread tail after a far-back jump.
@@ -3868,9 +4507,10 @@
   $effect(() => {
     const tracePreviews = tracePreviewByUserMessage(messages)
     const userMessages = mergedUserMessageSummaries(messages, fullUserMessageHistory).map(
-      ({ id, content }) => ({
+      ({ id, content, isAction }) => ({
         id,
         content,
+        ...(isAction ? { isAction } : {}),
         ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
       })
     )
@@ -4055,11 +4695,57 @@
   }
 
   let loadingOlderMessages = $state(false)
+  /** The row that carries the history button: it is the top of the mounted
+   *  window, so the blocks a load mounts are exactly the ones between it and the
+   *  seam the window already had (see `historyArrivedBlocks`). Plain local state,
+   *  not `$state`: nothing renders from it, the load reads it when it runs. */
+  let historyHeadEl: HTMLElement | null = null
+
+  /** Track the history row for as long as it is mounted. */
+  function trackHistoryHead(node: HTMLElement): () => void {
+    historyHeadEl = node
+    return () => {
+      if (historyHeadEl === node) historyHeadEl = null
+    }
+  }
+
+  /** The earliest block of the mounted window, the seam a history load inserts
+   *  above. Must be read BEFORE the window moves: afterwards the seam sits under
+   *  the pages that arrived on top of it. Null with an empty window, and while
+   *  the history row is not mounted there is nothing for a load to insert above. */
+  function historySeamElement(): Element | null {
+    return historyHeadEl?.nextElementSibling ?? null
+  }
+
+  /** The blocks a history load mounted, in document order. Element identity is
+   *  the boundary and the window only ever grows upward, so every sibling above
+   *  the seam and below the history row is new, whether it is a prompt, an
+   *  answer, a working trace or a card. Walking it here rather than listing the
+   *  mounted message ids is what lets one arrival cover the whole page instead of
+   *  the message blocks alone. */
+  function historyArrivedBlocks(seam: Element | null): HTMLElement[] {
+    const blocks: HTMLElement[] = []
+    if (!historyHeadEl || !seam || !seam.isConnected) return blocks
+    for (
+      let node = seam.previousElementSibling;
+      node && node !== historyHeadEl;
+      node = node.previousElementSibling
+    ) {
+      if (node instanceof HTMLElement) blocks.push(node)
+    }
+    return blocks.reverse()
+  }
 
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
     if (controller) {
+      // A controller's transcript mounts every message it holds, so the page that
+      // lands above the seam is the page the reader watches arrive.
+      const seam = historySeamElement()
       await controller.loadOlder()
+      if (!alive) return
+      await tick()
+      playHistoryArrive(historyArrivedBlocks(seam), scrollEl ?? null)
       return
     }
     loadingOlderMessages = true
@@ -4080,7 +4766,7 @@
       // it fetching until three deduped turn starts exist before the anchor.
       let pagesWithoutTurnStart = 0
       for (let attempt = 0; attempt < 30; attempt++) {
-        const startsBefore = turnStartPromptsBefore(messages, mountedStartIndex, 3)
+        const startsBefore = turnStartPromptsBefore(structureMessages, mountedStartIndex, 3)
         if (startsBefore.length === 3) break
         const el = scrollEl
         if (!el || !olderMessagesAvailable) break
@@ -4173,7 +4859,7 @@
       // The anchor must be the start of a turn   a user prompt   never a
       // trace row. Landing on a trace presented the loaded page cut off at
       // its beginning, with the turn's prompt missing above it.
-      const starts = turnStartPromptsBefore(messages, mountedStartIndex, 3)
+      const starts = turnStartPromptsBefore(structureMessages, mountedStartIndex, 3)
       let target = starts.length === 3 ? starts[starts.length - 1] : 0
       const isRealPrompt = (index: number): boolean => {
         const message = messages[index]
@@ -4186,6 +4872,7 @@
       // of refusing to move the window and leaving the click a no-op.
       if (target >= mountedStartIndex) target = 0
       if (target < mountedStartIndex) {
+        const seam = historySeamElement()
         windowStartId = messages[target]?.id ?? null
         // Keep the tail-relative count in sync so releasing the anchor at
         // the bottom never shrinks the window below what is mounted.
@@ -4215,6 +4902,12 @@
             awayFromBottom: userScrolledAway
           })
         }
+        // The loaded page is in the document and the viewport is back where the
+        // reader left it, so the blocks that landed inside it can settle into
+        // place instead of blinking on. Blocks above the viewport are left alone,
+        // which is both what the reader can watch and what keeps a three-page
+        // load from animating a hundred blocks at once (`playHistoryArrive`).
+        playHistoryArrive(historyArrivedBlocks(seam), after ?? null)
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
@@ -4623,26 +5316,28 @@
   }
 
   /**
-   * Creation time of the newest prompt that opened a turn. Activity-only user
-   * messages (compaction notices, sub-agent envelopes) ride mid-turn, so they
-   * never move the boundary   the same rule the main process folds by.
+   * Creation time of the newest prompt that opened a turn.
+   *
+   * Activity-only user messages (compaction notices, sub-agent envelopes, the
+   * app's own continuation prompts) ride mid-turn and a steer the harness has
+   * not taken yet opens no turn at all, so both are skipped   the same boundary
+   * the main process folds its turn stream by. This is the instant the turn on
+   * screen is measured from, and unlike the run store's in-memory start it is
+   * persisted, so it survives a window reload.
    */
   function turnAnchorCreatedAt(): number | null {
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index]
       if (!message || message.role !== 'user') continue
-      if (
-        message.parts.length > 0 &&
-        message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
-      ) {
-        continue
-      }
+      if (isActivityOnlyUserMessage(message)) continue
+      if (threadMessages.isSteerHeld(thread.projectId, conversationId, message.id)) continue
       return message.createdAt || null
     }
     return null
   }
 
   function beginLocalTurn(userMessageId: string): void {
+    liveTokenRate.startTurn(Date.now())
     restoredBusy = false
     clearStreamParts()
     locallySubmittedTurnId = userMessageId
@@ -4766,13 +5461,11 @@
           // path verifies against disk and merges real history if seeding raced
           // a non-empty thread.
           if (olderMessagesAvailable !== true) {
-            void invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE)
-              .then((probe) => {
-                if (!alive || !probe) return
-                if (probe.messages.length > 0 && messages.length <= probe.messages.length) {
-                  threadMessages.mergePage(projectId, id, probe.messages)
-                }
-                olderMessagesAvailable ||= probe.hasOlder
+            void threadMessages
+              .mergeTurnAlignedTail(projectId, id, HISTORY_WINDOW_SIZE)
+              .then((hasOlder) => {
+                if (!alive) return
+                olderMessagesAvailable = hasOlder
               })
               .catch(() => {})
           }
@@ -4943,6 +5636,7 @@
       // refresh or thread switch. Only the newest page is read here; older
       // entries page in on the trace's own inner scroll.
       const generation = ++streamPartsLoadGeneration
+      void loadCompletedTurns()
       void invoke('thread:loadStreamParts', projectId, id, {
         limit: WORKING_TRACE_PAGE_SIZE
       })
@@ -5392,11 +6086,18 @@
       }
       case 'message.completed': {
         if (event.sessionId !== sessionId) return
+        recordGenerationUsage(event)
         acknowledgeLocalTurn()
         // Record what the harness reported before closing the window, so this
-        // request's own count teaches the characters-per-token calibration.
+        // request's own count teaches the characters-per-token calibration, and
+        // in the scope the harness declared: a per-request count is summed
+        // across the message's requests instead of keeping the largest.
         if (event.tokens && generatedTokens(event.tokens) > 0) {
-          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+          liveTokenRate.noteReported(
+            event.messageId,
+            generatedTokens(event.tokens),
+            event.tokenUsageScope ?? 'message'
+          )
         }
         // The request's generation window ends here, so the next request starts
         // a fresh one and the tool wait between them is never counted.
@@ -5423,8 +6124,13 @@
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
+        recordGenerationUsage(event)
         if (event.tokens && generatedTokens(event.tokens) > 0) {
-          liveTokenRate.noteReported(event.messageId, generatedTokens(event.tokens))
+          liveTokenRate.noteReported(
+            event.messageId,
+            generatedTokens(event.tokens),
+            event.tokenUsageScope ?? 'message'
+          )
         }
         break
       }
@@ -5433,8 +6139,13 @@
         liveTokenRate.settle()
         if (liveTokenRate.messageId) {
           const finalizedId = liveTokenRate.messageId
+          const observation = liveTokenRate.observation()
           const rate = liveTokenRate.finalize()
-          if (rate !== null) finalizedTokenRates[finalizedId] = rate
+          if (rate !== null) {
+            finalizedTokenRates[finalizedId] = rate
+            if (observation)
+              finalizedGenerationObservation = { messageId: finalizedId, observation }
+          }
         }
         const interruptedCompaction = compactionInterrupted()
         if (!setIdleFromSession()) return
@@ -5590,16 +6301,19 @@
     const { projectId, id } = thread
     const loadPromise = (async (): Promise<void> => {
       try {
-        const page = await invoke(
-          'thread:loadMessages',
+        // Turn-aligned, additive merge. A raw tail page could land mid-turn and
+        // leave the newest turn rendered as a working trace with its user
+        // message still unloaded, and marking the thread loaded from that page
+        // then skipped the aligned cold load on the next visit. The store owns
+        // the alignment rule, so this path and the cold load cannot disagree
+        // about where a turn begins. Assignment, never `||=`: an aligned result
+        // that reached the start of the thread must be able to clear the flag.
+        olderMessagesAvailable = await threadMessages.mergeTurnAlignedTail(
           projectId,
           id,
-          undefined,
           HISTORY_WINDOW_SIZE
         )
         if (!alive) return
-        threadMessages.mergePage(projectId, id, page.messages)
-        olderMessagesAvailable ||= page.hasOlder
         syncOpenSubagentTabs()
       } catch {
         // Non-fatal   keep what we have
@@ -5998,6 +6712,10 @@
       head.promptReferences.length > 0 ||
       head.projectReferences.length > 0 ||
       head.taskReferences.length > 0
+    // The card's chips lead with a picture's own thumbnail, so the head's files
+    // are read into the cache the composer previews attachments from. A file
+    // already cached is skipped, so a repeated sync reads nothing.
+    if (head.attachments.length > 0) void attachmentPreview.loadAll(head.attachments)
   }
 
   /** Recover response-selection annotations persisted with the composer draft
@@ -6031,12 +6749,72 @@
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
-  let showQueueMenu = $state(false)
-  /** Folds the queued-message card down to its header so the conversation above
-   *  the composer stays readable while a message waits in the queue. */
-  let queuedFolded = $state(false)
   /** Count of messages waiting in the thread's FIFO queue (from the store). */
   const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
+  /** The rest of the queue behind the head entry, listed inside its card, with
+   *  how many files each message behind the head carries. */
+  const queuedNextMessages = $derived(
+    rendererRecovery
+      .queuedMessagesFor(thread.projectId, thread.id)
+      .slice(1)
+      .map((entry) => ({ id: entry.id, text: entry.text, attachments: entry.attachments.length }))
+  )
+
+  /**
+   * The cards that stack on the composer's top edge, top to bottom. Each drops
+   * its own bottom rule so the surface below carries the join: another card's
+   * broken top rule, or the composer's dashed one. They render flush, so the
+   * whole stack reads as one surface with a broken line at every boundary.
+   */
+  type ComposerStackSlot =
+    | 'worker'
+    | 'provider'
+    | 'compaction'
+    | 'queued'
+    | 'account'
+    | 'foreign-run'
+    | 'image-descriptor'
+    | 'assistant-recap'
+    | 'todo'
+  let queuedCardVisible = $derived(
+    (queuedMessage !== '' || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread
+  )
+  let composerStackSlots = $derived.by((): ComposerStackSlot[] => {
+    const slots: ComposerStackSlot[] = []
+    if (assignmentWorkerAttentionItems.length > 0) slots.push('worker')
+    if (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) {
+      slots.push('provider')
+    }
+    if (compactionInterruptedNotice !== '') slots.push('compaction')
+    if (queuedCardVisible) slots.push('queued')
+    if (aiAccountPromptVisible) slots.push('account')
+    if (assistantForeignRunThreadId) slots.push('foreign-run')
+    if (pendingImageDescriptorError !== null && !achievementAutonomous) {
+      slots.push('image-descriptor')
+    }
+    if (assistantRecapVisible && assistantDraft) slots.push('assistant-recap')
+    if (visibleTodo !== null && !failureRetryVisible) slots.push('todo')
+    return slots
+  })
+  /** True when any card sits on the composer's top edge, so the composer's top
+   *  rule breaks into the dashed line that carries the join and it stops opening
+   *  a gap above itself. */
+  let composerStackedAbove = $derived(composerStackSlots.length > 0)
+  /** Whether a card sits above the named slot, so its own top rule is the broken
+   *  join rather than a solid edge. */
+  function stackedAboveSlot(slot: ComposerStackSlot): boolean {
+    return composerStackSlots.indexOf(slot) > 0
+  }
+  /** The compaction notice owns no card component, so its fold preference is read
+   *  and written here, per thread, like every other stack card. */
+  const compactionFold = {
+    get folded(): boolean {
+      return threadCardFold.isFolded(thread.id, 'compaction')
+    },
+    set folded(value: boolean) {
+      threadCardFold.setFolded(thread.id, 'compaction', value)
+    }
+  }
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -6054,21 +6832,13 @@
     }
   })
   /** Where the scroll-to-latest button floats within the bottom-chrome wrapper.
-   *  When a fixed gutter (worker/provider/compaction card, no top padding) sits
-   *  above the composer the button straddles that card's top edge. The queued
-   *  message card and the in-composer image-descriptor card both start 8px
-   *  below the stack edge (pt-2), so they straddle slightly lower. With nothing
-   *  above the composer it keeps the original -2.75rem spot. */
-  const scrollButtonTop = $derived(
-    assignmentWorkerAttentionItems.length > 0 ||
-      (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) ||
-      compactionInterruptedNotice !== ''
-      ? '-1.125rem'
-      : ((queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread) ||
-          (pendingImageDescriptorError !== null && !achievementAutonomous)
-        ? '-0.625rem'
-        : '-2.75rem'
-  )
+   *  The button is 1.75rem tall. A stack on the composer starts at the wrapper's
+   *  top edge (the cards are flush, with no top padding), so the button centres
+   *  on that edge at half its own height: -0.875rem. With nothing above the
+   *  composer the wrapper's top edge *is* the composer's top rule, so the button
+   *  floats clear of it, its lower edge 0.5rem above: -(1.75rem + 0.5rem).
+   *  Change the button's height and both spots move with it. */
+  const scrollButtonTop = $derived(composerStackedAbove ? '-0.875rem' : '-2.25rem')
 
   /** The mounted composer, used to focus the editor in place (no remount). */
   let composer: ChatComposer | undefined = $state(undefined)
@@ -6161,7 +6931,7 @@
     queuedHasContent = true
     // Append to the thread's FIFO queue   a later queued message sends after
     // earlier ones, one per idle turn. The in-memory mirror then follows the
-    // store head so the queue card always shows the next message to send.
+    // Store head so the queue card always shows the next message to send.
     rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
       text: send.text,
       attachments: send.attachments,
@@ -6635,170 +7405,156 @@
     requestSkillUse(skill.name, args)
   }
 
-  /** The routine this assistant thread is authoring, when it is one. */
-  const assistantRoutine = $derived(
-    assistantRoutineId
-      ? (assistantRoutines.routines.find((entry) => entry.id === assistantRoutineId) ?? null)
-      : null
+  /** The assistant this assistant thread is authoring, when it is one. */
+  const assistant = $derived(
+    assistantId ? (assistants.assistants.find((entry) => entry.id === assistantId) ?? null) : null
   )
 
-  /** Whether this thread is a routine's Getting started thread: the authoring
-   *  host while its how-to is missing, and the editing host once it is saved. */
+  /** Whether this thread is an assistant's Getting started thread: the authoring
+   *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
-  /** The routine's own connection labels, for the recap card's kept ones. */
-  const existingRoutineConnections = $derived(
-    assistantRoutine?.connections.map((connection) => connection.label) ?? []
+  /**
+   * Whether the assistant still wears the name the create flow had to store.
+   * Nothing about an assistant built by talking is known at first, so the copy
+   * that would otherwise greet it by name says what is happening instead.
+   */
+  const assistantUnnamed = $derived(assistantName === ASSISTANT_PLACEHOLDER_NAME)
+
+  /**
+   * The app's own shortcut for starting a task with an assistant, for the copy
+   * that sends the user to a new task rather than a message in this thread.
+   */
+  const assistantNewTaskShortcut = $derived(
+    formatKeyCombo(keymapState.keysFor('assistant-new-task'))
+  )
+
+  /** The assistant's own connection labels, for the recap card's kept ones. */
+  const existingAssistantConnections = $derived(
+    assistant?.connections.map((connection) => connection.label) ?? []
   )
 
   /**
-   * The complete draft the agent has presented for this routine: the how-to it
+   * The complete draft the agent has presented for this assistant: the knowledge it
    * wrote plus the machine-readable plan (schedule and connections). A draft is
-   * what makes the routine committable, so the recap card and the fallback
+   * what makes the assistant committable, so the recap card and the fallback
    * command both key off it. It is computed only while the agent is idle: a
    * running turn streams the draft token by token, and re-parsing fences on
    * every delta would be wasted work for a card that cannot show yet anyway.
-   * The authoring conversation is short and lives only until the routine is
+   * The authoring conversation is short and lives only until the assistant is
    * saved, so scanning it once per settled turn is bounded work.
    *
-   * A saved routine keeps its draft path on its Getting started thread alone, and
+   * A saved assistant keeps its draft path on its Getting started thread alone, and
    * only for a revision that actually changes it: a message there tweaks the
-   * how-to, so a revised draft has to be committable, while a task or run thread
-   * of the same routine carries the saved how-to and must never suggest a new one,
+   * knowledge, so a revised draft has to be committable, while a task or run thread
+   * of the same assistant carries the saved knowledge and must never suggest a new one,
    * and the draft already committed must not read as a pending change.
    */
-  const assistantRoutineDraft = $derived.by(
+  const assistantDraft = $derived.by(
     (): {
-      howTo: string
-      plan: RoutinePlanDraft | null
+      knowledge: string
+      plan: AssistantPlanDraft | null
     } | null => {
-      if (!assistantMode || !assistantRoutineId || busy) return null
-      const draft = latestHowToDraft()
+      if (!assistantMode || !assistantId || busy) return null
+      const draft = latestAssistantRecap(messages, messageText)
       if (!draft) return null
-      const plan = latestRoutinePlanDraft()
-      if (assistantHowToComplete && !isRoutineRevision(draft, plan)) return null
-      return { howTo: draft.howTo, plan }
+      const plan = draft.plan
+      if (assistantKnowledgeComplete && !isAssistantRevision(draft, plan)) return null
+      return { knowledge: draft.knowledge, plan }
     }
   )
 
   /**
-   * Whether a how-to draft is a change to the routine that is already saved, so
+   * Whether a knowledge draft is a change to the assistant that is already saved, so
    * the card offers a revision and never a second save of what is saved. Three
    * things disqualify a draft:
    *
-   * - it sits on a thread that is not the routine's Getting started thread;
-   * - it is older than the saved how-to, which is what a draft left in a reopened
-   *   thread looks like after the how-to was edited elsewhere;
-   * - it changes nothing, either because the agent re-presented the same how-to
+   * - it sits on a thread that is not the assistant's Getting started thread;
+   * - it is older than the saved knowledge, which is what a draft left in a reopened
+   *   thread looks like after the knowledge was edited elsewhere;
+   * - it changes nothing, either because the agent re-presented the same knowledge
    *   and the same plan, or because the save would patch no field differently.
-   *   A plan-only change counts, because the how-to text often does not carry the
+   *   A plan-only change counts, because the knowledge text often does not carry the
    *   schedule at all.
    *
-   * A routine that predates the how-to timestamp falls back to comparing content.
+   * An assistant that predates the knowledge timestamp falls back to comparing content.
    */
-  function isRoutineRevision(
-    draft: { howTo: string; at: number },
-    plan: RoutinePlanDraft | null
+  function isAssistantRevision(
+    draft: { knowledge: string; at: number },
+    plan: AssistantPlanDraft | null
   ): boolean {
     if (!assistantSetupThread) return false
-    const savedAt = assistantRoutine?.howToUpdatedAt
+    const savedAt = assistant?.knowledgeUpdatedAt
     if (savedAt !== undefined && draft.at <= savedAt) return false
-    const routine = assistantRoutine
-    if (!routine) return true
-    if (draft.howTo.trim() !== routine.howTo.trim()) return true
+    if (!assistant) return true
+    if (draft.knowledge.trim() !== assistant.knowledge.trim()) return true
     if (!plan) return false
     if (
-      routineIsScheduled(routine) &&
+      assistantIsScheduled(assistant) &&
       plan.schedule &&
-      describeSchedule(plan.schedule) !== describeSchedule(routine.schedule)
+      describeSchedule(plan.schedule) !== describeSchedule(assistant.schedule)
     ) {
       return true
     }
-    if (plan.delivery && routineDeliveryLabel(plan.delivery) !== currentDeliveryLabel()) return true
-    if (plan.priority && routinePriorityLabel(plan.priority) !== currentPriorityLabel()) return true
+    if (plan.delivery && assistantDeliveryLabel(plan.delivery) !== currentDeliveryLabel())
+      return true
+    if (plan.priority && assistantPriorityLabel(plan.priority) !== currentPriorityLabel())
+      return true
     const known = new Set(
-      routine.connections.map((connection) => connection.label.trim().toLowerCase())
+      assistant.connections.map((connection) => connection.label.trim().toLowerCase())
     )
     return plan.connections.some((connection) => !known.has(connection.name.trim().toLowerCase()))
   }
 
   /** The saved delivery as the plan's own label, so the two compare. */
   function currentDeliveryLabel(): string {
-    const delivery = assistantRoutine?.delivery
-    return delivery ? routineDeliveryLabel(delivery) : ''
+    const delivery = assistant?.delivery
+    return delivery ? assistantDeliveryLabel(delivery) : ''
   }
 
   /** The saved urgency as the plan's own label, so the two compare. */
   function currentPriorityLabel(): string {
-    const priority = assistantRoutine?.priority
-    return priority ? routinePriorityLabel(priority) : ''
+    const priority = assistant?.priority
+    return priority ? assistantPriorityLabel(priority) : ''
   }
 
   /**
    * Identity of the current draft. Dismissing the recap card hides it only for
    * this revision, so a revised draft brings the card back.
    */
-  const assistantRoutineDraftSignature = $derived(
-    assistantRoutineDraft
-      ? `${assistantRoutineDraft.howTo.length}:${JSON.stringify(assistantRoutineDraft.plan)}`
+  const assistantDraftSignature = $derived(
+    assistantDraft
+      ? `${assistantDraft.knowledge.length}:${JSON.stringify(assistantDraft.plan)}`
       : ''
   )
 
   /** The draft revision the user chose to keep editing; empty means none. */
-  let routineRecapDismissed = $state('')
-  let routineSaving = $state(false)
+  let assistantRecapDismissed = $state('')
+  let assistantSaving = $state(false)
 
-  const routineRecapVisible = $derived(
-    assistantRoutineDraft !== null &&
-      !routineSaving &&
-      routineRecapDismissed !== assistantRoutineDraftSignature
+  const assistantRecapVisible = $derived(
+    assistantDraft !== null &&
+      !assistantSaving &&
+      assistantRecapDismissed !== assistantDraftSignature
   )
 
-  function keepEditingRoutine(): void {
-    routineRecapDismissed = assistantRoutineDraftSignature
+  function keepEditingAssistant(): void {
+    assistantRecapDismissed = assistantDraftSignature
   }
 
   /**
-   * The how-to the agent last drafted for this routine, with the time it was
-   * written: the newest how-to fenced block in the newest assistant message that
-   * carries one. The authoring contract asks for a `how-to` fence, but a bare
-   * fence whose body starts with a `how-to: <title>` line is accepted too. The
-   * time is what tells a revision from the authoring draft the app already saved.
-   */
-  function latestHowToDraft(): { howTo: string; at: number } | null {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]
-      if (!message || message.role !== 'assistant') continue
-      const howTo = extractHowToDraft(messageText(message))
-      if (howTo) return { howTo, at: message.createdAt }
-    }
-    return null
-  }
-
-  /** The machine-readable routine plan the agent last emitted, if any. */
-  function latestRoutinePlanDraft(): ReturnType<typeof latestRoutinePlanDraftIn> {
-    const assistantTexts: string[] = []
-    for (const message of messages) {
-      if (message.role !== 'assistant') continue
-      assistantTexts.push(messageText(message))
-    }
-    return latestRoutinePlanDraftIn(assistantTexts)
-  }
-
-  /**
-   * Keep the routine's primary in step with the model the user is working on
-   * while the how-to is still being written. The primary is the model that
-   * triggers the how-to, so a model switched in the composer before the first
-   * turn must become the model the routine runs on   a fresh install has no
-   * last-used model for the create flow to default from. No-op once the how-to
+   * Keep the assistant's primary in step with the model the user is working on
+   * while the knowledge is still being written. The primary is the model that
+   * triggers the knowledge, so a model switched in the composer before the first
+   * turn must become the model the assistant runs on   a fresh install has no
+   * last-used model for the create flow to default from. No-op once the knowledge
    * is saved, and no-op while the composer already matches the primary.
    */
-  function syncRoutinePrimaryToCurrentModel(): void {
-    const routineId = assistantRoutineId
-    if (!routineId || assistantHowToComplete) return
+  function syncAssistantPrimaryToCurrentModel(): void {
+    if (!assistantId || assistantKnowledgeComplete) return
     const current = settings
     if (!current.modelId) return
-    const primary = assistantRoutine?.agents?.primary
+    const primary = assistant?.agents?.primary
     if (
       primary &&
       primary.harnessId === current.harnessId &&
@@ -6807,10 +7563,10 @@
     ) {
       return
     }
-    void assistantRoutines
-      .updateRoutine(routineId, {
+    void assistants
+      .updateAssistant(assistantId, {
         agents: {
-          ...(assistantRoutine?.agents ?? { fallbacks: [] }),
+          ...(assistant?.agents ?? { fallbacks: [] }),
           primary: {
             harnessId: current.harnessId,
             providerId: current.providerId,
@@ -6824,66 +7580,93 @@
   }
 
   /**
-   * The user's go-ahead for the pending routine recap: commit the draft, then
+   * The user's go-ahead for the pending assistant recap: commit the draft, then
    * have the agent post a short next-steps list in the Getting started thread.
    * Both the recap card's Save button and a typed confirmation route here, so
    * the follow-up turn happens whichever way the user agreed. The next-steps
-   * turn belongs to a routine's first save; an edit of a routine that already
-   * has its how-to commits on its own, with nothing left to set up.
+   * turn belongs to an assistant's first save; an edit of an assistant that already
+   * has its knowledge commits on its own, with nothing left to set up.
    */
-  async function confirmRoutineSave(): Promise<void> {
-    const routineId = assistantRoutineId
-    if (!routineId) return
-    const firstSave = !assistantHowToComplete
-    const saved = await saveRoutineHowTo()
-    if (saved && firstSave) await assistantRoutines.postSetup(routineId).catch(() => undefined)
+  async function confirmAssistantSave(): Promise<void> {
+    if (!assistantId) return
+    const firstSave = !assistantKnowledgeComplete
+    const saved = await saveAssistantKnowledge()
+    if (saved && firstSave) await assistants.postSetup(assistantId).catch(() => undefined)
   }
 
   /**
-   * Commit the agent-drafted how-to, schedule, and connections to the routine
-   * once the user agrees. Called by the recap card and by the `/save-how-to`
-   * fallback. The plan block is optional: without it the how-to is saved on its
-   * own and the existing schedule is left untouched.
+   * Commit the agent-drafted knowledge, schedule, and connections to the assistant
+   * once the user agrees. Called by the recap card and by the `/save-knowledge`
+   * fallback. Initial setup requires valid settings. A knowledge-only revision
+   * preserves the saved schedule, connections and reporting agreement.
    */
-  async function saveRoutineHowTo(draftOverride?: {
-    howTo: string
-    plan: RoutinePlanDraft | null
+  async function saveAssistantKnowledge(draftOverride?: {
+    knowledge: string
+    plan: AssistantPlanDraft | null
   }): Promise<boolean> {
-    const routineId = assistantRoutineId
-    if (!routineId || routineSaving) return false
-    const draft = draftOverride ?? assistantRoutineDraft
+    if (!assistantId || assistantSaving) return false
+    const draft = draftOverride ?? assistantDraft
     if (!draft) {
-      errorMessage = `No how-to draft found in this thread yet. Ask the agent to present the final how-to in a fenced how-to block, then try again.`
+      errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
       return false
     }
-    routineSaving = true
+    const setupIssue = assistantKnowledgeComplete
+      ? null
+      : assistantSetupRecapIssue(assistant, draft.plan)
+    if (setupIssue) {
+      await sendMessage(
+        `The application could not save this setup: ${setupIssue} Repair the recap using the decisions already agreed in this conversation and checkpoint. Do not ask those questions again. Include the complete knowledge block and an assistant block containing actual values for name, personality, scheduled, schedule, scheduleName, connections, delivery and priority where applicable. Do not copy the JSON schema. Verify required connections or finish the setup steps you can perform before presenting the corrected recap for confirmation. Do not claim it is saved or ready.`,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        [],
+        [],
+        {
+          action: 'Repair setup recap',
+          body: 'Complete the settings already agreed before saving.'
+        }
+      )
+      return false
+    }
+    assistantSaving = true
     try {
       const plan = draft.plan
-      const routine = assistantRoutines.routines.find((entry) => entry.id === routineId) ?? null
-      const scheduled = routine ? routineIsScheduled(routine) : true
-      const patch: Parameters<typeof assistantRoutines.updateRoutine>[1] = { howTo: draft.howTo }
-      // An on-demand routine has no schedule, so a plan that still carries one
+      const assistant = assistants.assistants.find((entry) => entry.id === assistantId) ?? null
+      const wasScheduled = assistant ? assistantIsScheduled(assistant) : true
+      const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
+      // A conversation settles who the assistant is as well as what it does, so a
+      // plan that carries the name the user gave it, the way they asked it to
+      // behave, or a clock they did or did not want is applied on the same save.
+      if (plan?.name) patch.name = plan.name
+      if (plan?.personality) patch.personality = plan.personality
+      if (typeof plan?.scheduled === 'boolean') patch.scheduled = plan.scheduled
+      const scheduled = plan?.scheduled ?? wasScheduled
+      // An on-demand assistant has no schedule, so a plan that still carries one
       // (an agent that did not know) can never re-schedule it here.
       if (plan?.schedule && scheduled) patch.schedule = plan.schedule
+      if (plan?.scheduleName && scheduled) patch.scheduleName = plan.scheduleName
       if (plan?.delivery) patch.delivery = plan.delivery
       if (plan?.priority) patch.priority = plan.priority
       if (plan && plan.connections.length > 0) {
         const catalog = await invoke('utilities:list').catch(() => null)
         patch.connections = connectionsFromPlan(
           plan.connections,
-          routine?.connections ?? [],
+          assistant?.connections ?? [],
           catalog?.utilities ?? []
         )
       }
-      await assistantRoutines.updateRoutine(routineId, patch)
-      toast.success(plan?.schedule && scheduled ? 'How-to and schedule saved' : 'How-to saved')
-      routineRecapDismissed = ''
+      await assistants.updateAssistant(assistantId, patch)
+      // The name is the one part of the save the user should see confirmed, since
+      // it is what the sidebar and every later message will call the assistant.
+      toast.success(plan?.name ? `Saved as ${plan.name}` : 'Saved')
+      assistantRecapDismissed = ''
       return true
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'The how-to could not be saved.'
+      errorMessage = error instanceof Error ? error.message : 'The knowledge could not be saved.'
       return false
     } finally {
-      routineSaving = false
+      assistantSaving = false
     }
   }
 
@@ -6915,8 +7698,8 @@
 
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
-    if (commandId === 'command:save-how-to') {
-      await saveRoutineHowTo()
+    if (commandId === 'command:save-knowledge') {
+      await saveAssistantKnowledge()
       return
     }
     if (commandId === 'command:cio-utility') {
@@ -7108,7 +7891,6 @@
 
     if (controller) {
       clearQueuedState()
-      showQueueMenu = false
       errorMessage = ''
       const payload: SendPayload = {
         text: msg,
@@ -7123,12 +7905,11 @@
       return
     }
     clearQueuedState()
-    showQueueMenu = false
-    // The steer opens a fresh trace under the steered message. Drop the
-    // durable fold loaded at mount (and its todo snapshot)   it describes the
-    // turn the steer is interrupting, and a steered continuation keeps the
-    // old turn's stream anchor, so it must never feed the new trace.
-    clearStreamParts()
+    // The running trace stays exactly as it is: the harness has not taken the
+    // message yet, so the work still streaming belongs to the turn it steers and
+    // must keep rendering above the message. The durable fold moves to the new
+    // turn on its own when delivery clears the hold, and that move is what
+    // freezes this turn's trace and opens the next one under the message.
     // The steered message lands at the tail. A reader scrolled up into the
     // running turn keeps their position and their mounted messages   releasing
     // the tail lock here would re-window the conversation and hide on-screen
@@ -7191,7 +7972,6 @@
 
   /** Return the queued message to the composer for editing. */
   function editQueuedMessage(): void {
-    showQueueMenu = false
     if (!queuedMessage && !queuedHasContent) return
     rendererRecovery.setDraft(
       thread.projectId,
@@ -7209,13 +7989,11 @@
 
   /** Delete the queued message. */
   function deleteQueuedMessage(): void {
-    showQueueMenu = false
     clearQueuedState()
   }
 
   /** Delete every queued message for the thread. */
   function deleteAllQueuedMessages(): void {
-    showQueueMenu = false
     queuedMessage = ''
     queuedAttachments = []
     queuedPromptContext = undefined
@@ -7335,7 +8113,12 @@
     const items = previewableFileParts(msg)
     const index = items.findIndex((item) => item.url === part.url)
     if (index === -1) return
-    messageViewer = { items, index }
+    messageViewer = {
+      items,
+      index,
+      messageId: msg.id,
+      annotatable: msg.inlineArtifact === true
+    }
     loadViewerItem(items[index])
   }
 
@@ -7345,7 +8128,12 @@
     if (!viewer) return
     const index = viewer.index + delta
     if (index < 0 || index >= viewer.items.length) return
-    messageViewer = { items: viewer.items, index }
+    messageViewer = {
+      items: viewer.items,
+      index,
+      messageId: viewer.messageId,
+      annotatable: viewer.annotatable
+    }
     loadViewerItem(viewer.items[index])
   }
 
@@ -7353,6 +8141,51 @@
     messageViewer = null
     attachmentPreview.close()
   }
+
+  /**
+   * Open one of the queued message's files fullscreen, stepping between its
+   * siblings. Only files a preview can render are listed, so the pager never
+   * lands on an empty frame.
+   */
+  function openQueuedAttachment(attachment: PromptAttachment): void {
+    const items = queuedAttachments.filter((file) =>
+      attachmentPreviewKind(file.mime, file.filename ?? 'file')
+    )
+    const index = items.findIndex((item) => item.url === attachment.url)
+    const item = items[index]
+    if (!item) return
+    queuedAttachmentViewer = { items, index }
+    void attachmentPreview.load(item)
+  }
+
+  /** Move the open queued-file preview by `delta` and read the file it lands on. */
+  function stepQueuedAttachmentViewer(delta: number): void {
+    const viewer = queuedAttachmentViewer
+    if (!viewer) return
+    const index = viewer.index + delta
+    const item = viewer.items[index]
+    if (!item) return
+    queuedAttachmentViewer = { items: viewer.items, index }
+    void attachmentPreview.load(item)
+  }
+
+  function closeQueuedAttachmentViewer(): void {
+    queuedAttachmentViewer = null
+    attachmentPreview.close()
+  }
+
+  /** Sibling navigation for the open queued-file preview, absent for a message
+   *  that carries fewer than two previewable files. */
+  const queuedAttachmentPager = $derived.by<PreviewPagerState | undefined>(() => {
+    const viewer = queuedAttachmentViewer
+    if (!viewer || viewer.items.length < 2) return undefined
+    return {
+      index: viewer.index,
+      count: viewer.items.length,
+      onPrevious: () => stepQueuedAttachmentViewer(-1),
+      onNext: () => stepQueuedAttachmentViewer(1)
+    }
+  })
 
   /** Sibling navigation for the open message preview, absent for a message with
    *  fewer than two previewable attachments. */
@@ -7365,6 +8198,19 @@
       onPrevious: () => stepMessageViewer(-1),
       onNext: () => stepMessageViewer(1)
     }
+  })
+
+  /**
+   * The item the open lightbox is showing when it is material a mark can be
+   * drawn on: an artifact picture or an artifact video. Null for everything
+   * else, which is what keeps the plain lightbox plain.
+   */
+  const viewerAnnotatableItem = $derived.by(() => {
+    const viewer = messageViewer
+    if (!viewer || !viewer.annotatable) return null
+    const item = viewer.items[viewer.index]
+    if (!item) return null
+    return isImageMime(item.mime) || isVideoMime(item.mime) ? item : null
   })
 
   /**
@@ -8957,7 +9803,6 @@
           )
         }
         specFormulating = true
-        showQueueMenu = false
         await sendMessage(ENGINEERING_SPEC_REQUEST_PROMPT, [], 'request', true, undefined, [], [], {
           action: 'Request spec'
         })
@@ -9109,6 +9954,91 @@
     const linkedThread =
       threadId === thread.id ? thread : await invoke('thread:get', thread.projectId, threadId)
     if (linkedThread) workspaceState.openThread(linkedThread, project)
+  }
+
+  /**
+   * Carrying composer content to another chat.
+   *
+   * An attached file, a doc comment and an inspector comment all name something
+   * the project holds, not something this conversation holds, so any of them can
+   * be moved or copied to another chat of the same project. A chat, an assistant
+   * task or a browser tab conversation lives in a hidden container with no
+   * sibling chat to carry anything to, and a controller-driven conversation (a
+   * temporary chat) keeps its own composer state, so neither offers the action.
+   */
+  const relocationAvailable = $derived(
+    !hasController && !usesThreadWorkspaceMount(thread.projectId)
+  )
+
+  /** The composer chip a destination is being picked for, and which verb applies. */
+  let relocationRequest = $state<{
+    item: ComposerRelocationItem
+    mode: ComposerRelocationMode
+  } | null>(null)
+
+  const relocationPickerTitle = $derived(
+    relocationRequest
+      ? relocationActionLabel(relocationRequest.mode, relocationRequest.item)
+      : 'Move to chat'
+  )
+
+  function requestComposerRelocation(
+    item: ComposerRelocationItem,
+    mode: ComposerRelocationMode
+  ): void {
+    logRendererDev(`[relocation] requested ${item.kind} ${mode} from ${thread.id}`)
+    if (!relocationAvailable) return
+    relocationRequest = { item, mode }
+  }
+
+  function closeRelocationPicker(): void {
+    relocationRequest = null
+  }
+
+  /**
+   * Carry the requested item to the chosen chat and land there with it.
+   *
+   * The request arrives as a value rather than being read from the state that
+   * opened the picker: the palette closes the picker before it reports the pick,
+   * and that close clears the request, so reading it here would always find
+   * nothing and the carry would do nothing at all.
+   *
+   * The carry is a transaction: the destination is written and persisted first,
+   * and only then does this composer give the item up, so a failure leaves every
+   * draft exactly as it was and nothing is reported as moved. The composer is
+   * remounted on the way out because it was drawn from the draft the move just
+   * changed.
+   */
+  async function commitComposerRelocation(
+    request: { item: ComposerRelocationItem; mode: ComposerRelocationMode },
+    target: Thread
+  ): Promise<void> {
+    if (relocationRequest !== null) relocationRequest = null
+    const noun = relocationNoun(request.item)
+    logRendererDev(
+      `[relocation] commit ${request.mode} ${request.item.kind} ${thread.id} -> ${target.id}`
+    )
+    try {
+      await applyComposerRelocation({
+        projectId: thread.projectId,
+        sourceThreadId: thread.id,
+        targetThreadId: target.id,
+        item: request.item,
+        mode: request.mode
+      })
+    } catch (error) {
+      logRendererDev(
+        `[relocation] failed: ${error instanceof Error ? error.message : String(error)}`
+      )
+      reportError(error, `Could not carry the ${noun} to that chat; nothing was changed.`)
+      return
+    }
+    logRendererDev(`[relocation] carried ${noun} to ${target.id}`)
+    toast.success(`${request.mode === 'copy' ? 'Copied' : 'Moved'} ${noun} to ${target.title}`)
+    composerRestoreKey += 1
+    const targetProject =
+      project ?? (await invoke('project:get', target.projectId).catch(() => null))
+    workspaceState.openThreadInOwningView(target, targetProject)
   }
 
   function persistQueuedStartAfterThreads(): void {
@@ -11357,14 +12287,19 @@
   function hasPersistedInFlightWork(): boolean {
     const startIndex = latestTurnInfo.startIndex
     if (startIndex === -1) return false
-    if (isTurnCompleted(messages, startIndex)) return false
-    const { leading, body } = getTurnWorkingParts(messages, startIndex, false)
+    if (isTurnCompleted(structureMessages, startIndex)) return false
+    const { leading, body } = getTurnWorkingParts(
+      messages,
+      startIndex,
+      false,
+      isTransparentTurnMessage
+    )
     return hasRenderableWorkingParts([...leading, ...body])
   }
 
   function isLatestTurnCompleted(): boolean {
     const startIndex = latestTurnInfo.startIndex
-    return startIndex !== -1 && isTurnCompleted(messages, startIndex)
+    return startIndex !== -1 && isTurnCompleted(structureMessages, startIndex)
   }
 
   /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
@@ -11383,9 +12318,102 @@
     return parts.filter((part) => !pendingPartIds.has(part.id))
   }
 
+  /**
+   * Assemble one turn's working-trace parts from the mirror and the live
+   * durable log, dropping the closing statement once the transcript shows it.
+   *
+   * `closingTextId` is the turn's closing statement when the transcript renders
+   * it (so the trace must not show the same sentence twice), and
+   * `holdsClosingText` is true while the trace still owns that text because the
+   * transcript cannot show it yet. `collectsDurable` mirrors the original rule
+   * that only the current assistant turn merges the durable fold ahead of the
+   * mirror body.
+   */
+  function buildTurnTrace(
+    startIndex: number,
+    closingTextId: string | null,
+    holdsClosingText: boolean,
+    collectsDurable: boolean
+  ): AgentPart[] {
+    const working = getTurnWorkingParts(
+      messages,
+      startIndex,
+      holdsClosingText,
+      isTransparentTurnMessage
+    )
+    const durable = pendingLiveTurn
+      ? []
+      : streamWorkingPartsForTurn(streamParts, transcriptIndex, startIndex, holdsClosingText)
+    const collected =
+      streamParts.length > 0 && collectsDurable
+        ? // The durable log is the turn's stream order, so it orders the body;
+          // entries that streamed before this view mounted only exist there. The
+          // leading context is not in the durable fold, so it stays in front.
+          mergeWorkingParts([...working.leading, ...durable], working.body)
+        : withoutPendingLiveParts([...working.leading, ...working.body])
+    if (isAssignmentAuditorThread) {
+      // The auditor transcript renders its own commentary from the trace and
+      // keeps its deliverable (the report card) out of both, so its trace still
+      // holds commentary prose.
+      return collected.filter((part) => part.type !== 'text' || part.phase === 'commentary')
+    }
+    return closingTextId ? collected.filter((part) => part.id !== closingTextId) : collected
+  }
+
+  /**
+   * Trace parts for a settled turn, memoized by the transcript index they were
+   * assembled from.
+   *
+   * `messages` moves on every streamed frame, so without this a long thread
+   * re-assembled EVERY mounted turn's trace on every frame even though only the
+   * live turn can still change. The key is the index instance, which is rebuilt
+   * exactly when the transcript's structure changes, so the cache can never
+   * serve a trace the structure has moved past. The live/current turn   and a
+   * turn whose pending live parts are still being reconciled   always
+   * recomputes. Deliberately a plain array, never reactive: this is a pure
+   * cache, so subscribing to it would only buy extra renders.
+   */
+  const settledTurnTraces = new WeakMap<TranscriptIndex, (AgentPart[] | undefined)[]>()
+
+  function turnTraceParts(
+    startIndex: number,
+    live: boolean,
+    closingTextId: string | null,
+    holdsClosingText: boolean
+  ): AgentPart[] {
+    // Only the turn that is actually live merges the durable fold. A pending
+    // turn elsewhere in the transcript must never let this turn's trace pull the
+    // log's newest entries: they belong to the pending turn, which renders them
+    // from its own block, and merging them here is what kept an interrupted
+    // turn's trace growing past a steer.
+    if (live) {
+      return buildTurnTrace(startIndex, closingTextId, holdsClosingText, true)
+    }
+    let byStart = settledTurnTraces.get(transcriptIndex)
+    if (!byStart) {
+      byStart = []
+      settledTurnTraces.set(transcriptIndex, byStart)
+    }
+    const cached = byStart[startIndex]
+    if (cached) return cached
+    const built = buildTurnTrace(startIndex, closingTextId, holdsClosingText, false)
+    byStart[startIndex] = built
+    return built
+  }
+
   /** Find the last text part in a turn ending at the given message index.
    *  Activity-only user messages are transparent to the turn span. */
   let showFind = $derived(findNavState.conversationFindOpen && !isAssignmentAuditorThread)
+
+  /** The authored messages a reader has opened past the height clamp, by
+   *  message id. Session-scoped on purpose: it survives the windowed
+   *  transcript unmounting a row, and a fresh thread starts folded. */
+  const expandedMessageBodies = new SvelteSet<string>()
+
+  function toggleMessageBody(messageId: string, expanded: boolean): void {
+    if (expanded) expandedMessageBodies.add(messageId)
+    else expandedMessageBodies.delete(messageId)
+  }
 
   /** What "find in conversation" reads: every message plus the composer's own
    *  draft, so a word can be located in what was said and in what is being
@@ -11416,18 +12444,33 @@
       )
       if (!alive || generation !== streamPartsLoadGeneration) return
       if (page.kind === 'window') {
+        if (foldBoundaryMoved(page)) {
+          await handleFoldBoundaryMove(page.turnStartTs as number, generation)
+          return
+        }
         // No cursor yet (a mount read that has not landed): adopt the window.
+        streamTurnStartTs = page.turnStartTs ?? null
         streamParts = mergeWorkingParts(streamParts, page.parts)
         streamHasOlder = page.hasOlder
+        streamTotalSteps = page.totalSteps
         applyTodoSnapshot(page)
         streamCursor = page.cursor
         return
       }
+      // A completed-turn read is a different request shape; the poll never asks
+      // for one, so anything but a window or a change is not this reader's.
+      if (page.kind === 'completedTurns') return
+      if (foldBoundaryMoved(page)) {
+        await handleFoldBoundaryMove(page.turnStartTs as number, generation)
+        return
+      }
+      streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
       streamCursor = page.cursor
+      streamTotalSteps = page.totalSteps
       applyTodoSnapshot(page)
-      // A fold that shrank under us belongs to another turn (a steered
-      // continuation, or a log rewritten after the fact): remount the newest
-      // page instead of keeping entries that no longer belong here.
+      // A fold that shrank under us with the same boundary belongs to a log
+      // rewritten after the fact: remount the newest page instead of keeping
+      // entries that no longer belong here.
       if (page.total < streamParts.length) {
         await remountNewestStreamParts(generation)
         return
@@ -11449,13 +12492,23 @@
    * finished thread can still clear its card on its own.
    */
   async function refreshStreamTailAfterTurn(): Promise<void> {
+    // A turn boundary is also when the provider transcript may have reached the
+    // mirror, so a closed turn's durable copy is re-read here: the mirror's own
+    // trace takes over and the log's copy stands down.
+    void loadCompletedTurns()
     try {
       const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
         limit: WORKING_TRACE_PAGE_SIZE
       })
       if (!alive || page.kind !== 'window') return
+      if (foldBoundaryMoved(page)) {
+        await handleFoldBoundaryMove(page.turnStartTs as number, streamPartsLoadGeneration)
+        return
+      }
+      streamTurnStartTs = page.turnStartTs ?? null
       streamParts = mergeWorkingParts(streamParts, page.parts)
       streamHasOlder = page.hasOlder
+      streamTotalSteps = page.totalSteps
       applyTodoSnapshot(page)
       streamCursor = page.cursor
     } catch {
@@ -11470,30 +12523,41 @@
       limit: WORKING_TRACE_PAGE_SIZE
     })
     if (!alive || generation !== streamPartsLoadGeneration || page.kind !== 'window') return
+    streamTurnStartTs = page.turnStartTs ?? streamTurnStartTs
     streamParts = page.parts
     streamHasOlder = page.hasOlder
+    streamTotalSteps = page.totalSteps
     applyTodoSnapshot(page)
     streamCursor = page.cursor
   }
 
   /** Pull the next older durable page for the trace's own inner-scroll paging,
-   *  prepending it in the log's own order. The page is authoritative for the
-   *  entries it carries: an entry the poll had already appended out of place
-   *  (a part older than the mounted window that kept updating) adopts its real
-   *  position instead of staying stuck at the tail. */
+   *  prepending it in the log's own order. One page per call: the trace pages as
+   *  the reader scrolls up rather than mounting the whole turn at once, which is
+   *  what let a long turn overwhelm the screen the moment it opened.
+   *
+   *  The page is authoritative for the entries it carries: an entry the poll had
+   *  already appended out of place (a part older than the mounted window that kept
+   *  updating) adopts its real position instead of staying stuck at the tail. */
   async function loadOlderStreamParts(): Promise<void> {
     const oldest = streamParts[0]
     if (!oldest || !streamHasOlder) return
     const foldVersion = streamFoldVersion
     const page = await invoke('thread:loadStreamParts', thread.projectId, thread.id, {
       beforeId: oldest.id,
-      limit: WORKING_TRACE_PAGE_SIZE
+      limit: STREAM_OLDER_PAGE_SIZE
     })
     if (!alive || page.kind !== 'window' || foldVersion !== streamFoldVersion) return
-    streamHasOlder = page.hasOlder
-    if (page.parts.length === 0) return
+    if (page.parts.length === 0) {
+      streamHasOlder = false
+      return
+    }
     const pagedIds = new SvelteSet(page.parts.map((part) => part.id))
+    const mountedBefore = streamParts.length
     streamParts = [...page.parts, ...streamParts.filter((part) => !pagedIds.has(part.id))]
+    streamHasOlder = page.hasOlder
+    streamTotalSteps = page.totalSteps
+    if (streamParts.length === mountedBefore) streamHasOlder = false
   }
 
   // While a run is streaming on screen, re-read the durable SSE log every second
@@ -11514,8 +12578,33 @@
     }
   })
 
+  /** How many durable parts one trace mounts while it fills its own step list.
+   *  The rows are one-line fold controls whose content renders only on open, so
+   *  the whole list is what the reader wants at a glance; the cap keeps a
+   *  monster turn from mounting without end. */
+  const EAGER_STREAM_PARTS_CAP = 400
+
+  // A trace's step list is complete the moment the reader looks at it. The rows
+  // are folded and cheap and their content stays lazy, so the trace fills the
+  // rest of its own fold in the background instead of streaming steps in as the
+  // reader scrolls. One page per frame and bounded, so nothing blocks a frame.
+  $effect(() => {
+    void streamParts.length
+    void streamHasOlder
+    void streamFoldVersion
+    if (!active || appQuitState.quitting) return
+    if (!streamHasOlder) return
+    if (streamParts.length >= EAGER_STREAM_PARTS_CAP) return
+    const foldVersion = streamFoldVersion
+    const frame = requestAnimationFrame(() => {
+      if (!alive || foldVersion !== streamFoldVersion) return
+      void loadOlderStreamParts()
+    })
+    return () => cancelAnimationFrame(frame)
+  })
+
   // The transcript can advance to a new turn without this view ever observing
-  // the boundary (a queued message, an auto-retry, a routine, or another app
+  // the boundary (a queued message, an auto-retry, an assistant, or another app
   // instance running the turn). The live poll above only runs while this view
   // believes the thread is busy, so re-read the durable snapshot the moment the
   // transcript's turn anchor actually changes. The guard that feeds the task
@@ -11551,6 +12640,7 @@
   })
 
   onDestroy(() => {
+    liveTokenRate.clear()
     if (responseRangeRetryFrame) cancelAnimationFrame(responseRangeRetryFrame)
     responseRangeRetryFrame = 0
     releaseAnnotationHighlights(responseHighlightOwner, RESPONSE_HIGHLIGHT_NAME)
@@ -11569,11 +12659,48 @@
       {thread}
       {settings}
       {busy}
+      variant="segment"
       onSettingsChange={updateSettings}
     />
   {:catch}
     <span class="text-xs text-danger" role="alert">Oven controls could not be loaded.</span>
   {/await}
+{/snippet}
+
+<!-- The annotatable surface the lightbox draws in place of the plain media
+     element: an artifact picture or video with its marks, its pen and its
+     numbered badges. The conversation itself shows the artifact plain, because
+     the pen and the badges are decisions about the picture and belong where the
+     picture is big enough to make them. -->
+{#snippet viewerAnnotationSurface()}
+  {@const item = viewerAnnotatableItem}
+  {#if item}
+    {#if isVideoMime(item.mime)}
+      <ArtifactVideoAnnotator
+        projectId={thread.projectId}
+        threadId={thread.id}
+        url={item.url}
+        filename={item.filename}
+        messageId={messageViewer?.messageId}
+        marks={marksFor(item.url)}
+        editingId={imageMarkEditorId}
+        onEditClosed={clearImageMarkEditor}
+        onLoadError={(element) => void imageUrls.bindMedia(item.url, item.mime, element)}
+      />
+    {:else}
+      <ArtifactImageAnnotator
+        projectId={thread.projectId}
+        threadId={thread.id}
+        url={item.url}
+        src={imageUrls.getUrl(item.url)}
+        filename={item.filename}
+        messageId={messageViewer?.messageId}
+        marks={marksFor(item.url)}
+        editingId={imageMarkEditorId}
+        onEditClosed={clearImageMarkEditor}
+      />
+    {/if}
+  {/if}
 {/snippet}
 
 {#if messageViewer}
@@ -11586,6 +12713,7 @@
       filename={viewerItem.filename}
       mime={viewerItem.mime}
       pager={messageViewerPager}
+      annotate={viewerAnnotatableItem ? viewerAnnotationSurface : undefined}
       onClose={closeMessageViewer}
       onReveal={viewerArtifact ? () => revealViewerArtifact(viewerArtifact) : undefined}
       onLoadError={(el) => {
@@ -11604,6 +12732,21 @@
       pager={messageViewerPager}
       onClose={closeMessageViewer}
       onReveal={viewerArtifact ? () => revealViewerArtifact(viewerArtifact) : undefined}
+    />
+  {/if}
+{/if}
+
+{#if queuedAttachmentViewer}
+  {@const queuedViewerItem = queuedAttachmentViewer.items[queuedAttachmentViewer.index]}
+  {#if queuedViewerItem}
+    <AttachmentPreview
+      attachment={queuedViewerItem}
+      src={attachmentPreview.urls[queuedViewerItem.url]}
+      text={attachmentPreview.texts[queuedViewerItem.url]}
+      documentHtml={attachmentPreview.documents[queuedViewerItem.url]}
+      documentLoading={attachmentPreview.documentLoading[queuedViewerItem.url] ?? false}
+      pager={queuedAttachmentPager}
+      onClose={closeQueuedAttachmentViewer}
     />
   {/if}
 {/if}
@@ -11940,15 +13083,15 @@
       <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
         {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
-            <Loader2 size={16} class="animate-spin" />
+            <CioSpinner size={16} class="animate-spin" />
             Loading conversation...
           </div>
         {:else}
           {#if hasOlderMessages}
-            <div class="flex justify-center pb-2">
+            <div class="flex justify-center pb-2" {@attach trackHistoryHead}>
               <button
                 type="button"
-                class="rounded-lg px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-60"
+                class="px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-60"
                 disabled={loadingOlderMessages}
                 onclick={() => void loadOlderMessages()}
               >
@@ -11970,31 +13113,124 @@
           )}
             <button
               type="button"
-              class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+              class="flex cursor-pointer items-center gap-1.5 border border-border bg-elevated px-2 py-1 text-[0.75rem] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
               title={action}
               aria-label={action}
               {onclick}
             >
               {#if kind === 'video'}
-                <Video size={11} class="shrink-0" />
+                <CioClapper size={11} class="shrink-0" />
               {:else if kind === 'audio'}
-                <AudioLines size={11} class="shrink-0" />
+                <CioAudioLines size={11} class="shrink-0" />
               {:else if kind === 'renderable'}
                 <FileTypeIcon path={name} size={12} class="shrink-0" />
               {:else}
-                <FileText size={11} class="shrink-0" />
+                <CioFileText size={11} class="shrink-0" />
               {/if}
               <span class="max-w-32 truncate">{name}</span>
             </button>
           {/snippet}
+          <!-- The live or settled trace for a turn with no mirrored assistant
+               row. It renders as its own block so a held steer can be placed
+               after it instead of above the work it interrupts. -->
+          {#snippet liveTurnTrace(traceParts: AgentPart[], traceBusy: boolean)}
+            <WorkingTrace
+              parts={traceParts}
+              open
+              busy={traceBusy}
+              note={traceBusy ? workingStatusNote : null}
+              {active}
+              olderPartsAvailable={streamHasOlder}
+              onLoadOlderParts={loadOlderStreamParts}
+              totalSteps={streamTotalSteps}
+              startTime={unmirroredTraceStartTime}
+              modelLabel={currentWorkingTraceAttribution.modelLabel}
+              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
+              providerName={currentWorkingTraceAttribution.providerName}
+              providerId={currentWorkingTraceAttribution.providerId}
+              harnessId={currentWorkingTraceAttribution.harnessId}
+              harnessName={currentWorkingTraceAttribution.harnessName}
+              accountLabel={currentWorkingTraceAttribution.accountLabel}
+              accountId={currentWorkingTraceAttribution.accountId}
+              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
+              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
+              isFast={currentWorkingTraceAttribution.isFast}
+              initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
+              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
+              initiallyFolded={agentRuns.isTraceUserFolded(thread.projectId, conversationId)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              onToggle={(open, userOpened, userFolded) =>
+                agentRuns.setTraceOpen(
+                  thread.projectId,
+                  conversationId,
+                  open,
+                  userOpened,
+                  userFolded
+                )}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
+          {/snippet}
+          <!-- A turn a prompt closed whose work the transcript never mirrored:
+               the durable log's record of it, rendered settled. It owns no
+               session any more, so it shows no spinner, and it ships its step
+               total with the newest window of entries, paging the rest in as
+               the reader opens it. -->
+          {#snippet completedTurnTraceBlock(turn: TurnStreamCompletedTurn)}
+            <WorkingTrace
+              parts={turn.parts}
+              done
+              busy={false}
+              totalSteps={turn.totalSteps}
+              {active}
+              olderPartsAvailable={turn.hasOlder}
+              onLoadOlderParts={() => loadOlderCompletedTurnParts(turn.endTs)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              modelLabel={currentWorkingTraceAttribution.modelLabel}
+              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
+              providerName={currentWorkingTraceAttribution.providerName}
+              providerId={currentWorkingTraceAttribution.providerId}
+              harnessId={currentWorkingTraceAttribution.harnessId}
+              harnessName={currentWorkingTraceAttribution.harnessName}
+              accountLabel={currentWorkingTraceAttribution.accountLabel}
+              accountId={currentWorkingTraceAttribution.accountId}
+              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
+              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
+              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
+              isFast={currentWorkingTraceAttribution.isFast}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
+          {/snippet}
           {#each visibleMessages as msg, msgIndex (msg.id)}
             {@const absIndex = msgIndex + (messages.length - visibleMessages.length)}
+            <!-- The work of the turn a steer interrupted sits directly above the
+                 message that closed it, which is the order the run was lived in:
+                 prompt, its trace, the steer, then the next turn's trace. -->
+            {#each completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
+              {@render completedTurnTraceBlock(view.turn)}
+            {/each}
+            <!-- A steer still held under the running trace: its work is the
+                 interrupted turn's, so that trace renders above the message. -->
+            {#if absIndex === heldSteerAbsIndex && !turnAboveHasAssistantRow(absIndex)}
+              {@render liveTurnTrace(unmirroredTraceParts, true)}
+            {/if}
             {#if msg.inlineArtifact}
               <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
                 {#each msg.parts as part (part.id)}
                   {#if part.type === 'text'}
-                    <MarkdownView text={part.text} citationThread={citationThreadContext} />
+                    <MarkdownView
+                      text={part.text}
+                      citationThread={citationThreadContext}
+                      annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
+                    />
                   {:else if part.type === 'file' && isImageMime(part.mime)}
+                    <!-- An artifact picture is shown plain here: its marks, its
+                         pen and its numbered badges are drawn in the expanded
+                         viewer, which is what its expand affordance opens. -->
                     <InlineImageFigure
                       url={part.url}
                       mime={part.mime}
@@ -12002,10 +13238,17 @@
                       {imageUrls}
                       onExpand={() => openMessageViewer(msg, part)}
                     />
-                  {:else if part.type === 'file' && (isAudioMime(part.mime) || isVideoMime(part.mime))}
+                  {:else if part.type === 'file' && isVideoMime(part.mime)}
                     <InlineMediaFigure
                       src={part.url}
-                      kind={isVideoMime(part.mime) ? 'video' : 'audio'}
+                      kind="video"
+                      filename={part.filename ?? 'Video'}
+                      onExpand={() => openMessageViewer(msg, part)}
+                    />
+                  {:else if part.type === 'file' && isAudioMime(part.mime)}
+                    <InlineMediaFigure
+                      src={part.url}
+                      kind="audio"
                       filename={part.filename ?? 'Media'}
                       onExpand={() => openMessageViewer(msg, part)}
                     />
@@ -12014,12 +13257,22 @@
               </div>
             {:else if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
-                <div id={`msg-${msg.id}`} class="message-block group flex min-w-0 flex-col">
+                <!-- The whole block travels, the ledger row and the action row
+                     that hangs under it: a prompt this view watched arrive rises
+                     the last few pixels into place, while history (and a message
+                     it mounts for a jump) appears where it belongs. The motion is
+                     transform and opacity only, so the reader's scroll position
+                     and the tail lock never wait on it (`promptArrive`). -->
+                <div
+                  id={`msg-${msg.id}`}
+                  class="message-block group flex min-w-0 flex-col"
+                  in:fly={promptArrive(msg.createdAt, viewAttachedAt)}
+                >
                   {#if editingMessageId === msg.id}
                     <RichMarkdownEditor
                       bind:this={messageEditEditor}
                       bind:value={editingText}
-                      class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
+                      class="w-full bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
                       ariaLabel="Edit message"
                       onSubmit={() => void submitEditedMessage(msg)}
                     />
@@ -12028,7 +13281,7 @@
                       data-voice-trigger-root
                     >
                       <button
-                        class="rounded-md px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                        class="px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                         title="Discard the edit"
                         onclick={cancelEdit}
                       >
@@ -12042,7 +13295,7 @@
                         triggerPriority={8}
                       />
                       <button
-                        class="rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+                        class="bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
                         title="Send the edited message   replaces the conversation from here down"
                         disabled={busy || !editingText.trim()}
                         onclick={() => submitEditedMessage(msg)}
@@ -12071,16 +13324,19 @@
                     {@const leftoverReferences = (msg.projectReferences ?? []).filter(
                       (reference) => !inlinedPaths.has(reference.path)
                     )}
+                    <!-- The user's own message reads as a ledger row: only its
+                         left edge is drawn, a 2px accent against the transcript,
+                         and every corner is square. -->
                     <div
-                      class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm text-foreground"
+                      class="w-full border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
                       data-conversation-searchable
                     >
                       {#if leftoverReferences.length}
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each leftoverReferences as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[0.75rem]"
-                              title="Tagged {reference.kind}: {reference.name}"
+                              class="inline-flex max-w-full items-center gap-1.5 border border-border bg-elevated px-2 py-1 text-[0.75rem]"
+                              title="Tagged {reference.kind}: {reference.path}"
                             >
                               {#if reference.kind === 'directory'}
                                 <FolderTypeIcon name={reference.name} size={12} class="shrink-0" />
@@ -12098,12 +13354,12 @@
                         <div class="mb-2 flex flex-wrap gap-1.5">
                           {#each msg.references as reference (reference.id)}
                             <span
-                              class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
+                              class="inline-flex max-w-full items-center gap-1.5 border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
                               title={reference.comment
                                 ? `${reference.comment}\n\n${reference.text}`
                                 : reference.text}
                             >
-                              <MessageSquare size={11} class="shrink-0 text-accent" />
+                              <CioMessage size={11} class="shrink-0 text-accent" />
                               <span class="font-medium text-foreground">{reference.label}</span>
                               <span class="max-w-56 truncate text-muted">{reference.text}</span>
                               {#if reference.comment}
@@ -12119,22 +13375,29 @@
                         <p class="mb-1 text-xs italic text-muted">
                           {explicitPresentation.action}
                         </p>
-                        {#if explicitPresentation.body}
+                      {/if}
+                      {#if !explicitPresentation || explicitPresentation.body}
+                        <!-- The authored text is height-clamped: a very long
+                             prompt keeps its opening lines behind an explicit
+                             reveal for the rest. Attachments are drawn below,
+                             outside the clamp, so they are never folded away. -->
+                        <ClampedText
+                          expanded={expandedMessageBodies.has(msg.id)}
+                          clamp={!showFind}
+                          label="message"
+                          onToggle={(next) => toggleMessageBody(msg.id, next)}
+                        >
                           <MarkdownView
-                            text={explicitPresentation.body}
+                            text={explicitPresentation
+                              ? (explicitPresentation.body ?? '')
+                              : messageText(msg)}
                             citationThread={citationThreadContext}
+                            annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
+                            inlineFileTags={explicitPresentation ? undefined : inlineTags}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
-                        {/if}
-                      {:else}
-                        <MarkdownView
-                          text={messageText(msg)}
-                          citationThread={citationThreadContext}
-                          inlineFileTags={inlineTags}
-                          onCiteFile={openFileCitation}
-                          onOpenLocalFile={(url) => void openFilePart(url)}
-                        />
+                        </ClampedText>
                       {/if}
                       {#if msg.parts.some((p) => p.type === 'file')}
                         {@const fileParts = msg.parts.filter((p) => p.type === 'file')}
@@ -12230,44 +13493,44 @@
                       <div class="flex items-center gap-0.5">
                         {#if threadMessages.isSteerHeld(thread.projectId, conversationId, msg.id)}
                           <button
-                            class="rounded p-1 text-accent transition-colors hover:bg-elevated"
+                            class="p-1 text-accent transition-colors hover:bg-elevated"
                             aria-label="Undo steer   the message has not reached the agent yet"
                             title="Undo   the agent never receives a steered message that is undone"
                             onclick={() => void undoHeldSteer(msg)}
                           >
-                            <Undo2 size={12} />
+                            <CioUndo size={12} />
                           </button>
                         {/if}
                         <button
-                          class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                          class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                           aria-label="Copy message"
                           title="Copy"
                           onclick={() => copyMessage(msg)}
                         >
                           {#if copiedMessageId === msg.id}
-                            <Check size={12} class="text-success" />
+                            <CioCheck size={12} class="text-success" />
                           {:else}
-                            <Copy size={12} />
+                            <CioCopy size={12} />
                           {/if}
                         </button>
                         {#if !explicitPresentation}
                           <button
-                            class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                            class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Edit message"
                             title="Edit   resend replaces the conversation from here down"
                             disabled={busy}
                             onclick={() => editMessage(msg)}
                           >
-                            <Pencil size={12} />
+                            <CioPencil size={12} />
                           </button>
                           <button
-                            class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                            class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
                             aria-label="Delete message"
                             title="Delete   removes the conversation up to this message"
                             disabled={busy}
                             onclick={() => requestDeleteMessage(msg)}
                           >
-                            <Trash2 size={12} />
+                            <CioTrash size={12} />
                           </button>
                         {/if}
                       </div>
@@ -12316,65 +13579,38 @@
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const traceRunIsForeign = foreignRuns.isForeign(thread.projectId, thread.id)}
                     {@const turnEndIndex = transcriptIndex.turnEnd[absIndex] ?? absIndex}
-                    {@const turnClosingText = getTurnFinalText(messages, turnEndIndex)}
+                    {@const turnClosingText = getTurnFinalText(
+                      messages,
+                      turnEndIndex,
+                      isTransparentTurnMessage
+                    )}
                     {@const turnClosingVisible = closingStatementVisible(
                       turnEndIndex,
                       turnEndIndex === messages.length - 1
                     )}
                     {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
-                    {@const turnWorkingParts = getTurnWorkingParts(
-                      messages,
+                    {@const traceIsLiveTurn =
+                      isCurrentAssistantTurn || traceIsLive || traceIsRestored}
+                    {@const turnClosingTextId =
+                      turnClosingVisible && turnClosingText ? turnClosingText.id : null}
+                    {@const turnParts = turnTraceParts(
                       absIndex,
+                      traceIsLiveTurn,
+                      turnClosingTextId,
                       traceHoldsClosingText
                     )}
-                    {@const durableTurnParts = pendingLiveTurn
-                      ? []
-                      : streamWorkingPartsForTurn(
-                          streamParts,
-                          transcriptIndex,
-                          absIndex,
-                          traceHoldsClosingText
-                        )}
-                    {@const collectedTurnParts =
-                      streamParts.length > 0 && isCurrentAssistantTurn
-                        ? // The durable log is the turn's stream order, so it orders the
-                          // body; entries that streamed before this view mounted only
-                          // exist there. The leading context is not in the durable fold
-                          // (the fold scopes it out), so it keeps its place in front.
-                          mergeWorkingParts(
-                            [...turnWorkingParts.leading, ...durableTurnParts],
-                            turnWorkingParts.body
-                          )
-                        : withoutPendingLiveParts([
-                            ...turnWorkingParts.leading,
-                            ...turnWorkingParts.body
-                          ])}
-                    {@const turnParts = isAssignmentAuditorThread
-                      ? // The auditor transcript renders its own commentary from the
-                        // trace and keeps its deliverable (the report card) out of
-                        // both, so its trace still holds commentary prose.
-                        collectedTurnParts.filter(
-                          (part) => part.type !== 'text' || part.phase === 'commentary'
-                        )
-                      : // The transcript is showing the agent's closing statement, so
-                        // the trace must not carry a second copy of that one part.
-                        // Every other text part stays: it is the commentary that
-                        // explains the work behind the answer.
-                        turnClosingVisible && turnClosingText
-                        ? collectedTurnParts.filter((part) => part.id !== turnClosingText.id)
-                        : collectedTurnParts}
                     {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
                         open={isCurrentAssistantTurn || traceIsLive || traceIsRestored}
                         busy={traceIsLive || traceIsRestored}
-                        latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
                         foreignRun={traceRunIsForeign}
                         {active}
                         olderPartsAvailable={isCurrentAssistantTurn && streamHasOlder}
                         onLoadOlderParts={isCurrentAssistantTurn ? loadOlderStreamParts : undefined}
+                        totalSteps={isCurrentAssistantTurn ? streamTotalSteps : undefined}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(absIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(absIndex)}
@@ -12418,13 +13654,21 @@
                           agentRuns.isTraceOpen(thread.projectId, thread.id)}
                         initialUserOpened={isCurrentAssistantTurn &&
                           agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
+                        initiallyFolded={isCurrentAssistantTurn &&
+                          agentRuns.isTraceUserFolded(thread.projectId, thread.id)}
                         projectId={thread.projectId}
                         threadId={thread.id}
                         checkpointId={turnCheckpoint?.id ?? null}
                         checkpointPaths={turnCheckpoint?.changes.map((change) => change.path) ?? []}
-                        onToggle={(open, userOpened) => {
+                        onToggle={(open, userOpened, userFolded) => {
                           if (isCurrentAssistantTurn) {
-                            agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)
+                            agentRuns.setTraceOpen(
+                              thread.projectId,
+                              thread.id,
+                              open,
+                              userOpened,
+                              userFolded
+                            )
                           }
                         }}
                         onOpenSubagent={openSubagent}
@@ -12463,8 +13707,20 @@
                         {/if}
                       {/if}
                     {:else}
-                      {@const turnClosingText = getTurnFinalText(messages, absIndex)}
+                      {@const turnClosingText = getTurnFinalText(
+                        messages,
+                        absIndex,
+                        isTransparentTurnMessage
+                      )}
                       {@const turnClosingVisible = closingStatementVisible(absIndex, isLatest)}
+                      {@const deliveredClosingText = assistantMode
+                        ? assistantSetupThread
+                          ? assistantDisplayText(turnClosingText?.text ?? messageText(msg))
+                          : assistantResultText(
+                              turnClosingText?.text ?? messageText(msg),
+                              !msg.completedAt
+                            )
+                        : (turnClosingText?.text ?? messageText(msg))}
                       {#if turnClosingVisible && turnClosingText}
                         {@const isReadingThisTurn =
                           'messageId' in speechController.playback &&
@@ -12494,10 +13750,14 @@
                           {:else}
                             <!-- The agent's closing statement is the turn's answer;
                                  the running commentary it wrote between tool calls
-                                 lives in the trace above. -->
+                                 lives in the trace above. In the Assistant view the
+                                 answer may carry the drafted knowledge, which is a
+                                 document rather than a code block, so it is shown as
+                                 the finished markdown it is. -->
                             <MarkdownView
-                              text={turnClosingText.text}
+                              text={deliveredClosingText}
                               citationThread={citationThreadContext}
+                              annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                               onCiteFile={openFileCitation}
                               onOpenLocalFile={(url) => void openFilePart(url)}
                             />
@@ -12526,20 +13786,20 @@
                           <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                             <div class="flex shrink-0 items-center gap-0.5">
                               <button
-                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                                class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
                                 title="Copy"
-                                onclick={() => copyMessage(msg, turnClosingText?.text)}
+                                onclick={() => copyMessage(msg, deliveredClosingText)}
                               >
                                 {#if copiedMessageId === msg.id}
-                                  <Check size={12} class="text-success" />
+                                  <CioCheck size={12} class="text-success" />
                                 {:else}
-                                  <Copy size={12} />
+                                  <CioCopy size={12} />
                                 {/if}
                               </button>
                               <SpeechPlaybackButton
                                 messageId={msg.id}
-                                markdown={turnClosingText?.text ?? messageText(msg)}
+                                markdown={deliveredClosingText}
                                 scope={{
                                   kind: 'project',
                                   projectId: thread.projectId,
@@ -12548,51 +13808,51 @@
                               />
                               {#if onContinueInThread && controller?.kind === 'temporary-chat'}
                                 <button
-                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Continue this chat in a new thread"
                                   title="Continue in a new thread"
                                   disabled={continuingInThread}
                                   onclick={() => void continueInThread()}
                                 >
                                   {#if continuingInThread}
-                                    <Loader2 size={12} class="animate-spin" />
+                                    <CioSpinner size={12} class="animate-spin" />
                                   {:else}
-                                    <MessageSquare size={12} />
+                                    <CioMessage size={12} />
                                   {/if}
                                 </button>
                               {/if}
                               {#if controller?.kind !== 'temporary-chat'}
                                 <button
-                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Fork thread from this message"
                                   title="Fork from here"
                                   disabled={forkingMessageId !== null}
                                   onclick={() => forkFromMessage(msg)}
                                 >
                                   {#if forkingMessageId === msg.id}
-                                    <Loader2 size={12} class="animate-spin" />
+                                    <CioSpinner size={12} class="animate-spin" />
                                   {:else}
-                                    <GitFork size={12} />
+                                    <CioFork size={12} />
                                   {/if}
                                 </button>
                               {/if}
                               {#if chatMode && onContinueInProject}
                                 <button
-                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                   aria-label="Continue this chat in a project"
                                   title="Continue in a project"
                                   onclick={() => openContinueInProject()}
                                 >
-                                  <FolderInput size={12} />
+                                  <CioFolderInput size={12} />
                                 </button>
                               {/if}
                               <button
-                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                                class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Export this conversation as a transcript"
                                 title="Export transcript"
                                 onclick={openTranscriptExport}
                               >
-                                <FileDown size={12} />
+                                <CioDownload size={12} />
                               </button>
                             </div>
                             <div
@@ -12615,7 +13875,7 @@
                                   />
                                   {modelLabel}
                                   {#if fastVariant}
-                                    <Zap
+                                    <CioZap
                                       size={10}
                                       class="text-accent"
                                       fill="currentColor"
@@ -12702,38 +13962,11 @@
             {/if}
           {/each}
 
-          {#if pendingLiveTurn || settledTurnParts.length > 0}
-            <WorkingTrace
-              parts={pendingLiveTurn ? pendingLiveTurnParts : settledTurnParts}
-              open
-              busy={Boolean(pendingLiveTurn)}
-              note={workingStatusNote}
-              latest
-              {active}
-              olderPartsAvailable={streamHasOlder}
-              onLoadOlderParts={loadOlderStreamParts}
-              startTime={activeTurnStartTime}
-              modelLabel={currentWorkingTraceAttribution.modelLabel}
-              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
-              providerName={currentWorkingTraceAttribution.providerName}
-              providerId={currentWorkingTraceAttribution.providerId}
-              harnessId={currentWorkingTraceAttribution.harnessId}
-              harnessName={currentWorkingTraceAttribution.harnessName}
-              accountLabel={currentWorkingTraceAttribution.accountLabel}
-              accountId={currentWorkingTraceAttribution.accountId}
-              ovenLabel={currentWorkingTraceAttribution.ovenLabel}
-              ovenIsLocal={currentWorkingTraceAttribution.ovenIsLocal}
-              ovenAppearance={currentWorkingTraceAttribution.ovenAppearance}
-              isFast={currentWorkingTraceAttribution.isFast}
-              initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
-              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
-              projectId={thread.projectId}
-              threadId={thread.id}
-              onToggle={(open, userOpened) =>
-                agentRuns.setTraceOpen(thread.projectId, conversationId, open, userOpened)}
-              onOpenSubagent={openSubagent}
-              onCiteFile={openFileCitation}
-            />
+          {#if (pendingLiveTurn && heldSteerAbsIndex === -1) || settledTurnParts.length > 0}
+            {@render liveTurnTrace(
+              pendingLiveTurn ? unmirroredTraceParts : settledTurnParts,
+              Boolean(pendingLiveTurn)
+            )}
           {/if}
 
           {#if specGenerationTraceActive && specGenerationTraceParts.length > 0}
@@ -12741,7 +13974,6 @@
               parts={specGenerationTraceParts}
               open
               busy
-              latest
               startTime={specGenerationTraceStartedAt}
               projectId={thread.projectId}
               threadId={thread.id}
@@ -12753,7 +13985,6 @@
               parts={assignmentGenerationTraceParts}
               open
               busy
-              latest
               startTime={assignmentGenerationTraceStartedAt}
               projectId={thread.projectId}
               threadId={thread.id}
@@ -12762,7 +13993,7 @@
 
           {#if brainstormReportRefreshing || delegatedWorkBusy || assignmentFormulating || (!pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
-              <Loader2 size={14} class="animate-spin text-info" />
+              <ThinkingOrb size={20} label={activityLabel} />
               <span>
                 {brainstormReportRefreshing
                   ? brainstormActivityLabel
@@ -12787,23 +14018,37 @@
         : 'shrink-0'}"
     >
       {#if userScrolledAway}
+        <!-- Bottom-anchored chrome, so it exists only while the reader is away
+             from the tail. Squared and bordered like every other control, and it
+             names what it does instead of showing a bare chevron in a pill.
+
+             Its rung is deliberate: above everything the transcript paints, which
+             reaches z-20 on a working trace's sticky header, and below the panels
+             and menus at z-40, so the context meter's popover opens over it and a
+             card's own menu is never covered by it. The click-away scrims sit at
+             this same rung and paint after it, which is what a scrim should do to
+             a control. -->
         <button
           type="button"
-          class="absolute left-1/2 z-40 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
+          class="group absolute left-1/2 z-30 inline-flex h-7 -translate-x-1/2 items-center gap-1 border border-border-strong bg-surface px-2 text-[0.6875rem] font-medium whitespace-nowrap text-foreground shadow-md transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
           style:top={scrollButtonTop}
           title="Scroll to latest message"
           aria-label="Scroll to latest message"
           onclick={scrollToLatest}
           transition:fly={{ y: -8, duration: 140 }}
         >
-          <ChevronDown size={18} />
+          <CioChevronDown
+            size={12}
+            class="shrink-0 text-muted transition-colors group-hover:text-foreground"
+          />
+          Latest
         </button>
       {/if}
       <div class="flex min-w-0 flex-col">
         <!-- Assignment worker failures stay visible on the coordinator, but their
          actions target the owning durable worker rather than this thread. -->
-        {#each assignmentWorkerAttentionItems as item (item.task.id)}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+        {#each assignmentWorkerAttentionItems as item, index (item.task.id)}
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={assignmentWorkerAttentionStatus(item.task, item.worker)}
@@ -12818,6 +14063,10 @@
                 sourceDetail={item.task.title}
                 retryLabel="Retry worker"
                 retrying={assignmentWorkerRetryingId === item.worker.id}
+                stackedAbove={index > 0}
+                joinsBelow
+                threadId={thread.id}
+                foldKey={`worker:${item.worker.id}`}
                 onModelChange={(selected) =>
                   void changeAssignmentWorkerModel(item.worker, selected)}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -12833,10 +14082,13 @@
         <!-- Provider status   between messages and composer, always visible. A
          matching bubbled worker error is replaced by the attributed card above. -->
         {#if visibleProviderStatus && !coordinatorErrorMatchesAssignmentWorker}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={visibleProviderStatus}
+                stackedAbove={stackedAboveSlot('provider')}
+                joinsBelow
+                threadId={thread.id}
                 providerName={statusCardProviderName}
                 settings={statusCardSettings ??
                   (chatMode
@@ -12889,246 +14141,121 @@
           </div>
         {/if}
 
-        <!-- Gentle notice   an interrupted auto-compaction silently ate the last turn -->
+        <!-- Compaction interrupted   the auto-compaction ate the last turn and was
+       stopped before it saved a summary. A top-of-thread card: it reports, it
+       never blocks the composer. -->
         {#if compactionInterruptedNotice}
-          <div class="conversation-gutter shrink-0 px-6 pb-2">
+          <div class="conversation-gutter shrink-0 px-6">
             <div class="mx-auto max-w-3xl">
-              <div
-                class="flex items-start gap-3 rounded-xl border border-info/25 bg-info/5 px-4 py-3"
-                role="status"
-              >
-                <Info size={16} class="mt-0.5 shrink-0 text-info" />
-                <p class="min-w-0 flex-1 text-sm leading-relaxed text-foreground">
-                  {compactionInterruptedNotice}
-                </p>
-                <button
-                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-label="Dismiss compaction notice"
-                  title="Dismiss"
-                  onclick={() => (compactionInterruptedNotice = '')}
+              <div out:slide={dismissSlide()} role="status" aria-live="polite">
+                <CardFrame
+                  placement="top"
+                  label="Compaction interrupted"
+                  stackedAbove={stackedAboveSlot('compaction')}
+                  joinsBelow
                 >
-                  <X size={14} />
-                </button>
+                  <CardHead
+                    icon={CioAttention}
+                    title="Compaction interrupted"
+                    chip={{
+                      text: 'Stopped',
+                      tone: 'urgent',
+                      title: 'The summary was never saved'
+                    }}
+                    bind:folded={compactionFold.folded}
+                    foldLabel="compaction notice"
+                  />
+                  {#if !compactionFold.folded}
+                    <div class="space-y-2 px-3 py-2.5">
+                      <CardNotice icon={CioAttention} tone="warn">
+                        {compactionInterruptedNotice}
+                      </CardNotice>
+                    </div>
+                    <CardFoot>
+                      {#snippet left()}
+                        <CardButton
+                          label="Dismiss"
+                          title="Dismiss the compaction notice"
+                          variant="ghost"
+                          onclick={() => (compactionInterruptedNotice = '')}
+                        />
+                      {/snippet}
+                    </CardFoot>
+                  {/if}
+                </CardFrame>
               </div>
             </div>
           </div>
         {/if}
 
-        <!-- Queued message card   attached to the top of the composer -->
-        {#if (queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread}
-          <div class="conversation-gutter shrink-0 px-6 pt-2">
+        <!-- Queued message card   attached to the top of the composer. It stacks on the
+       edge of whatever the composer slot shows, so its own bottom rule is dropped
+       and the surface below carries the join: a broken line when a card is what
+       follows, the composer's dashed top rule when the composer is. It opens the
+       way it closes, on the slot rather than the card: the space grows out of the
+       composer's edge (`cardArrive`) exactly as the card's own dismissal collapses
+       it, so parking a message never snaps the transcript up by a card's height.
+       The head names what waits, and Send now (the steer key) is a head control. -->
+        {#if queuedCardVisible}
+          <div class="conversation-gutter shrink-0 px-6" in:slide={cardArrive()}>
             <div class="mx-auto max-w-3xl">
-              <div
-                out:slide={dismissSlide()}
-                class="rounded-t-xl border border-border bg-surface shadow-sm"
-              >
-                <div
-                  class={[
-                    'flex items-center justify-between gap-2 px-3 pt-2.5',
-                    queuedFolded ? 'pb-2.5' : 'pb-1'
-                  ]}
-                >
-                  <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-                    >{queuedCount > 1
-                      ? `Queued · ${queuedCount}`
-                      : queuedStartAfterThreads.length > 0
-                        ? 'Starts after'
-                        : 'Queued'}</span
-                  >
-                  <div class="flex items-center gap-1">
-                    <button
-                      type="button"
-                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Add thread to Starts after"
-                      aria-label="Add thread to Starts after"
-                      onclick={() => (queuedStartAfterPickerOpen = true)}
-                    >
-                      <Plus size={13} />
-                    </button>
-                    <button
-                      class="rounded-md px-2 py-0.5 text-[0.75rem] font-medium text-foreground transition-colors hover:bg-elevated"
-                      title={`Steer   ${steerModifierLabel}Enter   send this message to the agent now`}
-                      onclick={() => void steerQueuedMessage()}
-                    >
-                      Steer
-                    </button>
-                    <div class="relative">
-                      <button
-                        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                        aria-label="Queued message actions"
-                        onclick={() => (showQueueMenu = !showQueueMenu)}
-                        oncontextmenu={(e: MouseEvent) => {
-                          e.preventDefault()
-                          showQueueMenu = true
-                        }}
-                      >
-                        <Ellipsis size={13} />
-                      </button>
-                      {#if showQueueMenu}
-                        <button
-                          class="fixed inset-0 z-30 cursor-default"
-                          aria-label="Close menu"
-                          onclick={() => (showQueueMenu = false)}
-                        ></button>
-                        <div
-                          class="absolute bottom-8 right-0 z-40 w-32 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-                          role="menu"
-                        >
-                          {#if !queuedPresentation}
-                            <button
-                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
-                              role="menuitem"
-                              onclick={editQueuedMessage}
-                            >
-                              <Pencil size={13} class="text-muted" />
-                              Edit
-                            </button>
-                            <div class="mx-2 my-1 border-t"></div>
-                          {/if}
-                          <button
-                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
-                            role="menuitem"
-                            onclick={deleteQueuedMessage}
-                          >
-                            <Trash2 size={13} />
-                            Delete
-                          </button>
-                          {#if queuedCount > 1}
-                            <div class="mx-2 my-1 border-t"></div>
-                            <button
-                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
-                              role="menuitem"
-                              onclick={deleteAllQueuedMessages}
-                            >
-                              <Trash2 size={13} />
-                              Delete all ({queuedCount})
-                            </button>
-                          {/if}
-                        </div>
-                      {/if}
-                    </div>
-                    <CardFoldToggle bind:folded={queuedFolded} label="queued message" compact />
-                  </div>
-                </div>
-                {#if !queuedFolded}
-                  <div transition:slide={foldSlide()}>
-                    {#if queuedPromptReferences.length > 0}
-                      <div class="flex flex-wrap gap-1.5 px-3 pb-2">
-                        {#each queuedPromptReferences as reference (reference.id)}
-                          <span
-                            class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
-                            title={reference.comment
-                              ? `${reference.comment}\n\n${reference.text}`
-                              : reference.text}
-                          >
-                            <MessageSquare size={11} class="shrink-0 text-accent" />
-                            <span class="font-medium text-foreground">{reference.label}</span>
-                            <span class="max-w-56 truncate text-muted">{reference.text}</span>
-                            {#if reference.comment}
-                              <span class="max-w-48 truncate italic text-foreground">
-                                “{reference.comment}”
-                              </span>
-                            {/if}
-                          </span>
-                        {/each}
-                      </div>
-                    {/if}
-                    {#if queuedStartAfterThreads.length > 0}
-                      <div class="flex flex-col gap-1 px-3 pb-2.5">
-                        {#each queuedStartAfterThreads as dependency (dependency.id)}
-                          <div
-                            class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
-                            role="group"
-                            onmouseenter={() => preloadStartAfterThread(dependency.id)}
-                          >
-                            <Clock size={12} class="shrink-0 text-info" />
-                            <button
-                              type="button"
-                              class="min-w-0 flex-1 truncate text-left text-[0.75rem] text-info"
-                              title={`Open ${dependency.title}`}
-                              aria-label={`Open ${dependency.title}`}
-                              onclick={() => void openStartAfterThread(dependency.id)}
-                            >
-                              {dependency.title}
-                            </button>
-                            <button
-                              type="button"
-                              class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-                              title={`Remove ${dependency.title} from Starts after`}
-                              aria-label={`Remove ${dependency.title} from Starts after`}
-                              onclick={() => (queuedStartAfterPendingRemoval = dependency)}
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                            <button
-                              type="button"
-                              class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                              title={`Open ${dependency.title}`}
-                              aria-label={`Open ${dependency.title}`}
-                              onclick={() => void openStartAfterThread(dependency.id)}
-                            >
-                              <ArrowUpRight size={12} />
-                            </button>
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                    {#if queuedPresentation}
-                      <div class="px-3 pb-2.5">
-                        <p class="text-[0.75rem] italic text-dimmed">{queuedPresentation.action}</p>
-                        {#if queuedPresentation.body}
-                          <p class="mt-1 text-[0.75rem] text-muted line-clamp-3">
-                            {queuedPresentation.body}
-                          </p>
-                        {/if}
-                      </div>
-                    {:else}
-                      <p class="px-3 pb-2.5 text-[0.75rem] text-muted line-clamp-3">
-                        {queuedMessage}
-                      </p>
-                    {/if}
-                    {#if queuedCount > 1}
-                      <div class="border-t px-3 pb-2.5 pt-2">
-                        <p
-                          class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-                        >
-                          Next up
-                        </p>
-                        {#each rendererRecovery
-                          .queuedMessagesFor(thread.projectId, thread.id)
-                          .slice(1) as next (next.id)}
-                          <p class="line-clamp-2 pt-1 text-[0.75rem] text-muted">{next.text}</p>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
+              <ComposerQueuedCard
+                text={queuedMessage}
+                hasContent={queuedHasContent}
+                attachments={queuedAttachments}
+                previewUrls={attachmentPreview.urls}
+                count={queuedCount}
+                next={queuedNextMessages}
+                promptReferences={queuedPromptReferences}
+                presentation={queuedPresentation}
+                startAfterThreads={queuedStartAfterThreads}
+                {steerModifierLabel}
+                threadId={thread.id}
+                stackedAbove={stackedAboveSlot('queued')}
+                onPreviewAttachment={openQueuedAttachment}
+                onSteer={() => void steerQueuedMessage()}
+                onEdit={editQueuedMessage}
+                onDelete={deleteQueuedMessage}
+                onDeleteAll={deleteAllQueuedMessages}
+                onAddStartAfter={() => (queuedStartAfterPickerOpen = true)}
+                onRemoveStartAfter={(dependency) => (queuedStartAfterPendingRemoval = dependency)}
+                onOpenStartAfter={(id) => void openStartAfterThread(id)}
+                onPreloadStartAfter={preloadStartAfterThread}
+              />
             </div>
           </div>
         {/if}
 
         <!-- Composer   always anchored at the bottom. Blocking permission and question
-       tools replace it until the user responds. -->
-        <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
+       tools replace it until the user responds. The queued card sits directly on
+       whatever this slot shows, so it keeps its own top spacing and gives up the
+       padding here rather than opening a gap in the middle of the stack. -->
+        <div
+          class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 {composerStackedAbove
+            ? 'pt-0'
+            : 'pt-2'}"
+        >
           <div class="mx-auto w-full {centeredComposer ? 'max-w-4xl' : 'max-w-3xl'}">
             {#if centeredComposer}
               {#if assistantMode}
                 <div class="mb-5 text-center">
                   <h1 class="text-[1.25rem] font-semibold tracking-tight text-foreground">
-                    {assistantRoutineName ?? thread.title}
+                    {assistantName ?? thread.title}
                   </h1>
                   <p class="mx-auto mt-1.5 max-w-2xl text-[0.875rem] leading-relaxed text-muted">
-                    {#if assistantRoutineName && !assistantHowToComplete}
-                      How should this routine happen? Describe it properly for the agent. Say what
-                      it should do, how often, and where the information comes from. The agent works
-                      out what it needs, asks about anything missing, and drafts the how-to with you
-                      until you agree. It then shows a recap for you to save.
-                    {:else if assistantRoutineName}
-                      This task follows the <span class="text-foreground"
-                        >{assistantRoutineName}</span
-                      >
-                      how-to. Send a message to run it now, or adjust anything in How to.
+                    {#if assistantName && assistantUnnamed && !assistantKnowledgeComplete}
+                      Your new assistant is getting to know you. Answer its first question and it
+                      takes it from there.
+                    {:else if assistantName && !assistantKnowledgeComplete}
+                      Tell {assistantName} what you want it to handle. It asks what it needs, and writes
+                      down what it learns so every run follows it.
+                    {:else if assistantName && assistantSetupThread}
+                      This conversation is where you teach {assistantName} and change what it knows. To
+                      give it a task, start a new one with the New task button in the header, or press
+                      {assistantNewTaskShortcut}.
+                    {:else if assistantName}
+                      This task runs on what <span class="text-foreground">{assistantName}</span> knows.
+                      Send a message to run it now, or change anything in What it knows.
                     {:else}
                       Describe what this task should do and the agent will take it from there.
                     {/if}
@@ -13148,7 +14275,7 @@
                         src={centeredProjectIconUrl}
                         alt=""
                         aria-hidden="true"
-                        class="size-7 rounded-[0.375rem] object-cover"
+                        class="size-7 object-cover"
                       />
                     {/if}
                     {chatMode ? 'Start a new chat' : (project?.name ?? 'New thread')}
@@ -13164,12 +14291,15 @@
               {/if}
             {/if}
             {#if aiAccountPromptVisible}
-              <div class="mb-2">
+              <div>
                 <AiAccountSetupCard
                   harnessName={harnessDisplayName(settings.harnessId)}
                   {providers}
                   {settings}
                   projectId={thread.projectId}
+                  stackedAbove={stackedAboveSlot('account')}
+                  joinsBelow
+                  threadId={thread.id}
                   favoriteModels={rendererRecovery.modelFavoritesFor(modelScope())}
                   recentModels={rendererRecovery.modelRecentsFor(modelScope())}
                   onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor(modelScope(), key)}
@@ -13192,10 +14322,12 @@
               </div>
             {/if}
             {#if assistantForeignRunThreadId}
-              <div class="mb-3">
+              <div>
                 <ForeignRunCard
                   projectId={thread.projectId}
                   threadId={assistantForeignRunThreadId}
+                  stackedAbove={stackedAboveSlot('foreign-run')}
+                  joinsBelow
                 />
               </div>
             {/if}
@@ -13226,6 +14358,9 @@
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  stackedAbove={stackedAboveSlot('image-descriptor')}
+                  joinsBelow
+                  threadId={thread.id}
                 />
               {/key}
             {/if}
@@ -13249,21 +14384,22 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {/if}
-            {#if routineRecapVisible && assistantRoutineDraft}
-              <div class="conversation-gutter shrink-0 px-6 pb-2">
-                <div class="mx-auto max-w-3xl">
-                  <RoutineRecapCard
-                    routineName={assistantRoutine?.name ?? assistantRoutineName ?? thread.title}
-                    howTo={assistantRoutineDraft.howTo}
-                    plan={assistantRoutineDraft.plan}
-                    update={assistantHowToComplete}
-                    scheduled={assistantRoutine ? routineIsScheduled(assistantRoutine) : true}
-                    existingConnections={existingRoutineConnections}
-                    saving={routineSaving}
-                    onSave={() => void confirmRoutineSave()}
-                    onKeepEditing={keepEditingRoutine}
-                  />
-                </div>
+            {#if assistantRecapVisible && assistantDraft}
+              <div>
+                <AssistantRecapCard
+                  assistantName={assistant?.name ?? assistantName ?? thread.title}
+                  knowledge={assistantDraft.knowledge}
+                  plan={assistantDraft.plan}
+                  update={assistantKnowledgeComplete}
+                  scheduled={assistant ? assistantIsScheduled(assistant) : true}
+                  existingConnections={existingAssistantConnections}
+                  saving={assistantSaving}
+                  onSave={() => void confirmAssistantSave()}
+                  onKeepEditing={keepEditingAssistant}
+                  stackedAbove={stackedAboveSlot('assistant-recap')}
+                  joinsBelow
+                  threadId={thread.id}
+                />
               </div>
             {/if}
             {#if isAssignmentAuditorThread}
@@ -13622,6 +14758,9 @@
                     signature={visibleTodo.signature}
                     {busy}
                     stopped={todoRunStopped}
+                    foreign={foreignRunActive}
+                    stackedAbove={stackedAboveSlot('todo')}
+                    threadId={thread.id}
                     onClose={() => dismissedTodo.dismiss(thread.id, visibleTodo.signature)}
                   />
                 {/if}
@@ -13631,10 +14770,10 @@
                   {#key composerRestoreKey}
                     <ChatComposer
                       bind:this={composer}
-                      placeholder={assistantMode && assistantRoutineName && !assistantHowToComplete
-                        ? 'Describe how this routine should run…'
-                        : assistantSetupThread && assistantHowToComplete
-                          ? 'Tweak the how-to, the schedule, or a connection…'
+                      placeholder={assistantMode && assistantName && !assistantKnowledgeComplete
+                        ? `Tell ${assistantName} what you want it to do…`
+                        : assistantSetupThread && assistantKnowledgeComplete
+                          ? 'Change what it knows, its times, or a connection…'
                           : activePlanningEntry === 'brainstorm'
                             ? 'Add details to the Brainstorm discussion…'
                             : activePlanningEntry === 'spec'
@@ -13670,7 +14809,9 @@
                       onActionSelect={handleActionSelection}
                       onSlashCommand={executeHarnessCommand}
                       usageCreditsCommandId={usageCreditsCommand?.id}
-                      contextUsage={contextUsageDisplay}
+                      contextUsage={composerUsage}
+                      generationRate={composerGenerationRate}
+                      generationDetails={composerGenerationDetails}
                       efficiencyKpis={storedEfficiencyKpis}
                       onRevealUsage={revealContextUsage}
                       onHideUsage={hideContextUsage}
@@ -13687,7 +14828,8 @@
                       }}
                       projectId={thread.projectId}
                       threadId={thread.id}
-                      {scopeShoe}
+                      shoe={composerShoe}
+                      stackedAbove={composerStackedAbove}
                       attachmentStorage={{
                         kind: chatMode ? 'chat' : 'project',
                         projectId: thread.projectId,
@@ -13778,6 +14920,7 @@
                         )
                       }}
                       onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
+                      onRelocateItem={relocationAvailable ? requestComposerRelocation : undefined}
                       references={composerReferences}
                       onRemoveReference={removeComposerReference}
                       onRemoveAllReferences={clearComposerReferences}
@@ -13815,7 +14958,7 @@
                         {#each suggestedPrompts as prompt (prompt)}
                           <button
                             type="button"
-                            class="rounded-full border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            class="border border-border bg-surface px-3.5 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
                             onclick={() => composer?.setComposerText(prompt)}
                           >
                             {prompt}
@@ -13853,6 +14996,25 @@
   onContinue={(project) => continueChatInProject(project)}
   onProjectCreated={(project) => void onProjectCreated?.(project)}
 />
+
+<!-- The destination picker for a relocation or a copy: the same spotlight the
+     rest of the app picks from, listing this project's chats in the order the
+     project view shows them. Mounted only while a carry is being picked. -->
+{#if relocationRequest}
+  <!-- The request travels into the picker's own callback: the palette closes the
+       picker before it reports the pick, and that close clears this state. -->
+  {@const request = relocationRequest}
+  <RelocateThreadPicker
+    projectId={thread.projectId}
+    projectName={project?.name ?? 'this project'}
+    sourceThreadId={thread.id}
+    item={request.item}
+    mode={request.mode}
+    title={relocationPickerTitle}
+    onSelect={(picked) => void commitComposerRelocation(request, picked)}
+    onClose={closeRelocationPicker}
+  />
+{/if}
 
 <TranscriptExportModal
   open={transcriptExportOpen}

@@ -23,6 +23,7 @@ interface MockAutoUpdater {
   autoDownload: boolean
   autoInstallOnAppQuit: boolean
   channel: string | null
+  allowPrerelease: boolean
   checkForUpdates: ReturnType<typeof vi.fn>
   downloadUpdate: ReturnType<typeof vi.fn>
   quitAndInstall: ReturnType<typeof vi.fn>
@@ -32,12 +33,26 @@ interface MockAutoUpdater {
 
 const { autoUpdater, autoUpdaterHandlers } = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => void>()
+  let channel: string | null = null
   const updater = {
     isUpdaterActive: () => true,
     logger: null,
     autoDownload: false,
     autoInstallOnAppQuit: false,
-    channel: null,
+    allowPrerelease: false,
+    get channel(): string | null {
+      return channel
+    },
+    // electron-updater's real setter accepts only a string and throws
+    // "Channel must be a string" otherwise. Mirroring that here means a
+    // regression back to a null channel makes the stable-channel case fail
+    // instead of quietly passing.
+    set channel(value: string | null) {
+      if (typeof value !== 'string') {
+        throw new Error(`Channel must be a string, but got: ${String(value)}`)
+      }
+      channel = value
+    },
     checkForUpdates: vi.fn(() => Promise.resolve()),
     downloadUpdate: vi.fn(() => Promise.resolve()),
     quitAndInstall: vi.fn(),
@@ -65,9 +80,13 @@ function defaultConfig(): AppConfig {
     fontFamily: 'jetbrains-mono',
     appFontSize: 15,
     fontWeight: 200,
+    contrastLevel: 'normal',
     zoomLevel: 1,
     onboardingCompleted: false,
     threadLimit: 70,
+    switcherTerminalTabs: true,
+    switcherFileTabs: true,
+    switcherThreadBrowserTabs: true,
     questionTimeoutMs: 300_000,
     agentQuestionCap: 3,
     keybindings: {},
@@ -83,7 +102,6 @@ function defaultConfig(): AppConfig {
     auxiliaryAgents: {},
     design: { assignments: [] },
     modelProfiles: [],
-    workRoots: { design: '.cio/designs', video: '.cio/videos' },
     mediaGeneration: { providerId: null },
     rankingJudge: { kind: 'automatic' },
     agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -100,6 +118,7 @@ function defaultConfig(): AppConfig {
     maxConflictFileBytes: DEFAULT_MAX_CONFLICT_FILE_BYTES,
     browserHibernationMinutes: DEFAULT_BROWSER_HIBERNATION_MINUTES,
     browserHistoryLimit: DEFAULT_BROWSER_HISTORY_LIMIT,
+    browserAllowSiteKeymapOverride: true,
     backgroundMode: 'scheduled',
     launchAtLogin: true,
     launchAtLoginPrompted: false,
@@ -148,6 +167,7 @@ beforeEach(() => {
   autoUpdater.checkForUpdates.mockResolvedValue(undefined)
   autoUpdater.downloadUpdate.mockClear()
   autoUpdater.downloadUpdate.mockResolvedValue(undefined)
+  autoUpdater.allowPrerelease = false
 })
 
 afterEach(() => {
@@ -431,5 +451,61 @@ describe('UpdaterService check failure handling', () => {
     await pending
 
     expect(service.status.state).toBe('waiting')
+  })
+})
+
+describe('UpdaterService update channel', () => {
+  it('applies the string channel latest for the stable channel', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    await service.checkForUpdates()
+    await flush()
+
+    // A null here threw inside electron-updater's setter and left a stale
+    // channel behind; the stable feed is the string `latest`.
+    expect(autoUpdater.channel).toBe('latest')
+    expect(autoUpdater.allowPrerelease).toBe(false)
+  })
+
+  it('selects the nightly channel with prereleases, then clears both on stable', async () => {
+    const config = defaultConfig()
+    config.updateChannel = 'nightly'
+    const storage = makeStorage({ getConfig: vi.fn(async () => config) })
+    const service = new UpdaterService(storage)
+
+    await service.checkForUpdates()
+    expect(autoUpdater.channel).toBe('nightly')
+    expect(autoUpdater.allowPrerelease).toBe(true)
+
+    config.updateChannel = 'stable'
+    await service.checkForUpdates()
+    expect(autoUpdater.channel).toBe('latest')
+    expect(autoUpdater.allowPrerelease).toBe(false)
+  })
+
+  it('ignores an offered update older than the running build', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    // Running 0.1.0; a nightly of the same core is lower than the release.
+    autoUpdater.emit('update-available', { version: '0.1.0-nightly.2', files: [] })
+    await flush()
+
+    expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled()
+    expect(service.status.state).toBe('idle')
+  })
+
+  it('still downloads an offered update that is genuinely newer', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    autoUpdater.emit('update-available', { version: '0.2.0', files: [] })
+    await flush()
+
+    expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
   })
 })

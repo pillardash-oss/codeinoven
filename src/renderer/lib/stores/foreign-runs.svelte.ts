@@ -9,9 +9,11 @@
  * pushes the set and this store is the renderer's projection of it.
  */
 import { SvelteMap } from 'svelte/reactivity'
+import { toast } from 'svelte-sonner'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
-import type { ForeignRunNotice } from '$shared/types'
+import { showToastError } from '$lib/stores/app-errors.svelte'
+import type { ForeignRunNotice, ThreadTransferResult } from '$shared/types'
 
 /**
  * Which transfer requests are in flight, and how the last one failed.
@@ -86,21 +88,58 @@ class ForeignRunsStore {
     this.#setTransferState(key, { pending: true, error: null })
     try {
       const result = await invoke('thread:transferRun', projectId, threadId)
-      // A push that arrived while the request was in flight already removed the
-      // thread (this instance owns it now), so there is no card to update.
-      if (!this.runs.has(key)) return
-      this.#setTransferState(key, {
-        pending: false,
-        error: result.ok ? null : result.reason
-      })
+      if (result.ok && result.noLongerForeign) {
+        await this.#refreshThread(projectId, threadId)
+        this.transferStates.delete(key)
+        toast.info('The thread is no longer running in the other instance.')
+        return
+      }
+      this.#settleTransfer(key, result)
     } catch (error) {
       logRendererError('Cross-instance thread transfer failed', error)
-      if (!this.runs.has(key)) return
-      this.#setTransferState(key, {
-        pending: false,
-        error: 'The transfer could not be completed.'
-      })
+      this.#settleTransfer(key, { ok: false, reason: 'The transfer could not be completed.' })
     }
+  }
+
+  /**
+   * Record a transfer verdict, and make sure the user can read it.
+   *
+   * A transfer that fails after the other instance stopped the run drops the
+   * thread from the foreign set before the answer arrives, so the card is already
+   * gone when the verdict lands. The verdict is stored anyway, because the thread
+   * can come back to the set (the other instance resumed the run it stopped), and
+   * when no card is on screen to carry the reason it is toasted instead. Dropping
+   * it there is what leaves a stopped run with nothing explaining it.
+   */
+  #settleTransfer(key: string, result: ThreadTransferResult): void {
+    const cardOnScreen = this.runs.has(key)
+    if (result.ok || !cardOnScreen) this.transferStates.delete(key)
+    else this.#setTransferState(key, { pending: false, error: result.reason })
+    if (!result.ok && !cardOnScreen) showToastError(result.reason)
+  }
+
+  async #refreshThread(projectId: string, threadId: string): Promise<void> {
+    await Promise.all([
+      this.#hydrate(),
+      (async () => {
+        try {
+          const [thread, { scopeState }, { workspaceState }, { threadMessages }] =
+            await Promise.all([
+              invoke('thread:get', projectId, threadId),
+              import('./scope.svelte'),
+              import('./workspace.svelte'),
+              import('./thread-messages.svelte')
+            ])
+          if (thread) {
+            scopeState.updateThread(thread)
+            if (workspaceState.selectedThread?.id === thread.id) workspaceState.updateThread(thread)
+          }
+          await threadMessages.mergeTurnAlignedTail(projectId, threadId, 50)
+        } catch (error) {
+          logRendererError('Transferred thread cache could not be refreshed', error)
+        }
+      })()
+    ])
   }
 
   #setTransferState(key: string, state: ForeignTransferState): void {
@@ -108,7 +147,7 @@ class ForeignRunsStore {
   }
 
   async #hydrate(): Promise<void> {
-    const revision = this.#revision
+    const revision = ++this.#revision
     try {
       const notices = await invoke('thread:listForeignRuns')
       if (this.#revision !== revision) return
@@ -135,7 +174,7 @@ class ForeignRunsStore {
     // A thread that is no longer foreign (this instance took it over, or it
     // settled) has no card left to show a transfer verdict on.
     for (const key of [...this.transferStates.keys()]) {
-      if (!keys.has(key)) this.transferStates.delete(key)
+      if (!keys.has(key) && !this.transferStates.get(key)?.pending) this.transferStates.delete(key)
     }
   }
 }

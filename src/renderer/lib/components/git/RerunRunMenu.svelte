@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, Loader2, RefreshCw, RotateCcw } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import { showToastError } from '$lib/stores/app-errors.svelte'
@@ -69,27 +72,27 @@
 {#if rerunnable}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40 {className}"
+      class="flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40 {className}"
       title="Re-run jobs for this workflow run"
       aria-label="Re-run jobs for this workflow run"
       disabled={busy}
     >
       {#if busy}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <RefreshCw size={11} />
+        <CioRefresh size={11} />
       {/if}
       {#if !compact}
         <span>Re-run</span>
       {/if}
-      <ChevronDown size={10} class="text-dimmed" />
+      <CioChevronDown size={10} class="text-dimmed" />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
         side="bottom"
         align="end"
         sideOffset={6}
-        class="z-90 w-44 overflow-hidden rounded-lg border-border bg-surface p-1 shadow-lg"
+        class="z-90 w-44 overflow-hidden border-border bg-surface p-1 shadow-lg"
       >
         <p
           class="px-2.5 py-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-dimmed"
@@ -97,18 +100,18 @@
           Re-run
         </p>
         <DropdownMenu.Item
-          class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+          class="flex cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
           onSelect={() => void rerun('all')}
         >
-          <RefreshCw size={12} class="shrink-0 text-dimmed" />
+          <CioRefresh size={12} class="shrink-0 text-dimmed" />
           Re-run all jobs
         </DropdownMenu.Item>
         <DropdownMenu.Item
-          class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated data-[disabled]:cursor-default data-[disabled]:opacity-40"
+          class="flex cursor-pointer items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated data-[disabled]:cursor-default data-[disabled]:opacity-40"
           disabled={!hasFailedJobs}
           onSelect={() => void rerun('failed')}
         >
-          <RotateCcw size={12} class="shrink-0 text-dimmed" />
+          <CioUndo size={12} class="shrink-0 text-dimmed" />
           Re-run failed jobs only
         </DropdownMenu.Item>
       </DropdownMenu.Content>

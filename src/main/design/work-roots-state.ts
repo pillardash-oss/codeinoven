@@ -1,50 +1,106 @@
 import { DEFAULT_WORK_ROOTS, workRootForKind, type WorkRoots } from '../../lib/design/work-roots'
-import type { AuthoredWorkKind, WorkRootRelocationReport } from '../../lib/ipc/design'
+import { normalizeWorkRoot } from '../../lib/design/work-roots'
+import type { Database } from '../database/database'
+import type { AuthoredWorkKind } from '../../lib/ipc/design'
 
 /**
- * The roots the app is using right now, and what the last change moved.
+ * Where each project writes its authored work.
  *
- * The setting lives in the config file, which is asynchronous to read, while its
- * readers are everywhere: the two path resolvers run on every capability call,
- * the board reads it on every list, and the tab recogniser reads it on every
- * navigation. Reading the file in each of them would put a disk read on a
- * navigation and would still let two of them see different values while a save
- * was in flight.
- *
- * So one value is held here, seeded at startup and replaced on every save, and
- * every main-process reader takes it from here. That is the same shape the
- * prototype preview server uses for its CDN policy, and for the same reason: the
- * thing a setting configures reads the setting, not a copy of it.
- *
- * The reports live beside it because they belong to the same question. A change
- * moves folders across every project, and the only moment the user can be told
- * what moved is the save that caused it, which happens before the renderer asks.
+ * The app default is a constant and this module holds only project records, so a
+ * project that never changed its folder is answered with the default and nothing
+ * has to be written to say so. The records are the single place a project's folder
+ * comes from: leaving one design, or one video, somewhere else is a property of
+ * that folder rather than of the project, so it never reaches here.
  */
 
-let roots: WorkRoots = { ...DEFAULT_WORK_ROOTS }
-let reports: WorkRootRelocationReport[] = []
+interface ProjectRoots {
+  roots: WorkRoots
+  /** Folders the project used before, kept so old work stays discoverable. */
+  previous: Record<AuthoredWorkKind, string[]>
+}
+const projectRoots = new Map<string, ProjectRoots>()
+const PROJECT_ROOT_PREFIX = 'authored-work-roots:'
 
-/** Seed or replace the live roots. Called at startup and after every config save. */
-export function setWorkRoots(next: WorkRoots): void {
-  roots = { ...next }
+/** The folders one project writes into: its own record, or the app default. */
+export function currentWorkRoots(projectId?: string): WorkRoots {
+  const recorded = projectId ? projectRoots.get(projectId) : undefined
+  return recorded ? { ...recorded.roots } : { ...DEFAULT_WORK_ROOTS }
 }
 
-/** A copy, so a caller cannot change the live value by accident. */
-export function currentWorkRoots(): WorkRoots {
-  return { ...roots }
+/** One kind's folder, which is what a resolver falls back to. */
+export function currentWorkRoot(kind: AuthoredWorkKind, projectId?: string): string {
+  return workRootForKind(currentWorkRoots(projectId), kind)
 }
 
-/** One kind's folder, which is what a resolver defaults to. */
-export function currentWorkRoot(kind: AuthoredWorkKind): string {
-  return workRootForKind(roots, kind)
+/** Restore project preferences before preview services and agent tools start. */
+export async function loadProjectWorkRoots(database: Database): Promise<void> {
+  const result = await database.queryViaWorker(
+    'SELECT key, value FROM db_meta WHERE key LIKE ?',
+    [`${PROJECT_ROOT_PREFIX}%`],
+    0
+  )
+  if (!result.ok) throw new Error('Could not load project save paths')
+  projectRoots.clear()
+  for (const row of result.rows as unknown as Array<{ key: string; value: string }>) {
+    try {
+      const value: ProjectRoots = JSON.parse(row.value)
+      if (!normalizeWorkRoot(value.roots.design) || !normalizeWorkRoot(value.roots.video)) continue
+      for (const kind of ['design', 'video'] as const) {
+        value.previous[kind] = value.previous[kind].filter(
+          (path) => normalizeWorkRoot(path) === path
+        )
+      }
+      projectRoots.set(row.key.slice(PROJECT_ROOT_PREFIX.length), value)
+    } catch {
+      /* A malformed saved preference falls back to the app default. */
+    }
+  }
 }
 
-/** Remember what the last change moved, for the surfaces that report it. */
-export function setWorkRootReports(next: readonly WorkRootRelocationReport[]): void {
-  reports = next.map((report) => ({ ...report }))
+/** Old roots remain discoverable when only one folder moves. */
+export function projectWorkRootPaths(projectId: string, kind: AuthoredWorkKind): string[] {
+  return [
+    ...new Set([
+      currentWorkRoot(kind, projectId),
+      ...(projectRoots.get(projectId)?.previous[kind] ?? [])
+    ])
+  ]
 }
 
-/** What the last change moved, oldest kind first. Empty until a root is changed. */
-export function currentWorkRootReports(): WorkRootRelocationReport[] {
-  return reports.map((report) => ({ ...report }))
+export async function saveProjectWorkRoot(
+  database: Database,
+  projectId: string,
+  kind: AuthoredWorkKind,
+  root: string
+): Promise<void> {
+  const current = currentWorkRoots(projectId)
+  const previous = projectRoots.get(projectId)?.previous ?? { design: [], video: [] }
+  const value: ProjectRoots = {
+    roots: { ...current, [kind]: root },
+    previous: { ...previous, [kind]: [...new Set([...previous[kind], current[kind]])] }
+  }
+  const saved = await database.executeViaWorker(
+    'INSERT INTO db_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    [`${PROJECT_ROOT_PREFIX}${projectId}`, JSON.stringify(value)]
+  )
+  if (!saved.ok) throw new Error(saved.error ?? 'Could not save project work folder')
+  projectRoots.set(projectId, value)
+}
+
+/** All current and historical roots, for conservative scratch-cleanup protection. */
+export function protectedWorkRoots(): WorkRoots[] {
+  const result: WorkRoots[] = [{ ...DEFAULT_WORK_ROOTS }]
+  for (const [projectId, value] of projectRoots) {
+    result.push(value.roots)
+    for (const kind of ['design', 'video'] as const) {
+      for (const root of projectWorkRootPaths(projectId, kind))
+        result.push({ ...value.roots, [kind]: root })
+    }
+  }
+  return result
+}
+
+export function forgetProjectWorkRoots(database: Database, projectId: string): void {
+  database.run('DELETE FROM db_meta WHERE key = ?', `${PROJECT_ROOT_PREFIX}${projectId}`)
+  projectRoots.delete(projectId)
 }

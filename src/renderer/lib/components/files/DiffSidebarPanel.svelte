@@ -464,17 +464,14 @@
 </script>
 
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-    Eye,
-    FileDiff,
-    Loader2,
-    RefreshCw,
-    RotateCcw,
-    RotateCw
-  } from '@lucide/svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileDiffView from './FileDiffView.svelte'
@@ -537,40 +534,36 @@
     <div class="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show previous turn"
         title="Previous turn"
         disabled={controller.selectedIndex >= controller.turns.length - 1}
         onclick={() => controller.selectTurn(controller.selectedIndex + 1)}
       >
-        <ChevronLeft size={13} />
+        <CioBack size={13} />
       </button>
       <span class="text-[0.625rem] font-medium tabular-nums text-muted">
         Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
       </span>
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show next turn"
         title="Next turn"
         disabled={controller.selectedIndex <= 0}
         onclick={() => controller.selectTurn(controller.selectedIndex - 1)}
       >
-        <ChevronRight size={13} />
+        <CioForward size={13} />
       </button>
     </div>
   {/if}
 
   <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
-    <div
-      class="flex items-center rounded-md bg-elevated p-0.5"
-      role="group"
-      aria-label="Changes view"
-    >
+    <div class="flex items-center bg-elevated p-0.5" role="group" aria-label="Changes view">
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
+          'flex h-6 items-center gap-1.5 px-2.5 text-[0.625rem] font-medium transition-colors',
           controller.mode === 'diffs'
             ? 'bg-overlay text-foreground'
             : 'text-muted hover:text-foreground'
@@ -584,7 +577,7 @@
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[0.625rem] font-medium transition-colors',
+          'flex h-6 items-center gap-1.5 px-2.5 text-[0.625rem] font-medium transition-colors',
           controller.mode === 'files'
             ? 'bg-overlay text-foreground'
             : 'text-muted hover:text-foreground'
@@ -600,30 +593,30 @@
     <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={13} />
     <button
       type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       aria-label="Refresh change history"
       title="Refresh changes"
       disabled={controller.loading}
       onclick={() => void controller.refresh()}
     >
-      <RefreshCw size={13} class={controller.loading ? 'animate-spin' : ''} />
+      <CioRefresh size={13} class={controller.loading ? 'animate-spin' : ''} />
     </button>
   </div>
 
   <div {@attach bindScrollContainer} class="min-h-0 flex-1 overflow-auto p-2">
     {#if controller.loading && controller.turns.length === 0}
       <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
         Loading changes
       </div>
     {:else if controller.error}
-      <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2">
+      <div class="border border-danger/20 bg-danger/10 px-3 py-2">
         <p class="text-[0.6875rem] leading-relaxed text-danger">{controller.error}</p>
       </div>
     {:else if controller.turns.length === 0}
       <div class="flex h-full items-center justify-center px-6 text-center">
         <div>
-          <FileDiff size={22} class="mx-auto mb-2 text-dimmed" />
+          <CioDiff size={22} class="mx-auto mb-2 text-dimmed" />
           <p class="text-xs font-medium text-muted">No recorded changes</p>
           <p class="mt-1 text-[0.625rem] text-dimmed">
             Changes appear here the moment a run edits a file.
@@ -642,14 +635,14 @@
             {/if}
             {#if checkpoint.failure}
               <p
-                class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
+                class="border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
               >
                 {checkpoint.failure}
               </p>
             {/if}
             {#if controller.loadingDiffs && controller.fileDiffs.length === 0}
               <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
-                <Loader2 size={14} class="animate-spin" />
+                <CioSpinner size={14} class="animate-spin" />
                 Loading diffs
               </div>
             {:else if controller.fileDiffs.length === 0}
@@ -669,7 +662,7 @@
                 <section
                   data-reveal-path={fileDiff.path}
                   class={[
-                    'overflow-hidden rounded-md border transition-colors',
+                    'overflow-hidden border transition-colors',
                     controller.flashPath === fileDiff.path
                       ? 'border-primary bg-primary/5'
                       : 'border-border bg-surface'
@@ -703,24 +696,24 @@
                         <span class="shrink-0 text-[0.5625rem] text-dimmed">undone</span>
                       {/if}
                       {#if expanded}
-                        <ChevronDown size={12} class="shrink-0 text-dimmed" />
+                        <CioChevronDown size={12} class="shrink-0 text-dimmed" />
                       {:else}
-                        <ChevronRight size={12} class="shrink-0 text-dimmed" />
+                        <CioForward size={12} class="shrink-0 text-dimmed" />
                       {/if}
                     </button>
                     {#if checkpoint.status !== 'active'}
                       <button
                         type="button"
-                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                         aria-label={`Open ${fileDiff.path} in the changes sidebar`}
                         title={`Open ${fileDiff.path} in the changes sidebar`}
                         onclick={() => void controller.openChange(checkpoint.id, fileDiff.path)}
                       >
-                        <Eye size={13} />
+                        <CioEye size={13} />
                       </button>
                       <button
                         type="button"
-                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                         disabled={controller.restoringId !== null}
                         aria-label={undone
                           ? `Redo the changes to ${fileDiff.path}`
@@ -734,11 +727,11 @@
                             : controller.requestUndoPath(checkpoint.id, fileDiff.path)}
                       >
                         {#if controller.busyPath === fileDiff.path}
-                          <Loader2 size={13} class="animate-spin" />
+                          <CioSpinner size={13} class="animate-spin" />
                         {:else if undone}
-                          <RotateCw size={13} />
+                          <CioRefresh size={13} />
                         {:else}
-                          <RotateCcw size={13} />
+                          <CioUndo size={13} />
                         {/if}
                       </button>
                     {/if}
@@ -754,9 +747,9 @@
           </div>
         {:else}
           <div class="space-y-2">
-            <section class="rounded-lg border border-border bg-surface">
+            <section class="border border-border bg-surface">
               <div class="flex min-h-10 items-center gap-2 px-3 py-2">
-                <FileDiff size={13} class="shrink-0 text-info" />
+                <CioDiff size={13} class="shrink-0 text-info" />
                 <span class="min-w-0 flex-1">
                   <span class="flex items-center gap-1.5">
                     <span
@@ -766,7 +759,7 @@
                     </span>
                     {#if checkpoint.status === 'active'}
                       <span
-                        class="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
+                        class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
                       >
                         In progress
                       </span>
@@ -843,7 +836,7 @@
                       {#if checkpoint.status !== 'active'}
                         <button
                           type="button"
-                          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
                           disabled={controller.restoringId !== null}
                           aria-label={undone
                             ? `Redo the changes to ${change.path}`
@@ -857,11 +850,11 @@
                               : controller.requestUndoPath(checkpoint.id, change.path)}
                         >
                           {#if controller.busyPath === change.path}
-                            <Loader2 size={13} class="animate-spin" />
+                            <CioSpinner size={13} class="animate-spin" />
                           {:else if undone}
-                            <RotateCw size={13} />
+                            <CioRefresh size={13} />
                           {:else}
-                            <RotateCcw size={13} />
+                            <CioUndo size={13} />
                           {/if}
                         </button>
                       {/if}
@@ -871,7 +864,7 @@
                     <div class="flex items-center gap-2 border-t border-border px-3 py-2">
                       <button
                         type="button"
-                        class="rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                        class="border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
                         disabled={controller.restoringId === checkpoint.id ||
                           (controller.selections[checkpoint.id] ?? []).length === 0}
                         onclick={() => void controller.restoreSelected(checkpoint.id)}
@@ -880,7 +873,7 @@
                       </button>
                       <button
                         type="button"
-                        class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
+                        class="px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
                         disabled={controller.restoringId === checkpoint.id}
                         onclick={() => controller.requestRestoreRun(checkpoint.id)}
                       >

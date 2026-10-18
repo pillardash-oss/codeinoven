@@ -32,10 +32,12 @@ export type RendererSpeechState =
  */
 export type VoiceSendStage = 'send' | 'steer'
 
-/** Escalation level of an armed dictation: 1 send, 2 send after steering the
- *  box content now, 3 steer the transcript itself. A press at 3 clears the
- *  intent instead of escalating past it, so the ladder is a cycle. */
-export type VoiceSendLevel = 1 | 2 | 3
+/** Escalation level of an armed dictation: 1 sends the transcript, 2 steers it
+ *  into the running turn. A press at 2 clears the intent instead of escalating
+ *  past it, so the ladder is a cycle. The ladder only ever applies to the
+ *  transcript itself: what the composer already held is never sent on its own
+ *  behalf. */
+export type VoiceSendLevel = 1 | 2
 
 /**
  * Outcome of handing a transcript that is still waiting for its field.

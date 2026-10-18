@@ -3,8 +3,26 @@ import { GitHubAuthService } from '../../src/main/git/github-auth-service'
 import type { SecretVault } from '../../src/main/storage/secret-vault'
 
 const fetchMock = vi.hoisted(() => vi.fn())
+const lockCalls = vi.hoisted(() => [] as Array<'acquire' | 'release'>)
 
 vi.stubGlobal('fetch', fetchMock)
+
+/**
+ * The credential lock's own behaviour is covered against real files in
+ * `tests/main/cross-process-mutex.test.ts`. Here it only has to exist and be
+ * observable, so a refresh can be asserted to take it without this suite
+ * touching the machine's real lock directory.
+ */
+vi.mock('../../src/main/system/cross-process-mutex', () => ({
+  CLAUDE_CREDENTIAL_LOCK_NAME: 'claude-credential-refresh',
+  GITHUB_CREDENTIAL_LOCK_NAME: 'github-credential-refresh',
+  CrossProcessMutex: class {
+    async acquire(): Promise<() => void> {
+      lockCalls.push('acquire')
+      return () => lockCalls.push('release')
+    }
+  }
+}))
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -104,9 +122,27 @@ function rotatingVault(first: string, next: string): SecretVault {
   return vault
 }
 
+/**
+ * A vault that keeps answering with the credential we already tried until
+ * `afterMs` has passed, which is what a sibling instance that redeems the
+ * refresh token a moment after our refusal looks like from here.
+ */
+function lateRotatingVault(first: string, next: string, afterMs: number): SecretVault {
+  const vault = mapVault({ github_oauth_accounts: first })
+  const base = vi.mocked(vault.resolve).getMockImplementation()
+  if (!base) throw new Error('Vault stub has no read behaviour')
+  const startedAt = Date.now()
+  vi.mocked(vault.resolve).mockImplementation(async (ref: string) => {
+    if (ref === 'github_oauth_accounts' && Date.now() - startedAt >= afterMs) return next
+    return await base(ref)
+  })
+  return vault
+}
+
 describe('GitHubAuthService', () => {
   beforeEach(() => {
     delete process.env['CODEINOVEN_GITHUB_CLIENT_ID']
+    lockCalls.length = 0
   })
 
   afterEach(() => {
@@ -426,7 +462,16 @@ describe('GitHubAuthService', () => {
     })
     const service = new GitHubAuthService(vault)
 
-    await expect(service.resolveToken()).resolves.toBeNull()
+    // A refusal is held open for the window in which another instance could
+    // still persist the replacement, so the clock is advanced past it.
+    vi.useFakeTimers()
+    try {
+      const refusal = service.resolveToken()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(refusal).resolves.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
 
     // The refused account is gone, and the healthy one took its place.
     const file = writtenFile(vault)
@@ -521,7 +566,7 @@ describe('GitHubAuthService', () => {
     expect(vault.remove).toHaveBeenCalledWith('github_oauth_accounts')
   })
 
-  it('recovers when another instance rotated the refresh token first', async () => {
+  it('uses the credential a sibling instance stored instead of redeeming the token again', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
     const vault = rotatingVault(
       accountsFile(
@@ -548,13 +593,83 @@ describe('GitHubAuthService', () => {
         'account-1'
       )
     )
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'incorrect_client_credentials' }))
     const service = new GitHubAuthService(vault)
 
     await expect(service.resolveToken()).resolves.toBe('ghu_rotated')
 
-    // The refused exchange is not a reason to drop an account that now holds a
-    // usable credential.
+    // The account keeps its sibling's credential, and GitHub is never asked to
+    // redeem the token that sibling already spent.
+    expect(vault.remove).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('holds the cross-instance credential lock across the exchange', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ access_token: 'ghu_fresh', refresh_token: 'ghr_fresh', expires_in: 28_800 })
+    )
+    const vault = mapVault({
+      github_oauth_accounts: accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_expired',
+            refreshToken: 'ghr_used',
+            accessTokenExpiresAt: Date.now() - 1,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      )
+    })
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken()).resolves.toBe('ghu_fresh')
+
+    // Two instances sharing this vault must not redeem one single-use refresh
+    // token at the same time.
+    expect(lockCalls).toEqual(['acquire', 'release'])
+  })
+
+  it('keeps the account when the instance that won the race writes after our refusal', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const vault = lateRotatingVault(
+      accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_stale',
+            refreshToken: 'ghr_used',
+            accessTokenExpiresAt: Date.now() - 1,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      ),
+      accountsFile(
+        [
+          accountEntry('account-1', 'octocat', {
+            accessToken: 'ghu_rotated',
+            refreshToken: 'ghr_rotated',
+            accessTokenExpiresAt: Date.now() + 60_000,
+            refreshTokenExpiresAt: Date.now() + 60_000
+          })
+        ],
+        'account-1'
+      ),
+      100
+    )
+    // Every exchange is refused: the sibling instance's request is the one
+    // GitHub accepted, and its vault write lands after our refusal.
+    fetchMock.mockResolvedValue(
+      jsonResponse({
+        error: 'incorrect_client_credentials',
+        error_description: 'The client_id and/or client_secret passed are incorrect.'
+      })
+    )
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.resolveToken()).resolves.toBe('ghu_rotated')
+
+    // Losing the race must not sign the user out of an account that is healthy.
     expect(vault.remove).not.toHaveBeenCalled()
   })
 })

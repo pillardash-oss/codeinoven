@@ -1,22 +1,27 @@
 <script lang="ts">
-  import { ChevronsDown, ChevronsUp, FolderOpen, RefreshCw, Search } from '@lucide/svelte'
-  import { RoutineDefaultIcon } from '$lib/routine-icons'
+  import CioChevronsDown from '@pillardash-oss/cio-icon/CioChevronsDown.svelte'
+  import CioChevronsUp from '@pillardash-oss/cio-icon/CioChevronsUp.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
+  import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {
-    /** Full name of the tree's root. It is the routine's own name for an
+    /** Full name of the tree's root. It is the assistant's own name for an
      *  assistant task's tree, which is often a whole sentence, so it is used as
      *  the root icon's tooltip rather than printed as the label. */
     projectName: string
     /** Label beside the root icon; empty when the root names itself with the
-     *  icon alone, which is a routine root. */
+     *  icon alone, which is an assistant root. */
     projectLabel?: string
-    /** Root icon image: the routine's own icon when the tree is mounted on a
-     *  routine's workspace, else null. */
+    /** Root icon image: the assistant's own icon when the tree is mounted on a
+     *  assistant's workspace, else null. */
     projectIconUrl?: string | null
-    /** True when the tree's root is a routine: without an icon of its own it
-     *  draws the routine default mark, never a generic folder. */
-    routineRoot?: boolean
-    /** Accent colour of the root identity (a routine's colour), or null for the
+    /** True when the tree's root is an assistant: without an icon of its own it
+     *  draws the assistant default mark, never a generic folder. */
+    assistantRoot?: boolean
+    /** Accent colour of the root identity (an assistant's colour), or null for the
      *  default primary accent. Drawn as an inset left edge so the header never
      *  shifts, whatever the scope. */
     projectAccentColor?: string | null
@@ -28,10 +33,14 @@
     treeBusy: boolean
     filterOpen: boolean
     rootLoading: boolean
+    /** False while no file is open: there is nothing to locate in the tree. */
+    canRevealActiveFile: boolean
     onStartResize: (event: PointerEvent) => void
     onResizeKeydown: (event: KeyboardEvent) => void
     onToggleExpandAll: () => void
     onToggleFilter: () => void
+    /** Bring the open file's row on screen, opening the folders above it. */
+    onRevealActiveFile: () => void
     onRefresh: () => void
   }
 
@@ -39,7 +48,7 @@
     projectName,
     projectLabel = projectName,
     projectIconUrl = null,
-    routineRoot = false,
+    assistantRoot = false,
     projectAccentColor = null,
     explorerWidth,
     resizing,
@@ -49,10 +58,12 @@
     treeBusy,
     filterOpen,
     rootLoading,
+    canRevealActiveFile,
     onStartResize,
     onResizeKeydown,
     onToggleExpandAll,
     onToggleFilter,
+    onRevealActiveFile,
     onRefresh
   }: Props = $props()
 </script>
@@ -74,7 +85,7 @@
     aria-hidden="true"
   >
     <span
-      class="mt-1.5 rounded-full bg-primary px-2.5 py-0.5 text-[0.625rem] font-medium text-on-primary shadow-lg"
+      class="mt-1.5 bg-primary px-2.5 py-0.5 text-[0.625rem] font-medium text-on-primary shadow-lg"
       >{dropFolder ? `Drop into ${dropFolder || ''}` : 'Drop to import'}</span
     >
   </div>
@@ -96,14 +107,13 @@
         class="h-3.5 w-3.5 object-contain"
         draggable="false"
       />
-    {:else if routineRoot}
-      <RoutineDefaultIcon
+    {:else if assistantRoot}
+      <AssistantDefaultIcon
         size={13}
-        strokeWidth={1.8}
         style="color: {projectAccentColor ?? 'var(--color-primary)'}"
       />
     {:else}
-      <FolderOpen size={13} style="color: {projectAccentColor ?? 'var(--color-primary)'}" />
+      <CioFolderOpen size={13} style="color: {projectAccentColor ?? 'var(--color-primary)'}" />
     {/if}
   </span>
   <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground"
@@ -111,22 +121,22 @@
   >
   <button
     type="button"
-    class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
     aria-label={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
     title={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
     disabled={treeBusy}
     onclick={onToggleExpandAll}
   >
     {#if anyDirExpanded}
-      <ChevronsUp size={12} />
+      <CioChevronsUp size={12} />
     {:else}
-      <ChevronsDown size={12} />
+      <CioChevronsDown size={12} />
     {/if}
   </button>
   <button
     type="button"
     class={[
-      'flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground',
+      'flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground',
       filterOpen ? 'bg-elevated text-foreground' : ''
     ]}
     aria-label="Search project files"
@@ -134,16 +144,26 @@
     aria-pressed={filterOpen}
     onclick={onToggleFilter}
   >
-    <Search size={12} />
+    <CioSearch size={12} />
   </button>
   <button
     type="button"
-    class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    aria-label="Locate the open file in the tree"
+    title="Locate the open file in the tree"
+    disabled={!canRevealActiveFile}
+    onclick={onRevealActiveFile}
+  >
+    <CioTarget size={12} />
+  </button>
+  <button
+    type="button"
+    class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
     aria-label="Refresh project files"
     title="Refresh files"
     disabled={rootLoading}
     onclick={onRefresh}
   >
-    <RefreshCw size={12} class={rootLoading ? 'animate-spin' : ''} />
+    <CioRefresh size={12} class={rootLoading ? 'animate-spin' : ''} />
   </button>
 </div>

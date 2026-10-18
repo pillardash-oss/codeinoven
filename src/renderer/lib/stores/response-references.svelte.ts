@@ -1,7 +1,13 @@
 import type { PromptReference } from '$shared/types'
+import type { MarkPoint } from '$lib/annotation-marks'
 import { rendererRecovery } from './renderer-recovery.svelte'
 
-const MAX_REFERENCES_PER_THREAD = 20
+/**
+ * How many threads may hold composer references at once. A cap on *threads*, not
+ * on a thread's references: one conversation carries as many as the user gives
+ * it, and trimming a thread's list would be the app deciding to drop a comment
+ * the user attached.
+ */
 const MAX_THREADS_WITH_REFERENCES = 200
 
 export interface ResponseReferenceAnchor extends PromptReference {
@@ -24,6 +30,38 @@ export interface ResponseReferenceAnchor extends PromptReference {
    *  passage was annotated in, so a document's preview pins only its own
    *  annotations and the path travels with the prompt. */
   filePath?: string
+  /** Video notes: the second on the composition the note was written at, so the
+   *  timeline can place its row and a jump can seek the preview back to it. */
+  seconds?: number
+  /** Video notes: the project-relative composition folder the moment belongs
+   *  to, so a note names its file the way a document annotation names its path. */
+  directory?: string
+  /** Media marks: the artifact part the stroke was drawn on, whether that part
+   *  is a still picture or a video. The conversation pins the mark to that media
+   *  part, and the send renders the annotated picture from the same source, so
+   *  the mark can never land on a different picture than the one the user
+   *  circled. */
+  mediaUrl?: string
+  /** Media marks: the freehand stroke, every point normalized to 0..1 of the
+   *  picture box. A single point is a tap. */
+  points?: MarkPoint[]
+  /** Media marks drawn on a video: the second whose frame was on screen when the
+   *  stroke was drawn. Its presence is what makes a mark a frame annotation: the
+   *  send composes the picture from that second rather than from a still, and the
+   *  descriptor names the timecode so the agent knows which moment to change. */
+  markSeconds?: number
+  /** Media marks: the colour the stroke was drawn in. Absent on a mark whose
+   *  drawer left the colour to the app's accent. */
+  markColor?: string
+  /** Media marks: the stroke's width in CSS pixels. Absent means the default. */
+  markStrokeWidth?: number
+  /** Media marks: the shorter edge of the picture the stroke was drawn on, in CSS
+   *  pixels. The composed picture is usually a different size, so this is the
+   *  ratio that keeps the stroke as heavy as the user drew it. */
+  markSurfaceEdge?: number
+  /** SVG element picks: a stable key for the artifact card the element was
+   *  picked in, so the card that drew the element is the one that pins it. */
+  artifactKey?: string
 }
 
 /**
@@ -50,7 +88,14 @@ export function isResponseSelection(reference: Pick<PromptReference, 'kind'>): b
  * only from the surface that happens to be on screen.
  */
 export function referenceHasEditableSurface(reference: Pick<PromptReference, 'kind'>): boolean {
-  return isResponseSelection(reference) || reference.kind === 'file' || reference.kind === 'design'
+  return (
+    isResponseSelection(reference) ||
+    reference.kind === 'file' ||
+    reference.kind === 'design' ||
+    reference.kind === 'video' ||
+    reference.kind === 'image' ||
+    reference.kind === 'svg'
+  )
 }
 
 /**
@@ -133,22 +178,28 @@ class ResponseReferencesState {
         const oldestKey = Object.keys(next)[0]
         if (oldestKey) delete next[oldestKey]
       }
-      stored = uniqueReferencesById(references)
-        .slice(0, MAX_REFERENCES_PER_THREAD)
-        .map((reference, index) => ({
-          ...reference,
-          // A response selection is named by its position, and so is a picked
-          // design element: both are shown as a number by the popover, and the
-          // number has to agree with the surface that pins them (a highlight
-          // bubble, a page pin). A document annotation keeps the label it was
-          // created with instead: its path names it on the document pin and in
-          // the prompt, and it is what the model needs to find the passage.
-          label: isResponseSelection(reference)
-            ? `Selection ${index + 1}`
-            : reference.kind === 'file'
-              ? reference.label
-              : `Design element ${index + 1}`
-        }))
+      stored = uniqueReferencesById(references).map((reference, index) => ({
+        ...reference,
+        // A response selection is named by its position, and so is a picked
+        // design element: both are shown as a number by the popover, and the
+        // number has to agree with the surface that pins them (a highlight
+        // bubble, a page pin). A mark drawn on a picture is the same deal:
+        // still or a video frame, its number is drawn onto the composed
+        // picture the agent receives   so it must be the number the composer
+        // shows. A document annotation keeps the label
+        // it was created with instead: its path names it on the document pin
+        // and in the prompt, and it is what the model needs to find the
+        // passage.
+        label: isResponseSelection(reference)
+          ? `Selection ${index + 1}`
+          : reference.kind === 'file'
+            ? reference.label
+            : reference.kind === 'video'
+              ? `Video note ${index + 1}`
+              : reference.kind === 'image'
+                ? `Mark ${index + 1}`
+                : `Design element ${index + 1}`
+      }))
       next[key] = stored
     }
     this.references = next

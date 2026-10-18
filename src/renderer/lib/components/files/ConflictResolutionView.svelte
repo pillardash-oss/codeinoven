@@ -1,19 +1,17 @@
 <script lang="ts">
+  import CioArrowLeftToLine from '@pillardash-oss/cio-icon/CioArrowLeftToLine.svelte'
+  import CioArrowRightToLine from '@pillardash-oss/cio-icon/CioArrowRightToLine.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioFileCode from '@pillardash-oss/cio-icon/CioFileCode.svelte'
+  import CioFileWarning from '@pillardash-oss/cio-icon/CioFileWarning.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioRedo from '@pillardash-oss/cio-icon/CioRedo.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    ArrowLeftToLine,
-    ArrowRightToLine,
-    Check,
-    FileCode2,
-    FileWarning,
-    GitMerge,
-    Loader2,
-    Redo2,
-    Save,
-    Undo2,
-    WrapText
-  } from '@lucide/svelte'
   import type { GitConflictWorkFile, GitConflictWorkHunkState } from '$shared/types'
   import {
     createFileEditor,
@@ -479,11 +477,11 @@
 <div class="flex h-full min-h-0 flex-col bg-app" data-region="conflict-editor">
   {#if loading && !workFile}
     <div class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed">
-      <Loader2 size={14} class="animate-spin" /> Preparing conflict scratch document
+      <CioSpinner size={14} class="animate-spin" /> Preparing conflict scratch document
     </div>
   {:else if error}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-      <FileWarning size={22} class="text-danger" />
+      <CioFileWarning size={22} class="text-danger" />
       <p class="text-xs font-medium text-foreground">Could not prepare this conflict</p>
       <p class="max-w-[48ch] text-[0.625rem] leading-relaxed text-danger">{error}</p>
     </div>
@@ -493,7 +491,7 @@
     </div>
   {:else if analysis.binary || analysis.truncated}
     <div class="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-      <AlertTriangle size={22} class="text-warning" />
+      <CioAttention size={22} class="text-warning" />
       <p class="text-xs font-medium text-foreground">
         {analysis.binary ? 'Binary conflict' : 'File too large for the merge editor'}
       </p>
@@ -504,18 +502,18 @@
         </p>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
+          class="flex items-center gap-1.5 border border-border bg-elevated px-3 py-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:text-foreground"
           title="Reveal the original conflicted file in the file tree and open it in the file editor"
           onclick={onOpenOriginal}
         >
-          <FileCode2 size={12} />
+          <CioFileCode size={12} />
           Open original file
         </button>
       {/if}
     </div>
   {:else}
     <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-3">
-      <GitMerge size={13} class="text-warning" />
+      <CioMerge size={13} class="text-warning" />
       <span class="text-[0.625rem] font-semibold text-foreground"
         >Conflict {activeHunk + 1} of {analysis.hunks.length}</span
       >
@@ -524,68 +522,70 @@
       >
       <button
         type="button"
-        class="ml-1 h-6 rounded border border-accent/40 px-2 text-[0.5625rem] font-medium text-accent hover:bg-accent/10"
+        class="ml-1 h-6 border border-accent/40 px-2 text-[0.5625rem] font-medium text-accent hover:bg-accent/10"
         title="Accept every incoming conflict block"
         onclick={() => acceptAll('incoming')}>Accept all incoming</button
       >
       <button
         type="button"
-        class="h-6 rounded border border-primary/40 px-2 text-[0.5625rem] font-medium text-primary hover:bg-primary/10"
+        class="h-6 border border-primary/40 px-2 text-[0.5625rem] font-medium text-primary hover:bg-primary/10"
         title="Accept every current conflict block"
         onclick={() => acceptAll('current')}>Accept all current</button
       >
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1 rounded px-2 text-[0.5625rem] font-medium transition-colors',
+          'flex h-6 items-center gap-1 px-2 text-[0.5625rem] font-medium transition-colors',
           wrap ? 'bg-overlay text-foreground' : 'text-muted hover:bg-elevated hover:text-foreground'
         ]}
         aria-pressed={wrap}
         title={wrap ? 'Disable line wrapping' : 'Enable line wrapping'}
-        onclick={onToggleWrap}><WrapText size={11} />Wrap</button
+        onclick={onToggleWrap}><CioWrapText size={11} />Wrap</button
       >
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-6 items-center gap-1 rounded border border-border bg-elevated px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:opacity-30"
+        class="flex h-6 items-center gap-1 border border-border bg-elevated px-2 text-[0.5625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:opacity-30"
         disabled={!canSaveDraft || draftSaving || saving}
         title={conflictSaveActionTitle('draft')}
         onclick={() => void saveDraft()}
       >
-        {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
+        {#if draftSaving}<CioSpinner size={11} class="animate-spin" />{:else}<CioSave
+            size={11}
+          />{/if}
         {conflictSaveActionLabels.draft}
       </button>
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
         title="Undo conflict edit"
         aria-label="Undo conflict edit"
-        onclick={undo}><Undo2 size={12} /></button
+        onclick={undo}><CioUndo size={12} /></button
       >
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 items-center justify-center text-muted hover:bg-elevated hover:text-foreground"
         title="Redo conflict edit"
         aria-label="Redo conflict edit"
-        onclick={redo}><Redo2 size={12} /></button
+        onclick={redo}><CioRedo size={12} /></button
       >
     </div>
 
     <div class="flex h-8 shrink-0 items-center gap-1 border-b border-border bg-elevated/30 px-2">
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        class="flex h-6 w-6 items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground disabled:opacity-30"
         title="Previous conflict"
         aria-label="Previous conflict"
         disabled={activeHunk === 0}
-        onclick={() => selectHunk(activeHunk - 1)}><ArrowLeftToLine size={12} /></button
+        onclick={() => selectHunk(activeHunk - 1)}><CioArrowLeftToLine size={12} /></button
       >
       <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {#each hunkStates as state (state.index)}
           <button
             type="button"
             class={[
-              'flex h-6 shrink-0 items-center gap-1 rounded px-2 font-mono text-[0.5625rem] tabular-nums',
+              'flex h-6 shrink-0 items-center gap-1 px-2 font-mono text-[0.5625rem] tabular-nums',
               state.index === activeHunk
                 ? 'bg-primary/15 text-primary'
                 : isResolved(state)
@@ -595,17 +595,17 @@
             title={`Conflict ${state.index + 1}`}
             onclick={() => selectHunk(state.index)}
           >
-            {#if isResolved(state)}<Check size={9} />{/if}{state.index + 1}
+            {#if isResolved(state)}<CioCheck size={9} />{/if}{state.index + 1}
           </button>
         {/each}
       </div>
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed hover:bg-elevated hover:text-foreground disabled:opacity-30"
+        class="flex h-6 w-6 items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground disabled:opacity-30"
         title="Next conflict"
         aria-label="Next conflict"
         disabled={activeHunk >= hunkStates.length - 1}
-        onclick={() => selectHunk(activeHunk + 1)}><ArrowRightToLine size={12} /></button
+        onclick={() => selectHunk(activeHunk + 1)}><CioArrowRightToLine size={12} /></button
       >
     </div>
 
@@ -636,13 +636,12 @@
 
         <section
           bind:this={incomingPane}
-          class="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-accent/40 bg-app"
+          class="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden border border-accent/40 bg-app"
         >
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-accent/30 bg-accent/10 px-2"
           >
-            <span
-              class="rounded bg-accent/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-accent"
+            <span class="bg-accent/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-accent"
               >incoming</span
             >
             <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"
@@ -650,7 +649,7 @@
             >
             <button
               type="button"
-              class="h-6 shrink-0 rounded bg-accent px-2 text-[0.5625rem] font-semibold text-on-primary disabled:opacity-40"
+              class="h-6 shrink-0 bg-accent px-2 text-[0.5625rem] font-semibold text-on-primary disabled:opacity-40"
               disabled={activeState.acceptedIncoming}
               title="Accept this incoming block"
               onclick={() => acceptSide('incoming')}>Accept incoming</button
@@ -660,12 +659,12 @@
         </section>
 
         <section
-          class="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-app"
+          class="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden border border-border bg-app"
         >
           <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-surface px-2">
             <span
               class={[
-                'rounded px-1.5 py-0.5 text-[0.5625rem] font-semibold',
+                'px-1.5 py-0.5 text-[0.5625rem] font-semibold',
                 isResolved(activeState)
                   ? 'bg-success/15 text-success'
                   : 'bg-warning/15 text-warning'
@@ -676,7 +675,7 @@
             >
             <button
               type="button"
-              class="h-6 shrink-0 rounded border border-border px-2 text-[0.5625rem] font-semibold text-foreground hover:bg-elevated disabled:opacity-40"
+              class="h-6 shrink-0 border border-border px-2 text-[0.5625rem] font-semibold text-foreground hover:bg-elevated disabled:opacity-40"
               disabled={activeState.acceptedIncoming && activeState.acceptedCurrent}
               title="Merge incoming above current"
               onclick={mergeBoth}>Merge both</button
@@ -687,13 +686,12 @@
 
         <section
           bind:this={currentPane}
-          class="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-primary/40 bg-app"
+          class="relative z-20 flex min-h-0 min-w-0 flex-col overflow-hidden border border-primary/40 bg-app"
         >
           <div
             class="flex h-9 shrink-0 items-center gap-2 border-b border-primary/30 bg-primary/10 px-2"
           >
-            <span
-              class="rounded bg-primary/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-primary"
+            <span class="bg-primary/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-primary"
               >current</span
             >
             <span class="min-w-0 flex-1 truncate font-mono text-[0.5625rem] text-dimmed"
@@ -701,7 +699,7 @@
             >
             <button
               type="button"
-              class="h-6 shrink-0 rounded bg-primary px-2 text-[0.5625rem] font-semibold text-on-primary disabled:opacity-40"
+              class="h-6 shrink-0 bg-primary px-2 text-[0.5625rem] font-semibold text-on-primary disabled:opacity-40"
               disabled={activeState.acceptedCurrent}
               title="Accept this current block"
               onclick={() => acceptSide('current')}>Accept current</button

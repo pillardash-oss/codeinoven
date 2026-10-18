@@ -19,6 +19,7 @@
  */
 
 import { publishBrowserSearchEngine } from '$lib/browser-search-context'
+import { publishBrowserAllowSiteKeymapOverride } from '$lib/browser-keymap-context'
 import { publishBrowserScrollbarTheme } from '$lib/browser-page-scrollbar'
 import { appConfigState } from './app-config.svelte'
 import { browserAssistant } from './browser-assistant.svelte'
@@ -30,6 +31,7 @@ import { browserInspector } from './browser-inspector.svelte'
 import { browserPopupWindows } from './browser-popup-windows.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { globalBrowser } from './global-browser.svelte'
+import { videoTimelineState } from './video-timeline.svelte'
 
 /** The live browser store, re-exported so the access seam needs one import. */
 export { globalBrowser }
@@ -48,6 +50,11 @@ export function startBrowserRuntime(): void {
   browserDownloads.start()
   browserExtensions.start()
   browserInspector.start()
+  // A composition is played by a browser tab, so a timeline that has to follow
+  // the playhead needs the same state stream every browser store reads. It holds
+  // one composition tab per conversation and nothing else, so wiring it here
+  // costs a launch that never opens a video a single listener.
+  videoTimelineState.start()
   // The history and the bookmark list are the browser's memory: one records every
   // page a tab commits, the other is what the user saved. Both are read here, once
   // the browser is actually wanted, so a launch that never reaches it pays nothing
@@ -76,4 +83,5 @@ export function startBrowserRuntime(): void {
   // before the first page exists to use them.
   publishBrowserScrollbarTheme()
   publishBrowserSearchEngine(appConfigState.browserSearchEngine)
+  publishBrowserAllowSiteKeymapOverride(appConfigState.browserAllowSiteKeymapOverride)
 }

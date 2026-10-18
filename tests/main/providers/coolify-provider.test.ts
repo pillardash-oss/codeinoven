@@ -205,6 +205,16 @@ describe('CoolifyProvider', () => {
       ['error', 'failed'],
       ['unhealthy', 'failed'],
       ['oops', 'failed'],
+      // Coolify always appends the container health as `state:health`; the state
+      // segment alone decides the runtime badge.
+      ['running:healthy', 'success'],
+      ['running:starting', 'success'],
+      ['running:unhealthy', 'success'],
+      ['degraded:unhealthy', 'success'],
+      ['restarting:unhealthy', 'building'],
+      ['exited:unhealthy', 'failed'],
+      ['running (healthy)', 'success'],
+      ['exited (unhealthy)', 'failed'],
       ['unexpected-state', 'unknown']
     ])('normalizes application runtime status %s -> %s', async (raw, expected) => {
       fetchMock.mockResolvedValueOnce(jsonResponse([{ uuid: 'app-1', status: raw }]))

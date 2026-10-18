@@ -54,6 +54,23 @@ export function registerProviderAccountIpc(
             await (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(account.id)
           }
         }
+        // A managed row's provider id is pinned when its container is created,
+        // so a release that renamed an integration leaves the row naming a
+        // provider the CLI no longer knows. A harness whose credential store is
+        // read locally (OpenCode V2) can repair it here, before that stale id
+        // breaks a login, a logout or a switch.
+        const managed = (await accounts.list(harnessId)).filter(
+          (account) => account.containerKind === 'managed' && account.providerId !== ''
+        )
+        for (const account of managed) {
+          const storedProvider = await auth.storedProviderFor(
+            harnessId,
+            accounts.environment(account)
+          )
+          if (storedProvider && storedProvider !== account.providerId) {
+            await accounts.adoptManagedCredential(account.id, storedProvider, storedProvider)
+          }
+        }
         lastAccountSync.set(harnessId, Date.now())
       }
       return accounts.list(harnessId)
@@ -267,7 +284,10 @@ export function registerProviderAccountIpc(
           ? undefined
           : validateEntityId(rawProviderId, 'Provider ID', 256),
         account ? accounts.environment(account) : undefined,
-        account?.providerName ?? account?.label
+        account?.providerName ?? account?.label,
+        // The credential id a registry row mirrors (OpenCode V2's store id) is
+        // the selector its CLI logout needs non-interactively.
+        account?.sourceId
       )
     }
   )

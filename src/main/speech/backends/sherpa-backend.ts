@@ -78,6 +78,13 @@ export class SherpaSpeechBackend implements SpeechBackend {
   }
 
   async transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string> {
+    return (await this.transcribeTimed(input, signal)).text
+  }
+
+  async transcribeTimed(
+    input: SpeechTranscribeInput,
+    signal: AbortSignal
+  ): Promise<import('../speech-backend').SpeechTimedTranscript> {
     const response = await this.request(
       {
         id: randomUUID(),
@@ -91,7 +98,7 @@ export class SherpaSpeechBackend implements SpeechBackend {
     )
     if (!response.ok) throw new Error(response.error)
     if (response.kind !== 'transcribe') throw new Error('Unexpected sherpa transcription response.')
-    return response.text
+    return { text: response.text, ...(response.words ? { words: response.words } : {}) }
   }
 
   async cleanup(

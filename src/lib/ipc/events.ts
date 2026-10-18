@@ -25,14 +25,14 @@ import type {
   BrowserFindResult,
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
+  BrowserPageKey,
   BrowserPageState,
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
   BrowserPopupWindow,
   BrowserScreenSharePrompt,
   BrowserSitePermissionsPrompt,
-  BrowserSwitcherKey,
-  BrowserShortcutChord
+  BrowserSwitcherKey
 } from './browser'
 import type {
   AgentNotificationPayload,
@@ -56,6 +56,10 @@ import type { AppControlRequest } from '../app-control'
 export const IPC_EVENT_CONTRACT = {
   'customVendors:iconChanged': [] as unknown as [payload: { providerId: string; icon: string }],
   'design:historyChanged': [] as unknown as [projectId: string, directory: string],
+  'design:relocated': [] as unknown as [
+    projectId: string,
+    moves: Array<{ from: string; to: string }>
+  ],
   /** One app call for the renderer to perform on the agent's behalf. The
    *  renderer answers on the `appControl:respond` invoke with the request id. */
   'appControl:request': [] as unknown as [request: AppControlRequest],
@@ -67,8 +71,8 @@ export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
-   * The one-time start-at-login offer, raised right after a routine gets its
-   * first how-to: the app asks whether it should start at login so a scheduled
+   * The one-time start-at-login offer, raised right after an assistant gets its
+   * first knowledge: the app asks whether it should start at login so a scheduled
    * run can fire after a restart. Sent at most once in an install's life, and
    * only while `launchAtLoginPrompted` is still false, so nothing has to guard
    * against a second prompt arriving.
@@ -82,6 +86,16 @@ export const IPC_EVENT_CONTRACT = {
   'thread:deleted': [] as unknown as [projectId: string, threadId: string],
   /** Live thread snapshot push so sidebar indicators react without polling. */
   'thread:updated': [] as unknown as [thread: Thread],
+  /**
+   * Another CodeInOven instance wrote this thread's mirrored conversation.
+   *
+   * The mirror lives in the database both instances share, so the rows are
+   * already there and a window only has to re-read the tail it is showing. Kept
+   * separate from `thread:updated` on purpose: a message write is not a row
+   * change, and routing it through the row push would re-run the whole reconcile
+   * (working state, notices, draft label) for every batch.
+   */
+  'thread:messagesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Lightweight draft-state push (flag + committed draft content). Kept
    *  separate from `thread:updated` so commits land while the user is typing
    *  without triggering the full-transcript reconcile. */
@@ -93,6 +107,13 @@ export const IPC_EVENT_CONTRACT = {
   ],
   /** Branch association changed for a thread. */
   'thread:branchUpdated': [] as unknown as [projectId: string, threadId: string, branch: string],
+  /** Authored-work sessions changed for a thread (its design/video markers). */
+  'thread:authoredWorkUpdated': [] as unknown as [
+    projectId: string,
+    threadId: string,
+    kind: import('./design').AuthoredWorkKind,
+    kinds: import('./design').AuthoredWorkKind[]
+  ],
   /** Note presence changed for a thread (saved or deleted). */
   'note:changed': [] as unknown as [projectId: string, threadId: string, hasNote: boolean],
   /**
@@ -108,21 +129,19 @@ export const IPC_EVENT_CONTRACT = {
    * design board changes the work folders and Settings is open behind it.
    */
   'config:changed': [] as unknown as [config: import('../types').AppConfig],
-  /** Assistant routines changed (created, updated, deleted, reordered). */
-  'routine:changed': [] as unknown as [routines: import('../types').Routine[]],
+  /** Assistants changed (created, updated, deleted, reordered). */
+  'assistant:changed': [] as unknown as [assistants: import('../types').Assistant[]],
   /**
-   * A routine's Getting started checkpoint was saved. Only the routine id
+   * An assistant's Getting started checkpoint was saved. Only the assistant id
    * travels: the checkpoint itself is read on demand by the panel that shows it.
    */
-  'routine:checkpointChanged': [] as unknown as [routineId: string],
+  'assistant:checkpointChanged': [] as unknown as [assistantId: string],
   /** The set of pending missed scheduled runs changed. */
   'assistant:missedRunsChanged': [] as unknown as [runs: import('../types').MissedRun[]],
   /** The durable record of unattended runs changed (a run started or settled). */
   'assistant:backgroundRunsChanged': [] as unknown as [runs: import('../types').BackgroundRun[]],
   /** User-skipped scheduled slots changed, so next-run labels can refresh. */
-  'assistant:skippedRoutineRunsChanged': [] as unknown as [
-    runs: import('../types').SkippedRoutineRun[]
-  ],
+  'assistant:skippedAssistantRunsChanged': [] as unknown as [runs: import('../types').SkippedRun[]],
   /**
    * The set of gates the app resolved without the user changed: one settled, or
    * the user dismissed one or all. Drives the amber attention rail item and its
@@ -222,6 +241,13 @@ export const IPC_EVENT_CONTRACT = {
   /** Background pass over the skills CodeInOven installed (progress and result). */
   'utilities:skillUpdates': [] as unknown as [status: SkillUpdateStatus],
   /**
+   * Live stages of one MCP OAuth authorization: the URL the browser has to
+   * open, what it is waiting for, and how it ended. Pushed so an editor that
+   * started the flow can follow it without polling, and so any other surface
+   * showing the same utility never reports a stale grant.
+   */
+  'utilities:mcpOAuthEvent': [] as unknown as [payload: import('../types').McpOAuthEventPayload],
+  /**
    * Progress of a manual ranking grade run, pushed after every pass so a queue
    * of conversations graded three at a time never looks like a hang. The run
    * itself answers over `account:gradeRankingQueue`; this stream carries only
@@ -254,12 +280,8 @@ export const IPC_EVENT_CONTRACT = {
   'browser:inspector': [] as unknown as [tabId: string, event: BrowserInspectorEvent],
   /**
    * A browser shortcut the renderer has to carry out, because it owns the tab
-   * strip or holds the find bar: focusing the address bar of a tab, closing or
-   * opening a tab, or showing and stepping its find bar. Main decides the key,
-   * the renderer decides what the tab strip or the find bar does with it.
+   * strip: focusing the address bar of a tab, closing or opening a tab.
    */
-  /** View shortcut forwarded from a native page to the shell's keymap handlers. */
-  'browser:navigationKey': [] as unknown as [chord: BrowserShortcutChord],
   'browser:panelShortcut': [] as unknown as [tabId: string, action: BrowserPanelShortcutAction],
   /**
    * What Chromium's find reported for a tab's page. The page is a native view, so
@@ -273,6 +295,13 @@ export const IPC_EVENT_CONTRACT = {
    * opens from inside a page exactly as it does from the app's own chrome.
    */
   'browser:switcherKey': [] as unknown as [key: BrowserSwitcherKey],
+  /**
+   * An app shortcut a page did not handle, replayed so the app's own keymap
+   * handlers run. Main offered the chord to the page first, so this is only sent
+   * for a chord the page left alone; the renderer rebuilds a `keydown` from it and
+   * dispatches it, which is what makes every existing binding work unchanged.
+   */
+  'browser:pageKey': [] as unknown as [key: BrowserPageKey],
   'browser:openRequested': [] as unknown as [url: string, context?: BrowserOpenRequestContext],
   /**
    * Every popup window the browser holds, whole, after any change to one of
@@ -376,6 +405,26 @@ export const IPC_EVENT_CONTRACT = {
    * mirrors this so a long download and a background reindex both report live.
    */
   'search:progress': [] as unknown as [progress: import('../search/types').SearchProgressEvent],
+  /**
+   * The semantic half of a spotlight thread search, delivered after its keyword
+   * rows so the panel replaces them instead of waiting on the local model. The
+   * `requestId` and `query` are the ones the invoke carried, and a panel that has
+   * moved on drops the payload.
+   */
+  'threads:searchIntent': [] as unknown as [
+    payload: {
+      query: string
+      requestId: number
+      results: import('../types').ThreadSearchResult[]
+    }
+  ],
+  /**
+   * The optional video pack's install state. The Design and video settings
+   * block mirrors this so a long package install reports live progress.
+   */
+  'video:packages:progress': [] as unknown as [
+    state: import('./video-packages').VideoPackagesProgressEvent
+  ],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer
    * keeps its docked job panel on these so the user sees real progress while

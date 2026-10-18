@@ -1,7 +1,9 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { Star, X } from '@lucide/svelte'
+
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { BROWSER_HISTORY_GLOBAL_SCOPE, browserHistory } from '$lib/stores/browser-history.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
@@ -81,7 +83,7 @@
     <button
       type="button"
       class={[
-        'flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-overlay',
+        'flex h-6 w-6 items-center justify-center transition-colors hover:bg-overlay',
         bookmarked ? 'text-warning' : 'text-dimmed hover:text-foreground'
       ]}
       aria-label={bookmarked ? `Remove ${entry.title} from bookmarks` : `Bookmark ${entry.title}`}
@@ -89,16 +91,16 @@
       title={bookmarked ? 'Remove bookmark' : 'Bookmark this page'}
       onclick={() => browserBookmarks.toggle(entry.url, entry.title, null, bookmarkBoxId)}
     >
-      <Star size={12} class={bookmarked ? 'fill-current' : ''} />
+      <CioStar size={12} class={bookmarked ? 'fill-current' : ''} />
     </button>
     <button
       type="button"
-      class="flex h-6 w-6 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-overlay hover:text-danger"
+      class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-danger"
       aria-label={`Forget ${entry.title}`}
       title="Forget this page"
       onclick={() => (forgettingUrl = entry.url)}
     >
-      <X size={12} />
+      <CioClose size={12} />
     </button>
   {/snippet}
 </BrowserHistoryList>

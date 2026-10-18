@@ -9,6 +9,26 @@ import type {
 import { appServiceRegistry } from '../../system/app-service-registry'
 import { isRecord, recordValue } from './utility-input'
 
+/**
+ * A refusal from a remote MCP server, kept as data rather than as a bare string.
+ *
+ * A `401` from an MCP server is not generic: the MCP authorization spec puts the
+ * server's protected-resource metadata in the `WWW-Authenticate` header, which
+ * is the only place a client learns where to authorize. Keeping the status and
+ * that header on the error is what lets the app answer with an authorization
+ * instead of a status code.
+ */
+export class McpHttpError extends Error {
+  constructor(
+    readonly status: number,
+    /** The `WWW-Authenticate` header sent with the refusal, when the server sent one. */
+    readonly wwwAuthenticate: string | null
+  ) {
+    super(`Remote MCP request failed (${status})`)
+    this.name = 'McpHttpError'
+  }
+}
+
 export class RemoteMcpClient implements McpClient {
   serverInfo: McpServerInfo = {}
 
@@ -137,7 +157,9 @@ export class RemoteMcpClient implements McpClient {
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(MCP_TIMEOUT_MS)
     })
-    if (!response.ok) throw new Error(`Remote MCP request failed (${response.status})`)
+    if (!response.ok) {
+      throw new McpHttpError(response.status, response.headers.get('www-authenticate'))
+    }
     this.sessionId ??= response.headers.get('mcp-session-id') ?? undefined
     if (!expectsResult || response.status === 202) return undefined
     const contentType = response.headers.get('content-type') ?? ''

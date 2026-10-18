@@ -12,12 +12,25 @@ export function startStartupUpdater(state: BootstrapState, storage: StorageEngin
     if (!state.updaterService) {
       const { UpdaterService } = await import('../notifications/updater-service')
       state.updaterService = new UpdaterService(storage)
+      let quitWasConfirmed = false
       state.updaterService.attachUpdateQuitHooks({
         begin: () => {
+          quitWasConfirmed = state.quitConfirmed
           state.quitForUpdate = true
+          // A missing renderer cannot answer a close request. Healthy windows
+          // still get their normal unsaved-file confirmation before shutdown.
+          const window = state.mainWindow
+          if (
+            !window ||
+            window.isDestroyed() ||
+            window.webContents.isDestroyed() ||
+            state.startupRecovery
+          )
+            state.quitConfirmed = true
         },
         end: () => {
           state.quitForUpdate = false
+          if (!state.quitCleanupStarted) state.quitConfirmed = quitWasConfirmed
         }
       })
       // Downloads/checks work during initialization; installation waits until

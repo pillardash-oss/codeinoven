@@ -56,6 +56,29 @@ export const USAGE_RESET_FALLBACK_RETRY_MS = 60 * 60 * 1000
  *  drops straight back into the wait (observed with Codex on 2026-09-07). */
 export const RETRY_FIRE_GRACE_MS = 90 * 1000
 
+/**
+ * The card copy for a wait parked on the device's own connection. Kept in one
+ * place because the same wait reaches the user through several paths (a
+ * driver's transport verdict, the engine re-reading a failure while the device
+ * is offline, and the restored ledger after a restart), and all of them must
+ * promise the user the same thing.
+ */
+export const CONNECTION_WAIT_MESSAGE =
+  'Connection interrupted. This thread will resume automatically when the device reconnects.'
+
+/**
+ * How recently connectivity must have been verified absent for a failure with
+ * no provider verdict of its own to be read as a connection loss.
+ *
+ * A dropped Wi-Fi link takes the harness process down with it, and what that
+ * reports back ("process exited unexpectedly", an empty stream, a transport
+ * reset buried in a driver-specific string) classifies as `unknown`. Honoring
+ * that verdict parked the thread on a terminal card while the device was
+ * plainly the cause of the failure and already reconnecting, so a failure
+ * landing inside this window is re-read as the connection wait it is.
+ */
+export const CONNECTION_LOSS_GRACE_MS = 30_000
+
 export const LOOP_MAX_ITERATIONS = 8
 
 /** How long a transferring instance waits for the departing instance's aborted
@@ -91,6 +114,21 @@ export const INCOMPLETE_TURN_MESSAGE =
 
 export const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
+
+/**
+ * Prompt for the app-issued reconcile turn that fires when a turn settles but
+ * the task list it published still shows unfinished work. The app renders that
+ * list as live task progress, so an abandoned list reads as work still running.
+ * The instruction only asks the agent to make the list truthful; it never asks
+ * it to invent work it did not do.
+ */
+export function taskReconcilePrompt(labels: readonly string[]): string {
+  return (
+    'Your turn ended, but the task list you published still shows unfinished work: ' +
+    labels.join('; ') +
+    '. The app shows that list as live task progress, so it now reads as abandoned work. Before you finish, publish the final list once more with the same task-list tool you used: mark every task you completed as completed, and drop (or clear) tasks you no longer intend to do. When the work is truly complete and only the list lagged, make that one task-list call and nothing else: add no prose. The app keeps the final answer you already gave the user and shows it, so any words you add here would only replace that answer with a redundant second version of it. Write text only if something material truly changed since that answer, and never mark a task complete that you did not actually finish. Do not start new work just to satisfy the list.'
+  )
+}
 
 /**
  * Checkpoint note for a turn whose finalization a newer turn superseded. The

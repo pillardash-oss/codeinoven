@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CircleCheck, Loader2, PlugZap, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioPlugZap from '@pillardash-oss/cio-icon/CioPlugZap.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { McpConnectionTestResult, McpProbeTarget } from '$shared/types'
 
@@ -50,12 +53,12 @@
 
 <div
   class={variant === 'panel'
-    ? 'space-y-2 rounded-xl border bg-raised p-3'
+    ? 'space-y-2 border bg-raised p-3'
     : 'mt-2 flex flex-wrap items-center gap-2'}
 >
   <button
     type="button"
-    class="flex items-center gap-1.5 rounded-lg border bg-elevated font-medium hover:bg-overlay disabled:opacity-50 {variant ===
+    class="flex items-center gap-1.5 border bg-elevated font-medium hover:bg-overlay disabled:opacity-50 {variant ===
     'panel'
       ? 'h-9 px-3 text-xs'
       : 'h-7 px-2.5 text-[0.6875rem]'}"
@@ -65,16 +68,16 @@
     onclick={() => void run()}
   >
     {#if running}
-      <Loader2 size={13} class="animate-spin" />
+      <CioSpinner size={13} class="animate-spin" />
     {:else}
-      <PlugZap size={13} />
+      <CioPlugZap size={13} />
     {/if}
     {running ? 'Testing…' : 'Test connection'}
   </button>
 
   {#if failure}
     <p class="flex items-start gap-1.5 text-[0.6875rem] text-danger" role="alert">
-      <TriangleAlert size={12} class="mt-0.5 shrink-0" />
+      <CioAttention size={12} class="mt-0.5 shrink-0" />
       <span class={variant === 'row' ? 'line-clamp-2' : ''} title={rowTitle(failure)}
         >{failure}</span
       >
@@ -82,7 +85,7 @@
   {:else if result}
     {#if result.ok}
       <p class="flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-success">
-        <CircleCheck size={12} class="shrink-0" />
+        <CioCheckCircle size={12} class="shrink-0" />
         <span>
           {answeredBy} in {result.latencyMs} ms with {result.toolCount}
           {result.toolCount === 1 ? 'tool' : 'tools'}
@@ -90,11 +93,16 @@
       </p>
     {:else}
       <p class="flex items-start gap-1.5 text-[0.6875rem] text-danger" role="alert">
-        <TriangleAlert size={12} class="mt-0.5 shrink-0" />
+        <CioAttention size={12} class="mt-0.5 shrink-0" />
         <span class={variant === 'row' ? 'line-clamp-2' : ''} title={rowTitle(reason)}>
           {reason}
         </span>
       </p>
+      {#if result.oauthRequired}
+        <p class="text-[0.6875rem] text-muted">
+          This server requires OAuth authorization. Use MCP authorization above.
+        </p>
+      {/if}
     {/if}
 
     {#if result.missingCredentials.length}
@@ -110,7 +118,7 @@
         </p>
       {/if}
       {#if result.ok}
-        <details class="rounded-lg border bg-surface">
+        <details class="border bg-surface">
           <summary
             class="cursor-pointer px-3 py-2 text-[0.6875rem] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           >

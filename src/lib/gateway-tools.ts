@@ -1,6 +1,7 @@
 import { UTILITY_KIND_VALUES } from './types'
 import { ORCHESTRATION_TOOLS } from './orchestration-tools'
 import { APP_CONTROL_TOOLS } from './app-control-tools'
+import { ENGINEERING_TOOLS } from './engineering-tools'
 
 /** Stable app-owned gateway tool names. */
 export const UTILITY_SEARCH_TOOL_NAME = 'cio_util_find'
@@ -8,7 +9,13 @@ export const UTILITY_ACTIVATE_TOOL_NAME = 'cio_util_init'
 export const UTILITY_INVOKE_TOOL_NAME = 'cio_util_use'
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
-/** Explicit-turn-only, read-only app diagnostics for debugging user-reported issues. */
+/**
+ * Always-available, read-only app diagnostics for debugging user-reported issues.
+ * This is an app capability rather than a utility operation, so the gateway
+ * grants its route on every turn: a user reporting a problem never has to
+ * re-send their message with a tag before the agent can look at the thread or
+ * the log they named.
+ */
 export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'cio_util_diagnose'
 /**
  * Proposes a capability the agent found for the user to install. Always
@@ -24,6 +31,64 @@ export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
  * harness: the value goes to the encrypted vault, and the model never sees it.
  */
 export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
+
+/** Optional app APIs remain callable through the core invocation tool. */
+export const GATEWAY_CAPABILITY_ID = 'cio:gateway'
+export const CORE_GATEWAY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_DOCS_TOOL_NAME,
+  ASK_SECRET_TOOL_NAME,
+  UTILITY_DIAGNOSTICS_TOOL_NAME
+])
+export const GATEWAY_DISCOVERY_INSTRUCTION =
+  'Optional app, workstation, engineering and utility-setup tools are available through the built-in cio:gateway capability, already active. Use cio_util_use with utility_id "cio:gateway", operation "catalog", and input {names:["tool_name"]} to load only the needed schemas, or input {} for a compact index. Then operation "call" with input {tool:"tool_name",arguments:{...}} executes it with the original permissions. Operation "batch" accepts input {calls:[{tool,arguments}]} for up to eight independent read-only calls. Inspect every result; dependent calls, mutations and approvals remain sequential. Do not call optional tool names directly or use shell gateway requests.'
+
+export function initialGatewayTools(
+  tools: readonly GatewayToolDefinition[]
+): GatewayToolDefinition[] {
+  return tools.filter(({ name }) => CORE_GATEWAY_TOOL_NAMES.has(name))
+}
+
+/** Model-facing summaries; complete schemas and route policy remain unchanged. */
+const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  cio_orchestrate_targets:
+    'Read exact Oven, harness, provider, model, profile and account ids plus defaults before dispatch. Use filters to avoid unused catalogs.',
+  cio_orchestrate_dispatch:
+    'Start a real project thread on the chosen Oven. Use ids from cio_orchestrate_targets, resolve missing required choices with the question tool, and report acceptance, not completion. Results arrive asynchronously.',
+  cio_orchestrate_status: 'Read a previously dispatched thread status and latest result by id.',
+  cio_app_catalog:
+    'Read exact app IPC channels, argument order, UI actions and current context before cio_app_call. Filter by domain.',
+  cio_app_call:
+    'Invoke one catalog-listed IPC channel or UI action. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
+  cio_create_brainstorm:
+    'Create a durable Brainstorm draft from this conversation and optional constraints for review.',
+  cio_create_prd: 'Create a PRD draft from the finalized Brainstorm or conversation for review.',
+  cio_create_spec:
+    'Create an implementation-ready engineering specification draft for review. Does not approve or implement it.',
+  cio_create_assignment:
+    'Draft independently promptable worker tasks for user review and model selection. Nothing runs until sign-off. If preference is unknown, ask whether the user wants promptable Assignment workers or inline sub-agents.',
+  cio_util_find:
+    'Find app-managed capabilities by task or name. Evaluate candidates semantically. Only notFound:true proves absence. Known eligible ids may be activated directly.',
+  cio_util_init:
+    'Activate an installed utility and read its operations. Registration persists in this thread; later turns can invoke its id directly.',
+  cio_util_use: 'Invoke an operation on an activated or banked utility by id.',
+  cio_util_docs_lookup:
+    'Retrieve full documentation for a registered utility when it has left context.',
+  cio_ask_secret:
+    'Collect all missing credentials together through the encrypted vault. Values never enter chat. Use returned environment names or secret paths without printing values; bind utility_id when applicable. An alternative answer reuses held values, so do not repeat an answered request.',
+  cio_util_manage:
+    'Install or update a secret-free utility bundle only during explicit utility setup. Each entry wraps definition with kind inside it. Collect credentials afterward with cio_ask_secret.',
+  cio_util_diagnose:
+    'Read-only app diagnostics: find threads, read bounded messages or redacted logs, inspect schema, or run bounded SELECT queries. Use for reported app problems. Never changes data.',
+  cio_util_suggest:
+    'Offer a validated, secret-free capability bundle for user installation. Include real MCP transport configuration. Claim connection only after accepted; collect credentials afterward with cio_ask_secret. Handle declined, alternative, invalid and failed results honestly.'
+}
+
+export function gatewayToolForModel(tool: GatewayToolDefinition): GatewayToolDefinition {
+  return { ...tool, description: MODEL_TOOL_DESCRIPTIONS[tool.name] ?? tool.description }
+}
 
 /** One tool the utility gateway MCP exposes to agents. */
 export interface GatewayToolDefinition {
@@ -130,6 +195,7 @@ const UTILITY_BUNDLE_INPUT_SCHEMA: Record<string, unknown> = {
 export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   ...ORCHESTRATION_TOOLS,
   ...APP_CONTROL_TOOLS,
+  ...ENGINEERING_TOOLS,
   {
     name: UTILITY_SEARCH_TOOL_NAME,
     description:
@@ -276,7 +342,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
+      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -333,14 +399,15 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       additionalProperties: false
     },
     route: '/diagnostics',
-    sentWhen: 'Only an explicit @cio-utility debugging turn'
+    sentWhen:
+      'Whenever the user reports a problem with the app, a thread, an assistant, or a log line and the evidence lives in app data'
   },
   {
     name: UTILITY_SUGGEST_TOOL_NAME,
     description:
-      'Propose a capability you found for the user to install: a skill, an MCP server, or a plugin bundle of both. The app surfaces it as an actionable card and installs it through CodeInOven Utilities on every harness only when the user accepts. Use this instead of telling the user a found capability is connected: never say it is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free: install the definition, then collect any credential with ' +
+      'Propose a capability you found for the user to install: a skill, an MCP server, or a plugin bundle of both. The app surfaces it as an actionable card and installs it through CodeInOven Utilities on every harness only when the user accepts. The card lists every utility in the bundle, so send the real definition (an MCP entry needs config.transport plus config.url or config.command), never a placeholder. The app validates the bundle the same way the install does: an invalid bundle is rejected without asking the user, so fix the definition and call again. Use this instead of telling the user a found capability is connected: never say it is installed, available, or connected before this tool returns "accepted". The bundle must be secret-free: install the definition, then collect any credential with ' +
       ASK_SECRET_TOOL_NAME +
-      ', passing the installed id as utility_id. The result reports "accepted" with the installed ids, or "declined" with the instruction to continue without the capability.',
+      ', passing the installed id as utility_id. The result reports "accepted" with the installed ids, "declined", "alternative" when the user answered in their own words, or "invalid"/"failed" with the reason to correct.',
     inputSchema: {
       type: 'object',
       properties: {

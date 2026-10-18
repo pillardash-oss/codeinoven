@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Check, ChevronDown, GitBranch } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 
@@ -8,7 +10,7 @@
     tabs: Array<{
       id: GitPanelTabId
       label: string
-      icon: typeof GitBranch
+      icon: typeof CioTabGit
       count: number | null
     }>
     activeTab: GitPanelTabId
@@ -22,7 +24,7 @@
   const activeCount = $derived(activeEntry?.count ?? null)
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated'
+    'flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated'
 
   /**
    * A radio group reports its value as a plain string, so the tab list is what
@@ -47,7 +49,7 @@
 -->
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
-    class="flex h-7 min-w-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-7 min-w-0 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     title={`View: ${activeLabel || 'none'}. Switch view`}
     aria-label={`Switch view, currently ${activeLabel || 'none'}`}
   >
@@ -57,11 +59,11 @@
     {/if}
     <span class="max-w-[14ch] truncate">{activeLabel}</span>
     {#if activeCount !== null}
-      <span class="shrink-0 rounded-sm bg-elevated px-1 text-[0.5rem] font-semibold tabular-nums">
+      <span class="shrink-0 bg-elevated px-1 text-[0.5rem] font-semibold tabular-nums">
         {activeCount}
       </span>
     {/if}
-    <ChevronDown size={10} class="shrink-0 text-dimmed" />
+    <CioChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
@@ -69,7 +71,7 @@
       align="start"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 w-48 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+      class="z-50 w-48 overflow-hidden border border-border bg-surface py-1 shadow-xl"
     >
       <DropdownMenu.RadioGroup value={activeTab} onValueChange={handleValueChange}>
         {#each tabs as tab (tab.id)}
@@ -79,12 +81,12 @@
             <span class="min-w-0 flex-1 truncate">{tab.label}</span>
             {#if tab.count !== null}
               <span
-                class="shrink-0 rounded-sm bg-app px-1 text-[0.5rem] font-semibold tabular-nums text-dimmed"
+                class="shrink-0 bg-app px-1 text-[0.5rem] font-semibold tabular-nums text-dimmed"
               >
                 {tab.count}
               </span>
             {/if}
-            <Check
+            <CioCheck
               size={12}
               class={['shrink-0', tab.id === activeTab ? 'text-primary' : 'invisible']}
               aria-hidden="true"

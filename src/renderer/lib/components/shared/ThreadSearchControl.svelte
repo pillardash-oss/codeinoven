@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Loader2, Search, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { Popover } from 'bits-ui'
   import { isOrchestrationChildThread, type Thread, type ThreadSearchResult } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
@@ -9,6 +11,10 @@
   interface FtsScope {
     /** Scope the search to one project. Omit for a global search. */
     projectId?: string
+    /** Scope the search to one thread family: the project threads, the chats, or
+     *  one assistant's tasks. Omitted, a search spans every family except the
+     *  hidden browser-chat container. */
+    family?: 'projects' | 'chats' | 'assistant'
     /** Optional client-side filter applied to results (e.g. exclude the inbox). */
     filter?: (thread: Thread) => boolean
   }
@@ -93,6 +99,7 @@
     searchTimer = setTimeout(() => {
       void invoke('threads:search', safeQuery, {
         projectId: scope.projectId,
+        family: scope.family,
         limit: SEARCH_LIMIT
       })
         .then((results) => {
@@ -134,11 +141,11 @@
   }}
 >
   <Popover.Trigger
-    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={title}
     {title}
   >
-    <Search size={15} strokeWidth={1.8} />
+    <CioSearch size={15} strokeWidth={1.8} />
   </Popover.Trigger>
 
   <Popover.Portal>
@@ -146,12 +153,12 @@
       sideOffset={8}
       collisionPadding={16}
       align="end"
-      class="z-50 w-80 overflow-hidden rounded-xl border bg-surface shadow-lg"
+      class="titlebar-no-drag z-50 w-80 overflow-hidden border bg-surface shadow-lg"
       aria-label="Search {contextLabel}"
       onCloseAutoFocus={(e) => e.preventDefault()}
     >
       <div class="flex items-center gap-2 border-b px-3 py-2">
-        <Search size={14} class="shrink-0 text-dimmed" />
+        <CioSearch size={14} class="shrink-0 text-dimmed" />
         <input
           bind:this={searchInput}
           bind:value={query}
@@ -164,7 +171,7 @@
         />
         {#if query}
           <button
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Clear search"
             title="Clear search"
             onclick={() => {
@@ -175,7 +182,7 @@
               searchInput?.focus()
             }}
           >
-            <X size={13} />
+            <CioClose size={13} />
           </button>
         {/if}
       </div>
@@ -186,7 +193,7 @@
             <p
               class="flex items-center justify-center gap-1.5 px-3 py-6 text-center text-xs text-dimmed"
             >
-              <Loader2 size={12} class="animate-spin" />
+              <CioSpinner size={12} class="animate-spin" />
               Searching…
             </p>
           {:else if results.length === 0}
@@ -195,7 +202,7 @@
             {#each results as result (result.thread.id)}
               {@const thread = result.thread}
               <button
-                class="flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                class="flex w-full flex-col gap-0.5 px-2.5 py-2 text-left transition-colors hover:bg-elevated"
                 title={thread.title}
                 onclick={() => void openThread(thread)}
               >

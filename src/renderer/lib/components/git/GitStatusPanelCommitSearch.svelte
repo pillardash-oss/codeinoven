@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Loader2, Search } from '@lucide/svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { GitCommitInfo } from '$shared/types'
   import FindInBar from '../files/FindInBar.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
@@ -52,12 +53,12 @@
     />
     {#if query}
       <div
-        class="mt-1 max-h-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl"
+        class="mt-1 max-h-80 overflow-y-auto border border-border bg-surface p-1 shadow-xl"
         aria-live="polite"
       >
         {#if loading}
           <div class="flex items-center justify-center gap-2 px-3 py-6 text-xs text-dimmed">
-            <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
             Searching commits…
           </div>
         {:else if results.length === 0}
@@ -67,7 +68,7 @@
             <button
               type="button"
               class={[
-                'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                'flex w-full items-start gap-2 px-2.5 py-2 text-left transition-colors',
                 index === activeIndex
                   ? 'bg-primary/10 text-foreground'
                   : 'text-muted hover:bg-elevated'
@@ -76,7 +77,7 @@
               onclick={() => onSelectResult(commit)}
               onmouseenter={() => (activeIndex = index)}
             >
-              <Search size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
+              <CioSearch size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
               <span class="min-w-0 flex-1">
                 <span class="block truncate text-[0.6875rem] leading-snug">
                   {commit.message.split('\n')[0]}

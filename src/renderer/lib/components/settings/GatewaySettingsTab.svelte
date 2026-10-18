@@ -1,16 +1,14 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSquare from '@pillardash-oss/cio-icon/CioSquare.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    Copy,
-    ExternalLink,
-    Loader2,
-    Play,
-    RefreshCw,
-    Square,
-    Trash2,
-    Upload
-  } from '@lucide/svelte'
   import type { GatewayStatus } from '$shared/gateway-types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
@@ -67,7 +65,8 @@
       applyStatus(status)
       if (!enabled) actionNotice = 'Gateway disabled'
     } catch (toggleError) {
-      error = toggleError instanceof Error ? toggleError.message : 'The gateway could not be updated.'
+      error =
+        toggleError instanceof Error ? toggleError.message : 'The gateway could not be updated.'
     } finally {
       busyPluginId = null
     }
@@ -107,7 +106,9 @@
       await loadGateways()
     } catch (refreshError) {
       error =
-        refreshError instanceof Error ? refreshError.message : 'The model catalog could not be refreshed.'
+        refreshError instanceof Error
+          ? refreshError.message
+          : 'The model catalog could not be refreshed.'
     } finally {
       busyPluginId = null
     }
@@ -122,7 +123,9 @@
       toast.success('Gateway uninstalled')
     } catch (uninstallError) {
       error =
-        uninstallError instanceof Error ? uninstallError.message : 'The gateway could not be uninstalled.'
+        uninstallError instanceof Error
+          ? uninstallError.message
+          : 'The gateway could not be uninstalled.'
     } finally {
       busyPluginId = null
     }
@@ -136,7 +139,8 @@
       applyStatus(await invoke('gateway:update', pluginId))
       toast.success('Gateway updated')
     } catch (updateError) {
-      error = updateError instanceof Error ? updateError.message : 'The gateway could not be updated.'
+      error =
+        updateError instanceof Error ? updateError.message : 'The gateway could not be updated.'
     } finally {
       busyPluginId = null
     }
@@ -153,7 +157,10 @@
 
   async function openDashboard(url: string): Promise<void> {
     const opened = await gatewayState.openDashboard(url)
-    if (!opened) toast.error('No project context   open a project first, or the dashboard will open externally.')
+    if (!opened)
+      toast.error(
+        'No project context   open a project first, or the dashboard will open externally.'
+      )
   }
 
   function hasUpdate(gateway: GatewayStatus): boolean {
@@ -167,7 +174,10 @@
   function applyStatus(status: GatewayStatus): void {
     const index = gateways.findIndex((gateway) => gateway.pluginId === status.pluginId)
     if (index === -1) gateways = [...gateways, status]
-    else gateways = gateways.map((gateway) => (gateway.pluginId === status.pluginId ? status : gateway))
+    else
+      gateways = gateways.map((gateway) =>
+        gateway.pluginId === status.pluginId ? status : gateway
+      )
   }
 
   onMount(() => {
@@ -191,29 +201,29 @@
   </div>
 
   {#if error}
-    <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+    <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
   {#if actionNotice}
-    <p class="rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+    <p class="bg-success/10 px-3 py-2 text-xs text-success" role="status">
       {actionNotice}
     </p>
   {/if}
 
   {#if loading && gateways.length === 0}
-    <div class="flex items-center gap-2 rounded-xl border bg-surface p-4 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" />
+    <div class="flex items-center gap-2 border bg-surface p-4 text-xs text-muted">
+      <CioSpinner size={14} class="animate-spin" />
       Inspecting gateways…
     </div>
   {:else}
     {#each gateways as gateway (gateway.pluginId)}
       {@const busy = busyPluginId === gateway.pluginId}
-      <section class="rounded-xl border bg-surface p-4">
+      <section class="border bg-surface p-4">
         <div class="flex items-start justify-between gap-4">
           <div class="min-w-0">
             <div class="flex flex-wrap items-center gap-2">
               <h2 class="text-base font-semibold">{gateway.adapterName}</h2>
               <span
-                class="rounded-lg px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide {lifecycleClass(
+                class="border border-border px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide {lifecycleClass(
                   gateway.lifecycle
                 )}"
               >
@@ -239,17 +249,17 @@
         </div>
 
         <div class="mt-4 grid gap-3 sm:grid-cols-3">
-          <div class="rounded-xl bg-elevated px-3 py-2.5">
+          <div class="border bg-elevated px-3 py-2.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Port</p>
             <p class="mt-1 text-sm font-medium tabular-nums">
               {gateway.port ?? ' '}
             </p>
           </div>
-          <div class="rounded-xl bg-elevated px-3 py-2.5">
+          <div class="border bg-elevated px-3 py-2.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Models</p>
             <p class="mt-1 text-sm font-medium tabular-nums">{gateway.modelCount}</p>
           </div>
-          <div class="rounded-xl bg-elevated px-3 py-2.5">
+          <div class="border bg-elevated px-3 py-2.5">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Version</p>
             <p class="mt-1 text-sm font-medium">
               {gateway.installedVersion ?? gateway.availableVersion}
@@ -259,9 +269,9 @@
 
         {#if gateway.detail}
           <div
-            class="mt-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+            class="mt-4 flex items-start gap-2 border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
           >
-            <AlertTriangle size={14} class="mt-0.5 shrink-0" />
+            <CioAttention size={14} class="mt-0.5 shrink-0" />
             <span class="break-all">{gateway.detail}</span>
           </div>
         {/if}
@@ -271,8 +281,14 @@
           <div class="mt-4">
             <DownloadProgress
               percent={progress.percent}
-              label={progress.phase === 'downloading' ? `Downloading ${progress.detail ?? gateway.adapterName}` : 'Installing packages'}
-              detail={progress.phase === 'downloading' && progress.downloadedBytes !== undefined && progress.totalBytes !== undefined ? `${(progress.downloadedBytes / 1_048_576).toFixed(1)} / ${(progress.totalBytes / 1_048_576).toFixed(1)} MB` : undefined}
+              label={progress.phase === 'downloading'
+                ? `Downloading ${progress.detail ?? gateway.adapterName}`
+                : 'Installing packages'}
+              detail={progress.phase === 'downloading' &&
+              progress.downloadedBytes !== undefined &&
+              progress.totalBytes !== undefined
+                ? `${(progress.downloadedBytes / 1_048_576).toFixed(1)} / ${(progress.totalBytes / 1_048_576).toFixed(1)} MB`
+                : undefined}
               indeterminate={progress.percent === undefined}
               ariaLabel={`${gateway.adapterName} install progress`}
             />
@@ -283,72 +299,72 @@
           {#if gateway.lifecycle === 'ready'}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
               disabled={busy}
               title="Stop the {gateway.adapterName} gateway"
               onclick={() => void stopGateway(gateway.pluginId)}
             >
-              <Square size={14} />
+              <CioSquare size={14} />
               Stop
             </button>
           {:else if gateway.enabled}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              class="flex h-9 items-center gap-2 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               disabled={busy}
               title="Install if needed and start the {gateway.adapterName} gateway"
               onclick={() => void startGateway(gateway.pluginId)}
             >
               {#if busy || gateway.lifecycle === 'starting' || gateway.lifecycle === 'installing'}
-                <Loader2 size={14} class="animate-spin" />
+                <CioSpinner size={14} class="animate-spin" />
               {:else}
-                <Play size={14} />
+                <CioPlay size={14} />
               {/if}
               Start
             </button>
           {/if}
           <button
             type="button"
-            class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
             disabled={busy || gateway.lifecycle !== 'ready'}
             title="Re-fetch the model catalog from the running gateway"
             onclick={() => void refreshCatalog(gateway.pluginId)}
           >
-            <RefreshCw size={14} class={busy ? 'animate-spin' : ''} />
+            <CioRefresh size={14} class={busy ? 'animate-spin' : ''} />
             Refresh models
           </button>
           {#if gateway.dashboardUrl && gateway.lifecycle === 'ready'}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
               title="Open the {gateway.adapterName} dashboard"
               onclick={() => openDashboard(gateway.dashboardUrl ?? '')}
             >
-              <ExternalLink size={14} />
+              <CioExternalLink size={14} />
               Open dashboard
             </button>
           {/if}
           {#if gateway.installedVersion !== undefined}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
               disabled={busy}
               title="Copy the provisioned dashboard password"
               onclick={() => void copyDashboardPassword(gateway.pluginId)}
             >
-              <Copy size={14} />
+              <CioCopy size={14} />
               Copy password
             </button>
           {/if}
           {#if hasUpdate(gateway)}
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/15 disabled:opacity-50"
+              class="flex h-9 items-center gap-2 border border-primary/40 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/15 disabled:opacity-50"
               disabled={busy}
               title="Reinstall at version {gateway.availableVersion}"
               onclick={() => (updateTarget = gateway)}
             >
-              <Upload size={14} />
+              <CioUpload size={14} />
               Update to {gateway.availableVersion}
             </button>
           {/if}
@@ -356,12 +372,12 @@
             {#if gateway.lifecycle !== 'not_installed'}
               <button
                 type="button"
-                class="ml-auto flex h-9 items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+                class="ml-auto flex h-9 items-center gap-2 border border-danger/30 bg-danger/5 px-3 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
                 disabled={busy}
                 title="Uninstall the {gateway.adapterName} gateway and remove its data"
                 onclick={() => (uninstallTarget = gateway)}
               >
-                <Trash2 size={14} />
+                <CioTrash size={14} />
                 Uninstall
               </button>
             {/if}
@@ -369,7 +385,9 @@
         </div>
 
         {#if gateway.dashboardUrl}
-          <p class="mt-3 break-all font-mono text-[0.6875rem] text-dimmed">{gateway.dashboardUrl}</p>
+          <p class="mt-3 break-all font-mono text-[0.6875rem] text-dimmed">
+            {gateway.dashboardUrl}
+          </p>
         {/if}
       </section>
     {/each}
@@ -390,14 +408,14 @@
         the gateway will stop working.
       </p>
       <p class="text-xs text-dimmed">
-        Your gateway configuration data (providers set up inside the dashboard) is also removed.
-        You can reinstall the gateway at any time.
+        Your gateway configuration data (providers set up inside the dashboard) is also removed. You
+        can reinstall the gateway at any time.
       </p>
     </div>
     {#snippet footer()}
       <button
         type="button"
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+        class="border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
         title="Keep the gateway installed"
         onclick={() => (uninstallTarget = null)}
       >
@@ -405,7 +423,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-danger px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-danger px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         title="Confirm uninstalling the gateway"
         disabled={busyPluginId === uninstallTarget?.pluginId}
         onclick={() => {
@@ -413,9 +431,9 @@
         }}
       >
         {#if busyPluginId === uninstallTarget?.pluginId}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Trash2 size={13} />
+          <CioTrash size={13} />
         {/if}
         Uninstall
       </button>
@@ -444,7 +462,7 @@
     {#snippet footer()}
       <button
         type="button"
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+        class="border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
         title="Skip this update"
         onclick={() => (updateTarget = null)}
       >
@@ -452,7 +470,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         title="Confirm updating the gateway"
         disabled={busyPluginId === updateTarget?.pluginId}
         onclick={() => {
@@ -460,9 +478,9 @@
         }}
       >
         {#if busyPluginId === updateTarget?.pluginId}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Upload size={13} />
+          <CioUpload size={13} />
         {/if}
         Update
       </button>

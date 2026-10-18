@@ -1,4 +1,17 @@
 <script lang="ts">
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+  import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioMoon from '@pillardash-oss/cio-icon/CioMoon.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSun from '@pillardash-oss/cio-icon/CioSun.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -8,6 +21,7 @@
   import type { SettingsSearchEntry } from '$lib/settings-search'
   import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
   import {
+    CONTRAST_LEVEL_OPTIONS,
     FONT_FAMILY_OPTIONS,
     FONT_WEIGHT_OPTIONS,
     ZOOM_LEVEL_OPTIONS
@@ -45,23 +59,7 @@
     type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
-  import {
-    AlertCircle,
-    AlertTriangle,
-    Bell,
-    CheckCircle2,
-    Clock,
-    Download,
-    FolderOpen,
-    Loader2,
-    Monitor,
-    Moon,
-    RefreshCw,
-    Search,
-    Sun,
-    type LucideIcon
-  } from '@lucide/svelte'
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, type Component } from 'svelte'
   import { toast } from 'svelte-sonner'
   import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import VendorIcon from '../../vendor-icons/VendorIcon.svelte'
@@ -81,11 +79,11 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
-  import DesignWorkFoldersSettings from './DesignWorkFoldersSettings.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
+  import VideoPackagesSettings from './VideoPackagesSettings.svelte'
   import OvensSettings from './OvensSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
@@ -251,7 +249,7 @@
   const tabs: Array<{
     id: SettingsSection
     label: string
-    icon: LucideIcon
+    icon: Component
   }> = SETTINGS_SEARCH_ENTRIES.filter((entry) => !entry.blockId).map((entry) => ({
     id: entry.section,
     label: entry.title,
@@ -275,9 +273,9 @@
   })
 
   const themeOptions = [
-    { id: 'system' as const, label: 'System', icon: Monitor },
-    { id: 'light' as const, label: 'Light', icon: Sun },
-    { id: 'dark' as const, label: 'Dark', icon: Moon }
+    { id: 'system' as const, label: 'System', icon: CioDisplay },
+    { id: 'light' as const, label: 'Light', icon: CioSun },
+    { id: 'dark' as const, label: 'Dark', icon: CioMoon }
   ]
 
   const slashCommandOptions: Array<{
@@ -626,7 +624,7 @@
       <div class="flex items-center px-2 py-1.5">
         <button
           type="button"
-          class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 flex-1 items-center gap-2 px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Exit settings"
           aria-label="Exit settings"
           onclick={onBack}
@@ -649,7 +647,7 @@
             Configure {APP_NAME} appearance and defaults.
           </p>
           {#if error}
-            <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
@@ -657,8 +655,10 @@
 
         <div class="space-y-4">
           <!-- Appearance -->
-          <div id="settings-block-general-appearance" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-general-appearance" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               Appearance
             </h3>
             <div class="flex items-center justify-between">
@@ -666,13 +666,13 @@
                 <p class="text-sm font-medium">Theme</p>
                 <p class="text-xs leading-relaxed text-dimmed">Follow the system or pick a mode</p>
               </div>
-              <div class="flex items-center gap-0.5 rounded-lg border bg-elevated p-0.5">
+              <div class="flex items-center gap-0.5 border bg-elevated p-0.5">
                 {#each themeOptions as option (option.id)}
                   {@const Icon = option.icon}
                   <button
-                    class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors {config.theme ===
+                    class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {config.theme ===
                     option.id
-                      ? 'bg-surface text-foreground shadow-sm'
+                      ? 'bg-surface text-foreground'
                       : 'text-muted hover:text-foreground'}"
                     aria-pressed={config.theme === option.id}
                     disabled={!settingsReady}
@@ -687,11 +687,35 @@
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
+                <p class="text-sm font-medium">Contrast</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  Strengthen text and rules for a dim or washed-out display
+                </p>
+              </div>
+              <div class="flex items-center gap-0.5 border bg-elevated p-0.5">
+                {#each CONTRAST_LEVEL_OPTIONS as option (option.id)}
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium transition-colors {config.contrastLevel ===
+                    option.id
+                      ? 'bg-surface text-foreground'
+                      : 'text-muted hover:text-foreground'}"
+                    aria-pressed={config.contrastLevel === option.id}
+                    disabled={!settingsReady}
+                    title={option.hint}
+                    onclick={() => void updateConfig({ contrastLevel: option.id })}
+                  >
+                    {option.label}
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-4">
+              <div>
                 <p class="text-sm font-medium">Font</p>
                 <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
               <select
-                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                 value={config.fontFamily}
                 disabled={!settingsReady}
                 aria-label="App font"
@@ -736,7 +760,7 @@
                 <p class="text-xs leading-relaxed text-dimmed">Lightness of the app text</p>
               </div>
               <select
-                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                 value={config.fontWeight}
                 disabled={!settingsReady}
                 aria-label="Font weight"
@@ -758,7 +782,7 @@
                 <p class="text-xs leading-relaxed text-dimmed">Magnify the whole interface</p>
               </div>
               <select
-                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                 value={config.zoomLevel}
                 disabled={!settingsReady}
                 aria-label="Interface zoom"
@@ -777,8 +801,10 @@
           </div>
 
           <!-- Notifications -->
-          <div id="settings-block-general-notifications" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-general-notifications" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               Notifications
             </h3>
             <div class="flex items-center justify-between gap-4">
@@ -793,17 +819,17 @@
                 </p>
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
-                    <CheckCircle2 size={13} />
+                    <CioCheckCircle size={13} />
                     Notifications are allowed
                   </p>
                 {/if}
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied'}
                   <div
-                    class="mt-3 flex items-start justify-between gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2"
+                    class="mt-3 flex items-start justify-between gap-3 border border-warning/30 bg-warning/10 px-3 py-2"
                     role="alert"
                   >
                     <div class="flex items-start gap-2">
-                      <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+                      <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
                       <div>
                         <p class="text-xs font-medium text-warning">Notifications are blocked</p>
                         <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
@@ -814,7 +840,7 @@
                       </div>
                     </div>
                     <button
-                      class="flex shrink-0 items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15"
+                      class="flex shrink-0 items-center gap-1.5 border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15"
                       title="Open System Settings to allow notifications for {APP_NAME}"
                       onclick={openNotificationSettings}
                     >
@@ -835,15 +861,15 @@
                 {/if}
               </div>
               <button
-                class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                class="flex shrink-0 items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                 disabled={notificationTestBusy}
                 title="Request permission and send a test system notification"
                 onclick={() => void testSystemNotification()}
               >
                 {#if notificationTestBusy}
-                  <Loader2 size={13} class="animate-spin" />
+                  <CioSpinner size={13} class="animate-spin" />
                 {:else}
-                  <Bell size={13} />
+                  <CioNotifications size={13} />
                 {/if}
                 Test notification
               </button>
@@ -890,8 +916,12 @@
 
           <!-- Browser -->
           <!-- Power -->
-          <div id="settings-block-general-power" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Power</h3>
+          <div id="settings-block-general-power" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Power
+            </h3>
             <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Keep device on while work is in progress</p>
@@ -910,8 +940,12 @@
           </div>
 
           <!-- Recovery -->
-          <div id="settings-block-general-recovery" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Recovery</h3>
+          <div id="settings-block-general-recovery" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Recovery
+            </h3>
             <div class="space-y-4">
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -949,8 +983,12 @@
           </div>
 
           <!-- Git -->
-          <div id="settings-block-general-git" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Git</h3>
+          <div id="settings-block-general-git" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Git
+            </h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
                 <div>
@@ -960,7 +998,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.defaultMergeMethod}
                   disabled={!settingsReady}
                   aria-label="Default merge method"
@@ -982,7 +1020,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.defaultPullStrategy}
                   disabled={!settingsReady}
                   aria-label="Default pull strategy"
@@ -1005,7 +1043,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min="10"
                     max="5000"
@@ -1028,7 +1066,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min={MIN_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
                     max={MAX_MAX_CONFLICT_FILE_BYTES / MEBIBYTE}
@@ -1045,8 +1083,12 @@
           </div>
 
           <!-- Threads -->
-          <div id="settings-block-general-threads" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Threads</h3>
+          <div id="settings-block-general-threads" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Threads
+            </h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
                 <div>
@@ -1056,7 +1098,7 @@
                   </p>
                 </div>
                 <input
-                  class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium outline-none focus:border-primary disabled:opacity-50"
                   type="number"
                   min="1"
                   max="1000"
@@ -1076,7 +1118,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.slashCommandMode}
                   disabled={!settingsReady}
                   aria-label="Slash command behavior"
@@ -1099,7 +1141,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min="10"
                     max="3600"
@@ -1120,7 +1162,7 @@
                   </p>
                 </div>
                 <input
-                  class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                  class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                   type="number"
                   min="1"
                   max="10"
@@ -1131,11 +1173,60 @@
                   onchange={saveAgentQuestionCap}
                 />
               </div>
+              <div class="space-y-2 border-t border-border pt-3">
+                <div>
+                  <p class="text-sm font-medium">Switcher panel tabs</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Let Ctrl+Tab also cycle these panels' own tabs
+                  </p>
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Terminal tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open terminal</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherTerminalTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherTerminalTabs: !config.switcherTerminalTabs })}
+                    aria-label="Toggle listing terminal tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Project file tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open file</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherFileTabs}
+                    onchange={() =>
+                      void updateConfig({ switcherFileTabs: !config.switcherFileTabs })}
+                    aria-label="Toggle listing project file tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="text-sm">Thread browser tabs</p>
+                    <p class="text-xs leading-relaxed text-dimmed">Each open browser tab</p>
+                  </div>
+                  <Switch
+                    checked={config.switcherThreadBrowserTabs}
+                    onchange={() =>
+                      void updateConfig({
+                        switcherThreadBrowserTabs: !config.switcherThreadBrowserTabs
+                      })}
+                    aria-label="Toggle listing thread browser tabs in the thread switcher"
+                    disabled={!settingsReady}
+                  />
+                </div>
+              </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Run in the background</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Keep Assistant routines on schedule after the window closes
+                    Keep Assistants on schedule after the window closes
                   </p>
                 </div>
                 <Switch
@@ -1154,7 +1245,7 @@
                   </p>
                 </div>
                 <select
-                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
                   value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
                   disabled={!settingsReady || config.backgroundMode === 'off'}
                   aria-label="Background mode"
@@ -1208,7 +1299,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min={MIN_BACKGROUND_WAKE_LEAD_MS / 1_000}
                     max={MAX_BACKGROUND_WAKE_LEAD_MS / 1_000}
@@ -1225,14 +1316,16 @@
           </div>
 
           <!-- CIO Cleanup -->
-          <div id="settings-block-general-cio-cleanup" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-general-cio-cleanup" class="border bg-surface p-4">
+            <h3
+              class="mb-1 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               CIO Cleanup
             </h3>
             <p class="mb-3 text-xs leading-relaxed text-dimmed">
               Stale content of every workspace's <code>.cio</code> scratch folder (projects, scopes, chats,
-              assistant routines, and browser tabs) is removed once a day. Folders you exclude below are
-              never touched.
+              assistants, and browser tabs) is removed once a day. Folders you exclude below are never
+              touched.
             </p>
             <div class="space-y-3">
               <div class="flex items-center justify-between gap-4">
@@ -1244,7 +1337,7 @@
                 </div>
                 <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
                   <input
-                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    class="w-20 border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
                     type="number"
                     min={MIN_CIO_CLEANUP_RETENTION_DAYS}
                     max={MAX_CIO_CLEANUP_RETENTION_DAYS}
@@ -1266,12 +1359,12 @@
                 </div>
                 <button
                   type="button"
-                  class="flex h-9 shrink-0 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  class="flex h-9 shrink-0 items-center gap-2 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                   title="Run CIO Cleanup now"
                   disabled={!settingsReady || cioCleanupStore.state.running}
                   onclick={() => void cioCleanupStore.runNow()}
                 >
-                  <RefreshCw
+                  <CioRefresh
                     size={13}
                     class={cioCleanupStore.state.running ? 'animate-spin' : ''}
                   />
@@ -1330,21 +1423,22 @@
     {:else if section === 'design'}
       <div class="p-6 pb-24">
         <div class="mb-6">
-          <h1 class="text-xl font-bold tracking-tight">Design</h1>
+          <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
           <p class="mt-0.5 text-sm text-muted">
-            Where design work is saved, and which model does each kind of it.
+            Which model does each kind of design and video work, and the optional video pack. Save
+            folders belong to each project and are changed from its design or video board.
           </p>
           {#if error}
-            <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
               {error}
             </p>
           {/if}
         </div>
         <div class="mb-6">
-          <DesignWorkFoldersSettings {config} {settingsReady} {updateConfig} />
+          <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
         </div>
         <div class="mb-6">
-          <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
+          <VideoPackagesSettings />
         </div>
         <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
       </div>
@@ -1471,7 +1565,7 @@
           <div class="mt-5 flex items-center gap-2">
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the CodeInOven website"
               data-external-url={WEBSITE_URL}
               onclick={() => void openInBrowser(WEBSITE_URL, 'global')}
@@ -1481,7 +1575,7 @@
             </button>
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the GitHub repository"
               data-external-url={GITHUB_URL}
               onclick={() => void openInBrowser(GITHUB_URL, 'global')}
@@ -1491,7 +1585,7 @@
             </button>
             <button
               type="button"
-              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
+              class="flex h-9 items-center gap-2 border bg-elevated px-3.5 text-xs font-medium hover:bg-overlay"
               title="Open the X (Twitter) page"
               data-external-url={X_URL}
               onclick={() => void openInBrowser(X_URL, 'global')}
@@ -1511,18 +1605,22 @@
           </div>
         </div>
 
-        <div id="settings-block-about-updates" class="mt-4 rounded-xl border bg-surface p-4">
-          <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Updates</h3>
+        <div id="settings-block-about-updates" class="mt-4 border bg-surface p-4">
+          <h3
+            class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+          >
+            Updates
+          </h3>
 
           <!-- Update status -->
           {#if updaterState.status.state === 'checking'}
             <div class="mb-3 flex items-center gap-2 text-xs text-muted">
-              <Loader2 size={13} class="animate-spin" />
+              <CioSpinner size={13} class="animate-spin" />
               Checking for updates…
             </div>
           {:else if updaterState.status.state === 'available'}
             <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <Download size={13} />
+              <CioDownload size={13} />
               <span>
                 Update <strong>{updaterState.status.availableVersion}</strong> available
               </span>
@@ -1540,20 +1638,20 @@
             </div>
           {:else if updaterState.status.state === 'downloaded'}
             <div class="mb-3 flex items-center gap-2 text-xs text-primary">
-              <CheckCircle2 size={13} />
+              <CioCheckCircle size={13} />
               <span>
                 Update <strong>{updaterState.status.availableVersion}</strong> ready to install
               </span>
             </div>
             {#if updaterState.status.blockedReason}
               <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
-                <AlertCircle size={13} class="shrink-0" />
+                <CioAlertCircle size={13} class="shrink-0" />
                 <span>{updaterState.status.blockedReason}</span>
               </div>
             {/if}
           {:else if updaterState.status.state === 'waiting'}
             <div class="mb-3 flex items-center gap-2 text-xs text-accent">
-              <Clock size={13} class="shrink-0" />
+              <CioClock size={13} class="shrink-0" />
               <span>
                 Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
                 1
@@ -1562,7 +1660,7 @@
               </span>
               <button
                 type="button"
-                class="shrink-0 whitespace-nowrap rounded border border-accent/40 px-2 py-1 font-medium text-accent transition-colors hover:bg-accent/10"
+                class="shrink-0 whitespace-nowrap border border-accent/40 px-2 py-1 font-medium text-accent transition-colors hover:bg-accent/10"
                 title="Show what the update is waiting on, and offer to stop it and install now"
                 onclick={openUpdateBlockersModal}
               >
@@ -1571,12 +1669,12 @@
             </div>
           {:else if updaterState.status.state === 'error'}
             <div class="mb-3 flex items-center gap-2 text-xs text-danger">
-              <AlertCircle size={13} />
+              <CioAlertCircle size={13} />
               <span>{updaterState.status.errorMessage ?? 'Update check failed'}</span>
             </div>
           {:else if updaterState.status.state === 'idle' && updaterState.status.canAutoUpdate}
             <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">
-              <CheckCircle2 size={13} />
+              <CioCheckCircle size={13} />
               <span>{APP_NAME} is up to date</span>
             </div>
           {/if}
@@ -1642,12 +1740,12 @@
               </div>
               <div class="flex flex-wrap items-center gap-2">
                 <button
-                  class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                  class="flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                   disabled={updaterState.status.state === 'checking' || !settingsReady}
                   title="Check for updates now"
                   onclick={() => void updaterState.checkForUpdates()}
                 >
-                  <RefreshCw
+                  <CioRefresh
                     size={13}
                     class={updaterState.status.state === 'checking' ? 'animate-spin' : ''}
                   />
@@ -1656,22 +1754,22 @@
 
                 {#if updaterState.status.state === 'available'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+                    class="flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                     title="Download update"
                     onclick={() => void updaterState.downloadUpdate()}
                   >
-                    <Download size={13} />
+                    <CioDownload size={13} />
                     Download
                   </button>
                 {/if}
 
                 {#if updaterState.status.state === 'downloaded'}
                   <button
-                    class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+                    class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
                     title="Restart and install update"
                     onclick={() => void updaterState.installUpdate()}
                   >
-                    <RefreshCw size={13} />
+                    <CioRefresh size={13} />
                     Restart &amp; install
                   </button>
                 {/if}
@@ -1682,33 +1780,39 @@
 
         <!-- Storage + Diagnostics sit side by side and stack on narrow screens -->
         <div class="mt-4 grid gap-4 md:grid-cols-2">
-          <div id="settings-block-about-storage" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
+          <div id="settings-block-about-storage" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
+              Storage
+            </h3>
             <p class="text-sm font-medium">Data directory</p>
             <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
               Projects, threads, and history are stored here.
             </p>
             <div class="mt-3 flex flex-wrap items-center gap-2">
               <span
-                class="min-w-0 truncate rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
+                class="min-w-0 truncate border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
                 title="~/.config/{ORG_SLUG}/{APP_SLUG}"
               >
                 ~/.config/{ORG_SLUG}/{APP_SLUG}
               </span>
               <button
                 type="button"
-                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
                 title="Open the data directory in the file manager"
                 onclick={() => void openDataDirectory()}
               >
-                <FolderOpen size={13} />
+                <CioFolderOpen size={13} />
                 Open in file manager
               </button>
             </div>
           </div>
 
-          <div id="settings-block-about-diagnostics" class="rounded-xl border bg-surface p-4">
-            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          <div id="settings-block-about-diagnostics" class="border bg-surface p-4">
+            <h3
+              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+            >
               Diagnostics
             </h3>
             <p class="text-sm font-medium">Export failure report</p>
@@ -1719,15 +1823,15 @@
               <p class="mt-1 max-w-md break-all text-[0.6875rem] text-muted">{diagnosticsResult}</p>
             {/if}
             <button
-              class="mt-3 flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              class="mt-3 flex items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
               disabled={diagnosticsBusy}
               title="Export a redacted diagnostics report"
               onclick={() => void exportDiagnostics()}
             >
               {#if diagnosticsBusy}
-                <Loader2 size={13} class="animate-spin" />
+                <CioSpinner size={13} class="animate-spin" />
               {:else}
-                <Download size={13} />
+                <CioDownload size={13} />
               {/if}
               Export
             </button>
@@ -1750,7 +1854,7 @@
     title="Search settings"
     placeholder="Search settings pages and sections…"
     emptyLabel="No matching settings"
-    headerIcon={Search}
+    headerIcon={CioSearch}
     onSelect={handleSettingsSearch}
     onClose={() => (settingsUiState.searchOpen = false)}
   />
@@ -1778,9 +1882,7 @@
     <div class="space-y-3 text-sm text-muted">
       <p>
         Nightly builds are bleeding-edge prereleases generated from the
-        <code class="rounded bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground"
-          >nightly</code
-        >
+        <code class="bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground">nightly</code>
         branch. They ship continuously so you can try the latest changes early.
       </p>
       <ul class="list-disc space-y-1 pl-5">
@@ -1798,7 +1900,7 @@
     </div>
     {#snippet footer()}
       <button
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        class="border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
         title="Keep receiving stable updates"
         onclick={() => {
           nightlyModalOpen = false
@@ -1807,15 +1909,15 @@
         Cancel
       </button>
       <button
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
         title="Enroll in nightly builds"
         disabled={channelBusy}
         onclick={() => void setChannel('nightly')}
       >
         {#if channelBusy}
-          <Loader2 size={13} class="animate-spin" />
+          <CioSpinner size={13} class="animate-spin" />
         {:else}
-          <Download size={13} />
+          <CioDownload size={13} />
         {/if}
         Enable nightly builds
       </button>

@@ -1,16 +1,14 @@
 <script lang="ts">
-  import {
-    Bell,
-    Bot,
-    Bug,
-    Check,
-    ChevronDown,
-    Copy,
-    MessageCircleDashed,
-    MessageSquare,
-    RotateCcw,
-    X
-  } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioDebugger from '@pillardash-oss/cio-icon/CioDebugger.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
@@ -24,13 +22,13 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { scopeState, STATUS_TONE_COLORS } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import {
     assistantSubjectName,
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
-    groupActivityByRoutine,
+    groupActivityByAssistant,
     missedRunReasonText,
     UNGROUPED_MISSED_RUNS
   } from '$lib/components/assistant/assistant-view'
@@ -56,30 +54,30 @@
   }
 
   /**
-   * One row the Assistants tab can show under a routine: a notice, a missed
+   * One row the Assistants tab can show under an assistant: a notice, a missed
    * fire, or an unattended run, each tagged with the moment it reports and the
-   * routine it belongs to, so all three fold together per routine.
+   * assistant it belongs to, so all three fold together per assistant.
    */
   type AssistantActivity =
     | {
         kind: 'notice'
         id: string
         at: number
-        routineId: string | undefined
+        assistantId: string | undefined
         notification: InAppNotification
       }
     | {
         kind: 'missed'
         id: string
         at: number
-        routineId: string | undefined
+        assistantId: string | undefined
         run: MissedRun
       }
     | {
         kind: 'background'
         id: string
         at: number
-        routineId: string | undefined
+        assistantId: string | undefined
         run: BackgroundRun
       }
 
@@ -171,7 +169,7 @@
     showingAppErrors
       ? appErrorState.count > 0
       : showingAssistants
-        ? assistantRoutines.missedRuns.length > 0 || assistantRoutines.backgroundRuns.length > 0
+        ? assistants.missedRuns.length > 0 || assistants.backgroundRuns.length > 0
         : notificationPanelState.visible.length > 0
   )
 
@@ -184,24 +182,24 @@
       : notificationPanelState.assistantNotifications.length > 0
   )
 
-  // Missed runs are surfaced per routine: one group per owning routine, plus a
-  // single group for routine-less tasks. Both the groups and the panel's tab
+  // Missed runs are surfaced per assistant: one group per owning assistant, plus a
+  // single group for assistant-less tasks. Both the groups and the panel's tab
   // chrome exist only once at least one run has actually been missed.
-  const routineNameById = $derived(
-    new Map(assistantRoutines.routines.map((routine) => [routine.id, routine.name]))
+  const assistantNameById = $derived(
+    new Map(assistants.assistants.map((assistant) => [assistant.id, assistant.name]))
   )
 
   /**
    * The missed fires and unattended runs the panel shows both come straight
    * from the store (`assistantVisibleMissedRuns` / `assistantVisibleBackgroundRuns`),
-   * which applies the same sub-filter, routines/tasks filter, and run/notice
+   * which applies the same sub-filter, assistants/tasks filter, and run/notice
    * de-duplication to them as it does to the notices it owns. Keeping the rule in
    * one place is what makes the tab badge match the rows on screen.
    */
 
   /**
    * One entry per row an assistant section can show: a notice, a missed fire, or
-   * an unattended run, each carrying the moment it reports and the routine it
+   * an unattended run, each carrying the moment it reports and the assistant it
    * belongs to.
    */
   const assistantActivity = $derived.by<AssistantActivity[]>(() => {
@@ -211,7 +209,7 @@
         kind: 'notice',
         id: `notice:${n.id}`,
         at: n.timestamp,
-        routineId: n.routineId,
+        assistantId: n.assistantId,
         notification: n
       })
     }
@@ -220,7 +218,7 @@
         kind: 'missed',
         id: `missed:${run.id}`,
         at: run.dueAt,
-        routineId: run.routineId,
+        assistantId: run.assistantId,
         run
       })
     }
@@ -229,7 +227,7 @@
         kind: 'background',
         id: `background:${run.runThreadId}`,
         at: run.settledAt ?? run.startedAt,
-        routineId: run.routineId,
+        assistantId: run.assistantId,
         run
       })
     }
@@ -237,16 +235,16 @@
   })
 
   /**
-   * The Assistants tab folds per routine: one section per routine (plus one for
-   * activity owned by no routine), newest update first inside each section and
-   * across them, so a routine that just updated rises to the top of the list.
+   * The Assistants tab folds per assistant: one section per assistant (plus one for
+   * activity owned by no assistant), newest update first inside each section and
+   * across them, so an assistant that just updated rises to the top of the list.
    */
   const assistantSections = $derived(
-    groupActivityByRoutine(assistantActivity, routineNameById, { key: UNGROUPED_MISSED_RUNS })
+    groupActivityByAssistant(assistantActivity, assistantNameById, { key: UNGROUPED_MISSED_RUNS })
   )
 
-  // Sections the user folded shut, keyed by routine (or the routine-less
-  // bucket). Open is the default, so a fresh routine stays visible until folded.
+  // Sections the user folded shut, keyed by assistant (or the assistant-less
+  // bucket). Open is the default, so a fresh assistant stays visible until folded.
   const collapsedAssistantSections = new SvelteSet<string>()
 
   function toggleAssistantSection(key: string): void {
@@ -254,28 +252,28 @@
     else collapsedAssistantSections.add(key)
   }
 
-  // The assistants tab's routines/tasks narrowing, behind the filter button at
+  // The assistants tab's assistants/tasks narrowing, behind the filter button at
   // the end of the sub-filter row.
   const assistantSubjectOptions: Array<{
     id: NotificationAssistantSubject
     label: string
     hint: string
   }> = [
-    { id: 'all', label: 'Routines and tasks', hint: 'Everything the assistant ran' },
-    { id: 'routine', label: 'Routines only', hint: 'Runs owned by a scheduled routine' },
-    { id: 'task', label: 'Tasks only', hint: 'Standalone task runs, owned by no routine' }
+    { id: 'all', label: 'Assistants and tasks', hint: 'Everything the assistant ran' },
+    { id: 'assistant', label: 'Assistants only', hint: 'Runs owned by a scheduled assistant' },
+    { id: 'task', label: 'Tasks only', hint: 'Runs of tasks that belong to no assistant yet' }
   ]
 
   const assistantSubjectLabel = $derived(
     assistantSubjectOptions.find((option) => option.id === notificationPanelState.assistantSubject)
-      ?.label ?? 'Routines and tasks'
+      ?.label ?? 'Assistants and tasks'
   )
 
   /** Whether any assistant activity exists before either filter narrows it. */
   const assistantHasActivity = $derived(
     notificationPanelState.assistantNotifications.length > 0 ||
-      assistantRoutines.missedRuns.length > 0 ||
-      assistantRoutines.backgroundRuns.length > 0
+      assistants.missedRuns.length > 0 ||
+      assistants.backgroundRuns.length > 0
   )
 
   /** Whether the active filters hide everything there is to show. */
@@ -288,34 +286,38 @@
 
   /**
    * The task a run row reports for, resolved from the loaded thread list. A
-   * routine's Getting started host is not a job, and a deleted task has no row
-   * at all, so both resolve through the routine name instead (see
+   * assistant's Getting started host is not a job, and a deleted task has no row
+   * at all, so both resolve through the assistant name instead (see
    * `assistantSubjectName`).
    */
   function runTask(threadId: string): Thread | undefined {
     return scopeState.allScopeThreads.find((thread) => thread.id === threadId)
   }
 
-  function routineNameFor(routineId: string | undefined): string | null {
-    return routineId ? (routineNameById.get(routineId) ?? null) : null
+  function assistantNameFor(assistantId: string | undefined): string | null {
+    return assistantId ? (assistantNameById.get(assistantId) ?? null) : null
   }
 
   function missedRunTitle(run: MissedRun): string {
     return assistantSubjectName(
       runTask(run.threadId),
-      routineNameFor(run.routineId),
+      assistantNameFor(run.assistantId),
       'Assistant task'
     )
   }
 
   /**
-   * A run's own row names the task it ran, never the routine's "Getting started"
+   * A run's own row names the task it ran, never the assistant's "Getting started"
    * authoring host, resolved from the thread list. A task whose thread was
-   * deleted still has ledger evidence, so it falls back to the routine name and
+   * deleted still has ledger evidence, so it falls back to the assistant name and
    * then the neutral label rather than disappearing.
    */
   function backgroundRunTitle(run: BackgroundRun): string {
-    return assistantSubjectName(runTask(run.taskId), routineNameFor(run.routineId), 'Assistant run')
+    return assistantSubjectName(
+      runTask(run.taskId),
+      assistantNameFor(run.assistantId),
+      'Assistant run'
+    )
   }
 
   /**
@@ -382,7 +384,7 @@
 
   async function dismissMissedRun(id: string): Promise<void> {
     try {
-      await assistantRoutines.dismissMissedRun(id)
+      await assistants.dismissMissedRun(id)
     } catch {
       // Surfaced as a missed run returning on the next refresh; nothing to do here.
     }
@@ -391,7 +393,7 @@
   /** Acknowledge one unattended run so it leaves the "While you were away" list. */
   async function dismissBackgroundRun(id: string): Promise<void> {
     try {
-      await assistantRoutines.dismissBackgroundRun(id)
+      await assistants.dismissBackgroundRun(id)
     } catch {
       // Main pushes the fresh ledger list; a failure simply leaves the row.
     }
@@ -409,7 +411,7 @@
   async function runMissedRunNow(id: string): Promise<void> {
     busyId = id
     try {
-      const run = await assistantRoutines.runMissedRunNow(id)
+      const run = await assistants.runMissedRunNow(id)
       // Every run executes on its own fresh thread, so open that thread.
       if (run) await openMissedRun(run.id)
     } finally {
@@ -472,7 +474,7 @@
    * The line under an entry's title.
    *
    * An assistant completion states its outcome: the reader is on the Assistants
-   * tab, the title is already the routine or task name, and the payload's body
+   * tab, the title is already the assistant or task name, and the payload's body
    * repeated that name ("Shower News finished."). Entries the durable inbox
    * restored from an older session still carry that repetition, so the outcome
    * is derived here rather than trusted from the stored body.
@@ -513,7 +515,7 @@
     ? `Hide ${stackFrames ? 'stack trace' : 'details'}`
     : `Show ${stackFrames ? 'stack trace' : 'details'}`}
   <button
-    class="mt-1.5 flex items-center gap-1 rounded px-1 py-0.5 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-raised hover:text-foreground"
+    class="mt-1.5 flex items-center gap-1 px-1 py-0.5 text-[0.625rem] font-medium text-dimmed transition-colors hover:bg-raised hover:text-foreground"
     aria-expanded={expanded}
     aria-label={label}
     title={label}
@@ -522,7 +524,7 @@
       toggleDetails(key)
     }}
   >
-    <ChevronDown
+    <CioChevronDown
       size={10}
       class={expanded ? 'rotate-180 transition-transform' : 'transition-transform'}
     />
@@ -530,7 +532,7 @@
   </button>
   {#if expanded}
     <pre
-      class="mt-1 max-h-40 select-text overflow-auto rounded border border-border bg-overlay p-2 font-mono text-[0.6875rem] leading-relaxed break-all whitespace-pre-wrap text-muted">{details}</pre>
+      class="mt-1 max-h-40 select-text overflow-auto border border-border bg-overlay p-2 font-mono text-[0.6875rem] leading-relaxed break-all whitespace-pre-wrap text-muted">{details}</pre>
   {/if}
 {/snippet}
 
@@ -572,11 +574,11 @@
       {#if !notificationPanelState.isAssistant(n)}
         <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
           {#if n.source === 'chat'}
-            <MessageSquare size={10} class="shrink-0" />
+            <CioMessage size={10} class="shrink-0" />
             <span>Chat</span>
           {:else}
             <span
-              class="h-1.5 w-1.5 shrink-0 rounded-full"
+              class="h-1.5 w-1.5 shrink-0"
               style="background: {n.projectColor ?? 'var(--color-border)'}"
               role="presentation"
             ></span>
@@ -584,9 +586,11 @@
             >
             {#if n.source === 'temporary-chat'}
               <span class="shrink-0">·</span>
-              <MessageCircleDashed
+              <!-- The dashed circle marks the side chat; it wears the row's own
+                   neutral icon colour, never an identity hue. -->
+              <CioTemporaryChat
                 size={10}
-                class="shrink-0 text-temporary-chat"
+                class="shrink-0"
                 title="Temporary chat"
                 aria-hidden="true"
               />
@@ -605,7 +609,7 @@
     </div>
     {#if n.kind === 'error'}
       <button
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label="Copy error details and stack trace"
         title="Copy error details"
         onclick={(e: MouseEvent) => {
@@ -614,14 +618,14 @@
         }}
       >
         {#if copiedId === n.id}
-          <Check size={11} />
+          <CioCheck size={11} />
         {:else}
-          <Copy size={11} />
+          <CioCopy size={11} />
         {/if}
       </button>
     {/if}
     <button
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
       aria-label="Dismiss notification"
       title="Dismiss"
       onclick={(e: MouseEvent) => {
@@ -629,7 +633,7 @@
         dismiss(n)
       }}
     >
-      <X size={11} />
+      <CioClose size={11} />
     </button>
   </div>
 {/snippet}
@@ -658,7 +662,7 @@
     </div>
     <div class="flex shrink-0 items-center gap-1">
       <button
-        class="rounded px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
+        class="px-1.5 py-1 text-[0.625rem] text-muted transition-colors hover:bg-raised hover:text-foreground"
         aria-label="Dismiss missed run"
         title="Dismiss"
         onclick={() => void dismissMissedRun(run.id)}
@@ -666,21 +670,21 @@
         Dismiss
       </button>
       <button
-        class="flex items-center gap-1 rounded bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+        class="flex items-center gap-1 bg-primary px-1.5 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
         aria-label="Run missed task now"
         title="Run now"
         onclick={() => void runMissedRunNow(run.id)}
       >
-        <RotateCcw size={11} strokeWidth={1.8} />
+        <CioUndo size={11} strokeWidth={1.8} />
         Run now
       </button>
       <button
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label="Open task"
         title="Open task"
         onclick={() => void openMissedRun(run.threadId)}
       >
-        <Bot size={11} />
+        <CioSubagent size={11} />
       </button>
     </div>
   </div>
@@ -732,12 +736,12 @@
     <div class="flex shrink-0 items-start px-1.5 pt-2">
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+        class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
         aria-label="Dismiss unattended run for {backgroundRunTitle(run)}"
         title="Dismiss"
         onclick={() => void dismissBackgroundRun(run.runThreadId)}
       >
-        <X size={11} />
+        <CioClose size={11} />
       </button>
     </div>
   </div>
@@ -772,12 +776,12 @@
     <div class="ml-auto pb-1.5">
       {#if showDismissAll}
         <button
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={showingAppErrors ? 'Dismiss all app errors' : 'Dismiss all notifications'}
           title={showingAppErrors ? 'Dismiss all errors' : 'Dismiss all'}
           onclick={dismissAll}
         >
-          <X size={12} />
+          <CioClose size={12} />
         </button>
       {/if}
     </div>
@@ -790,7 +794,7 @@
         {@const count = subCount(notificationPanelState.topTab, sub)}
         {@const active = notificationPanelState.subFilter === sub}
         <button
-          class="flex items-center gap-1.5 rounded px-2 py-0.5 text-[0.6875rem] font-medium transition-colors {active
+          class="flex items-center gap-1.5 px-2 py-0.5 text-[0.6875rem] font-medium transition-colors {active
             ? 'bg-elevated text-foreground'
             : 'text-muted hover:bg-raised hover:text-foreground'}"
           aria-label={`Show ${subFilterLabels[sub]} notifications`}
@@ -809,7 +813,7 @@
             value={notificationPanelState.assistantSubject}
             options={assistantSubjectOptions}
             onValueChange={(next) => notificationPanelState.setAssistantSubject(next)}
-            label="Filter assistant notifications by routines or tasks"
+            label="Filter assistant notifications by assistants or tasks"
             current={assistantSubjectLabel}
             narrowed={notificationPanelState.assistantSubject !== 'all'}
           />
@@ -823,7 +827,7 @@
     {#if showingAppErrors}
       {#if appErrorState.count === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          <Bug size={20} class="text-dimmed" />
+          <CioDebugger size={20} class="text-dimmed" />
           <p class="text-xs text-muted">No app errors</p>
         </div>
       {:else}
@@ -835,7 +839,7 @@
               )}"
             >
               <span
-                class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
+                class="mt-1.5 h-1.5 w-1.5 shrink-0"
                 style="background: {e.kind === 'error'
                   ? 'var(--color-danger)'
                   : 'var(--color-warning)'}"
@@ -871,7 +875,7 @@
               </div>
               <div class="flex shrink-0 items-center gap-0.5">
                 <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
                   aria-label={hasUsefulDetails(e.message, e.details)
                     ? `Copy app error and stack trace: ${e.message}`
                     : `Copy app error: ${e.message}`}
@@ -882,13 +886,13 @@
                   }}
                 >
                   {#if copiedId === e.id}
-                    <Check size={11} />
+                    <CioCheck size={11} />
                   {:else}
-                    <Copy size={11} />
+                    <CioCopy size={11} />
                   {/if}
                 </button>
                 <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  class="flex h-6 w-6 items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-raised hover:text-foreground group-hover:opacity-100"
                   aria-label="Dismiss app error"
                   title="Dismiss"
                   onclick={(ev: MouseEvent) => {
@@ -896,7 +900,7 @@
                     appErrorState.dismiss(e.id)
                   }}
                 >
-                  <X size={11} />
+                  <CioClose size={11} />
                 </button>
               </div>
             </div>
@@ -906,15 +910,15 @@
     {:else if showingAssistants}
       {#if !assistantHasActivity}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          <Bot size={20} class="text-dimmed" />
+          <CioSubagent size={20} class="text-dimmed" />
           <p class="text-xs text-muted">No assistant activity</p>
         </div>
       {:else if assistantFilteredEmpty}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          <Bell size={20} class="text-dimmed" />
+          <CioNotifications size={20} class="text-dimmed" />
           <p class="text-xs text-muted">Nothing matches this filter</p>
           <button
-            class="rounded px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Clear the assistant filters"
             aria-label="Clear the assistant filters"
             onclick={resetAssistantFilters}
@@ -926,7 +930,7 @@
         <div class="space-y-1 p-1.5">
           {#each assistantSections as section (section.key)}
             {@const collapsed = collapsedAssistantSections.has(section.key)}
-            <div class="overflow-hidden rounded-md border border-border bg-surface">
+            <div class="overflow-hidden border border-border bg-surface">
               <button
                 type="button"
                 class="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-elevated"
@@ -935,11 +939,12 @@
                 title="{collapsed ? 'Expand' : 'Collapse'} {section.label}"
                 onclick={() => toggleAssistantSection(section.key)}
               >
-                <ChevronDown
+                <CioChevronDown
                   size={12}
                   class="shrink-0 text-dimmed transition-transform {collapsed ? '-rotate-90' : ''}"
                 />
-                <span class="truncate text-[0.6875rem] font-semibold text-foreground"
+                <span
+                  class="truncate text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed"
                   >{section.label}</span
                 >
                 <span class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-dimmed"
@@ -968,7 +973,7 @@
       {/if}
     {:else if notificationPanelState.visible.length === 0}
       <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-        <Bell size={20} class="text-dimmed" />
+        <CioNotifications size={20} class="text-dimmed" />
         <p class="text-xs text-muted">No notifications</p>
       </div>
     {:else}

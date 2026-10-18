@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { Loader2, ShieldCheck } from '@lucide/svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
   import { slide } from 'svelte/transition'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { type CardChipData } from '../shared/CardTimer.svelte'
+  import { dismissSlide, foldSlide } from '../shared/card-motion'
   import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
@@ -55,6 +60,12 @@
     return { provider, model }
   })
 
+  const chip: CardChipData = {
+    text: 'No deadline',
+    tone: 'paused',
+    title: 'Nothing runs until you start the audit'
+  }
+
   function chooseModel(
     providerId: string,
     modelId: string,
@@ -74,72 +85,77 @@
   }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="rounded-xl border bg-surface p-4"
-  aria-label="Audit implementation"
->
-  <div class="flex items-start gap-3">
-    <div class="rounded-lg bg-primary/10 p-2 text-primary"><ShieldCheck size={18} /></div>
-    <div class="min-w-0 flex-1">
-      <h3 class="text-sm font-semibold">
-        {reworkCycle ? `Rework ${reworkCycle} complete   audit again` : 'Implementation finished'}
-      </h3>
-      {#if !folded}
-        <p class="mt-1 text-xs text-muted">
-          {reworkCycle ? 'Verify the completed corrections for' : 'Audit'} “{threadTitle}” with
-          <span class="font-medium text-foreground">
-            {selected.model?.name ?? settings.modelId}
-          </span>
-          before marking it complete?
-        </p>
-        <p class="mt-1 text-[0.6875rem] text-dimmed">
-          {selected.provider?.name ?? settings.providerId} / {selected.model?.name ??
-            settings.modelId}
-        </p>
-      {/if}
-    </div>
-    <CardFoldToggle bind:folded label="audit offer" />
-  </div>
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label="Audit implementation">
+    <CardHead
+      icon={CioShieldCheck}
+      title={reworkCycle
+        ? `Rework ${reworkCycle} complete   audit again`
+        : 'Implementation finished'}
+      {chip}
+      bind:folded
+      foldLabel="audit offer"
+    />
 
-  {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
-        <button class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay" onclick={onCancel}>
-          Cancel
-        </button>
-        <div class="ml-auto flex items-center justify-end gap-2">
-          <ModelPicker
-            {providers}
-            {projectId}
-            harnessId={settings.harnessId}
-            providerId={settings.providerId}
-            modelId={settings.modelId}
-            accountId={settings.accountId}
-            {favoriteModels}
-            {recentModels}
-            {onRemoveRecent}
-            side="top"
-            label="Change"
-            variant="action"
-            onSelect={chooseModel}
-            thinkingLevel={settings.thinkingLevel}
-            runtimeSettings={settings}
-            onSelectThinking={chooseThinking}
-            onSelectRuntime={chooseRuntime}
-            {onToggleFavorite}
-            {onReorderFavorite}
-          />
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-            disabled={busy}
-            onclick={() => onAudit(settings)}
-          >
-            {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-            {reworkCycle ? 'Audit again' : 'Audit'}
-          </button>
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div class="flex flex-col gap-1.5 px-3 py-2.5">
+          <p class="text-xs leading-relaxed text-muted">
+            {reworkCycle ? 'Verify the completed corrections for' : 'Audit'} “{threadTitle}” with
+            <span class="font-medium text-foreground">
+              {selected.model?.name ?? settings.modelId}
+            </span>
+            before marking it complete?
+          </p>
+          <p class="text-[0.6875rem] text-dimmed">
+            {selected.provider?.name ?? settings.providerId} / {selected.model?.name ??
+              settings.modelId}
+          </p>
         </div>
+
+        <CardFoot>
+          {#snippet left()}
+            <CardButton
+              label="Cancel"
+              title="Cancel the audit"
+              variant="ghost"
+              onclick={onCancel}
+            />
+          {/snippet}
+          {#snippet right()}
+            <ModelPicker
+              {providers}
+              {projectId}
+              harnessId={settings.harnessId}
+              providerId={settings.providerId}
+              modelId={settings.modelId}
+              accountId={settings.accountId}
+              {favoriteModels}
+              {recentModels}
+              {onRemoveRecent}
+              side="top"
+              label="Change"
+              variant="action"
+              onSelect={chooseModel}
+              thinkingLevel={settings.thinkingLevel}
+              runtimeSettings={settings}
+              onSelectThinking={chooseThinking}
+              onSelectRuntime={chooseRuntime}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+            <CardButton
+              label={reworkCycle ? 'Audit again' : 'Audit'}
+              title={reworkCycle ? 'Run the audit again' : 'Run an independent audit'}
+              icon={CioPlay}
+              variant="primary"
+              disabled={busy}
+              loading={busy}
+              onclick={() => onAudit(settings)}
+            />
+          {/snippet}
+        </CardFoot>
       </div>
-    </div>
-  {/if}
-</section>
+    {/if}
+  </CardFrame>
+</div>

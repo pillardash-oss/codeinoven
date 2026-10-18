@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState } from '$lib/stores/git.svelte'
@@ -226,7 +226,7 @@
       <label class="block">
         <span class="mb-1 block text-[0.625rem] font-medium text-muted">Title</span>
         <input
-          class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-8 w-full border border-border bg-elevated px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Issue title"
           bind:value={newTitle}
         />
@@ -234,7 +234,7 @@
       <label class="block">
         <span class="mb-1 block text-[0.625rem] font-medium text-muted">Description</span>
         <textarea
-          class="min-h-32 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="min-h-32 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Describe the problem, what you expected, and anything you tried."
           bind:value={newBody}></textarea>
       </label>
@@ -246,7 +246,7 @@
     {#snippet footer()}
       <button
         type="button"
-        class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+        class="border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
         data-modal-dismiss
         onclick={() => (creating = false)}
       >
@@ -254,12 +254,12 @@
       </button>
       <button
         type="button"
-        class="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+        class="inline-flex items-center gap-2 bg-primary px-3 py-2 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
         disabled={creatingBusy || newTitle.trim().length === 0}
         onclick={() => void createIssue()}
       >
         {#if creatingBusy}
-          <Loader2 size={14} class="animate-spin" />
+          <CioSpinner size={14} class="animate-spin" />
         {/if}
         Create issue
       </button>

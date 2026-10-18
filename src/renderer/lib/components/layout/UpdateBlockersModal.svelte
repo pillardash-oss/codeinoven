@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Loader2, Terminal } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'
@@ -74,7 +75,7 @@
           <ul class="space-y-1.5">
             {#each visibleTerminals as terminal (terminal.sessionId)}
               <li class="flex items-center gap-2 text-xs text-muted">
-                <Terminal size={13} class="shrink-0 text-dimmed" />
+                <CioTerminal size={13} class="shrink-0 text-dimmed" />
                 <span class="shrink-0 font-medium text-foreground">{terminal.shell}</span>
                 <span class="min-w-0 truncate font-mono text-dimmed" title={terminal.cwd}>
                   {terminal.cwd}
@@ -107,7 +108,7 @@
     <button
       type="button"
       data-modal-dismiss
-      class="shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="shrink-0 whitespace-nowrap px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Keep waiting for the active work instead of installing now"
       onclick={onDismiss}
     >
@@ -116,13 +117,13 @@
     <button
       type="button"
       data-modal-primary
-      class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
       title="Stop everything listed above and install the update now"
       disabled={forcing}
       onclick={() => void updateBlockers.forceInstall()}
     >
       {#if forcing}
-        <Loader2 size={14} class="animate-spin" />
+        <CioSpinner size={14} class="animate-spin" />
       {/if}
       <span>{forcing ? 'Stopping work' : 'Stop work & install'}</span>
     </button>

@@ -2,6 +2,12 @@ import type { Contract } from './contract-helpers'
 
 export const invokeSearchContract = {
   'search:getState': {} as Contract<[], import('../search/types').SearchState>,
+  /**
+   * Boot the local embedding model in the background so the next Cmd+K thread
+   * search does not pay the load. A no-op unless intent search is enabled with a
+   * loadable model.
+   */
+  'search:warm': {} as Contract<[], void>,
   'search:downloadArtifact': {} as Contract<[artifactId: string], void>,
   'search:cancelDownload': {} as Contract<[artifactId: string], boolean>,
   'search:deleteModel': {} as Contract<[modelId: string], void>,

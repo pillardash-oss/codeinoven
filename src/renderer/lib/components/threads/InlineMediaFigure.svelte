@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Expand } from '@lucide/svelte'
+  import InlineFigure from './InlineFigure.svelte'
 
   interface Props {
     src: string
@@ -11,17 +11,11 @@
   let { src, kind, filename, onExpand }: Props = $props()
 </script>
 
-<figure class="w-full min-w-0 overflow-hidden rounded-lg border border-border bg-surface">
-  <figcaption class="flex items-center justify-between gap-2 px-3 py-2 text-xs text-muted">
-    <span class="truncate">{filename}</span>
-    <button
-      type="button"
-      class="shrink-0 rounded p-1 text-muted hover:bg-elevated hover:text-foreground"
-      title={`Expand ${filename}`}
-      aria-label={`Expand ${filename}`}
-      onclick={onExpand}><Expand size={14} /></button
-    >
-  </figcaption>
+<!-- Both bodies fill the column: a player has no size of its own before its media
+     loads, and a frame that hugged one would jump the moment it did. A video
+     therefore keeps a standard box and letterboxes inside it, which is how every
+     player in the app shows one. -->
+<InlineFigure {filename} {onExpand} fit="fill">
   {#if kind === 'video'}
     <video class="max-h-96 w-full" {src} controls preload="none" playsinline>
       <track kind="captions" />
@@ -29,4 +23,4 @@
   {:else}
     <audio class="w-full" {src} controls preload="none"></audio>
   {/if}
-</figure>
+</InlineFigure>

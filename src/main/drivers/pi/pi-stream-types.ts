@@ -1,17 +1,10 @@
 import type { AgentMessage, AgentTokenUsage } from '../../../lib/types'
-import type { PiNativeToolAttribution } from './pi-mcp-registration'
 
 /** Shared stream-mapping context and per-turn state for the Pi record mapper. */
 
 export interface PiStreamContext {
   sessionId: string
   session: { messages: AgentMessage[] }
-  /**
-   * Resolves an `mcp__<server>__<tool>` name to the utility the app published
-   * for that server. Supplied by the driver, so a part for a script's native
-   * MCP call names the capability the user enabled instead of a bare tool name.
-   */
-  nativeToolOwner?: (toolName: string) => PiNativeToolAttribution | null
 }
 
 /** Turn-scoped state kept so parts of one assistant message can be correlated. */
@@ -28,6 +21,19 @@ export interface PiTurnState {
    *  the working trace but produces no assistant response of its own, so its
    *  `agent_settled` must not finalize the outer turn. */
   compacting?: boolean
+  /**
+   * Set while pi backs off for its own provider retry, between
+   * `auto_retry_start` and `auto_retry_end`.
+   *
+   * Pi retries a failed request inside the same turn, so the run is alive but
+   * deliberately not streaming for the whole gap. Every liveness question the
+   * driver answers (`isSessionBusy`, may a prompt be dispatched, may a finished
+   * turn's transport be torn down) has to answer "working" while this is set: a
+   * retry gap reported as idle made the app finalize a live turn, which cleared
+   * the utility gateway handoff the resumed run was still calling `cio_util_*`
+   * through.
+   */
+  providerRetry?: boolean
   /**
    * The turn's reported usage summed across its requests, guarded against the
    * repeat `turn_end` emits for the final request. Pi opens a turn per request,

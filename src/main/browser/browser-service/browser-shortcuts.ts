@@ -30,11 +30,29 @@ import type {
 export interface ShortcutKeyInput {
   type: string
   key: string
+  code: string
   meta: boolean
   control: boolean
   shift: boolean
   alt: boolean
   isAutoRepeat: boolean
+}
+
+/**
+ * Browser actions a page may answer itself.
+ *
+ * Saving is the one chord here a site plausibly draws its own handler for, so a
+ * page that does keeps it and the browser's Save only runs when the page leaves
+ * the chord alone. Every other action is reserved chrome: no page can answer a
+ * reload, a tab close or a zoom, and leaving them to a page that cannot act on
+ * them would hand the key to the application menu instead.
+ */
+const PAGE_OVERRIDABLE_BROWSER_ACTIONS: ReadonlySet<BrowserShortcutAction> =
+  new Set<BrowserShortcutAction>(['savePage'])
+
+/** Whether a browser action is reserved chrome, which the browser always claims. */
+export function isReservedBrowserAction(action: BrowserShortcutAction): boolean {
+  return !PAGE_OVERRIDABLE_BROWSER_ACTIONS.has(action)
 }
 
 /**

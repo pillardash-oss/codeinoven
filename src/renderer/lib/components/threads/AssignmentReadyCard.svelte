@@ -1,7 +1,16 @@
 <script lang="ts">
-  import { Check, ChevronDown, Loader2, Maximize2, Network, Save } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
   import { slide } from 'svelte/transition'
   import AssignmentReviewContent from '../specs/AssignmentReviewContent.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardNotice from '../shared/CardNotice.svelte'
+  import { type CardChipData } from '../shared/CardTimer.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import type {
     AssignmentModelSelection,
@@ -77,106 +86,96 @@
   // The card owns an editable snapshot until the user explicitly saves it.
   // svelte-ignore state_referenced_locally
   let draft = $state<AssignmentPlanContent>($state.snapshot(assignment.content))
-  let expanded = $state(true)
+  let folded = $state(false)
+
+  const chip: CardChipData = {
+    text: 'Draft',
+    tone: 'paused',
+    title: 'Nothing runs until you sign off'
+  }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="overflow-hidden rounded-xl border bg-surface shadow-sm"
-  aria-label="Assignment ready"
->
-  <button
-    type="button"
-    class="flex w-full items-center justify-between gap-3 border-b px-4 py-3 text-left hover:bg-elevated/60"
-    aria-expanded={expanded}
-    aria-controls={`assignment-review-${assignment.id}`}
-    title={expanded ? 'Fold assignment' : 'Expand assignment'}
-    onclick={() => (expanded = !expanded)}
-  >
-    <div class="flex min-w-0 items-center gap-2">
-      <Network size={16} class="shrink-0 text-primary" />
-      <div class="min-w-0">
-        <p class="truncate text-sm font-semibold text-foreground">Assignment is ready</p>
-        <p class="text-[0.6875rem] text-muted">
-          Review assignment · Sr. Engineer execution graph · version {assignment.version}
-        </p>
-      </div>
-    </div>
-    <div class="flex shrink-0 items-center gap-2">
-      <span
-        class="rounded-md bg-primary/10 px-2 py-1 text-[0.625rem] font-semibold uppercase text-primary"
-      >
-        {assignment.status}
-      </span>
-      <ChevronDown
-        size={14}
-        class="text-dimmed transition-transform {expanded ? '' : 'rotate-180'}"
-      />
-    </div>
-  </button>
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label="Assignment ready">
+    <CardHead
+      icon={CioNetwork}
+      title="Assignment is ready"
+      {chip}
+      bind:folded
+      foldLabel="assignment"
+    >
+      {#snippet meta()}
+        <span class="min-w-0 truncate text-[0.6875rem] text-dimmed">
+          Review assignment · Sr. Engineer execution graph · v{assignment.version}
+        </span>
+      {/snippet}
+    </CardHead>
 
-  {#if expanded}
-    <div id={`assignment-review-${assignment.id}`} transition:slide={foldSlide()}>
-      <div class="max-h-[32rem] overflow-y-auto p-4">
-        <AssignmentReviewContent
-          content={draft}
-          {providers}
-          {projectId}
-          {harnessId}
-          {fallbackModel}
-          {seniorModel}
-          {favoriteModels}
-          {recentModels}
-          {onRemoveRecent}
-          compact
-          onChange={(content) => (draft = content)}
-          {onWorkerModelChange}
-          {onSeniorModelChange}
-          {onTaskScopeChange}
-          {onWorkerScopeChange}
-          {assignmentScopeBucketId}
-          {onToggleFavorite}
-          {onReorderFavorite}
-          {onOpenTaskThread}
-          {resolveTaskThread}
-        />
-
-        {#if error}
-          <p class="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>
-        {/if}
-      </div>
-
-      <div class="flex items-center justify-between gap-2 border-t px-4 py-3">
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground"
-          title="Review assignment full screen"
-          onclick={onOpenFullscreen}
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div
+          id={`assignment-review-${assignment.id}`}
+          class="max-h-[32rem] overflow-y-auto px-3 py-2.5"
         >
-          <Maximize2 size={13} />
-          Full screen
-        </button>
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:text-foreground disabled:opacity-40"
-            disabled={busy}
-            onclick={() => onSave($state.snapshot(draft))}
-          >
-            <Save size={13} />
-            Save draft
-          </button>
-          <button
-            type="button"
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-40"
-            disabled={busy}
-            onclick={() => onApprove($state.snapshot(draft))}
-          >
-            {#if busy}<Loader2 size={13} class="animate-spin" />{:else}<Check size={13} />{/if}
-            Sign off & assign
-          </button>
+          <AssignmentReviewContent
+            content={draft}
+            {providers}
+            {projectId}
+            {harnessId}
+            {fallbackModel}
+            {seniorModel}
+            {favoriteModels}
+            {recentModels}
+            {onRemoveRecent}
+            compact
+            onChange={(content) => (draft = content)}
+            {onWorkerModelChange}
+            {onSeniorModelChange}
+            {onTaskScopeChange}
+            {onWorkerScopeChange}
+            {assignmentScopeBucketId}
+            {onToggleFavorite}
+            {onReorderFavorite}
+            {onOpenTaskThread}
+            {resolveTaskThread}
+          />
+
+          {#if error}
+            <CardNotice tone="danger" class="mt-2">{error}</CardNotice>
+          {/if}
         </div>
+
+        <CardFoot>
+          {#snippet left()}
+            <CardButton
+              label="Save draft"
+              title="Save the assignment draft"
+              icon={CioSave}
+              variant="secondary"
+              disabled={busy}
+              onclick={() => onSave($state.snapshot(draft))}
+            />
+          {/snippet}
+          {#snippet right()}
+            <CardButton
+              label="Full screen"
+              title="Open the assignment full screen"
+              icon={CioMaximize}
+              variant="secondary"
+              onclick={onOpenFullscreen}
+            />
+            <CardButton
+              label="Sign off & assign"
+              title="Sign off the assignment and run it"
+              icon={busy ? undefined : CioCheck}
+              variant="primary"
+              disabled={busy}
+              loading={busy}
+              onclick={() => onApprove($state.snapshot(draft))}
+            />
+          {/snippet}
+        </CardFoot>
       </div>
-    </div>
-  {/if}
-</section>
+    {/if}
+  </CardFrame>
+</div>

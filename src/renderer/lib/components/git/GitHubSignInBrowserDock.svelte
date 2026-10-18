@@ -1,14 +1,12 @@
 <script lang="ts">
-  import {
-    Check,
-    ChevronDown,
-    ChevronUp,
-    Copy,
-    Loader2,
-    TimerOff,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTimerOff from '@pillardash-oss/cio-icon/CioTimerOff.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import GitHubSignInActions from './GitHubSignInActions.svelte'
@@ -62,7 +60,7 @@
       -->
       <button
         type="button"
-        class="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 py-1 transition-colors hover:border-muted"
+        class="flex shrink-0 cursor-pointer items-center gap-1.5 border border-border bg-elevated px-2.5 py-1 transition-colors hover:border-muted"
         title="Copy the code to paste into the GitHub page"
         aria-label="Copy the device code"
         onclick={() => void githubSignIn.copyCode()}
@@ -71,9 +69,9 @@
           {githubSignIn.device.userCode}
         </span>
         {#if githubSignIn.copied}
-          <Check size={12} class="text-success" aria-hidden="true" />
+          <CioCheck size={12} class="text-success" aria-hidden="true" />
         {:else}
-          <Copy size={12} class="text-dimmed" aria-hidden="true" />
+          <CioCopy size={12} class="text-dimmed" aria-hidden="true" />
         {/if}
       </button>
       <span class="hidden text-[0.625rem] text-dimmed lg:inline">
@@ -86,13 +84,13 @@
       aria-live="polite"
     >
       {#if githubSignIn.waiting}
-        <Loader2 size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+        <CioSpinner size={11} class="shrink-0 animate-spin text-info" aria-hidden="true" />
       {:else if githubSignIn.phase === 'authorized'}
-        <Check size={11} class="shrink-0 text-success" aria-hidden="true" />
+        <CioCheck size={11} class="shrink-0 text-success" aria-hidden="true" />
       {:else if githubSignIn.phase === 'expired'}
-        <TimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
+        <CioTimerOff size={11} class="shrink-0 text-warning" aria-hidden="true" />
       {:else}
-        <TriangleAlert size={11} class="shrink-0 text-danger" aria-hidden="true" />
+        <CioAttention size={11} class="shrink-0 text-danger" aria-hidden="true" />
       {/if}
       <!--
         The countdown sits beside the code that expires, not in the panel body,
@@ -108,25 +106,25 @@
 
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={detailsLabel}
       title={detailsLabel}
       onclick={() => (collapsed ? githubSignIn.expand() : githubSignIn.minimize())}
     >
       {#if collapsed}
-        <ChevronUp size={14} />
+        <CioChevronUp size={14} />
       {:else}
-        <ChevronDown size={14} />
+        <CioChevronDown size={14} />
       {/if}
     </button>
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={dismissLabel}
       title={dismissLabel}
       onclick={() => githubSignIn.close()}
     >
-      <X size={14} />
+      <CioClose size={14} />
     </button>
   </div>
 

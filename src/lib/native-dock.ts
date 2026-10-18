@@ -83,6 +83,12 @@ export const NATIVE_DOCK_TAGS = new Set([
   'ellipse',
   'g',
   'title',
+  // An inert `<style>` is copied rather than refused. The bundled vendor marks
+  // carry their own theme rules inside the SVG (the CodeInOven mark switches its
+  // ink between black and white on the `dark` class), and the overlay document
+  // toggles that class itself, so copying the element styles the projected
+  // subtree the same way the app window draws it. A style element runs nothing.
+  'style',
   'img',
   'header',
   'footer',

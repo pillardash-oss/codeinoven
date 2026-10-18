@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Code, FolderOpen, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCode from '@pillardash-oss/cio-icon/CioCode.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
   import type { CustomIcon } from '$shared/types'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {
@@ -106,7 +108,7 @@
 <div class="space-y-4">
   <div class="flex justify-center">
     <div
-      class="flex h-14 w-14 items-center justify-center rounded-xl border-2 border-dashed"
+      class="flex h-14 w-14 items-center justify-center border-2 border-dashed"
       style={color ? `background-color: ${color}20` : ''}
       title="Icon preview"
     >
@@ -134,7 +136,7 @@
           draggable="false"
         />
       {:else}
-        <FolderOpen size={22} class="text-muted" />
+        <CioFolderOpen size={22} class="text-muted" />
       {/if}
     </div>
   </div>
@@ -156,7 +158,7 @@
       {#each PROJECT_SVG_ICONS as icon (icon.key)}
         <button
           type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md border transition-colors {iconType ===
+          class="flex h-7 w-7 items-center justify-center border transition-colors {iconType ===
           icon.key
             ? 'border-foreground bg-elevated'
             : 'border-border'}"
@@ -179,7 +181,7 @@
       {#each customIcons as customIcon (customIcon.id)}
         <button
           type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md border transition-colors {customSvg ===
+          class="flex h-7 w-7 items-center justify-center border transition-colors {customSvg ===
           customIcon.svg
             ? 'border-foreground bg-elevated'
             : 'border-border'}"
@@ -207,17 +209,17 @@
       {#if onUploadImage}
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title="Upload a custom image icon"
           onclick={onUploadImage}
         >
-          <FolderOpen size={12} />
+          <CioFolderOpen size={12} />
           Upload image
         </button>
       {/if}
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={showSvgInput ? 'Hide custom SVG input' : 'Add a custom SVG icon'}
         aria-expanded={showSvgInput}
         aria-controls="appearance-custom-svg-panel"
@@ -226,7 +228,7 @@
           if (showSvgInput && customSvg) pastedSvg = customSvg
         }}
       >
-        <Code size={12} />
+        <CioCode size={12} />
         {showSvgInput ? 'Hide SVG' : customSvg ? 'Edit SVG' : 'Add SVG'}
       </button>
     </div>
@@ -237,7 +239,7 @@
         >
         <textarea
           id="appearance-custom-svg"
-          class="min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground placeholder:text-dimmed"
+          class="min-h-24 w-full resize-y border bg-elevated px-3 py-2 font-mono text-xs text-foreground placeholder:text-dimmed"
           bind:value={pastedSvg}
           placeholder="Paste SVG markup with a viewBox"
           oninput={(event) => {
@@ -250,7 +252,7 @@
         <div class="flex items-center justify-between gap-2">
           <button
             type="button"
-            class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Preview pasted SVG"
             onclick={() => void previewCustomSvg()}>Preview</button
           >
@@ -273,7 +275,7 @@
           <span></span>
           <button
             type="button"
-            class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            class="border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             title="Use this SVG icon"
             disabled={!previewSvg}
             onclick={() => void usePreviewIcon()}>Use icon</button
@@ -287,11 +289,11 @@
     <div class="flex justify-end">
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-danger transition-colors hover:bg-danger/10"
         title="Reset appearance"
         onclick={onReset}
       >
-        <X size={12} />
+        <CioClose size={12} />
         Reset
       </button>
     </div>

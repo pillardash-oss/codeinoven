@@ -1,3 +1,8 @@
+import CioBoard from '@pillardash-oss/cio-icon/CioBoard.svelte'
+import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+import CioScoped from '@pillardash-oss/cio-icon/CioScoped.svelte'
+import CioThreads from '@pillardash-oss/cio-icon/CioThreads.svelte'
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
 import { contentThreadFamily, type ContentThreadFamily } from '$lib/content-view-threads'
@@ -9,7 +14,6 @@ import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { type Project, type Thread } from '$shared/types'
-import { FolderKanban, Globe, Kanban, Microscope, Timeline } from '@lucide/svelte'
 import { type Component } from 'svelte'
 import { SvelteSet } from 'svelte/reactivity'
 
@@ -237,7 +241,7 @@ export class AppHeaderNavigationController {
       {
         id: 'projects',
         label: 'Project',
-        icon: FolderKanban,
+        icon: CioProjects,
         keys: keymapState.keysFor('nav-projects'),
         select: () => {
           if (scopeState.sidebarContext) scopeState.clearSidebarContext()
@@ -247,21 +251,21 @@ export class AppHeaderNavigationController {
       {
         id: 'threads',
         label: 'Thread',
-        icon: Timeline,
+        icon: CioThreads,
         keys: keymapState.keysFor('nav-threads'),
         select: () => void this.onPrimaryNavClick('threads')
       },
       {
         id: 'scoped-threads',
         label: 'Scoped',
-        icon: Microscope,
+        icon: CioScoped,
         keys: keymapState.keysFor('nav-projects-with-scope'),
         select: () => void this.toggleScopedThreads()
       },
       {
         id: 'scope-board',
         label: 'Board',
-        icon: Kanban,
+        icon: CioBoard,
         keys: keymapState.keysFor('nav-scope'),
         select: () => void this.onPrimaryNavClick('scope')
       },
@@ -282,7 +286,7 @@ export class AppHeaderNavigationController {
       {
         id: 'browser',
         label: 'Browser',
-        icon: Globe,
+        icon: CioBrowser,
         keys: keymapState.keysFor('nav-browser'),
         select: () => void this.onPrimaryNavClick('browser')
       }

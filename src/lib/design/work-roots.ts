@@ -4,10 +4,15 @@ import type { AuthoredWorkKind } from '../ipc/design'
  * Where authored work goes, and which session a folder belongs to.
  *
  * A design session writes into one folder and a video session writes into
- * another, and until now both were constants. A user who wants their designs in
- * version control needs to point them somewhere Git tracks, so the roots are a
- * setting and this module is the only place that decides what a root may be, how
- * the setting is read, and which session a folder belongs to.
+ * another. The two folder names are the app's default, and they are a constant
+ * rather than a setting: the folder a project writes into is the project's own
+ * record, changed from that project's design or video board, and one design or
+ * video can move on its own without moving anything else. There is deliberately
+ * no app-wide value to read, because an app-wide value is exactly how changing
+ * one design's folder came to change the folder every other design used.
+ *
+ * This module owns what a root may be, how a stored one is read, and which
+ * session a folder belongs to.
  *
  * The classifier is here rather than inside the service that happened to need it
  * first, because more than one caller asks the same question: the design service
@@ -29,12 +34,12 @@ export interface WorkRoots {
 }
 
 /**
- * The roots a fresh install uses, and the ones Reset returns to.
+ * The roots a project uses until its own board points it somewhere else.
  *
  * `.cio/` is the app's scratch tree and is ignored by Git, so work written here
  * is explorable rather than a change to the product. Promoting it, by pointing a
- * root into the source tree and committing what lands there, stays a deliberate
- * act.
+ * project's folder into the source tree and committing what lands there, stays a
+ * deliberate act taken from that project's board.
  */
 export const DEFAULT_WORK_ROOTS: WorkRoots = {
   design: '.cio/designs',
@@ -72,14 +77,31 @@ export function workRootGuidance(root: string): string {
     : `\`${root}\` is inside the project's own tree, so it is version-controlled like the rest of the source.`
 }
 
-/** Both folders, keyed by kind, for callers that switch on the kind. */
-export function workRootsByKind(roots: WorkRoots): Record<AuthoredWorkKind, string> {
-  return { design: roots.design, video: roots.video }
-}
-
-/** Whether a folder is the default for its kind, which is what Reset returns to. */
-export function isDefaultWorkRoot(kind: AuthoredWorkKind, root: string): boolean {
-  return workRootForKind(DEFAULT_WORK_ROOTS, kind) === root
+/**
+ * A warning that a previewed folder is not one the board lists.
+ *
+ * Authored work lives one folder under its kind's root, and the coordinator board
+ * lists exactly those folders. Work written anywhere else is work the user cannot
+ * find: the capability was used, the preview served, the tab opened, and the
+ * design missing from every list. The folder models reach for instead is their own
+ * scratch notes folder under `.cio/work`, which every prompt in the app names for
+ * non-source output, so this is a mistake the app can predict rather than a rare
+ * slip. The preview is the first moment the app sees where the work landed, so it
+ * says so in the note the model reads, and names the folder to use instead.
+ *
+ * Empty for a folder the board does list, which is the normal case. Free of
+ * `node:` imports like the rest of this module, because the renderer reads it.
+ */
+export function workFolderNote(
+  kind: AuthoredWorkKind,
+  directory: string,
+  roots: readonly string[],
+  root: string
+): string {
+  const slash = directory.lastIndexOf('/')
+  const parent = slash === -1 ? '' : directory.slice(0, slash)
+  if (parent !== '' && roots.includes(parent)) return ''
+  return `${kind === 'video' ? 'compositions' : 'designs'} live one folder under \`${root}\`, as \`${root}/<name>/\`, and the board lists those folders only: this folder is not one of them, so the user will not find the work here. Move it under \`${root}\` and preview it again.`
 }
 
 /** A root may not be this folder, whatever its spelling: work written into Git's
@@ -98,8 +120,8 @@ const FORBIDDEN_ROOT_SEGMENT = '.git'
  * never do.
  *
  * A refusal is the caller's to report: this answers the question, it does not
- * throw, so the settings boundary can say which field was wrong and the config
- * reader can fall back to the default without a try/catch.
+ * throw, so the board can say which field was wrong and a stored project root can
+ * fall back to the default without a try/catch.
  */
 export function normalizeWorkRoot(value: unknown): string | null {
   if (typeof value !== 'string') return null
@@ -122,7 +144,7 @@ export function normalizeWorkRoot(value: unknown): string | null {
  * A nested pair is not two settings but one with a shadow: a folder under both
  * roots would classify as whichever kind is tested first, so a design would be
  * listed as a composition or the reverse, depending on an order nobody chose.
- * The settings boundary refuses such a pair instead of storing an ambiguity.
+ * The board refuses such a pair instead of storing an ambiguity.
  */
 export function workRootsConflict(roots: WorkRoots): boolean {
   for (const kind of AUTHORED_WORK_KINDS) {
@@ -134,25 +156,6 @@ export function workRootsConflict(roots: WorkRoots): boolean {
     }
   }
   return false
-}
-
-/** The stored shape this module reads. Kept structural so config types need no import. */
-export interface WorkRootsConfig {
-  workRoots?: Partial<WorkRoots> | null
-}
-
-/**
- * The config's roots, with anything unusable replaced by its default.
- *
- * Reading is tolerant on purpose. A config file a future version wrote, a
- * hand-edited value, or a pair that nests arrives as a working app rather than as
- * a failed startup, and the two defaults are always a valid pair.
- */
-export function workRootsFromConfig(config: WorkRootsConfig): WorkRoots {
-  const design = normalizeWorkRoot(config.workRoots?.design) ?? DEFAULT_WORK_ROOTS.design
-  const video = normalizeWorkRoot(config.workRoots?.video) ?? DEFAULT_WORK_ROOTS.video
-  const roots: WorkRoots = { design, video }
-  return workRootsConflict(roots) ? { ...DEFAULT_WORK_ROOTS } : roots
 }
 
 /**
@@ -170,4 +173,17 @@ export function authoredWorkKindOf(directory: string, roots: WorkRoots): Authore
     if (directory === root || directory.startsWith(`${root}/`)) return kind
   }
   return null
+}
+
+/** A folder segment safe to paste into URLs on every supported platform. */
+export function sanitizeWorkName(value: string): string {
+  const slug = value
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 100)
+    .replace(/-+$/u, '')
+  return /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/u.test(slug) ? `${slug}-design` : slug
 }

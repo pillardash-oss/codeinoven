@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { FolderTree, GitBranch, MoreHorizontal } from '@lucide/svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import type { GitBranchInfo } from '$shared/types'
   import { gitState } from '$lib/stores/git.svelte'
@@ -65,7 +67,7 @@
       <div class="flex items-center gap-1.5">
         <input
           bind:this={newBranchInput}
-          class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="min-w-0 flex-1 border border-border bg-elevated px-2 py-1 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="new-feature"
           bind:value={newBranchName}
           onkeydown={(event: KeyboardEvent) => {
@@ -75,7 +77,7 @@
         />
         <button
           type="button"
-          class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+          class="shrink-0 cursor-pointer bg-primary px-2 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
           disabled={!newBranchName.trim() || gitState.isBusy('checkout')}
           onclick={submitNewBranch}
         >
@@ -83,7 +85,7 @@
         </button>
         <button
           type="button"
-          class="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="shrink-0 cursor-pointer px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={cancelNewBranch}
         >
           Cancel
@@ -95,7 +97,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto p-2">
     {#if branches.length === 0}
       <div class="flex flex-col items-center justify-center py-12 text-center">
-        <GitBranch size={22} class="mx-auto mb-2 text-dimmed" />
+        <CioTabGit size={22} class="mx-auto mb-2 text-dimmed" />
         <p class="text-xs font-medium text-muted">No branches</p>
       </div>
     {:else}
@@ -139,18 +141,18 @@
                 aria-label={`Actions for branch ${branch.ref}`}
               >
                 <div
-                  class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
+                  class="group flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
                 >
                   <span
                     class={[
-                      'flex size-5 shrink-0 items-center justify-center rounded-full',
+                      'flex size-5 shrink-0 items-center justify-center',
                       inWorktree ? 'bg-warning/10 text-warning' : branchAvatarClass(branch.ref)
                     ]}
                   >
                     {#if inWorktree}
-                      <FolderTree size={11} />
+                      <CioFiles size={11} />
                     {:else}
-                      <GitBranch size={11} />
+                      <CioTabGit size={11} />
                     {/if}
                   </span>
                   <span class="min-w-0 flex-1">
@@ -187,7 +189,7 @@
                   </span>
                   {#if inWorktree}
                     <span
-                      class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
+                      class="shrink-0 bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning"
                     >
                       worktree
                     </span>
@@ -205,15 +207,15 @@
                   <div class="relative h-6 w-16 shrink-0">
                     <DropdownMenu.Root>
                       <DropdownMenu.Trigger
-                        class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                        class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
                         aria-label={`More actions for branch ${branch.ref}`}
                         title={`More actions for branch ${branch.ref}`}
                       >
-                        <MoreHorizontal size={13} />
+                        <CioEllipsis size={13} />
                       </DropdownMenu.Trigger>
                       <DropdownMenu.Portal>
                         <DropdownMenu.Content
-                          class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                          class="z-50 min-w-48 overflow-hidden border border-border bg-surface p-1 shadow-xl"
                           side="bottom"
                           align="end"
                           sideOffset={4}
@@ -241,7 +243,7 @@
                     </DropdownMenu.Root>
                     {#if branch.current}
                       <span
-                        class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap rounded bg-primary/15 px-1.5 text-[0.5rem] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
+                        class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap bg-primary/15 px-1.5 text-[0.5rem] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
                       >
                         current
                       </span>
@@ -251,7 +253,7 @@
               </ContextMenu.Trigger>
               <ContextMenu.Portal>
                 <ContextMenu.Content
-                  class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                  class="z-50 min-w-48 overflow-hidden border border-border bg-surface p-1 shadow-xl"
                   side="bottom"
                   align="start"
                   sideOffset={4}

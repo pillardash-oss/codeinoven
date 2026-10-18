@@ -1,18 +1,16 @@
 <script lang="ts">
-  import {
-    CircleX,
-    Cloud,
-    Loader2,
-    Pencil,
-    Plus,
-    RefreshCw,
-    Rocket,
-    Search,
-    Server,
-    Trash2,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCloud from '@pillardash-oss/cio-icon/CioCloud.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioRocket from '@pillardash-oss/cio-icon/CioRocket.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { invoke } from '$lib/ipc.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
@@ -640,7 +638,7 @@ ${fence}`
         {#each statusChips as chip (chip.value)}
           <button
             type="button"
-            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.625rem] font-medium transition-colors {statusFilter ===
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-[0.625rem] font-medium transition-colors {statusFilter ===
             chip.value
               ? 'bg-raised text-foreground'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
@@ -651,7 +649,7 @@ ${fence}`
           >
             {#if chip.value !== 'all'}
               <span
-                class="h-1.5 w-1.5 shrink-0 rounded-full {chip.tone === 'danger'
+                class="h-1.5 w-1.5 shrink-0 {chip.tone === 'danger'
                   ? 'bg-danger'
                   : chip.tone === 'warning'
                     ? 'bg-warning'
@@ -673,14 +671,13 @@ ${fence}`
         {#each providerChips as chip (chip.kind)}
           <!-- Chip and its add action are siblings so neither button nests in the other. -->
           <div
-            class="flex h-6 shrink-0 items-center rounded-md transition-colors {providerFilter ===
-            chip.kind
+            class="flex h-6 shrink-0 items-center transition-colors {providerFilter === chip.kind
               ? 'bg-raised text-foreground'
               : 'text-muted hover:bg-elevated'}"
           >
             <button
               type="button"
-              class="flex h-6 cursor-pointer items-center gap-1 rounded-l-md pl-1.5 pr-1 text-[0.625rem] font-medium hover:text-foreground"
+              class="flex h-6 cursor-pointer items-center gap-1 pl-1.5 pr-1 text-[0.625rem] font-medium hover:text-foreground"
               title="Show only {chip.label} containers"
               aria-label="Show only {chip.label} containers"
               aria-pressed={providerFilter === chip.kind}
@@ -697,12 +694,12 @@ ${fence}`
             </button>
             <button
               type="button"
-              class="flex h-6 w-5 cursor-pointer items-center justify-center rounded-r-md text-dimmed hover:text-foreground"
+              class="flex h-6 w-5 cursor-pointer items-center justify-center text-dimmed hover:text-foreground"
               title="Add a {chip.label} container to monitor"
               aria-label="Add a {chip.label} container to monitor"
               onclick={() => openConfigSheet('container')}
             >
-              <Plus size={11} />
+              <CioPlus size={11} />
             </button>
           </div>
         {/each}
@@ -711,19 +708,19 @@ ${fence}`
 
     {#if configLoading}
       <div class="flex flex-1 items-center justify-center gap-2 py-10 text-sm text-muted">
-        <Loader2 size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         Loading deployments…
       </div>
     {:else if !configured}
       <EmptyState
-        icon={Rocket}
+        icon={CioRocket}
         title="No cloud deployments configured"
         description="Add a provider and its containers to monitor deployment status and logs for this project."
       >
         {#snippet action()}
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+            class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => openConfigSheet('provider')}
           >
             Add provider
@@ -731,10 +728,10 @@ ${fence}`
         {/snippet}
       </EmptyState>
     {:else if error && !hasContainers}
-      <EmptyState icon={CircleX} title="Deployments unavailable" description={error} />
+      <EmptyState icon={CioCrossCircle} title="Deployments unavailable" description={error} />
     {:else if containersLoading}
       <div class="flex min-h-0 flex-1 items-center justify-center gap-2 py-10 text-sm text-muted">
-        <Loader2 size={16} class="animate-spin" />
+        <CioSpinner size={16} class="animate-spin" />
         Loading containers…
       </div>
     {:else if containers.length === 0}
@@ -742,14 +739,14 @@ ${fence}`
            show, so its error leads rather than reading as "nothing configured". -->
       {#if anyAccessError}
         <EmptyState
-          icon={CircleX}
+          icon={CioCrossCircle}
           title="Deployments unavailable"
           description={Object.values(accessErrors).join(' · ')}
         >
           {#snippet action()}
             <button
               type="button"
-              class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
               onclick={() => openConfigSheet('provider', firstAccessErrorKind())}
             >
               Reconnect account
@@ -758,14 +755,14 @@ ${fence}`
         </EmptyState>
       {:else}
         <EmptyState
-          icon={Cloud}
+          icon={CioCloud}
           title="No containers added yet"
           description="Pick the containers (projects or applications) on your provider account to monitor. Status and logs appear here once added."
         >
           {#snippet action()}
             <button
               type="button"
-              class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
               onclick={() => openConfigSheet('container')}
             >
               Add container
@@ -775,11 +772,11 @@ ${fence}`
       {/if}
     {:else if !hasFilteredResults}
       <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
-        <Search size={16} class="text-dimmed" />
+        <CioSearch size={16} class="text-dimmed" />
         <p class="text-[0.6875rem] font-medium text-foreground">No matching containers</p>
         <button
           type="button"
-          class="h-7 cursor-pointer rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
+          class="h-7 cursor-pointer border border-border px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
           onclick={clearFilters}
         >
           Clear filters
@@ -810,7 +807,7 @@ ${fence}`
                 <p class="min-w-0 flex-1">{accessErrors[kind]}</p>
                 <button
                   type="button"
-                  class="shrink-0 cursor-pointer rounded-md bg-danger px-2 py-1 text-[0.5625rem] font-semibold text-white transition-opacity hover:opacity-90"
+                  class="shrink-0 cursor-pointer bg-danger px-2 py-1 text-[0.5625rem] font-semibold text-on-danger transition-opacity hover:opacity-90"
                   title="Reconnect the {PROVIDER_LABELS[
                     kind as CloudDeploymentProviderKind
                   ]} account"
@@ -823,7 +820,7 @@ ${fence}`
                 </button>
                 <button
                   type="button"
-                  class="-m-0.5 shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-danger/10"
+                  class="-m-0.5 shrink-0 cursor-pointer p-0.5 transition-colors hover:bg-danger/10"
                   title="Dismiss {PROVIDER_LABELS[
                     kind as CloudDeploymentProviderKind
                   ]} access error"
@@ -832,14 +829,14 @@ ${fence}`
                   ]} access error"
                   onclick={() => dismissAccessError(kind)}
                 >
-                  <X size={11} />
+                  <CioClose size={11} />
                 </button>
               </div>
             {/if}
             {#each projectGroups as projectGroup (projectGroup.project)}
               <div class="border-t border-border">
                 <div class="flex items-center gap-1.5 bg-surface/50 px-3 py-1">
-                  <Server size={9} class="shrink-0 text-dimmed" />
+                  <CioServer size={9} class="shrink-0 text-dimmed" />
                   <span class="truncate text-[0.5625rem] font-medium text-muted">
                     {projectGroup.project}
                   </span>
@@ -867,7 +864,9 @@ ${fence}`
                             <StatusPill
                               tone={runtimeStatusTone(container.runtimeStatus)}
                               dot
-                              title="Container runtime: {runtimeStatusLabel(container.runtimeStatus)}"
+                              title="Container runtime: {runtimeStatusLabel(
+                                container.runtimeStatus
+                              )}"
                             >
                               {runtimeStatusLabel(container.runtimeStatus)}
                             </StatusPill>
@@ -881,7 +880,7 @@ ${fence}`
                             {/if}
                             {#if containerError(container)}
                               {@const pollError = containerError(container)}
-                              <TriangleAlert
+                              <CioAttention
                                 size={12}
                                 class="shrink-0 text-warning"
                                 title="Status check failed: {pollError}"
@@ -894,7 +893,8 @@ ${fence}`
                           >
                             <span class="truncate font-mono">{container.id}</span>
                             {#if container.updatedAt}
-                              <span class="shrink-0">· {formatCompactAge(container.updatedAt)}</span>
+                              <span class="shrink-0">· {formatCompactAge(container.updatedAt)}</span
+                              >
                             {/if}
                           </div>
                         </div>
@@ -911,21 +911,21 @@ ${fence}`
                         {/if}
                         <button
                           type="button"
-                          class="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-raised hover:text-foreground"
+                          class="flex h-6 w-6 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-raised hover:text-foreground"
                           title="Edit {container.label}"
                           aria-label="Edit {container.label}"
                           onclick={() => editContainer(container)}
                         >
-                          <Pencil size={11} />
+                          <CioPencil size={11} />
                         </button>
                         <button
                           type="button"
-                          class="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                          class="flex h-6 w-6 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                           title="Remove {container.label}"
                           aria-label="Remove {container.label}"
                           onclick={() => requestRemoveContainer(container)}
                         >
-                          <Trash2 size={11} />
+                          <CioTrash size={11} />
                         </button>
                       </div>
                     </div>
@@ -940,7 +940,7 @@ ${fence}`
 
     {#if configured && hasContainers && searchOpen}
       <div class="relative shrink-0 border-t border-border bg-surface px-2 py-1.5">
-        <Search
+        <CioSearch
           size={11}
           class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -950,7 +950,7 @@ ${fence}`
           autofocus
           placeholder="Search by name, id or project…"
           aria-label="Search containers"
-          class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-6 w-full border border-border bg-elevated pl-6 pr-2 text-[0.625rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           bind:value={searchQuery}
         />
       </div>
@@ -970,12 +970,12 @@ ${fence}`
       </span>
       <button
         type="button"
-        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 px-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
       >
-        <Plus size={13} />
+        <CioPlus size={13} />
         {configured ? 'Add' : 'Connect'}
       </button>
 
@@ -983,7 +983,7 @@ ${fence}`
         {#if configured && hasContainers}
           <button
             type="button"
-            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {searchOpen
+            class="flex h-7 w-7 cursor-pointer items-center justify-center transition-colors hover:bg-elevated hover:text-foreground {searchOpen
               ? 'bg-elevated text-foreground'
               : 'text-muted'}"
             title="Search containers by name, id or project"
@@ -991,18 +991,18 @@ ${fence}`
             aria-pressed={searchOpen}
             onclick={toggleSearch}
           >
-            <Search size={13} />
+            <CioSearch size={13} />
           </button>
         {/if}
         {#if configured}
           <button
             type="button"
-            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-7 w-7 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Refresh deployment statuses now"
             aria-label="Refresh deployment statuses now"
             onclick={() => void refreshAll()}
           >
-            <RefreshCw size={13} class={refreshingAll ? 'animate-spin' : ''} />
+            <CioRefresh size={13} class={refreshingAll ? 'animate-spin' : ''} />
           </button>
         {/if}
         <Switch
@@ -1045,17 +1045,17 @@ ${fence}`
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="flex h-9 items-center justify-center rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
+          class="flex h-9 items-center justify-center border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
           onclick={() => (deleteTarget = null)}
         >
           Cancel
         </button>
         <button
           type="button"
-          class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-danger px-4 text-xs font-medium text-on-danger hover:bg-danger-hover"
+          class="flex h-9 items-center justify-center gap-1.5 bg-danger px-4 text-xs font-medium text-on-danger hover:bg-danger-hover"
           onclick={() => void confirmRemoveContainer()}
         >
-          <Trash2 size={13} />
+          <CioTrash size={13} />
           Remove
         </button>
       </div>

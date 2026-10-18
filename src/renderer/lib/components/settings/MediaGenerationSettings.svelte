@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ExternalLink, KeyRound, Loader2, Trash2 } from '@lucide/svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke } from '$lib/ipc.svelte'
@@ -130,8 +133,12 @@
   }
 </script>
 
-<div id="settings-block-design-generation" class="rounded-xl border bg-surface p-4">
-  <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Generation backend</h3>
+<div id="settings-block-design-generation" class="border bg-surface p-4">
+  <h3
+    class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+  >
+    Generation backend
+  </h3>
   <p class="mt-2 text-xs leading-relaxed text-dimmed">
     The service that makes images, clips and sound when a design or a composition needs them. One
     token reaches many models, and you pick which model each craft uses below. Store your own key:
@@ -139,12 +146,12 @@
   </p>
 
   {#if error}
-    <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+    <p class="mt-3 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
 
   {#if loading}
     <div class="mt-3 flex items-center gap-2 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading generation settings…
+      <CioSpinner size={14} class="animate-spin" /> Loading generation settings…
     </div>
   {:else if generationState}
     <div class="mt-3 flex flex-wrap items-start gap-3">
@@ -165,7 +172,7 @@
     </div>
 
     {#if selectedProvider}
-      <div class="mt-4 space-y-3 rounded-lg border border-border bg-elevated/40 p-3">
+      <div class="mt-4 space-y-3 border border-border bg-elevated/40 p-3">
         <p class="text-xs leading-relaxed text-dimmed">{selectedProvider.description}</p>
 
         <button
@@ -176,7 +183,7 @@
           data-external-url={selectedProvider.keyUrl}
           onclick={() => void openInBrowser(selectedProvider.keyUrl)}
         >
-          <ExternalLink size={12} /> Get a {selectedProvider.label} token
+          <CioExternalLink size={12} /> Get a {selectedProvider.label} token
         </button>
 
         {#if !generationState.secureStorageAvailable}
@@ -191,7 +198,7 @@
               <input
                 id="generation-token"
                 {@attach focusTokenField}
-                class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+                class="mt-1 w-full border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
                 type="password"
                 autocomplete="off"
                 spellcheck={false}
@@ -208,23 +215,23 @@
             </div>
             <button
               type="button"
-              class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
+              class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
               disabled={!settingsReady || saving || tokenInput.trim().length === 0}
               title="Save this generation token"
               aria-label="Save this generation token"
               onclick={() => void saveToken()}
             >
               {#if saving}
-                <Loader2 size={13} class="animate-spin" />
+                <CioSpinner size={13} class="animate-spin" />
               {:else}
-                <KeyRound size={13} />
+                <CioKey size={13} />
               {/if}
               Save
             </button>
             {#if generationState.hasToken}
               <button
                 type="button"
-                class="flex items-center gap-1.5 rounded-lg border border-danger/30 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+                class="flex items-center gap-1.5 border border-danger/30 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
                 disabled={!settingsReady}
                 title="Remove the stored generation token"
                 aria-label="Remove the stored generation token"
@@ -232,7 +239,7 @@
                   pendingRemoval = true
                 }}
               >
-                <Trash2 size={13} /> Remove
+                <CioTrash size={13} /> Remove
               </button>
             {/if}
           </div>

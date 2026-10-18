@@ -1,21 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import {
-  chmodSync,
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { flipFuses, FuseVersion, FuseV1Options } from '@electron/fuses'
+import { renderNativeSplash } from './artwork.js'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repositoryRoot = resolve(scriptDirectory, '../..')
 const sourceDirectory = join(scriptDirectory, 'native')
-const staticIcon = join(repositoryRoot, 'src/renderer/static/icon.png')
 
 function report(message) {
   process.stdout.write(`[native-splash] ${message}\n`)
@@ -35,8 +27,8 @@ function run(command, args, options = {}) {
   return result.stdout.trim()
 }
 
-function writeEmbeddedHeader(headerPath, version) {
-  const bytes = readFileSync(staticIcon)
+export function writeEmbeddedHeader(headerPath, version) {
+  const bytes = renderNativeSplash(repositoryRoot, version)
   const lines = []
   for (let offset = 0; offset < bytes.length; offset += 20) {
     lines.push(

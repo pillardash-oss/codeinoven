@@ -1,7 +1,14 @@
 <script lang="ts">
-  import { Check, Eye } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import { slide } from 'svelte/transition'
+  import CardHead from '../shared/CardHead.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardButton from '../shared/CardButton.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
+  import { foldSlide } from '../shared/card-motion'
   import type { AgentModelSelection, ProviderCatalog, ThinkingLevel } from '$shared/types'
 
   interface Props {
@@ -40,86 +47,99 @@
     onCancel,
     onConfirm
   }: Props = $props()
+
+  let folded = $state(false)
 </script>
 
+<!-- A gate that lives inside the composer: no frame of its own, a dashed rule
+that hands the eye down to the writing surface. The head, the body and the foot
+are the shared card shape. -->
 <div
-  class="mx-3 mt-2.5 rounded-xl border border-primary/30 bg-primary/5 p-4"
+  class="border-b border-dashed border-border-strong bg-transparent"
   role="dialog"
   aria-label="Pick a vision model to describe this image"
 >
-  <div class="flex items-start gap-2.5">
-    <div class="mt-0.5 shrink-0 rounded-lg bg-primary/10 p-1.5 text-primary">
-      <Eye size={15} />
+  <CardHead
+    icon={CioEye}
+    title="This model can't see images"
+    chip={{ text: 'Waiting', tone: 'paused' }}
+    bind:folded
+    foldLabel="This model can't see images"
+  />
+
+  {#if !folded}
+    <div transition:slide={foldSlide()}>
+      <div class="flex flex-col gap-2 px-3 py-2.5">
+        <p class="text-xs leading-relaxed text-muted">
+          You're about to send an image to a model without vision capability. The
+          <span class="font-mono">cio:see-image</span> utility is a tool the model can call to describe
+          the image for it, but you need to pick the vision model that does the describing.
+        </p>
+        <ModelPicker
+          {providers}
+          {projectId}
+          harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? harnessId}
+          providerId={visionSelection?.providerId ?? ''}
+          modelId={visionSelection?.modelId ?? ''}
+          accountId={visionSelection?.accountId}
+          {favoriteModels}
+          {recentModels}
+          {onRemoveRecent}
+          visionOnly
+          side="top"
+          variant="field"
+          label={visionSelection ? undefined : 'Choose a vision model'}
+          onSelect={(providerId, modelId, harnessId, accountId) => {
+            visionSelection = { harnessId, providerId, modelId, accountId }
+          }}
+          thinkingLevel={visionSelection?.thinkingLevel}
+          runtimeSettings={visionSelection ?? undefined}
+          onSelectRuntime={(runtime) => {
+            if (visionSelection) visionSelection = { ...visionSelection, ...runtime }
+          }}
+          onSelectThinking={(level: ThinkingLevel) => {
+            if (!visionSelection) return
+            visionSelection = { ...visionSelection, thinkingLevel: level }
+          }}
+          {onToggleFavorite}
+          {onReorderFavorite}
+        />
+        {#if !visionSelection}
+          <p class="text-[0.6875rem] text-dimmed">
+            No vision model selected. Continue is disabled until you pick one.
+          </p>
+        {/if}
+        <div class="flex justify-start">
+          <Switch
+            bind:checked={donotAsk}
+            label="Don't ask again"
+            aria-label="Don't ask again for this vision model"
+          />
+        </div>
+      </div>
+
+      <CardFoot>
+        {#snippet left()}
+          <CardButton
+            variant="ghost"
+            label="Cancel"
+            title="Cancel and keep your message and attachment"
+            icon={CioClose}
+            onclick={onCancel}
+          />
+        {/snippet}
+
+        {#snippet right()}
+          <CardButton
+            variant="primary"
+            label="Continue"
+            title="Send the image and describe it with the selected vision model"
+            icon={CioCheck}
+            disabled={!visionSelection}
+            onclick={onConfirm}
+          />
+        {/snippet}
+      </CardFoot>
     </div>
-    <div class="min-w-0 flex-1">
-      <p class="text-sm font-semibold text-foreground">This model can't see images</p>
-      <p class="mt-1 text-xs leading-relaxed text-muted">
-        You're about to send an image to a model without vision capability. Image Descriptor is a
-        tool the model can call to describe the image for it but you need to pick the vision model
-        that does the describing.
-      </p>
-    </div>
-  </div>
-  <div class="mt-3 flex flex-wrap items-center gap-2">
-    <button
-      type="button"
-      class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-      title="Cancel and keep your message and attachment"
-      onclick={onCancel}
-    >
-      Cancel
-    </button>
-    <div class="min-w-0 flex-1">
-      <ModelPicker
-        {providers}
-        {projectId}
-        harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? harnessId}
-        providerId={visionSelection?.providerId ?? ''}
-        modelId={visionSelection?.modelId ?? ''}
-        accountId={visionSelection?.accountId}
-        {favoriteModels}
-        {recentModels}
-        {onRemoveRecent}
-        visionOnly
-        side="top"
-        variant="field"
-        label={visionSelection ? undefined : 'Choose a vision model'}
-        onSelect={(providerId, modelId, harnessId, accountId) => {
-          visionSelection = { harnessId, providerId, modelId, accountId }
-        }}
-        thinkingLevel={visionSelection?.thinkingLevel}
-        runtimeSettings={visionSelection ?? undefined}
-        onSelectRuntime={(runtime) => {
-          if (visionSelection) visionSelection = { ...visionSelection, ...runtime }
-        }}
-        onSelectThinking={(level: ThinkingLevel) => {
-          if (!visionSelection) return
-          visionSelection = { ...visionSelection, thinkingLevel: level }
-        }}
-        {onToggleFavorite}
-        {onReorderFavorite}
-      />
-    </div>
-    <button
-      type="button"
-      class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-      title="Send the image and describe it with the selected vision model"
-      disabled={!visionSelection}
-      onclick={onConfirm}
-    >
-      <Check size={13} /> Continue
-    </button>
-  </div>
-  {#if !visionSelection}
-    <p class="mt-1.5 text-[0.6875rem] text-dimmed">
-      No vision model selected Continue is disabled until you pick one.
-    </p>
   {/if}
-  <div class="mt-3 flex justify-start">
-    <Switch
-      bind:checked={donotAsk}
-      label="Don't ask again"
-      aria-label="Don't ask again for this vision model"
-    />
-  </div>
 </div>

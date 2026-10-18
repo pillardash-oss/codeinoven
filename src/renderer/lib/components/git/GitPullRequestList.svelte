@@ -1,20 +1,18 @@
 <script lang="ts">
-  import {
-    Bot,
-    ChevronLeft,
-    ChevronRight,
-    GitMerge,
-    GitPullRequest,
-    GitPullRequestClosed,
-    GitPullRequestDraft,
-    Loader2,
-    Maximize2,
-    MessageSquare,
-    RefreshCw,
-    RotateCcw,
-    TriangleAlert,
-    X
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioPullRequestClosed from '@pillardash-oss/cio-icon/CioPullRequestClosed.svelte'
+  import CioPullRequestDraft from '@pillardash-oss/cio-icon/CioPullRequestDraft.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -278,10 +276,10 @@
     })
   }
 
-  function icon(pr: PullRequestSummary): typeof GitPullRequest {
-    if (pr.state === 'merged') return GitMerge
-    if (pr.state === 'closed') return GitPullRequestClosed
-    return pr.draft ? GitPullRequestDraft : GitPullRequest
+  function icon(pr: PullRequestSummary): typeof CioPullRequest {
+    if (pr.state === 'merged') return CioMerge
+    if (pr.state === 'closed') return CioPullRequestClosed
+    return pr.draft ? CioPullRequestDraft : CioPullRequest
   }
 
   function stateClass(pr: PullRequestSummary): string {
@@ -337,7 +335,7 @@
       </p>
       <button
         type="button"
-        class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+        class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
         onclick={onSignIn}
       >
         Sign in to GitHub
@@ -356,32 +354,32 @@
         {#if onFullscreen}
           <button
             type="button"
-            class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Open in full screen"
             aria-label="Open in full screen"
             onclick={onFullscreen}
           >
-            <Maximize2 size={12} />
+            <CioMaximize size={12} />
           </button>
         {/if}
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Create pull request"
           aria-label="Create pull request"
           onclick={onCreate}
         >
-          <GitPullRequest size={12} />
+          <CioPullRequest size={12} />
         </button>
         <button
           type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
           title="Refresh pull requests"
           aria-label="Refresh pull requests"
           disabled={loading}
           onclick={() => void load(true)}
         >
-          <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
+          <CioRefresh size={12} class={loading ? 'animate-spin' : ''} />
         </button>
       </div>
     {/if}
@@ -396,7 +394,7 @@
       <div
         class="flex shrink-0 items-start gap-1.5 border-b border-border bg-elevated/40 px-2.5 py-1.5"
       >
-        <TriangleAlert size={12} class="mt-0.5 shrink-0 text-warning" />
+        <CioAttention size={12} class="mt-0.5 shrink-0 text-warning" />
         <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
       </div>
     {/if}
@@ -414,16 +412,16 @@
       <div class="h-full overflow-y-auto {selectedItems.length > 0 ? 'pb-11' : ''}">
         {#if loading && items.length === 0}
           <div class="flex items-center justify-center gap-2 py-10 text-[0.6875rem] text-dimmed">
-            <Loader2 size={13} class="animate-spin" />
+            <CioSpinner size={13} class="animate-spin" />
             Loading pull requests…
           </div>
         {:else if accessError}
           <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
-            <GitPullRequestClosed size={18} class="text-danger" />
+            <CioPullRequestClosed size={18} class="text-danger" />
             <p class="text-[0.625rem] leading-relaxed text-dimmed">{accessError}</p>
             <button
               type="button"
-              class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
+              class="h-8 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary hover:bg-primary-hover"
               onclick={onSignIn}
             >
               Sign in to GitHub
@@ -431,12 +429,12 @@
           </div>
         {:else if transientError && items.length === 0}
           <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-            <TriangleAlert size={18} class="text-warning" />
+            <CioAttention size={18} class="text-warning" />
             <p class="text-[0.625rem] leading-relaxed text-dimmed">{transientError}</p>
           </div>
         {:else if items.length === 0}
           <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
-            <GitPullRequest size={18} class="text-dimmed" />
+            <CioPullRequest size={18} class="text-dimmed" />
             <p class="text-[0.6875rem] leading-relaxed text-dimmed">
               No {state === 'all' ? '' : state} pull requests.
             </p>
@@ -542,7 +540,7 @@
                     <span class="mt-1 flex min-w-0 items-center gap-1 overflow-hidden">
                       {#each shownLabels as label (label.name)}
                         <span
-                          class="max-w-[9ch] truncate rounded-full px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
+                          class="max-w-[9ch] truncate px-1.5 py-0.5 text-[0.5rem] font-medium leading-none"
                           style={prLabelStyle(label.color)}
                           title={label.name}
                         >
@@ -605,25 +603,25 @@
                     user set themselves, and the one they come back to check on.
                   -->
                     <span
-                      class="flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
+                      class="flex shrink-0 items-center gap-0.5 bg-primary/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tabular-nums text-primary"
                       title={agentAssignmentLabel(agentAssignment)}
                     >
-                      <Bot size={9} />
+                      <CioSubagent size={9} />
                       {agentAssignment.count}
                     </span>
                   {/if}
                   {#if hasIssue}
                     <span
-                      class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-danger"
+                      class="flex shrink-0 items-center gap-0.5 bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-danger"
                       title="This pull request has merge conflicts and needs resolution"
                     >
-                      <TriangleAlert size={9} />
+                      <CioAttention size={9} />
                       Conflicts
                     </span>
                   {/if}
                   {#if pr.checks && pr.checks.state !== 'none' && pr.checks.total > 0}
                     <span
-                      class="flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
+                      class="flex shrink-0 items-center gap-0.5 px-1.5 py-0.5 text-[0.5625rem] font-medium tabular-nums {prChecksToneClass(
                         pr.checks.state
                       )}"
                       title="{prChecksStateLabel(pr.checks.state)}: {pr.checks.passed} of {pr.checks
@@ -641,7 +639,7 @@
                       class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums text-dimmed"
                       title={commentLabel(pr.comments)}
                     >
-                      <MessageSquare size={10} />
+                      <CioMessage size={10} />
                       {pr.comments}
                     </span>
                   {/if}
@@ -657,7 +655,7 @@
           class="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center px-2 pb-2"
         >
           <div
-            class="selection-bar pointer-events-auto flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-surface/95 px-2 py-1.5 shadow-lg"
+            class="selection-bar pointer-events-auto flex max-w-full flex-wrap items-center gap-1 border border-border bg-surface/95 px-2 py-1.5 shadow-lg"
           >
             <span class="px-0.5 text-[0.625rem] font-medium tabular-nums text-foreground">
               {selectedItems.length} selected
@@ -665,32 +663,32 @@
             {#if closableSelection.length > 0}
               <button
                 type="button"
-                class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-danger/10 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/20"
+                class="flex h-6 cursor-pointer items-center gap-1 bg-danger/10 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/20"
                 title={`Close ${closableSelection.length} selected ${
                   closableSelection.length === 1 ? 'pull request' : 'pull requests'
                 } without merging`}
                 onclick={() => onAction({ kind: 'close', targets: closableSelection })}
               >
-                <X size={11} />
+                <CioClose size={11} />
                 Close {closableSelection.length}
               </button>
             {/if}
             {#if reopenableSelection.length > 0}
               <button
                 type="button"
-                class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 title={`Reopen ${reopenableSelection.length} selected ${
                   reopenableSelection.length === 1 ? 'pull request' : 'pull requests'
                 }`}
                 onclick={() => onAction({ kind: 'reopen', targets: reopenableSelection })}
               >
-                <RotateCcw size={11} />
+                <CioUndo size={11} />
                 Reopen {reopenableSelection.length}
               </button>
             {/if}
             <button
               type="button"
-              class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               title="Clear the selection"
               onclick={clearSelection}
             >
@@ -705,24 +703,24 @@
       <div class="flex shrink-0 items-center justify-between border-t border-border px-3 py-1.5">
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={page === 1 || loading}
           onclick={() => onPageChange(page - 1)}
         >
-          <ChevronLeft size={12} />
+          <CioBack size={12} />
           Previous
         </button>
         <span class="text-[0.5625rem] tabular-nums text-dimmed">Page {page}</span>
         <button
           type="button"
-          class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+          class="flex h-6 cursor-pointer items-center gap-1 px-2 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
           disabled={!hasMore || loading}
           onpointerenter={warmNextPage}
           onfocus={warmNextPage}
           onclick={() => onPageChange(page + 1)}
         >
           Next
-          <ChevronRight size={12} />
+          <CioForward size={12} />
         </button>
       </div>
     {/if}

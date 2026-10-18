@@ -1,18 +1,16 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    ChevronDown,
-    Download,
-    FolderOpen,
-    Globe,
-    LoaderCircle,
-    Pin,
-    Plus,
-    Puzzle,
-    Settings,
-    Store,
-    Trash2
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioPin from '@pillardash-oss/cio-icon/CioPin.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioStore from '@pillardash-oss/cio-icon/CioStore.svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
@@ -376,14 +374,14 @@
   }[] = [
     {
       id: 'store',
-      icon: Store,
+      icon: CioStore,
       label: 'Chrome Web Store',
       hint: "Open the store, then install from the extension's page with the button beside the address.",
       run: browseStore
     },
     {
       id: 'folder',
-      icon: FolderOpen,
+      icon: CioFolderOpen,
       label: 'Local folder',
       hint: 'Pick an unpacked extension folder on this computer.',
       run: () => void installFromFolder()
@@ -407,9 +405,9 @@
 {#snippet extensionIdentity(extension: BrowserExtension)}
   <span class="flex h-4 w-4 shrink-0 items-center justify-center">
     {#if extension.iconDataUrl}
-      <img src={extension.iconDataUrl} alt="" class="h-4 w-4 rounded-sm object-contain" />
+      <img src={extension.iconDataUrl} alt="" class="h-4 w-4 object-contain" />
     {:else}
-      <Puzzle size={13} class="text-dimmed" />
+      <CioTabExtensions size={13} class="text-dimmed" />
     {/if}
   </span>
   <span class="flex min-w-0 flex-1 flex-col">
@@ -423,7 +421,7 @@
           title={issueSummary(extension)}
           aria-label={issueSummary(extension)}
         >
-          <AlertTriangle size={12} class="text-warning" />
+          <CioAttention size={12} class="text-warning" />
         </span>
       {/if}
     </span>
@@ -443,7 +441,7 @@
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
         class={[
-          'flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors',
+          'flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors',
           installableStoreOffer
             ? 'text-muted hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground'
             : 'bg-primary text-on-primary hover:bg-primary-hover data-[state=open]:bg-primary-hover'
@@ -451,9 +449,9 @@
         title="Install an extension"
         aria-label="Install an extension"
       >
-        <Plus size={13} />
+        <CioPlus size={13} />
         Install extension
-        <ChevronDown size={12} class="shrink-0" />
+        <CioChevronDown size={12} class="shrink-0" />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
@@ -461,12 +459,12 @@
           align="end"
           sideOffset={6}
           collisionPadding={8}
-          class="z-60 w-64 rounded-xl border border-border bg-surface p-1 shadow-lg"
+          class="z-60 w-64 border border-border bg-surface p-1 shadow-lg"
         >
           {#each installDoors as door (door.id)}
             {@const DoorIcon = door.icon}
             <DropdownMenu.Item
-              class="flex cursor-pointer items-start gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+              class="flex cursor-pointer items-start gap-2 px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
               textValue={door.label}
               onSelect={door.run}
             >
@@ -502,13 +500,13 @@
     <div class="shrink-0 border-b border-border px-3 py-2">
       <button
         type="button"
-        class="flex w-full items-center gap-2 rounded-lg bg-primary px-2.5 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="flex w-full items-center gap-2 bg-primary px-2.5 py-2 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         disabled={installableStoreOffer.install !== null}
         title={`${offerInstallVerb ?? 'Install'} ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
         aria-label={`${offerInstallVerb ?? 'Install'} ${installableStoreOffer.name ?? 'this extension'} in ${installableStoreOffer.boxName}`}
         onclick={() => void installStoreExtensionOffer()}
       >
-        <Puzzle size={13} class="shrink-0" />
+        <CioTabExtensions size={13} class="shrink-0" />
         <span class="min-w-0 truncate"
           >{offerInstallVerb ?? 'Install'}
           {installableStoreOffer.name ?? 'this extension'}</span
@@ -534,7 +532,7 @@
 
   {#if shown.length === 0}
     <EmptyState
-      icon={Puzzle}
+      icon={CioTabExtensions}
       title={scopedBox ? `Nothing in ${scopedBox.name} yet` : 'No extensions yet'}
       description={scopedBox
         ? 'Install one and it lands in this box. Other boxes can be turned on later from its settings.'
@@ -566,7 +564,7 @@
           class:opacity-50={draggingId === extension.id}
         >
           <div
-            class="group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated"
+            class="group flex items-center gap-2 px-2 py-1.5 transition-colors hover:bg-elevated"
           >
             {#if popup.open}
               <!-- The identity is the door: one click on the extension opens its own
@@ -597,17 +595,17 @@
                 : `Updating ${extension.name}`}
               <button
                 type="button"
-                class="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-wait disabled:opacity-60"
+                class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:cursor-wait disabled:opacity-60"
                 disabled={updating}
                 title={updating ? `Updating ${extension.name}` : updateTitle}
                 aria-label={updating ? `Updating ${extension.name}` : updateTitle}
                 onclick={() => void browserExtensions.updateFromWebStore(extension.id)}
               >
                 {#if updating}
-                  <LoaderCircle size={12} class="animate-spin" />
+                  <CioSpinner size={12} class="animate-spin" />
                   Updating
                 {:else}
-                  <Download size={12} />
+                  <CioDownload size={12} />
                   Update
                 {/if}
               </button>
@@ -630,7 +628,7 @@
             <button
               type="button"
               class={[
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
+                'flex h-6 w-6 shrink-0 items-center justify-center transition-colors hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
                 pin.disabled
                   ? 'cursor-not-allowed text-muted opacity-40'
                   : extension.pinned
@@ -642,12 +640,12 @@
               aria-label={updating ? `Updating ${extension.name}` : pin.title}
               onclick={() => void browserExtensions.setPinned(extension.id, !extension.pinned)}
             >
-              <Pin size={13} />
+              <CioPin size={13} />
             </button>
             <button
               type="button"
               class={[
-                'flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
+                'flex h-6 w-6 shrink-0 items-center justify-center text-muted transition-colors group-hover:opacity-100 hover:bg-overlay hover:text-foreground focus-visible:opacity-100',
                 expandedId === extension.id ? 'opacity-100' : 'opacity-0'
               ]}
               title={expandedId === extension.id
@@ -660,7 +658,7 @@
               aria-controls="extension-settings-{extension.id}"
               onclick={() => (expandedId = expandedId === extension.id ? null : extension.id)}
             >
-              <ChevronDown size={13} class={expandedId === extension.id ? 'rotate-180' : ''} />
+              <CioChevronDown size={13} class={expandedId === extension.id ? 'rotate-180' : ''} />
             </button>
           </div>
 
@@ -673,10 +671,7 @@
               extension.allowedHosts,
               currentHost
             )}
-            <div
-              id="extension-settings-{extension.id}"
-              class="mb-1 space-y-2.5 rounded-lg border px-3 py-2.5"
-            >
+            <div id="extension-settings-{extension.id}" class="mb-1 space-y-2.5 border px-3 py-2.5">
               <div class="flex items-center justify-between gap-3">
                 <div class="min-w-0">
                   <p class="text-xs text-foreground">
@@ -709,7 +704,7 @@
                   Only the boxes you turn on load it, and each keeps its own storage. A box you make
                   later stays off until you turn it on here.
                 </p>
-                <div class="space-y-0.5 rounded-lg border p-1">
+                <div class="space-y-0.5 border p-1">
                   {#each jarChoices() as jar (jar.id)}
                     <div class="flex items-center justify-between gap-3 px-2 py-1">
                       <span class="flex min-w-0 items-center gap-2">
@@ -717,13 +712,10 @@
                           <img
                             src={jar.iconUrl}
                             alt=""
-                            class="h-3.5 w-3.5 shrink-0 rounded-sm object-contain"
+                            class="h-3.5 w-3.5 shrink-0 object-contain"
                           />
                         {:else}
-                          <span
-                            class="h-2 w-2 shrink-0 rounded-full"
-                            style:background-color={jar.accent}
-                          ></span>
+                          <span class="h-2 w-2 shrink-0" style:background-color={jar.accent}></span>
                         {/if}
                         <span class="truncate text-[0.6875rem]" style="color: {jar.accent}">
                           {jar.name}
@@ -750,12 +742,12 @@
               {#if extension.optionsPath}
                 <button
                   type="button"
-                  class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
+                  class="flex items-center gap-1.5 border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
                   title={`Open the ${extension.name} setup page`}
                   aria-label={`Open the ${extension.name} setup page`}
                   onclick={() => void openExtensionOptions(extension)}
                 >
-                  <Settings size={13} />
+                  <CioTabSettings size={13} />
                   Open setup page
                 </button>
               {/if}
@@ -777,7 +769,7 @@
                 {#if currentHost}
                   <button
                     type="button"
-                    class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
+                    class="flex items-center gap-1.5 border px-2.5 py-1.5 text-[0.6875rem] text-foreground transition-colors hover:bg-elevated"
                     disabled={updating}
                     title={runsHere
                       ? `Disable ${extension.name} on ${currentHost}`
@@ -805,12 +797,12 @@
                       }
                     }}
                   >
-                    <Globe size={13} />
+                    <CioBrowser size={13} />
                     {runsHere ? `Disable on ${currentHost}` : `Enable on ${currentHost}`}
                   </button>
                 {/if}
                 {#if extension.blockedHosts.length > 0 || extension.allowedHosts.length > 0}
-                  <div class="space-y-1 rounded-lg border p-2">
+                  <div class="space-y-1 border p-2">
                     {#if extension.blockedHosts.length > 0}
                       <p class="text-[0.625rem] text-dimmed">
                         Blocked: {extension.blockedHosts.join(', ')}
@@ -836,15 +828,15 @@
               </div>
 
               <p
-                class="rounded-lg border bg-elevated/50 px-2.5 py-2 text-[0.625rem] leading-relaxed text-dimmed"
+                class="border bg-elevated/50 px-2.5 py-2 text-[0.625rem] leading-relaxed text-dimmed"
               >
                 {browserExtensionInjectionLabel(extension.injected)}
               </p>
 
               {#if extension.missingCapabilities.length > 0}
-                <div class="rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2">
+                <div class="border border-warning/30 bg-warning/10 px-2.5 py-2">
                   <div class="flex items-center gap-1.5">
-                    <AlertTriangle size={12} class="shrink-0 text-warning" />
+                    <CioAttention size={12} class="shrink-0 text-warning" />
                     <p class="text-[0.6875rem] font-medium text-foreground">
                       {extension.missingCapabilities.length === 1
                         ? 'One capability is unavailable'
@@ -860,7 +852,7 @@
               {/if}
 
               {#if extension.warnings.length > 0}
-                <div class="rounded-lg border bg-elevated/50 px-2.5 py-2">
+                <div class="border bg-elevated/50 px-2.5 py-2">
                   <p class="text-[0.6875rem] font-medium text-foreground">Warnings</p>
                   <ul class="mt-1 space-y-0.5 pl-4 text-[0.625rem] leading-relaxed text-muted">
                     {#each extension.warnings as warning (warning)}
@@ -872,13 +864,13 @@
 
               <button
                 type="button"
-                class="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-danger transition-colors hover:bg-danger/10"
+                class="flex items-center gap-1.5 px-2.5 py-1.5 text-[0.6875rem] text-danger transition-colors hover:bg-danger/10"
                 disabled={updating}
                 title={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
                 aria-label={updating ? `Updating ${extension.name}` : `Uninstall ${extension.name}`}
                 onclick={() => (uninstallTarget = extension)}
               >
-                <Trash2 size={13} />
+                <CioTrash size={13} />
                 Uninstall
               </button>
             </div>

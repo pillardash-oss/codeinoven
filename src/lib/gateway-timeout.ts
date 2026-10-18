@@ -29,4 +29,6 @@ export interface UtilityGatewayEndpoint {
   url: string
   token: string
   timeoutMs: number
+  /** Tool names granted by this turn, shared with direct harness transports. */
+  toolNames?: readonly string[]
 }

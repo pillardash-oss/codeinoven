@@ -1,7 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
-import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+import { assistants } from '$lib/stores/assistants.svelte'
 import { isThreadBusy, type Project, type Thread } from '$shared/types'
 import { handoffSummary } from './assistant-view'
 
@@ -73,7 +73,7 @@ export function createAssistantHandoff(config: AssistantHandoffConfig) {
 
   /** The context summary that seeds the fork so work continues with the picture. */
   function buildSummary(task: Thread): string {
-    return handoffSummary(task, assistantRoutines.routineForTask(task))
+    return handoffSummary(task, assistants.assistantForTask(task))
   }
 
   async function continueInProject(project: Project): Promise<void> {

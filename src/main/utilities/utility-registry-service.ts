@@ -43,6 +43,7 @@ import {
   ARTIFACT_CAPABILITY_SUMMARY
 } from '../../lib/artifact-skill'
 import type { StorageEngine } from '../storage/storage-engine'
+import { parseMcpOAuthConfig } from './mcp-oauth/mcp-oauth-config'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
 // existing consumers) so browser-bound renderer code   which imports these ids
 // from `lib/agent-behavior`   never pulls this main-process service (and its
@@ -83,11 +84,19 @@ const SENSITIVE_CONFIG_KEY = /(api[-_]?key|authorization|credential|password|sec
 const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brave', 'custom'])
 
 /** Stable id of the app-seeded image-descriptor utility. */
-export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
+export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:see-image'
 
-/** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
+/**
+ * App-owned ids earlier builds seeded, mapped to the ids this build uses.
+ *
+ * `codeinoven:` ids predate the `cio:` rename; `cio:image-descriptor` is the
+ * name this entry shipped under before it became `cio:see-image`. A registry
+ * written by either build is renamed in place, so a renamed entry never
+ * survives beside its current one and a pinned vision model is never lost.
+ */
 const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
-  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID
+  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+  'cio:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID
 }
 
 /**
@@ -152,7 +161,7 @@ export class UtilityRegistryService {
       {
         id: APP_IMAGE_DESCRIPTOR_UTILITY_ID,
         kind: 'image_descriptor',
-        name: 'Image descriptor',
+        name: 'cio:see-image',
         description:
           'Describes images with a vision-capable model so text-only agents can reason about screenshots, video frames, and other media. Pick a vision model to pin it; otherwise the app chooses one automatically.',
         enabled: true,
@@ -176,7 +185,7 @@ export class UtilityRegistryService {
         kind: 'computer_use',
         name: 'cio:browser',
         description:
-          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, reviewed file uploads, screenshots, and browser console diagnostics.',
+          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, reviewed file uploads, screenshots, and browser console diagnostics. This is also the browser that renders your own design, prototype and video work at the URL the app served it on, so open it there before you describe the result.',
         enabled: true,
         activation: 'on_demand',
         scope: { level: 'global' },
@@ -333,7 +342,8 @@ export class UtilityRegistryService {
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
     const rebound = this.normalizeAppOwnedBindings(registry)
-    if (missing.length > 0 || migrated || retired || rebound) {
+    const relabelled = refreshAppOwnedPresentation(registry, defaults)
+    if (missing.length > 0 || migrated || retired || rebound || relabelled) {
       registry.utilities.push(...missing)
       await this.storage.write(REGISTRY_PATH, registry)
     }
@@ -369,8 +379,8 @@ export class UtilityRegistryService {
   }
 
   /**
-   * Renames legacy `codeinoven:` app-owned utilities to their current ids so
-   * registries created before the rename do not keep stale duplicates.
+   * Renames app-owned utilities an earlier build seeded under a different id,
+   * so a registry created before the rename does not keep a stale duplicate.
    */
   private migrateLegacyAppUtilities(registry: UtilityRegistryFile): boolean {
     let changed = false
@@ -481,6 +491,26 @@ export class UtilityRegistryService {
   }
 
   /**
+   * Validate a bundle without installing it, returning the definitions exactly as
+   * an install would store them.
+   *
+   * The registry owns the install rules, so a surface that has to decide whether a
+   * proposal is installable asks here instead of guessing: an MCP entry with no
+   * usable transport, an unknown kind or a credential smuggled into the bundle is
+   * rejected with the same message `installMany` would raise. That is what keeps an
+   * approval card from ever asking the user to bless an install that cannot happen.
+   * Nothing is written and no app default is seeded.
+   */
+  validateMany(inputs: UtilityDefinitionInput[]): UtilityDefinitionInput[] {
+    if (!Array.isArray(inputs) || inputs.length === 0) {
+      throw new TypeError('Utility bundle must contain at least one utility')
+    }
+    return inputs.map((input) =>
+      normalizeInput(input, { acceptMissingScope: true, acceptMissingBindings: true })
+    )
+  }
+
+  /**
    * Install a bundle the way a reinstall should behave: a definition that matches
    * an entry the registry already holds updates that entry in place instead of
    * adding a second one, and an install path that owns reconciliation (the agent
@@ -557,7 +587,8 @@ export class UtilityRegistryService {
       // App-owned identity stays the app's call, and so does availability, with
       // one exception: app-owned knowledge is advice rather than wiring, so a
       // user who already has a better runbook for a topic may switch ours off.
-      // See `canToggleUtilityEnabled`.
+      // See `canToggleUtilityEnabled`. Configuration is the app's too, apart
+      // from what `appOwnedConfigIsWritable` allows through.
       const lockedAppOwnedField =
         patch.name ??
         patch.description ??
@@ -574,6 +605,15 @@ export class UtilityRegistryService {
       if (current.appOwned && lockedAppOwnedField !== undefined) {
         throw new Error(
           'App-owned utility identity, activation, scope, credentials, and bindings are locked'
+        )
+      }
+      if (
+        current.appOwned &&
+        patch.config !== undefined &&
+        !appOwnedConfigIsWritable(current, patch.config)
+      ) {
+        throw new Error(
+          'This app-owned utility is managed by the app: its configuration cannot be changed'
         )
       }
       const normalized = normalizeInput({
@@ -766,6 +806,80 @@ function sameUtilityIdentity(
   return existing.name.trim().toLocaleLowerCase() === incoming.name.trim().toLocaleLowerCase()
 }
 
+/**
+ * Whether an app-owned utility's `config` may be rewritten.
+ *
+ * The app supplies the wiring these entries stand for, so their configuration
+ * is the app's: a browser backend or an MCP command a whole turn depends on
+ * must not be editable into a state the user cannot explain. Two writes stay
+ * allowed. The image descriptor exists only to choose a vision model, which is
+ * the one thing its editor offers, so any of its fields may move. The OAuth
+ * block belongs to whichever connection was authorized, so a grant may still
+ * be recorded or dropped   every other key must come back unchanged.
+ */
+function appOwnedConfigIsWritable(
+  current: UtilityDefinition,
+  config: UtilityConfigMap[UtilityKind]
+): boolean {
+  if (current.kind === 'image_descriptor') return true
+  const next = asConfigRecord(config)
+  const previous = asConfigRecord(current.config)
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
+  keys.delete('oauth')
+  return [...keys].every((key) => valuesEqual(previous[key], next[key]))
+}
+
+function asConfigRecord(config: UtilityConfigMap[UtilityKind]): Record<string, unknown> {
+  return isRecord(config) ? config : {}
+}
+
+/**
+ * Keeps an app-owned entry's name and description equal to what this build
+ * ships.
+ *
+ * App-owned identity is the app's call, so a registry written by an earlier
+ * build must not keep calling a renamed utility by its old name: the seed only
+ * adds missing ids, and an entry renamed in place (see
+ * `migrateLegacyAppUtilities`) would otherwise carry its old label forever.
+ */
+function refreshAppOwnedPresentation(
+  registry: UtilityRegistryFile,
+  defaults: readonly UtilityDefinition[]
+): boolean {
+  const shipped = new Map(defaults.map((utility) => [utility.id, utility]))
+  let changed = false
+  for (let index = 0; index < registry.utilities.length; index += 1) {
+    const utility = registry.utilities[index]
+    if (!utility.appOwned) continue
+    const current = shipped.get(utility.id)
+    if (!current) continue
+    if (utility.name === current.name && utility.description === current.description) continue
+    registry.utilities[index] = {
+      ...utility,
+      name: current.name,
+      description: current.description,
+      updatedAt: Date.now()
+    }
+    changed = true
+  }
+  return changed
+}
+
+/** Structural equality for the plain JSON values a utility config holds. */
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((value, index) => valuesEqual(value, right[index]))
+  }
+  if (isRecord(left) && isRecord(right)) {
+    const leftKeys = Object.keys(left)
+    if (leftKeys.length !== Object.keys(right).length) return false
+    return leftKeys.every((key) => key in right && valuesEqual(left[key], right[key]))
+  }
+  return false
+}
+
 function utilityTransportNames(utility: UtilityDefinition | UtilityDefinitionInput): Set<string> {
   return new Set(
     (utility.harnessBindings ?? [])
@@ -871,7 +985,8 @@ function parseConfig(kind: UtilityKind, value: unknown): UtilityConfigMap[Utilit
           : { environment: stringRecord(value['environment'], 'MCP environment') }),
         ...(value['headers'] === undefined
           ? {}
-          : { headers: stringRecord(value['headers'], 'MCP headers') })
+          : { headers: stringRecord(value['headers'], 'MCP headers') }),
+        ...(value['oauth'] === undefined ? {} : { oauth: parseMcpOAuthConfig(value['oauth']) })
       }
     }
     case 'skill':

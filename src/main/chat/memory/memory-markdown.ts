@@ -82,7 +82,10 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
       lastReinforced: safeInteger(metadata.get('lastreinforced'), now),
       projectId,
       threadId: metadata.get('threadid') || undefined,
-      routineId: metadata.get('routineid') || undefined,
+      // `routineid` is the stored spelling from before the rename; every memory
+      // file on disk still carries it, so it is read and then written back as
+      // `assistantId` on the next save.
+      assistantId: metadata.get('assistantid') || metadata.get('routineid') || undefined,
       ...(modelKeys.length > 0 ? { modelKeys } : {})
     })
   }
@@ -107,7 +110,7 @@ export function serializeMemoryMd(entries: MemoryEntry[]): string {
       ]
       if (entry.projectId) meta.push(`projectId: ${entry.projectId}`)
       if (entry.threadId) meta.push(`threadId: ${entry.threadId}`)
-      if (entry.routineId) meta.push(`routineId: ${entry.routineId}`)
+      if (entry.assistantId) meta.push(`assistantId: ${entry.assistantId}`)
       if (entry.modelKeys?.length) meta.push(`modelKeys: ${JSON.stringify(entry.modelKeys)}`)
       return `${ENTRY_MARKER}\n## ${entry.label}\n\n${meta.join('\n')}\n\n${entry.content}`
     })

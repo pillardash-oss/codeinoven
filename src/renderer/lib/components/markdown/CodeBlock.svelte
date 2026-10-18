@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
   import { onMount } from 'svelte'
-  import { Check, Copy, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
 
@@ -53,7 +55,7 @@
   }
 </script>
 
-<div class="overflow-hidden rounded-lg border bg-elevated">
+<div class="overflow-hidden border bg-elevated">
   {#if !hideHeader}
     <div class="flex h-7 items-center justify-between border-b px-3">
       <span class="font-mono text-[0.625rem] uppercase tracking-wide text-dimmed"
@@ -61,24 +63,24 @@
       >
       <div class="flex items-center gap-1">
         <button
-          class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="flex items-center p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label={wrapToggleLabel(wrapped)}
           title={wrapToggleLabel(wrapped)}
           aria-pressed={wrapped}
           onclick={() => wrapTextState.toggle()}
         >
-          <WrapText size={12} class={wrapped ? 'text-primary' : ''} />
+          <CioWrapText size={12} class={wrapped ? 'text-primary' : ''} />
         </button>
         <button
-          class="flex items-center gap-1 rounded p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          class="flex items-center gap-1 p-1 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
           aria-label="Copy code"
           title="Copy code"
           onclick={() => void copy()}
         >
           {#if copied}
-            <Check size={12} class="text-success" />
+            <CioCheck size={12} class="text-success" />
           {:else}
-            <Copy size={12} />
+            <CioCopy size={12} />
           {/if}
         </button>
       </div>

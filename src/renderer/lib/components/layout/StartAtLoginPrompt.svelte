@@ -6,11 +6,11 @@
    * The one-time start-at-login offer.
    *
    * Raised in the one moment the question has a reason to exist: right after a
-   * routine is given its first how-to, so its runs are something its owner is
+   * assistant is given its first knowledge, so its runs are something its owner is
    * expecting. Rendering the question is all this owns. Whether it is raised at
    * all is decided in the main process, which reads the `launchAtLoginPrompted`
    * flag, so the question is put once in an install's life and never again for
-   * any later routine setup.
+   * any later assistant setup.
    *
    * Both ways out are answers: `Not now` and a dismissal (backdrop, Escape) mean
    * the same thing, which is why the choice is saved with the flag on either
@@ -35,8 +35,8 @@
   onCancel={() => onChoose(false)}
 >
   <p>
-    Your first routine is set up. Routines only fire while {APP_NAME} is running, so starting it at login
-    lets a scheduled run still happen after a restart or a fresh sign in.
+    Your first assistant is set up. Assistants only fire while {APP_NAME} is running, so starting it at
+    login lets a scheduled run still happen after a restart or a fresh sign in.
   </p>
   <p>You can change this any time in Settings.</p>
 </ConfirmDialog>

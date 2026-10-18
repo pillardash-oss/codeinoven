@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { GitMerge, Loader2 } from '@lucide/svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type {
@@ -182,14 +183,14 @@
     <div class="mt-1.5 flex justify-end gap-1.5">
       <button
         type="button"
-        class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
+        class="px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
         onclick={() => (pushConfirm = false)}
       >
         Cancel
       </button>
       <button
         type="button"
-        class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        class="bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
         disabled={pushBlocked}
         onclick={() => void confirmPushUpstream()}
       >
@@ -206,7 +207,7 @@
         The remote branch has commits you don't have locally, so Git will not let you push over
         them. Integrate the remote changes first, then push again.
       </p>
-      <p class="rounded-lg border border-border bg-surface px-3 py-2 text-[0.625rem] text-dimmed">
+      <p class="border border-border bg-surface px-3 py-2 text-[0.625rem] text-dimmed">
         {status?.branch && primaryRemote
           ? `${primaryRemote.name}/${status.branch}`
           : 'Remote branch'}
@@ -225,30 +226,30 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={() => (pushDiverged = false)}
         >
           Cancel
         </button>
         <button
           type="button"
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+          class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
           disabled={pushRecoverMode !== null}
           onclick={() => void recoverPush('rebase')}
         >
           {#if pushRecoverMode === 'rebase'}
-            <Loader2 size={11} class="animate-spin" />
+            <CioSpinner size={11} class="animate-spin" />
           {/if}
           Rebase &amp; push
         </button>
         <button
           type="button"
-          class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+          class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
           disabled={pushRecoverMode !== null}
           onclick={() => void recoverPush('merge')}
         >
           {#if pushRecoverMode === 'merge'}
-            <Loader2 size={11} class="animate-spin" />
+            <CioSpinner size={11} class="animate-spin" />
           {/if}
           Pull &amp; push
         </button>
@@ -260,7 +261,7 @@
 {#if pullStrategyOpen}
   <Modal open title="Choose pull strategy" onClose={closePullStrategy}>
     <div class="space-y-3">
-      <div class="rounded-lg border border-border bg-elevated px-3 py-2">
+      <div class="border border-border bg-elevated px-3 py-2">
         <p class="text-[0.625rem] font-medium text-foreground">
           Pull into <span class="font-mono">{status?.branch ?? 'current branch'}</span>
         </p>
@@ -270,7 +271,7 @@
         </p>
       </div>
       {#if pullStrategyError}
-        <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
+        <div class="border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
           <p class="text-[0.625rem] font-semibold text-danger">
             That pull strategy could not finish
           </p>
@@ -303,7 +304,7 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          class="cursor-pointer px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
           disabled={gitState.isBusy('pull')}
           onclick={closePullStrategy}
         >
@@ -311,7 +312,7 @@
         </button>
         <button
           type="button"
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+          class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
           disabled={gitState.isBusy('pull')}
           onclick={() => void performPull('ff-only')}
         >
@@ -319,7 +320,7 @@
         </button>
         <button
           type="button"
-          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+          class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
           disabled={gitState.isBusy('pull')}
           onclick={() => void performPull('rebase')}
         >
@@ -327,7 +328,7 @@
         </button>
         <button
           type="button"
-          class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+          class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
           data-modal-primary
           disabled={gitState.isBusy('pull')}
           onclick={() => void performPull('merge')}
@@ -350,7 +351,7 @@
     onClose={closeSyncMain}
   >
     <div class="space-y-3">
-      <div class="rounded-lg border border-border bg-elevated px-3 py-2">
+      <div class="border border-border bg-elevated px-3 py-2">
         {#if syncDirection === 'from'}
           <p class="text-[0.625rem] font-medium text-foreground">
             Into <span class="font-mono">{status?.branch ?? 'this worktree'}</span>
@@ -374,7 +375,7 @@
             state is read from the worktree, not parsed out of the error text, so
             it is right even before a strategy was tried.
           -->
-        <div class="rounded-lg border border-warning/25 bg-warning/10 px-3 py-2">
+        <div class="border border-warning/25 bg-warning/10 px-3 py-2">
           <p class="text-[0.625rem] font-semibold text-warning">
             This worktree is mid-{conflictState}
           </p>
@@ -435,7 +436,7 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+          class="cursor-pointer px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
           disabled={gitState.isBusy('sync')}
           onclick={closeSyncMain}
         >
@@ -444,7 +445,7 @@
         {#if !integrationOpen}
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('sync')}
             onclick={() => performSyncMain(syncDirection, 'ff-only')}
           >
@@ -452,7 +453,7 @@
           </button>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
             disabled={gitState.isBusy('sync')}
             onclick={() => performSyncMain(syncDirection, 'rebase')}
           >
@@ -460,7 +461,7 @@
           </button>
           <button
             type="button"
-            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+            class="h-8 cursor-pointer bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
             data-modal-primary
             disabled={gitState.isBusy('sync')}
             onclick={() => performSyncMain(syncDirection, 'merge')}
@@ -487,13 +488,13 @@
           Add a message below, or leave it empty to generate one.
         </p>
         <input
-          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-8 w-full border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Title (e.g. Merge branch '{status?.upstream ?? 'main'}')"
           bind:value={mergeTitle}
           disabled={completeMergeBusy}
         />
         <textarea
-          class="min-h-16 w-full resize-y rounded-md border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="min-h-16 w-full resize-y border border-border bg-elevated px-2.5 py-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Description (optional)"
           bind:value={mergeDescription}
           disabled={completeMergeBusy}></textarea>
@@ -510,19 +511,19 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={() => (completeMergeOpen = false)}
         >
           Cancel
         </button>
         <button
           type="button"
-          class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-foreground px-3 text-[0.6875rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+          class="flex h-8 cursor-pointer items-center gap-1.5 bg-foreground px-3 text-[0.6875rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
           data-modal-primary
           disabled={completeMergeBusy}
           onclick={() => void confirmCompleteMerge()}
         >
-          {#if completeMergeBusy}<Loader2 size={11} class="animate-spin" />{:else}<GitMerge
+          {#if completeMergeBusy}<CioSpinner size={11} class="animate-spin" />{:else}<CioMerge
               size={11}
             />{/if}
           Complete merge
@@ -544,7 +545,7 @@
   <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
     <button
       type="button"
-      class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-md bg-foreground text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 bg-foreground text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
       title={mergePending
         ? `Commit the resolved files to complete the merge${prResolveBranch ? `, then push the resolution to the pull request and delete ${prResolveBranch}` : ''}`
         : `Push the resolution to the pull request, restore your previous branch, and delete ${prResolveBranch}`}
@@ -552,9 +553,9 @@
       onclick={openCompleteMerge}
     >
       {#if completeMergeBusy}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <GitMerge size={11} />
+        <CioMerge size={11} />
       {/if}
       Complete merge
     </button>
@@ -570,7 +571,7 @@
   >
     <div class="space-y-2">
       {#if stashPaths}
-        <div class="rounded-lg border border-border bg-elevated/50 px-3 py-2">
+        <div class="border border-border bg-elevated/50 px-3 py-2">
           <p class="text-[0.625rem] font-medium text-foreground">
             {stashPaths.length}
             {stashPaths.length === 1 ? 'file' : 'files'} to stash
@@ -588,7 +589,7 @@
         </p>
       {/if}
       <input
-        class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="h-8 w-full border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder="Describe this stash (optional)"
         bind:value={stashMessage}
       />
@@ -597,7 +598,7 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={() => {
             showStashModal = false
             stashPaths = null
@@ -607,12 +608,12 @@
         </button>
         <button
           type="button"
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-8 items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={(status?.clean ?? true) || gitState.isBusy('stash')}
           onclick={() => void stashChanges()}
         >
           {#if gitState.isBusy('stash')}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {stashPaths ? 'Stash selected' : 'Stash changes'}
         </button>
@@ -632,7 +633,7 @@
       </label>
       <select
         id="integrate-target"
-        class="h-8 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
+        class="h-8 w-full border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
         bind:value={mergeTarget}
       >
         <option value="" disabled>Select a branch…</option>
@@ -651,14 +652,14 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={() => (showIntegrateModal = false)}
         >
           Cancel
         </button>
         <button
           type="button"
-          class="h-8 rounded-lg border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+          class="h-8 border border-border px-3 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
           disabled={!mergeTarget || integrateBusy}
           onclick={() => requestMergeOrRebase('rebase')}
         >
@@ -666,7 +667,7 @@
         </button>
         <button
           type="button"
-          class="h-8 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="h-8 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={!mergeTarget || integrateBusy}
           onclick={() => requestMergeOrRebase('merge')}
         >
@@ -695,7 +696,7 @@
           <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
             Affected files
           </p>
-          <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
+          <div class="max-h-40 overflow-auto border border-border bg-surface">
             {#each atRiskFiles as path (path)}
               <div class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0">
                 <FileTypeIcon {path} size={12} class="shrink-0" />
@@ -707,14 +708,12 @@
           </div>
         </div>
       {:else}
-        <p
-          class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted"
-        >
+        <p class="border border-border bg-surface px-3 py-1.5 text-[0.625rem] text-muted">
           No local changes should apply cleanly.
         </p>
       {/if}
       {#if agentTurnActive}
-        <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+        <div class="border border-warning/30 bg-warning/10 px-3 py-2">
           <p class="text-[0.625rem] font-semibold text-warning">Agent turn in progress</p>
           <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
             Acknowledge to continue anyway.
@@ -734,19 +733,19 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={() => (pendingOperation = null)}
         >
           Cancel
         </button>
         <button
           type="button"
-          class="flex h-8 items-center rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-8 items-center bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={integrateBusy || (agentTurnActive && !acknowledgeActiveTurn)}
           onclick={() => void confirmPendingOperation()}
         >
           {#if gitState.isBusy('merge') || gitState.isBusy('rebase')}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {operation.kind === 'merge' ? 'Merge' : 'Rebase'}
         </button>
@@ -771,7 +770,7 @@
             <button
               type="button"
               class={[
-                'rounded-md border px-2 py-1.5 text-left transition-colors',
+                'border px-2 py-1.5 text-left transition-colors',
                 pendingReset.mode === option.mode
                   ? 'border-primary/50 bg-primary/10'
                   : 'border-border hover:bg-elevated'
@@ -793,7 +792,7 @@
       </div>
 
       {#if pendingReset.mode === 'hard'}
-        <div class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2">
+        <div class="border border-danger/30 bg-danger/10 px-3 py-2">
           <p class="text-[0.625rem] font-semibold text-danger">Hard reset discards changes</p>
           <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
             Staged and unstaged changes since this commit will be permanently lost. This cannot be
@@ -807,7 +806,7 @@
           <p class="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
             Affected files
           </p>
-          <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
+          <div class="max-h-40 overflow-auto border border-border bg-surface">
             {#each atRiskFiles as path (path)}
               <div class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0">
                 <FileTypeIcon {path} size={12} class="shrink-0" />
@@ -820,7 +819,7 @@
         </div>
       {/if}
       {#if agentTurnActive}
-        <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+        <div class="border border-warning/30 bg-warning/10 px-3 py-2">
           <p class="text-[0.625rem] font-semibold text-warning">Agent turn in progress</p>
           <p class="mt-0.5 text-[0.5625rem] leading-relaxed text-muted">
             Acknowledge to continue anyway.
@@ -840,7 +839,7 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={() => (resetConfirm = null)}
         >
           Cancel
@@ -848,7 +847,7 @@
         <button
           type="button"
           class={[
-            'flex h-8 items-center gap-1.5 rounded-lg px-3 text-[0.6875rem] font-medium text-on-primary transition-colors disabled:opacity-50',
+            'flex h-8 items-center gap-1.5 px-3 text-[0.6875rem] font-medium text-on-primary transition-colors disabled:opacity-50',
             pendingReset.mode === 'hard'
               ? 'bg-danger hover:bg-danger/90'
               : 'bg-primary hover:bg-primary-hover'
@@ -857,7 +856,7 @@
           onclick={() => void confirmReset()}
         >
           {#if gitState.isBusy('reset')}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {pendingReset.mode === 'hard' ? 'Reset hard' : 'Reset'}
         </button>
@@ -990,7 +989,7 @@
           Remote URL
         </p>
         <input
-          class="w-full rounded-lg border border-border bg-elevated px-3 py-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="w-full border border-border bg-elevated px-3 py-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="https://github.com/your-name/repo.git"
           bind:value={originUrl}
           onkeydown={(e: KeyboardEvent) => {
@@ -1006,7 +1005,7 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
           disabled={originBusy}
           onclick={closeOriginModal}
         >
@@ -1015,12 +1014,12 @@
         <button
           type="button"
           data-modal-primary
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-8 items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={originBusy || !originUrl.trim()}
           onclick={requestSetOrigin}
         >
           {#if originBusy}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {/if}
           {originMode === 'replace' ? 'Replace Origin' : 'Add Origin'}
         </button>

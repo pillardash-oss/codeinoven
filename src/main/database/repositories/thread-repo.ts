@@ -1,6 +1,13 @@
+import { ledgerContextUsageSql } from '../thread-context-usage-sql'
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
-import { DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
+import {
+  isAuthoredWorkKind,
+  orderAuthoredWorkKinds,
+  parseAuthoredWorkKinds,
+  serializeAuthoredWorkKinds
+} from '../../../lib/design/authored-work-kinds'
+import { canMarkThreadUnread, DONE_THREAD_STATUSES } from '../../../lib/thread-status-policy'
 import {
   ASSISTANT_SPACE_ID,
   GLOBAL_BROWSER_PROJECT_ID,
@@ -25,6 +32,7 @@ interface ThreadRow {
   status: string
   pinned: number
   pinned_at: number | null
+  bookmarked: number
   sort_order: number | null
   scope_sort_order: number | null
   archived: number
@@ -32,6 +40,7 @@ interface ThreadRow {
   branch: string | null
   feature_slug: string | null
   authored_work_kind: string | null
+  authored_work_kinds: string | null
   scope_bucket_id: string | null
   settings: string | null
   context_usage: string | null
@@ -51,9 +60,10 @@ interface ThreadRow {
   achievement_role: string | null
   auditor_thread_id: string | null
   user_input_locked: number
+  engineering: number
   independent_audit: number
   independent_audit_initialized: number
-  routine_id: string | null
+  assistant_id: string | null
   assistant_icon_type: string | null
   assistant_icon: string | null
   schedule_override: string | null
@@ -141,6 +151,23 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
   }
 }
 
+/**
+ * The authored-work kinds a row carries, or undefined when it has done none.
+ *
+ * The durable set is the answer, and the session kind is merged in because it is
+ * the one fact every write path is guaranteed to keep current. A row written
+ * before the set existed, or by a path that recorded only the session, still
+ * draws its marker instead of an empty row. Unknown values are dropped rather
+ * than trusted, so a hand-edited column cannot conjure a glyph.
+ */
+function authoredWorkKindsFromRow(row: ThreadRow): AuthoredWorkKind[] | undefined {
+  const kinds = orderAuthoredWorkKinds([
+    ...parseAuthoredWorkKinds(row.authored_work_kinds),
+    row.authored_work_kind
+  ])
+  return kinds.length > 0 ? kinds : undefined
+}
+
 /** Parse a raw thread row into a display-facing Thread. */
 function rowToThread(row: ThreadRow): Thread {
   return {
@@ -151,6 +178,7 @@ function rowToThread(row: ThreadRow): Thread {
     titleSource: (row.title_source || 'default') as ThreadTitleSource,
     status: row.status as ThreadStatus,
     pinned: row.pinned === 1,
+    bookmarked: row.bookmarked === 1,
     pinnedAt: row.pinned_at ?? undefined,
     sortOrder: row.sort_order ?? undefined,
     scopeSortOrder: row.scope_sort_order ?? undefined,
@@ -158,7 +186,10 @@ function rowToThread(row: ThreadRow): Thread {
     read: row.read === 1,
     branch: row.branch ?? undefined,
     featureSlug: row.feature_slug ?? undefined,
-    authoredWorkKind: (row.authored_work_kind as Thread['authoredWorkKind']) ?? undefined,
+    authoredWorkKind: isAuthoredWorkKind(row.authored_work_kind)
+      ? row.authored_work_kind
+      : undefined,
+    authoredWorkKinds: authoredWorkKindsFromRow(row),
     scopeBucketId: row.scope_bucket_id ?? undefined,
     settings: row.settings
       ? (sanitizeThreadSettings(JSON.parse(row.settings)) as ThreadSettings)
@@ -190,9 +221,10 @@ function rowToThread(row: ThreadRow): Thread {
     achievementRole: (row.achievement_role as Thread['achievementRole']) ?? undefined,
     auditorThreadId: row.auditor_thread_id ?? undefined,
     userInputLocked: row.user_input_locked === 1,
+    engineering: row.engineering === 1,
     independentAudit: row.independent_audit === 1,
     independentAuditInitialized: row.independent_audit_initialized === 1,
-    routineId: row.routine_id ?? undefined,
+    assistantId: row.assistant_id ?? undefined,
     assistantIconType: row.assistant_icon_type ?? undefined,
     assistantIcon: row.assistant_icon ?? undefined,
     scheduleOverride: row.schedule_override
@@ -263,7 +295,7 @@ function buildSnippet(rawText: string, rawQuery: string): string {
  *
  * `projects` searches every engineering project thread, `chats` the standalone
  * conversations in the inbox, and `assistant` the assistant space (optionally
- * narrowed to one routine). Omitted, a search spans every family except the
+ * narrowed to one assistant). Omitted, a search spans every family except the
  * hidden browser-chat container, which is how the in-view thread searches have
  * always behaved.
  */
@@ -273,8 +305,8 @@ export interface ThreadSearchOptions {
   projectId?: string
   limit?: number
   family?: ThreadSearchFamily
-  /** Narrow an assistant search to one routine. Ignored for other families. */
-  routineId?: string
+  /** Narrow an assistant search to one assistant. Ignored for other families. */
+  assistantId?: string
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -304,6 +336,10 @@ export interface ThreadCapacityCandidate {
   lastActivity: number
   /** Owning scope bucket; `undefined` resolves to the Default scope. */
   scopeBucketId?: string
+  /** Assignment role, so an orchestration coordinator stays protected. */
+  assignmentRole?: Thread['assignmentRole']
+  /** Achievement role, so a coordinator stays protected without a pin. */
+  achievementRole?: Thread['achievementRole']
 }
 
 /**
@@ -316,7 +352,7 @@ export const RECENT_THREADS_PER_PROJECT = 10
 function buildOrderBy(options: ThreadListOptions): string {
   return options.order === 'activity'
     ? 'ORDER BY pinned DESC, pinned_at DESC, last_activity DESC'
-    : 'ORDER BY pinned DESC, pinned_at DESC, sort_order ASC, last_activity DESC'
+    : 'ORDER BY pinned DESC, pinned_at DESC, COALESCE(sort_order, last_activity) DESC, id ASC'
 }
 
 /**
@@ -400,20 +436,20 @@ interface MessageMatchRow {
 // draft that is actively being composed in another window.
 const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
-  pinned, pinned_at, sort_order, scope_sort_order, archived, read,
-  branch, feature_slug, authored_work_kind, scope_bucket_id, settings, context_usage,
+  pinned, pinned_at, bookmarked, sort_order, scope_sort_order, archived, read,
+  branch, feature_slug, authored_work_kind, authored_work_kinds, scope_bucket_id, settings, context_usage,
   session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
   coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
-  independent_audit, independent_audit_initialized,
-  routine_id, assistant_icon_type, assistant_icon, schedule_override, scheduled, last_run_at, last_dispatched_at, last_success_at,
+  engineering, independent_audit, independent_audit_initialized,
+  assistant_id, assistant_icon_type, assistant_icon, schedule_override, scheduled, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
   assistant_task_id,
   last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -421,16 +457,18 @@ ON CONFLICT(id) DO UPDATE SET
   title_source=excluded.title_source,
   status=excluded.status,
   pinned=excluded.pinned,
-  sort_order=excluded.sort_order,
+  bookmarked=excluded.bookmarked,
+  sort_order=CASE WHEN excluded.last_activity > threads.last_activity THEN NULL ELSE excluded.sort_order END,
   scope_sort_order=excluded.scope_sort_order,
   archived=excluded.archived,
   read=excluded.read,
   branch=excluded.branch,
   feature_slug=excluded.feature_slug,
   authored_work_kind=excluded.authored_work_kind,
+  authored_work_kinds=excluded.authored_work_kinds,
   scope_bucket_id=excluded.scope_bucket_id,
   settings=excluded.settings,
-  context_usage=excluded.context_usage,
+  context_usage=COALESCE(threads.context_usage, excluded.context_usage),
   session_id=excluded.session_id,
   session_harness_id=excluded.session_harness_id,
   session_account_id=excluded.session_account_id,
@@ -447,9 +485,10 @@ ON CONFLICT(id) DO UPDATE SET
   achievement_role=excluded.achievement_role,
   auditor_thread_id=excluded.auditor_thread_id,
   user_input_locked=excluded.user_input_locked,
+  engineering=excluded.engineering,
   independent_audit=excluded.independent_audit,
   independent_audit_initialized=excluded.independent_audit_initialized,
-  routine_id=excluded.routine_id,
+  assistant_id=excluded.assistant_id,
   assistant_icon_type=excluded.assistant_icon_type,
   assistant_icon=excluded.assistant_icon,
   schedule_override=excluded.schedule_override,
@@ -477,6 +516,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.status,
     thread.pinned ? 1 : 0,
     thread.pinnedAt ?? null,
+    thread.bookmarked ? 1 : 0,
     thread.sortOrder ?? null,
     thread.scopeSortOrder ?? null,
     thread.archived ? 1 : 0,
@@ -484,6 +524,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.branch ?? null,
     thread.featureSlug ?? null,
     thread.authoredWorkKind ?? null,
+    serializeAuthoredWorkKinds(thread.authoredWorkKinds),
     thread.scopeBucketId ?? null,
     thread.settings ? JSON.stringify(thread.settings) : null,
     thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
@@ -503,9 +544,10 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.achievementRole ?? null,
     thread.auditorThreadId ?? null,
     thread.userInputLocked ? 1 : 0,
+    thread.engineering ? 1 : 0,
     thread.independentAudit ? 1 : 0,
     thread.independentAuditInitialized ? 1 : 0,
-    thread.routineId ?? null,
+    thread.assistantId ?? null,
     thread.assistantIconType ?? null,
     thread.assistantIcon ?? null,
     thread.scheduleOverride ? JSON.stringify(thread.scheduleOverride) : null,
@@ -568,21 +610,46 @@ export class ThreadRepo {
   }
 
   /**
-   * Set a thread's authored-work kind off the main thread.
+   * Record that a thread entered one authored-work session.
    *
-   * The `IS NOT ?` guard makes a repeated write of the same kind a no-op, so a
-   * preview navigation that records the kind it already stored touches nothing.
-   * That matters because this runs on every recognized navigation, and an
-   * unconditional UPDATE would bump the WAL for an unchanged value.
+   * Two columns, one write: `authored_work_kind` becomes the session the thread
+   * is in now (what a preview resolves against) and `authored_work_kinds` gains
+   * the kind, because the row draws one marker per kind and a thread that
+   * designed something and later cut a video about it has done both.
+   *
+   * The current row is read first so the set can be unioned rather than
+   * replaced, and so a repeat of the kind already recorded writes nothing: this
+   * runs on every recognized navigation, and an unconditional UPDATE would bump
+   * the WAL for an unchanged value. It reads and writes on the database worker,
+   * because a preview navigation must never touch the Electron main thread.
+   * Returns the set it stored, or null when the thread row is gone.
    */
-  async setAuthoredWorkKindViaWorker(id: string, kind: AuthoredWorkKind): Promise<void> {
+  async setAuthoredWorkKindViaWorker(
+    id: string,
+    kind: AuthoredWorkKind
+  ): Promise<AuthoredWorkKind[] | null> {
+    const current = await this.db.queryViaWorker(
+      'SELECT authored_work_kind, authored_work_kinds FROM threads WHERE id = ?',
+      [id],
+      1
+    )
+    if (!current.ok) throw new Error(current.error ?? 'Thread authored-work read failed')
+    const row = current.rows[0] as
+      { authored_work_kind: unknown; authored_work_kinds: unknown } | undefined
+    if (!row) return null
+    const stored = parseAuthoredWorkKinds(
+      typeof row.authored_work_kinds === 'string' ? row.authored_work_kinds : null
+    )
+    const kinds = orderAuthoredWorkKinds([...stored, kind])
+    if (row.authored_work_kind === kind && kinds.length === stored.length) return kinds
     const result = await this.db.executeViaWorker(
-      'UPDATE threads SET authored_work_kind = ? WHERE id = ? AND authored_work_kind IS NOT ?',
-      [kind, id, kind]
+      'UPDATE threads SET authored_work_kind = ?, authored_work_kinds = ? WHERE id = ?',
+      [kind, serializeAuthoredWorkKinds(kinds), id]
     )
     if (!result.ok) {
       throw new Error(result.error ?? 'Thread authored-work kind update failed')
     }
+    return kinds
   }
 
   get(id: string): Thread | null {
@@ -654,6 +721,67 @@ export class ThreadRepo {
       thread.usedHarnessIds = usage.rows.map((entry) => String(entry['harness_id']))
     }
     return { thread, changed: wasUnread }
+  }
+
+  /**
+   * Mark a thread unread without loading it through the main SQLite connection.
+   * The counterpart of {@link markReadViaWorker}: a user-requested unread mark
+   * from a thread actions menu.
+   *
+   * The mark is a fresh event, so it stamps `last_activity`/`updated_at` with
+   * `now` exactly as a new turn would. Every unread rule then applies to it
+   * unchanged: the thread is sorted to the top of its list and grouped as
+   * Unread, with no special casing anywhere.
+   *
+   * Only a settled thread may be flipped (see `canMarkThreadUnread`): a live
+   * thread, a ready spec, or a thread parked on the user is left untouched, so
+   * the rule holds even for a caller that skips the actions-menu gate.
+   */
+  async markUnreadViaWorker(
+    projectId: string,
+    id: string
+  ): Promise<{ thread: Thread; changed: boolean } | null> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM threads WHERE id = ? AND project_id = ?',
+      [id, projectId],
+      1
+    )
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ThreadRow[])[0]
+    if (!row) return null
+
+    const thread = rowToThread(row)
+    if (!canMarkThreadUnread(thread.status)) return { thread, changed: false }
+
+    const now = Date.now()
+    const wasRead = row.read === 1
+    if (wasRead) {
+      const updated = await this.db.executeViaWorker(
+        'UPDATE threads SET read = 0, sort_order = NULL, last_activity = ?, updated_at = ? WHERE id = ? AND project_id = ? AND read = 1',
+        [now, now, id, projectId]
+      )
+      if (!updated.ok) throw new Error(updated.error ?? 'Could not mark thread unread')
+    }
+
+    thread.read = false
+    if (wasRead) {
+      thread.lastActivity = now
+      thread.sortOrder = undefined
+      thread.updatedAt = now
+    }
+    const usage = await this.db.queryViaWorker(
+      `SELECT harness_id
+       FROM harness_usage
+       WHERE thread_id = ?
+       GROUP BY harness_id
+       ORDER BY MAX(last_used_at) DESC`,
+      [id],
+      0
+    )
+    if (usage.ok && usage.rows.length > 0) {
+      thread.usedHarnessIds = usage.rows.map((entry) => String(entry['harness_id']))
+    }
+    return { thread, changed: wasRead }
   }
 
   /**
@@ -785,7 +913,7 @@ export class ThreadRepo {
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, pinned, status, last_activity, scope_bucket_id
+      `SELECT id, pinned, status, last_activity, scope_bucket_id, assignment_role, achievement_role
        FROM threads
        WHERE project_id = ?
          AND archived = 0
@@ -802,7 +930,15 @@ export class ThreadRepo {
       pinned: row['pinned'] === 1,
       status: String(row['status']) as ThreadStatus,
       lastActivity: Number(row['last_activity']),
-      scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id'])
+      scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id']),
+      assignmentRole:
+        row['assignment_role'] == null
+          ? undefined
+          : (String(row['assignment_role']) as Thread['assignmentRole']),
+      achievementRole:
+        row['achievement_role'] == null
+          ? undefined
+          : (String(row['achievement_role']) as Thread['achievementRole'])
     }))
   }
 
@@ -972,32 +1108,32 @@ export class ThreadRepo {
   }
 
   /**
-   * Assistant task ids grouped by the routine they belong to, read on the
-   * database worker. Every task of a routine mounts that routine's single
+   * Assistant task ids grouped by the assistant they belong to, read on the
+   * database worker. Every task of an assistant mounts that assistant's single
    * workspace directory, so a caller that owns the directory needs their ids to
-   * recognise the same folder under each task's own identity. Routine ids with
+   * recognise the same folder under each task's own identity. Assistant ids with
    * no task are simply absent from the map.
    */
-  async listAssistantTaskIdsByRoutineViaWorker(
-    routineIds: readonly string[]
+  async listAssistantTaskIdsViaWorker(
+    assistantIds: readonly string[]
   ): Promise<Map<string, string[]>> {
     const grouped = new Map<string, string[]>()
-    const unique = [...new Set(routineIds)].filter((id) => id.length > 0)
+    const unique = [...new Set(assistantIds)].filter((id) => id.length > 0)
     if (unique.length === 0) return grouped
     const placeholders = unique.map(() => '?').join(',')
     const result = await this.db.queryViaWorker(
-      `SELECT id, routine_id FROM threads WHERE project_id = ? AND routine_id IN (${placeholders})`,
+      `SELECT id, assistant_id FROM threads WHERE project_id = ? AND assistant_id IN (${placeholders})`,
       [ASSISTANT_SPACE_ID, ...unique],
       0
     )
     if (!result.ok) return grouped
     for (const row of result.rows) {
       const id = row['id']
-      const routineId = row['routine_id']
-      if (typeof id !== 'string' || typeof routineId !== 'string') continue
-      const tasks = grouped.get(routineId)
+      const assistantId = row['assistant_id']
+      if (typeof id !== 'string' || typeof assistantId !== 'string') continue
+      const tasks = grouped.get(assistantId)
       if (tasks) tasks.push(id)
-      else grouped.set(routineId, [id])
+      else grouped.set(assistantId, [id])
     }
     return grouped
   }
@@ -1097,6 +1233,29 @@ export class ThreadRepo {
     )
   }
 
+  /**
+   * How many non-archived threads hold active agent work right now, read on the
+   * database worker.
+   *
+   * The count the menu bar figure shows. It is the same set {@link hasActive}
+   * probes for, counted rather than probed, so the icon and the stay-alive
+   * decision can never disagree about what "working" means. It is read on the
+   * worker because it is refreshed from thread-update paths, which are
+   * interaction paths: a count holds the whole main process for as long as the
+   * OS takes to serve it (see `docs/APP-BIBLE.md`).
+   */
+  async countActiveViaWorker(): Promise<number> {
+    const result = await this.db.queryViaWorker(
+      `SELECT COUNT(*) AS active
+       FROM threads
+       WHERE archived = 0 AND status IN ('planning', 'executing')`,
+      [],
+      1
+    )
+    if (!result.ok) return 0
+    return Number(result.rows[0]?.['active'] ?? 0)
+  }
+
   delete(id: string): void {
     this.db.run('DELETE FROM threads WHERE id = ?', id)
   }
@@ -1124,11 +1283,12 @@ export class ThreadRepo {
     contextUsage: ThreadContextUsage
   ): Promise<boolean> {
     return this.db
-      .executeViaWorker('UPDATE threads SET context_usage = ? WHERE id = ? AND project_id = ?', [
-        JSON.stringify(contextUsage),
-        threadId,
-        projectId
-      ])
+      .executeViaWorker(
+        `WITH incoming(snapshot) AS (VALUES (?))
+        UPDATE threads SET context_usage = (SELECT ${ledgerContextUsageSql('incoming.snapshot')} FROM incoming)
+        WHERE id = ? AND project_id = ?`,
+        [JSON.stringify(contextUsage), threadId, projectId]
+      )
       .then((result) => result.ok)
   }
 
@@ -1143,7 +1303,7 @@ export class ThreadRepo {
 
   setStatus(id: string, status: ThreadStatus, lastActivity: number): void {
     this.db.run(
-      'UPDATE threads SET status = ?, last_activity = ?, updated_at = ? WHERE id = ?',
+      'UPDATE threads SET status = ?, sort_order = NULL, last_activity = ?, updated_at = ? WHERE id = ?',
       status,
       lastActivity,
       lastActivity,
@@ -1151,21 +1311,56 @@ export class ThreadRepo {
     )
   }
 
-  setPinned(id: string, pinned: boolean, pinnedAt?: number): void {
+  /**
+   * A bookmark is a pin with a glyph, so the two flags always move together and
+   * `bookmarked` implies `pinned`: a surface that only knows about pins (the
+   * scope board's pin toggle) would otherwise leave a row claiming a bookmark
+   * while unpinned, which no view can draw honestly.
+   */
+  setPinned(id: string, pinned: boolean, pinnedAt?: number, bookmarked = false): void {
     this.db.run(
-      'UPDATE threads SET pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?',
+      'UPDATE threads SET pinned = ?, pinned_at = ?, bookmarked = ?, updated_at = ? WHERE id = ?',
       pinned ? 1 : 0,
       pinned ? (pinnedAt ?? Date.now()) : null,
+      pinned && bookmarked ? 1 : 0,
       Date.now(),
       id
     )
   }
 
-  setSortOrder(id: string, sortOrder: number): void {
+  setBookmarked(id: string, bookmarked: boolean): void {
     this.db.run(
-      'UPDATE threads SET sort_order = ?, updated_at = ? WHERE id = ?',
-      sortOrder,
+      'UPDATE threads SET bookmarked = ?, pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?',
+      bookmarked ? 1 : 0,
+      bookmarked ? 1 : 0,
+      bookmarked ? Date.now() : null,
       Date.now(),
+      id
+    )
+  }
+
+  /**
+   * A project's bookmarked-thread count, read on the database worker.
+   *
+   * The bookmark toggle is an interaction path, so the cap check that reads this
+   * must not touch SQLite on the Electron main thread (see `docs/APP-BIBLE.md`).
+   */
+  async countBookmarkedByProjectViaWorker(projectId: string): Promise<number> {
+    const result = await this.db.queryViaWorker(
+      'SELECT COUNT(*) AS count FROM threads WHERE project_id = ? AND bookmarked = 1',
+      [projectId],
+      1
+    )
+    if (!result.ok) return 0
+    return Number(result.rows[0]?.['count'] ?? 0)
+  }
+
+  setSortOrder(id: string, sortOrder: number, now = Date.now()): void {
+    this.db.run(
+      'UPDATE threads SET sort_order = ?, last_activity = ?, updated_at = ? WHERE id = ?',
+      sortOrder,
+      now,
+      now,
       id
     )
   }
@@ -1202,11 +1397,13 @@ export class ThreadRepo {
   }
 
   batchUpdateSortOrder(ids: string[]): void {
-    const stmt = this.db.prepare('UPDATE threads SET sort_order = ?, updated_at = ? WHERE id = ?')
+    const stmt = this.db.prepare(
+      'UPDATE threads SET sort_order = ?, last_activity = ?, updated_at = ? WHERE id = ?'
+    )
     const now = Date.now()
     this.db.transaction(() => {
       for (let i = 0; i < ids.length; i++) {
-        stmt.run(i, now, ids[i])
+        stmt.run(now - i, now, now, ids[i])
       }
     })
   }
@@ -1233,7 +1430,7 @@ export class ThreadRepo {
     const now = Date.now()
     this.db.transaction(() => {
       for (let i = 0; i < ids.length; i++) {
-        stmt.run(i, now, ids[i])
+        stmt.run(now - i, now, now, ids[i])
       }
     })
   }
@@ -1291,8 +1488,8 @@ export function threadSearchMessageLimit(limit: number): number {
  * Build the title + FTS search SQL from free-form input.
  *
  * `useSearchMeta` selects the fast message query: it ranks and filters against
- * the narrow `agent_message_search_meta` mirror and touches `agent_messages`
- * only for the rows that return a snippet. Without it (the mirror is still
+ * the narrow `agent_message_search_meta` mirror and extracts matching excerpts
+ * through FTS. Without it (the mirror is still
  * being backfilled, or the database predates it) the legacy query joins
  * `agent_messages` directly, which is correct but reads the whole messages
  * table in FTS index order. See schema.ts for the mirror's rationale.
@@ -1300,7 +1497,8 @@ export function threadSearchMessageLimit(limit: number): number {
 export function buildThreadSearchSql(
   raw: string,
   options: ThreadSearchOptions = {},
-  useSearchMeta = false
+  useSearchMeta = false,
+  messageQuery?: string
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
   const trimmed = raw.trim()
@@ -1312,7 +1510,7 @@ export function buildThreadSearchSql(
       ORDER BY t.last_activity DESC`,
     params: [...titleScope.params, `%${escapeLike(trimmed)}%`, trimmed]
   }
-  const ftsQuery = toFtsQuery(trimmed)
+  const ftsQuery = messageQuery ?? toFtsQuery(trimmed)
   const messageLimit = threadSearchMessageLimit(limit)
   const metaScope = threadSearchScopeClause('st', options)
   const legacyScope = threadSearchScopeClause('t', options)
@@ -1320,11 +1518,12 @@ export function buildThreadSearchSql(
     ? useSearchMeta
       ? {
           sql: `SELECT t.*, meta.role AS match_role,
-              substr(am.search_text, 1, 2000) AS snippet_text,
+              meta.snippet_text AS snippet_text,
               meta.created_at AS snippet_timestamp, meta.fts_rank AS fts_rank
         FROM (
           SELECT m.rowid AS msg_rowid, m.thread_id AS msg_thread_id, m.role AS role,
-                 m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank
+                 m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank,
+                 snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text
           FROM agent_messages_fts
           JOIN agent_message_search_meta m ON m.rowid = agent_messages_fts.rowid
           JOIN threads st ON st.id = m.thread_id
@@ -1335,13 +1534,13 @@ export function buildThreadSearchSql(
           ORDER BY bm25(agent_messages_fts), m.created_at DESC
           LIMIT ?
         ) meta
-        JOIN agent_messages am ON am.rowid = meta.msg_rowid
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
           params: [ftsQuery, ...metaScope.params, messageLimit]
         }
       : {
-          sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
+          sql: `SELECT t.*, am.role AS match_role,
+              snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text,
               am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
         FROM agent_messages_fts
         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
@@ -1370,16 +1569,16 @@ function threadSearchScopeClause(
   options: ThreadSearchOptions
 ): { sql: string; params: unknown[] } {
   const projectId = options.projectId ?? null
-  const routineId = options.routineId ?? null
+  const assistantId = options.assistantId ?? null
   switch (options.family) {
     case 'chats':
       return { sql: `${alias}.project_id = ?`, params: [INBOX_PROJECT_ID] }
     case 'assistant': {
       const clauses = [`${alias}.project_id = ?`]
       const params: unknown[] = [ASSISTANT_SPACE_ID]
-      if (routineId) {
-        clauses.push(`${alias}.routine_id = ?`)
-        params.push(routineId)
+      if (assistantId) {
+        clauses.push(`${alias}.assistant_id = ?`)
+        params.push(assistantId)
       }
       return { sql: clauses.join(' AND '), params }
     }
@@ -1416,10 +1615,10 @@ function threadSearchScopeClause(
  * Whether a thread belongs to the family a search was scoped to. This is the
  * in-memory twin of {@link threadSearchScopeClause}, used by the semantic path
  * after matches are hydrated back into `Thread` rows (which carry `projectId`
- * and `routineId` but no SQL to filter against).
+ * and `assistantId` but no SQL to filter against).
  */
 export function threadMatchesSearchScope(
-  thread: Pick<Thread, 'projectId' | 'routineId'>,
+  thread: Pick<Thread, 'projectId' | 'assistantId'>,
   options: ThreadSearchOptions
 ): boolean {
   switch (options.family) {
@@ -1428,7 +1627,7 @@ export function threadMatchesSearchScope(
     case 'assistant':
       return (
         thread.projectId === ASSISTANT_SPACE_ID &&
-        (!options.routineId || thread.routineId === options.routineId)
+        (!options.assistantId || thread.assistantId === options.assistantId)
       )
     case 'projects':
       if (

@@ -26,6 +26,13 @@ export type SpeechWorkerRequest =
 
 export type SpeechWorkerResponse =
   | { id: string; ok: true; kind: 'warmup' }
-  | { id: string; ok: true; kind: 'transcribe' | 'cleanup'; text: string }
+  | {
+      id: string
+      ok: true
+      kind: 'transcribe'
+      text: string
+      words?: { text: string; start: number; end: number }[]
+    }
+  | { id: string; ok: true; kind: 'cleanup'; text: string }
   | { id: string; ok: true; kind: 'synthesize' | 'shutdown' }
   | { id: string; ok: false; error: string }

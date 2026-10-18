@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Minus, X, GripVertical } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioGrip from '@pillardash-oss/cio-icon/CioGrip.svelte'
+  import CioMinus from '@pillardash-oss/cio-icon/CioMinus.svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { Snippet } from 'svelte'
   import { BitsConfig } from 'bits-ui'
@@ -29,7 +31,7 @@
      */
     minimized: boolean
     /**
-     * Whether the close (X) affordance is available. When false the header shows
+     * Whether the close (CioClose) affordance is available. When false the header shows
      * only the minimize button, Escape minimizes, and there is no backdrop to
      * dismiss   the panel floats and the app stays usable behind it.
      */
@@ -422,7 +424,7 @@
     <div
       class="fixed {layer === 'top'
         ? 'z-80'
-        : 'z-50'} flex flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl outline-none {minimized
+        : 'z-50'} flex flex-col overflow-hidden border bg-surface shadow-xl outline-none {minimized
         ? 'invisible pointer-events-none'
         : 'pointer-events-auto'}"
       style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed &&
@@ -468,7 +470,7 @@
         onpointerup={onHeaderPointerUp}
       >
         <span class="flex min-w-0 items-center gap-2">
-          <GripVertical size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioGrip size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
           {#if headerPrefix}
             <span class="flex min-w-0 items-center gap-1.5">{@render headerPrefix()}</span>
           {/if}
@@ -479,23 +481,23 @@
             {@render headerActions()}
           {/if}
           <button
-            class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-6 w-6 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
             data-modal-dismiss
             aria-label="Minimize"
             title="Minimize"
             onclick={onMinimize}
           >
-            <Minus size={14} />
+            <CioMinus size={14} />
           </button>
           {#if closable}
             <button
-              class="flex h-6 w-6 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              class="flex h-6 w-6 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
               data-modal-dismiss
               aria-label="Close"
               title="Close"
               onclick={onClose}
             >
-              <X size={14} />
+              <CioClose size={14} />
             </button>
           {/if}
         </span>

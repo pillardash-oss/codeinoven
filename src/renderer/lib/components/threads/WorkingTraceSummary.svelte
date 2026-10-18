@@ -1,18 +1,26 @@
 <script lang="ts">
-  import { Archive, CodeXml, Cog, Loader2 } from '@lucide/svelte'
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioTools from '@pillardash-oss/cio-icon/CioTools.svelte'
+  import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
+  import { formatDurationMs } from '$lib/format/duration'
   import type { SubagentPart } from '$lib/working-trace-parts'
+  import type { ThinkingLevel } from '$shared/types'
+  import type { OvenAppearance } from '$shared/ovens'
+  import WorkingTraceMetadata from './WorkingTraceMetadata.svelte'
   import WorkingTraceSubagentBadge from './WorkingTraceSubagentBadge.svelte'
 
   interface Props {
     /** True while the trace's entries are mounted. */
     open: boolean
-    /** True while the turn is streaming, so the header shows a spinner. */
-    busy: boolean
-    /** Number of entries this trace holds. */
+    /** True only while a live session is streaming this trace, so the header
+     *  keeps the thinking orb for as long as work is actually happening, folded
+     *  or not. A finished or restored trace shows the cog. */
+    live: boolean
+    /** Number of thinking and tool steps this trace holds. */
     count: number
+    /** Total wall-clock seconds the trace occupied, or null when unknown. */
+    durationSeconds: number | null
     hasCompaction: boolean
-    /** True when this trace ran code-mode scripts (any harness). */
-    hasCodeMode: boolean
     subagentCount: number
     activeSubagentCount: number
     subagentParts: SubagentPart[]
@@ -22,6 +30,18 @@
     title: string
     label: string
     elapsedFor: (part: SubagentPart) => number
+    /** Attribution for the model working on this trace, shown at the far right. */
+    modelLabel: string | null
+    isFast: boolean
+    thinkingLevel: ThinkingLevel | null
+    providerName?: string | null
+    providerId?: string | null
+    harnessId?: string | null
+    harnessName?: string | null
+    accountLabel?: string | null
+    ovenLabel?: string | null
+    ovenIsLocal?: boolean
+    ovenAppearance?: OvenAppearance
     onOpen: (part: SubagentPart) => void
     onOpenSheet: () => void
     onToggle: (event: MouseEvent) => void
@@ -29,10 +49,10 @@
 
   let {
     open,
-    busy,
+    live,
     count,
+    durationSeconds,
     hasCompaction,
-    hasCodeMode,
     subagentCount,
     activeSubagentCount,
     subagentParts,
@@ -40,58 +60,109 @@
     title,
     label,
     elapsedFor,
+    modelLabel,
+    isFast,
+    thinkingLevel,
+    providerName,
+    providerId,
+    harnessId,
+    harnessName,
+    accountLabel,
+    ovenLabel,
+    ovenIsLocal = false,
+    ovenAppearance,
     onOpen,
     onOpenSheet,
     onToggle
   }: Props = $props()
+
+  const stepLabel = $derived(`${count} ${count === 1 ? 'step' : 'steps'}`)
+  const durationLabel = $derived(
+    durationSeconds === null ? null : formatDurationMs(durationSeconds * 1000)
+  )
 </script>
 
-<summary
-  class="flex cursor-pointer items-center gap-2 px-3 py-2.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-  onclick={onToggle}
+<div
+  class="group/trace relative flex flex-wrap items-center gap-x-2 gap-y-1 py-1 text-left text-[0.75rem] font-medium text-muted"
 >
-  {#if open && busy}
-    <Loader2 size={12} class="shrink-0 animate-spin text-info" />
-  {:else}
-    <Cog size={12} class="shrink-0" />
-  {/if}
-  Working Trace
-  <span class="tabular-nums text-dimmed">({count})</span>
-  {#if hasCompaction || subagentCount > 0 || hasCodeMode}
-    <span class="ml-auto flex items-center gap-1.5">
-      {#if hasCodeMode}
-        <span
-          class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
-          title="This activity includes code-mode scripts that call tools in one run."
-          aria-label="This activity includes code-mode scripts."
-        >
-          <CodeXml size={10} />
-          Code
-        </span>
-      {/if}
-      {#if hasCompaction}
-        <span
-          class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[0.5625rem] text-info"
-          title="This trace includes compacted context. Forking from here restores the compaction summary."
-          aria-label="Compacted context. Forking from here restores the compaction summary."
-        >
-          <Archive size={10} />
-          Compacted
-        </span>
-      {/if}
-      {#if subagentCount > 0}
-        <WorkingTraceSubagentBadge
-          {coarsePointer}
-          {title}
-          {label}
-          {subagentCount}
-          {activeSubagentCount}
-          parts={subagentParts}
-          {elapsedFor}
-          {onOpen}
-          {onOpenSheet}
-        />
+  <!-- The whole line is one click target, but the rule belongs to the content:
+       it spans only what is on screen, from the title to the last badge, and the
+       trailing metadata repeats that on the right so the two read as a pair. The
+       target is an overlay so the sub-agent dropdown stays a real sibling
+       instead of a button nested inside a button. -->
+  <button
+    type="button"
+    class="absolute inset-0 cursor-pointer"
+    aria-expanded={open}
+    aria-label={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
+    title={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
+    onclick={onToggle}
+  ></button>
+  <div
+    class="pointer-events-none relative inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong group-hover/trace:text-foreground"
+  >
+    <!-- The icon keeps the left gutter shared with every step below, so the orb
+         and the cog sit on the same edge as the thinking and tool marks. -->
+    <span class="flex h-5 shrink-0 items-center">
+      {#if live}
+        <ThinkingOrb size={20} label="Weaving" />
+      {:else}
+        <CioTools size={12} />
       {/if}
     </span>
+    Working Trace
+    <span class="tabular-nums text-dimmed transition-colors group-hover/trace:text-foreground"
+      >{stepLabel}{durationLabel ? ` · ${durationLabel}` : ''}</span
+    >
+    {#if hasCompaction || subagentCount > 0}
+      <!-- Only the sub-agent dropdown takes the click; the plain badges let it
+           fall through to the line's own toggle. -->
+      <span class="relative z-10 flex items-center gap-1.5">
+        {#if hasCompaction}
+          <span
+            class="flex items-center gap-1 bg-dimmed/10 px-1.5 py-0.5 text-[0.5625rem]"
+            title="This trace includes compacted context. Forking from here restores the compaction summary."
+            aria-label="Compacted context. Forking from here restores the compaction summary."
+          >
+            <CioArchive size={10} />
+            Compacted
+          </span>
+        {/if}
+        {#if subagentCount > 0}
+          <span class="pointer-events-auto">
+            <WorkingTraceSubagentBadge
+              {coarsePointer}
+              {title}
+              {label}
+              {subagentCount}
+              {activeSubagentCount}
+              parts={subagentParts}
+              {elapsedFor}
+              {onOpen}
+              {onOpenSheet}
+            />
+          </span>
+        {/if}
+      </span>
+    {/if}
+  </div>
+  {#if modelLabel}
+    <div
+      class="pointer-events-none relative ml-auto inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong"
+    >
+      <WorkingTraceMetadata
+        {modelLabel}
+        {isFast}
+        {thinkingLevel}
+        {providerName}
+        {providerId}
+        {harnessId}
+        {harnessName}
+        {accountLabel}
+        {ovenLabel}
+        {ovenIsLocal}
+        {ovenAppearance}
+      />
+    </div>
   {/if}
-</summary>
+</div>

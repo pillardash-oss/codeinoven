@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { BookOpen, Pencil, Server, Trash2 } from '@lucide/svelte'
+  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import type { AgentCapabilityEntry } from '$shared/types'
   import { originLabel } from './sources-panel-helpers'
 
@@ -16,11 +19,11 @@
 
 <div class="group border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
   <div class="flex items-start gap-3">
-    <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted">
+    <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-muted">
       {#if kind === 'mcp'}
-        <Server size={15} />
+        <CioServer size={15} />
       {:else}
-        <BookOpen size={15} />
+        <CioBook size={15} />
       {/if}
     </span>
     <div class="min-w-0 flex-1">
@@ -33,11 +36,15 @@
         >
           {entry.name}
         </button>
-        <span class="rounded-md bg-raised px-1.5 py-0.5 text-[0.625rem] text-muted">
+        <span
+          class="border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase"
+        >
           {originLabel(entry)}
         </span>
         {#if !entry.enabled}
-          <span class="rounded-md bg-danger/10 px-1.5 py-0.5 text-[0.625rem] text-danger">
+          <span
+            class="border border-danger/30 bg-danger/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-danger uppercase"
+          >
             Disabled
           </span>
         {/if}
@@ -56,21 +63,21 @@
     <div class="flex shrink-0 items-center gap-1">
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed hover:bg-elevated hover:text-foreground"
+        class="flex h-7 w-7 items-center justify-center text-dimmed hover:bg-elevated hover:text-foreground"
         aria-label="Edit {entry.name}"
         title="Edit {entry.name}"
         onclick={() => onEdit(entry)}
       >
-        <Pencil size={13} />
+        <CioPencil size={13} />
       </button>
       <button
         type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-lg text-dimmed hover:bg-danger/10 hover:text-danger"
+        class="flex h-7 w-7 items-center justify-center text-dimmed hover:bg-danger/10 hover:text-danger"
         aria-label="Delete {entry.name}"
         title="Delete {entry.name}"
         onclick={() => onDelete(entry)}
       >
-        <Trash2 size={13} />
+        <CioTrash size={13} />
       </button>
     </div>
   </div>

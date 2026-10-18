@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { CircleCheck, Loader2, Sparkles } from '@lucide/svelte'
+
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { modelKey } from '$lib/model-keys'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -94,19 +97,19 @@
 
 <DropdownMenu.Root bind:open>
   <DropdownMenu.Trigger
-    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+    class="flex h-7 cursor-pointer items-center gap-1.5 border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
     aria-label="Compose with agent"
     title="Compose the title and description with an agent"
     disabled={working}
   >
     {#if working}
-      <Loader2 size={11} class="animate-spin" />
+      <CioSpinner size={11} class="animate-spin" />
       <span>Composing…</span>
     {:else if composePhase === 'complete'}
-      <CircleCheck size={11} class="text-success" />
+      <CioCheckCircle size={11} class="text-success" />
       <span>Complete</span>
     {:else}
-      <Sparkles size={11} />
+      <CioSparkles size={11} />
       <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
     {/if}
   </DropdownMenu.Trigger>
@@ -116,7 +119,7 @@
       align="start"
       sideOffset={6}
       collisionPadding={8}
-      class="z-90 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+      class="z-90 w-72 border border-border bg-surface p-2 shadow-xl"
     >
       <div class="space-y-1.5">
         <div>
@@ -154,7 +157,7 @@
         </div>
         <button
           type="button"
-          class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+          class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
           title={issue
             ? 'Run Compose PR again with the selected agent'
             : 'Draft the title and description with an agent'}
@@ -162,11 +165,11 @@
           onclick={onCompose}
         >
           {#if working}
-            <Loader2 size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else if composePhase === 'complete'}
-            <CircleCheck size={12} />
+            <CioCheckCircle size={12} />
           {:else}
-            <Sparkles size={12} />
+            <CioSparkles size={12} />
           {/if}
           <span>{actionLabel}</span>
         </button>

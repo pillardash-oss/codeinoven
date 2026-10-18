@@ -1,4 +1,8 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onDestroy, onMount } from 'svelte'
   import { GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -32,7 +36,7 @@
     Thread,
     ThreadSettings
   } from '$shared/types'
-  import { CheckCircle2, CircleCheck, GitPullRequest, Loader2, TriangleAlert } from '@lucide/svelte'
+
   import GitPullRequestSheetCompose from './GitPullRequestSheetCompose.svelte'
   import GitPullRequestSheetCompare from './GitPullRequestSheetCompare.svelte'
   import GitPullRequestSheetPushRecovery from './GitPullRequestSheetPushRecovery.svelte'
@@ -307,7 +311,7 @@
   const dockProjectName = $derived(projectMeta?.name ?? '')
 
   // The sheet lives inside `PrDockHost`'s `{#each store.drafts}`, so writing the
-  // store from a bare effect would re-render the host, re-run this effect and
+  // Store from a bare effect would re-render the host, re-run this effect and
   // write again   a read/write cycle. Reading back the current descriptor and
   // writing only when a field actually changed makes the sync idempotent.
   $effect(() => {
@@ -838,15 +842,15 @@
   {#snippet headerPrefix()}
     {#if dockProjectName}
       <button
-        class="flex min-w-0 max-w-48 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-elevated py-0.5 pr-2.5 pl-1 transition-colors hover:bg-overlay"
+        class="flex min-w-0 max-w-48 shrink-0 cursor-pointer items-center gap-1.5 border border-border bg-elevated py-0.5 pr-2.5 pl-1 transition-colors hover:bg-overlay"
         title={`Open first thread in ${dockProjectName}`}
         aria-label={`Open first thread in ${dockProjectName}`}
         onclick={() => void openProjectFirstThread()}
       >
         {#if resolvedProjectIcon}
-          <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0 rounded" />
+          <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0" />
         {:else}
-          <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+          <CioPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="truncate text-[0.625rem] font-semibold text-foreground">{dockProjectName}</span
         >
@@ -859,42 +863,42 @@
       <!-- When the host drives the dock, PrDockHost renders the unified chip row. -->
       <DockRow storageKey={effectiveStorageKey} label="Move docked pull request draft">
         <button
-          class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
+          class="flex cursor-pointer items-center gap-1.5 border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
           title="Show pull request creation"
           aria-label="Show pull request creation"
           onclick={handleExpand}
         >
           {#if result}
             <span
-              class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
+              class="flex items-center gap-1 bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success"
             >
-              <CheckCircle2 size={10} aria-hidden="true" />
+              <CioCheckCircle size={10} aria-hidden="true" />
               Created
             </span>
             <span class="text-[0.6875rem] font-medium">PR #{result.number}</span>
           {:else if dockDetail || creating || submitting}
-            <Loader2 size={14} class="shrink-0 animate-spin text-info" />
+            <CioSpinner size={14} class="shrink-0 animate-spin text-info" />
             <span class="text-[0.6875rem] font-medium"
               >{dockDetail || 'Creating pull request…'}</span
             >
           {:else if dockHasIssue}
             <span
-              class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-warning"
+              class="flex items-center gap-1 bg-warning/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-warning"
             >
-              <TriangleAlert size={10} aria-hidden="true" />
+              <CioAttention size={10} aria-hidden="true" />
               Needs attention
             </span>
             <span class="text-[0.6875rem] font-medium">New pull request</span>
           {:else if composeSucceeded}
             <span
-              class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-success"
+              class="flex items-center gap-1 bg-success/15 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-success"
             >
-              <CircleCheck size={10} aria-hidden="true" />
+              <CioCheckCircle size={10} aria-hidden="true" />
               Composed
             </span>
             <span class="text-[0.6875rem] font-medium">New pull request</span>
           {:else}
-            <GitPullRequest size={14} class="shrink-0 text-dimmed" />
+            <CioPullRequest size={14} class="shrink-0 text-dimmed" />
             <span class="text-[0.6875rem] font-medium">New pull request</span>
           {/if}
         </button>
@@ -906,13 +910,13 @@
     {#if !result}
       {#if originError}
         <p
-          class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
+          class="border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
         >
           {originError}
         </p>
       {:else if !originIdentity}
         <p
-          class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-warning"
+          class="border border-warning/30 bg-warning/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-warning"
         >
           No GitHub remote (origin) is configured for this project. Add the repository remote in the
           app's project settings first.
@@ -928,10 +932,10 @@
           for a failure that was transient.
         -->
         <div
-          class="flex flex-wrap items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5"
+          class="flex flex-wrap items-start gap-2 border border-warning/30 bg-warning/10 px-2.5 py-1.5"
           role="alert"
         >
-          <TriangleAlert size={11} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+          <CioAttention size={11} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
           <div class="min-w-0 flex-1">
             <p class="text-[0.625rem] font-semibold text-warning">
               {providerIssueTitle(composeIssue.kind)}
@@ -943,7 +947,7 @@
           <div class="ml-auto flex shrink-0 items-center gap-1">
             <button
               type="button"
-              class="cursor-pointer rounded-md px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/20"
+              class="cursor-pointer px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/20"
               title="Choose a different model or harness for Compose PR"
               onclick={() => {
                 composeOpen = true
@@ -953,7 +957,7 @@
             </button>
             <button
               type="button"
-              class="cursor-pointer rounded-md px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/20"
+              class="cursor-pointer px-1.5 py-0.5 text-[0.5625rem] font-medium text-warning transition-colors hover:bg-warning/20"
               title="Run Compose PR again"
               onclick={() => void runCompose()}
             >
@@ -1019,7 +1023,7 @@
         </label>
         <input
           id={titleFieldId}
-          class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="h-8 w-full border border-border bg-elevated px-2.5 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Summary of the change"
           bind:value={title}
         />
@@ -1033,7 +1037,7 @@
         </label>
         <textarea
           id={bodyFieldId}
-          class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          class="min-h-20 w-full resize-y border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="What does this change do?"
           bind:value={body}></textarea>
       </div>
@@ -1050,7 +1054,7 @@
 
     {#if gitState.error && !result && !composeIssue && !createError}
       <p
-        class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
+        class="border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
       >
         {gitState.error}
       </p>
@@ -1080,7 +1084,7 @@
       <button
         type="button"
         data-modal-dismiss
-        class="cursor-pointer rounded-lg px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+        class="cursor-pointer px-3 py-1.5 text-[0.6875rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
         onclick={onClose}
       >
         Cancel
@@ -1088,7 +1092,7 @@
       <button
         type="button"
         data-modal-primary
-        class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+        class="flex h-8 cursor-pointer items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
         disabled={!canCreate}
         title={!canCreate && existingPr
           ? 'A pull request already exists for these branches'
@@ -1100,9 +1104,9 @@
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}
-          <Loader2 size={12} class="animate-spin" />
+          <CioSpinner size={12} class="animate-spin" />
         {:else}
-          <GitPullRequest size={12} />
+          <CioPullRequest size={12} />
         {/if}
         {submitting ? 'Creating pull request…' : 'Create pull request'}
       </button>

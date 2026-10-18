@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Loader2 } from '@lucide/svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
@@ -147,30 +147,30 @@
       <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
       <div class="flex shrink-0 items-center gap-2">
         <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium whitespace-nowrap hover:bg-overlay"
+          class="h-9 border bg-elevated px-3 text-xs font-medium whitespace-nowrap hover:bg-overlay"
           type="button"
           onclick={onClose}
         >
           Cancel
         </button>
         <button
-          class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium whitespace-nowrap hover:bg-overlay disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium whitespace-nowrap hover:bg-overlay disabled:opacity-50"
           type="button"
           disabled={testing || saving}
           title="Verify these credentials without saving"
           aria-label="Test connection without saving"
           onclick={() => void testConnection()}
         >
-          {#if testing}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if testing}<CioSpinner size={13} class="animate-spin" />{/if}
           Test connection
         </button>
         <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium whitespace-nowrap text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium whitespace-nowrap text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"
           form="cloud-account-form"
           disabled={saving}
         >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+          {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
           Save account
         </button>
       </div>
@@ -182,7 +182,7 @@
       <label class="block space-y-1 text-xs font-medium">
         <span>Provider</span>
         <select
-          class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
+          class="h-9 w-full border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
           bind:value={draft.kind}
         >
           {#each CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES as providerKind (providerKind)}
@@ -214,7 +214,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Account name</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary"
         placeholder="e.g. Coolify   Personal or Coolify   Company"
         autocomplete="off"
         spellcheck="false"
@@ -226,7 +226,7 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Base URL</span>
       <input
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
         placeholder="https://coolify.internal"
         autocomplete="off"
         spellcheck="false"
@@ -238,7 +238,7 @@
       <span>API token</span>
       <input
         id="cloud-account-token"
-        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
+        class="h-9 w-full border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
         type="password"
         placeholder={account && account.configured
           ? 'Stored securely   enter a new token to replace'
@@ -255,12 +255,12 @@
     {/if}
 
     {#if testResult !== ''}
-      <p class="rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+      <p class="bg-success/10 px-3 py-2 text-xs text-success" role="status">
         {testResult}
       </p>
     {/if}
     {#if error !== ''}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
     {/if}
   </form>
 </Modal>

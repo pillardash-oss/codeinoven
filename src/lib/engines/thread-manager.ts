@@ -9,6 +9,8 @@ import { trackDraftWrite } from '../../main/chat/draft-commit-gate'
 import { validateEntityId } from '../../main/ipc/ipc-validation'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
 import { Logger } from '../../main/system/logger'
+import { withAuthoredWorkKind } from '../design/authored-work-kinds'
+import type { AuthoredWorkKind } from '../ipc/design'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import {
   AgentMessageRepo,
@@ -326,7 +328,7 @@ export class ThreadManager {
       title: input.title,
       titleSource: input.titleSource ?? 'default',
       status: 'created',
-      // A routine's how-to ("Getting started") thread is always pinned: pinning is
+      // An assistant's knowledge ("Getting started") thread is always pinned: pinning is
       // what keeps it out of automatic eviction, and the invariant lives here so
       // no caller can create it unpinned.
       pinned: input.assistantGettingStarted === true,
@@ -342,10 +344,12 @@ export class ThreadManager {
       achievementRole: input.achievementRole,
       auditorThreadId: input.auditorThreadId,
       userInputLocked: input.userInputLocked,
+      // Always a boolean, matching what a read returns for the column.
+      engineering: input.engineering === true,
       // Assistant-space fields must be part of the created row itself: the
       // creation broadcast carries this object, so grouping a task after the
       // fact would be wiped by the very next thread:updated payload.
-      routineId: input.routineId,
+      assistantId: input.assistantId,
       assistantIconType: input.assistantIconType,
       assistantIcon: input.assistantIcon,
       // Kept out of the row when absent: the repository stores only the true
@@ -519,8 +523,9 @@ export class ThreadManager {
    */
   async setSortOrder(projectId: string, threadId: string, sortOrder: number): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
-    this.threadRepo.setSortOrder(threadId, sortOrder)
-    const updated: Thread = { ...existing, sortOrder, updatedAt: Date.now() }
+    const now = Date.now()
+    this.threadRepo.setSortOrder(threadId, sortOrder, now)
+    const updated: Thread = { ...existing, sortOrder, lastActivity: now, updatedAt: now }
     this.onChange?.(updated)
     return updated
   }
@@ -677,6 +682,7 @@ export class ThreadManager {
         | 'providerId'
         | 'workingDirectory'
         | 'authoredWorkKind'
+        | 'authoredWorkKinds'
         | 'implementationBrainstorm'
         | 'scopeBucketId'
         | 'lastActivity'
@@ -688,11 +694,12 @@ export class ThreadManager {
         | 'achievementRole'
         | 'auditorThreadId'
         | 'userInputLocked'
+        | 'engineering'
         | 'independentAudit'
         | 'independentAuditInitialized'
         | 'activeAuditId'
         | 'activeAuditVersion'
-        | 'routineId'
+        | 'assistantId'
         | 'assistantIconType'
         | 'assistantIcon'
         | 'assistantGettingStarted'
@@ -715,11 +722,17 @@ export class ThreadManager {
     const updated: Thread = {
       ...existing,
       lastActivity: movedScopes ? Date.now() : (input.lastActivity ?? existing.lastActivity),
+      sortOrder:
+        movedScopes ||
+        (input.lastActivity !== undefined && input.lastActivity > existing.lastActivity)
+          ? undefined
+          : existing.sortOrder,
       title: input.title ?? existing.title,
       titleSource: input.titleSource ?? existing.titleSource,
       providerId: input.providerId ?? existing.providerId,
       workingDirectory: input.workingDirectory ?? existing.workingDirectory,
       authoredWorkKind: input.authoredWorkKind ?? existing.authoredWorkKind,
+      authoredWorkKinds: input.authoredWorkKinds ?? existing.authoredWorkKinds,
       scopeBucketId: input.scopeBucketId ?? existing.scopeBucketId,
       read: input.read ?? existing.read,
       assignmentId: input.assignmentId ?? existing.assignmentId,
@@ -729,12 +742,15 @@ export class ThreadManager {
       achievementRole: input.achievementRole ?? existing.achievementRole,
       auditorThreadId: input.auditorThreadId ?? existing.auditorThreadId,
       userInputLocked: input.userInputLocked ?? existing.userInputLocked,
+      // The Engineering marker is durable: once set it stays set, so a later
+      // partial update that omits it (or passes false) can never clear it.
+      engineering: input.engineering === true ? true : existing.engineering,
       independentAudit: input.independentAudit ?? existing.independentAudit,
       independentAuditInitialized:
         input.independentAuditInitialized ?? existing.independentAuditInitialized,
       activeAuditId: input.activeAuditId ?? existing.activeAuditId,
       activeAuditVersion: input.activeAuditVersion ?? existing.activeAuditVersion,
-      routineId: input.routineId ?? existing.routineId,
+      assistantId: input.assistantId ?? existing.assistantId,
       assistantIconType: input.assistantIconType ?? existing.assistantIconType,
       assistantIcon: input.assistantIcon ?? existing.assistantIcon,
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
@@ -768,6 +784,36 @@ export class ThreadManager {
     await this.threadRepo.upsertViaWorker(updated)
     await this.announce(updated)
     return updated
+  }
+
+  /**
+   * Record that a thread has entered an authored-work session.
+   *
+   * One method, because the two columns have to agree. `authoredWorkKind` is the
+   * session the thread is in now, which is what a preview, the expert card and
+   * media generation resolve against. `authoredWorkKinds` is every session it has
+   * entered, which is what the row's markers draw. The set only grows, so a
+   * thread that designed something and later cut a video about it keeps both
+   * marks for the rest of its life. A turn that names the kind the thread already
+   * holds writes nothing and announces nothing.
+   */
+  async recordAuthoredWorkKind(
+    projectId: string,
+    threadId: string,
+    kind: AuthoredWorkKind
+  ): Promise<void> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    const kinds = withAuthoredWorkKind(existing.authoredWorkKinds, kind)
+    if (
+      existing.authoredWorkKind === kind &&
+      (existing.authoredWorkKinds?.length ?? 0) === kinds.length
+    ) {
+      return
+    }
+    await this.updateThread(projectId, threadId, {
+      authoredWorkKind: kind,
+      authoredWorkKinds: kinds
+    })
   }
 
   /** Set the git branch associated with this thread. */
@@ -950,7 +996,7 @@ export class ThreadManager {
   private async removeThreadDiskArtifacts(threads: Thread[]): Promise<void> {
     for (const thread of threads) {
       const project = await this.projectRepo.getViaWorker(thread.projectId)
-      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id, thread.routineId)
+      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id, thread.assistantId)
       for (const dir of dirs) {
         await rm(dir, { recursive: true, force: true }).catch(() => {})
       }
@@ -1044,7 +1090,8 @@ export class ThreadManager {
       lastErrorAt: status === 'failed' ? now : undefined,
       lastOutcome,
       updatedAt: now,
-      lastActivity: now
+      lastActivity: now,
+      sortOrder: undefined
     }
 
     await this.threadRepo.upsertViaWorker(updated)
@@ -1070,7 +1117,8 @@ export class ThreadManager {
       dismissedSpecId: specId,
       dismissedSpecVersion: specVersion,
       updatedAt: now,
-      lastActivity: now
+      lastActivity: now,
+      sortOrder: undefined
     }
 
     await this.threadRepo.upsertViaWorker(updated)
@@ -1111,7 +1159,8 @@ export class ThreadManager {
           ? { activeAuditId: undefined, activeAuditVersion: undefined }
           : {}),
       updatedAt: now,
-      lastActivity: now
+      lastActivity: now,
+      sortOrder: undefined
     }
     await this.threadRepo.upsertViaWorker(updated)
     await this.announce(updated)
@@ -1168,21 +1217,65 @@ export class ThreadManager {
 
   async setPinned(projectId: string, threadId: string, pinned: boolean): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
-    // The how-to thread is pinned for its whole life: it is never evicted and
+    // The knowledge thread is pinned for its whole life: it is never evicted and
     // the user can only hide it, so no surface may unpin it.
     if (!pinned && isAssistantSetupThread(existing)) {
-      throw new Error('The how-to thread stays pinned. Hide it instead.')
+      throw new Error('The knowledge thread stays pinned. Hide it instead.')
     }
 
     const pinnedAt = pinned ? Date.now() : undefined
-    this.threadRepo.setPinned(threadId, pinned, pinnedAt)
-    const updated: Thread = { ...existing, pinned, pinnedAt, updatedAt: Date.now() }
+    // Unpinning drops the bookmark with the pin: a bookmarked thread the user
+    // unpins   from any surface   has to come back as a normal thread.
+    const bookmarked = pinned ? (existing.bookmarked ?? false) : false
+    this.threadRepo.setPinned(threadId, pinned, pinnedAt, bookmarked)
+    const updated: Thread = { ...existing, pinned, pinnedAt, bookmarked, updatedAt: Date.now() }
+    this.onChange?.(updated)
+    return updated
+  }
+
+  async setBookmarked(projectId: string, threadId: string, bookmarked: boolean): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    if (
+      bookmarked &&
+      !existing.bookmarked &&
+      (await this.threadRepo.countBookmarkedByProjectViaWorker(projectId)) >= 3
+    ) {
+      throw new Error('A project can have at most 3 bookmarked threads.')
+    }
+    if (!bookmarked && isAssistantSetupThread(existing)) {
+      throw new Error('The knowledge thread stays pinned. Hide it instead.')
+    }
+    this.threadRepo.setBookmarked(threadId, bookmarked)
+    const pinnedAt = bookmarked ? Date.now() : undefined
+    const updated: Thread = {
+      ...existing,
+      bookmarked,
+      pinned: bookmarked,
+      pinnedAt,
+      updatedAt: Date.now()
+    }
     this.onChange?.(updated)
     return updated
   }
 
   async markRead(projectId: string, threadId: string): Promise<Thread> {
     const result = await this.threadRepo.markReadViaWorker(projectId, threadId)
+    if (!result) {
+      throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
+    }
+    if (result.changed) this.onChange?.(result.thread)
+    return result.thread
+  }
+
+  /**
+   * Mark a thread unread at the user's request (a thread actions menu). The
+   * mark stamps fresh activity, so every unread rule applies unchanged: the
+   * thread sorts to the top of its list and reads as Unread. The broadcast lets
+   * every window settle its badge; the renderer keeps the mark from being
+   * auto-undone while the thread stays open (see `threadUnreadIntent`).
+   */
+  async markUnread(projectId: string, threadId: string): Promise<Thread> {
+    const result = await this.threadRepo.markUnreadViaWorker(projectId, threadId)
     if (!result) {
       throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
     }
@@ -1379,7 +1472,7 @@ export class ThreadManager {
    */
   async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
     if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
-    return this.transcripts.saveMessages(threadId, messages)
+    return this.transcripts.saveMessages(projectId, threadId, messages)
   }
 
   /**
@@ -1516,7 +1609,7 @@ export class ThreadManager {
     messages: AgentMessage[]
   ): Promise<void> {
     if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
-    return this.transcripts.saveSubagentMessages(threadId, sessionId, messages)
+    return this.transcripts.saveSubagentMessages(projectId, threadId, sessionId, messages)
   }
 
   /** Load a mirrored child-agent transcript without contacting the provider. */
@@ -1619,6 +1712,20 @@ export class ThreadManager {
     options: ThreadSearchOptions = {}
   ): Promise<import('../types').ThreadSearchResult[]> {
     return this.searchService.search(query, options)
+  }
+
+  /**
+   * Spotlight search: the keyword answer resolves, and the merged hybrid
+   * ranking is handed to `onIntentReady` when the local embedding model has
+   * answered. Used only by the command palette's thread search - the panels'
+   * own search buttons stay on {@link searchThreads} and never touch the model.
+   */
+  async searchThreadsWithDeferredIntent(
+    query: string,
+    options: ThreadSearchOptions,
+    onIntentReady: (results: import('../types').ThreadSearchResult[]) => void
+  ): Promise<import('../types').ThreadSearchResult[]> {
+    return this.searchService.searchWithDeferredIntent(query, options, onIntentReady)
   }
 
   /**

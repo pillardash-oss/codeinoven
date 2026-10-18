@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 
@@ -35,7 +35,7 @@
     <div class="space-y-4">
       <div class="flex items-start gap-3">
         <span class="mt-0.5 text-warning">
-          <AlertTriangle size={18} aria-hidden="true" />
+          <CioAttention size={18} aria-hidden="true" />
         </span>
         <p class="text-sm leading-relaxed text-foreground">
           An agent working in <span class="font-medium">{request.projectName}</span> asked to
@@ -44,7 +44,7 @@
       </div>
 
       {#if request.consequences.length > 0}
-        <ul class="space-y-1.5 rounded-lg border border-border bg-raised p-3 text-xs text-muted">
+        <ul class="space-y-1.5 border border-border bg-raised p-3 text-xs text-muted">
           {#each request.consequences as consequence (consequence)}
             <li>{consequence}</li>
           {/each}

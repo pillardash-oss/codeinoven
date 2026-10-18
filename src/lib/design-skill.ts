@@ -131,6 +131,8 @@ A project may hold no framework at all, sometimes not even a package.json. That 
 
 Write one design per folder under \`${designRoot}/<name>/\`, with \`index.html\` as the entry file. The folder is served as a static site, so \`styles.css\`, \`app.js\`, SVGs and images can sit beside the entry file, and both relative paths (\`./styles.css\`) and root-absolute paths (\`/styles.css\`) resolve inside the folder. ${workRootGuidance(designRoot)}
 
+That folder is the design's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a design written there is one the user cannot find, because the board lists the folders under \`${designRoot}\` and nothing else. A design belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a design is neither. If part of this design already sits somewhere else, move it under \`${designRoot}/<name>/\` before you continue, because work left in another folder is work the user cannot find.
+
 Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to the engineering prototype phase, which finalizes and registers whatever it finds there.
 
 ## One design, many screens
@@ -174,7 +176,13 @@ Invoke this capability with operation \`preview\`:
 
 The reply carries the URL, so you can also put it in your final message. The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit shows up without you re-previewing. Preview again when you move to a different folder or a different entry file.
 
+That URL is the address the thread's in-app browser opens, and it is the only one a screen you just wrote has: until \`preview\` has served the folder, there is nothing for a browser to render. So preview first, then look.
+
 ## Checking your own work
+
+The app's in-app browser is yours in this thread, and looking at your own screens in it is part of the design work rather than an extra. Activate the \`cio:browser\` capability with the utility tools (search for "browser"), point it at the tab this preview opened, and use \`snapshot\` for the visible text and controls, \`screenshot\` for the render, \`viewport\` to move between phone, tablet and desktop widths, and \`console\` for runtime errors and failed requests. Read \`snapshot\` for exact copy, because a capture is delivered at a reduced size; a page that has not changed since the previous capture is reported as unchanged rather than captured again, so pass \`force\` when you need the same page twice. A page nobody rendered is a page nobody tested.
+
+Never render your own work with a browser of your own: no cached headless Chrome or Chromium binary, no \`npx playwright\` or \`puppeteer\`, no \`curl\` and no screenshot script. That browser shows a page the app never served and tells you nothing about the tab the user is watching.
 
 Before calling a screen finished, render the current screen at phone and desktop widths, exercise its main action and states, then call \`lint\` with directory and entry. Fix objective craft failures. After that, call \`critique\` once for each changed screen. Supply five \`dimensions\`: philosophy, hierarchy, detail, functionality and innovation, each with a 0–10 score and concrete evidence. They are weighted equally. Supply \`fixes\` and \`criticalIssues\`, listing unresolved brand, accessibility, copy or functionality failures. Use the project's contract when judging the brand and actual measured contrast and keyboard behavior when judging accessibility.
 
@@ -183,6 +191,16 @@ A screen passes only at 8/10 or above, with no craft findings or critical issues
 ## Measuring a reference
 
 For "make it look like this site", call \`extract-reference\` with the user's HTTP(S) URL. It measures a bounded visible sample in an isolated renderer and returns source URL, viewport, typography, area-weighted colours, component geometry and logo references. Treat it as observed evidence, not the reference's complete brand system. Compare it with the project's existing contract and CSS tokens. Generate a lightweight contract with \`write-contract\` only when the user requests generation, preserving the old contract; distinguish observed values from inferred design rules. Ask for a source URL when the user has not supplied one.
+
+## Motion tools
+
+Use motion for feedback, continuity or attention. Repeated interactions must stay immediate and interruptible. Reuse project timing and components; respect reduced motion. Do not import stock effects or assets. The workstation and an authored film have different timing needs.
+
+Select an element using the browser inspector and use its source id. If it has none, add a unique stable id in the source first. Call \`motion-read\` with directory, entry and targetId. Call \`motion-preview\` with that revision and motion: purpose feedback|continuity|attention, trigger enter|hover|press|focus, frequency frequent|occasional, duration immediate|feedback|control|reveal, easing ease-out|ease-in-out|linear, from and to objects with opacity, x/y in rem, scale and rotate in degrees. Defaults inside each state are opacity/scale 1, x/y/rotate 0. Individual translate/scale/rotate properties compose with an existing transform, but inspect any existing individual transforms before changing them.
+
+Preview changes are temporary. Exercise the interaction using browser tools, then call \`motion-inspect\` with directory, entry and optional sampleMs 0–2000. It samples bounded Web Animations API effects, not FPS or canvas loops. It reports the current reduced-motion setting, not proof of both settings. The linter also returns advisory motionWarnings separately from blocking craft findings. Check each warning in context.
+
+Call \`motion-apply\` with the same inputs to persist the reviewed change. It rejects stale revisions and ambiguous source ids, preserves unrelated markup, and captures checkpoints. Existing history restores the previous screen. Read again after any source edit. No extra effect library is needed.
 
 ## Live design controls
 
@@ -198,8 +216,6 @@ When adjustable accent, density, theme or sample data helps the review, declare 
 \`\`\`
 
 Use the actual project token names and values. Up to 12 controls of type color, range, select or text are supported. A variable changes that CSS custom property immediately. For theme or sample data, listen for \`document\` event \`cio:tweaks\` and apply \`event.detail\` to the existing DOM. Changes never reload the page. Keep this review control strip out of production code when implementing the product in another thread.
-
-Activate the app's in-app browser capability, \`cio:browser\` (search for "browser"), and use it on the tab this preview opened. \`snapshot\` lists the visible text and controls, \`screenshot\` shows the render, \`viewport\` moves between phone, tablet and desktop widths, and \`console\` reports runtime errors and failed requests. Read \`snapshot\` for exact copy, because a capture is delivered at a reduced size, and screenshot to judge the render; a page that has not changed since the previous capture is reported as unchanged rather than captured again. Do that before calling a design finished. A page nobody rendered is a page nobody tested.
 
 ## Delegating to the models the user assigned
 

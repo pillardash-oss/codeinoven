@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ExternalLink, Globe } from '@lucide/svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { openInBrowser } from '$lib/open-in-browser'
 
@@ -23,22 +24,22 @@
 {#if urls.length === 1}
   <button
     type="button"
-    class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+    class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
     {title}
     aria-label={title}
     data-external-url={urls[0]}
     onclick={() => void openInBrowser(urls[0])}
   >
-    <ExternalLink {size} />
+    <CioExternalLink {size} />
   </button>
 {:else}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
       {title}
       aria-label={title}
     >
-      <ExternalLink {size} />
+      <CioExternalLink {size} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -46,7 +47,7 @@
         align="end"
         sideOffset={4}
         collisionPadding={8}
-        class="z-50 w-64 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+        class="z-50 w-64 overflow-hidden border bg-surface p-1 shadow-lg"
       >
         <div
           class="px-2.5 pb-1 pt-2 text-[0.5625rem] font-semibold uppercase tracking-wide text-muted"
@@ -55,11 +56,11 @@
         </div>
         {#each urls as url (url)}
           <DropdownMenu.Item
-            class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs outline-none transition-colors text-foreground hover:bg-elevated focus:bg-elevated"
+            class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs outline-none transition-colors text-foreground hover:bg-elevated focus:bg-elevated"
             data-external-url={url}
             onSelect={() => void openInBrowser(url)}
           >
-            <Globe size={13} class="shrink-0 text-muted" />
+            <CioThreadBrowser size={13} class="shrink-0 text-muted" />
             <span class="truncate font-mono text-[0.625rem]">{linkLabel(url)}</span>
           </DropdownMenu.Item>
         {/each}

@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronRight, Folder, FolderPlus, Home, Loader2 } from '@lucide/svelte'
+  import CioFolderPlus from '@pillardash-oss/cio-icon/CioFolderPlus.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioHome from '@pillardash-oss/cio-icon/CioHome.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenFile } from '$shared/ovens'
 
@@ -69,7 +73,7 @@
   /** The create row is open only while the user is still in the directory it opened in. */
   let creating = $derived(Boolean(createAt) && createAt === current)
 
-  /** Drop a trailing separator so `/home/user/` and `/home/user` compare equal. */
+  /** Drop a trailing separator so `/Home/user/` and `/Home/user` compare equal. */
   function trimTrailingSeparator(path: string): string {
     return path.replace(/[\\/]+$/u, '') || path
   }
@@ -83,7 +87,7 @@
   /**
    * The directory one level up, or null when already at a filesystem root.
    *
-   * `/home` climbs to `/`   the root is a real listing, not a dead end   and a
+   * `/Home` climbs to `/`   the root is a real listing, not a dead end   and a
    * Windows drive root (`C:\`) is the only place with nowhere above it.
    */
   function parentDirectory(path: string): string | null {
@@ -198,17 +202,17 @@
   <form class="flex items-center gap-2" onsubmit={submitTypedPath}>
     <button
       type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-8 w-8 shrink-0 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Go to the Oven home directory"
       aria-label="Go to the Oven home directory"
       disabled={disabled || !root}
       onclick={() => void open(root)}
     >
-      <Home size={14} />
+      <CioHome size={14} />
     </button>
     <button
       type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-8 w-8 shrink-0 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Go up one folder"
       aria-label="Go up one folder"
       disabled={disabled || !canGoUp}
@@ -217,11 +221,11 @@
         if (parent) void open(parent)
       }}
     >
-      <ChevronRight size={14} class="rotate-[-90deg]" />
+      <CioForward size={14} class="rotate-[-90deg]" />
     </button>
     <input
       type="text"
-      class="min-w-0 flex-1 rounded-lg border bg-elevated px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
+      class="min-w-0 flex-1 border bg-elevated px-3 py-1.5 font-mono text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
       placeholder="/absolute/path/on/the/oven"
       title="Folder on the Oven"
       aria-label="Folder on the Oven"
@@ -230,7 +234,7 @@
     />
     <button
       type="submit"
-      class="shrink-0 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="shrink-0 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Open this folder"
       {disabled}
     >
@@ -242,7 +246,7 @@
     <form class="flex items-center gap-2" onsubmit={submitNewFolder}>
       <input
         type="text"
-        class="min-w-0 flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
+        class="min-w-0 flex-1 border bg-elevated px-3 py-1.5 text-xs text-foreground placeholder:text-dimmed disabled:opacity-50"
         placeholder="Folder name"
         title={`Create a folder in ${current}`}
         aria-label="New folder name"
@@ -252,7 +256,7 @@
       />
       <button
         type="submit"
-        class="shrink-0 rounded-lg border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="shrink-0 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Create this folder"
         disabled={disabled || creatingBusy || !newFolderName.trim()}
       >
@@ -260,7 +264,7 @@
       </button>
       <button
         type="button"
-        class="shrink-0 rounded-lg px-2 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="shrink-0 px-2 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Cancel"
         disabled={creatingBusy}
         onclick={cancelCreate}
@@ -281,7 +285,7 @@
             {/if}
             <button
               type="button"
-              class="max-w-32 truncate rounded px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
+              class="max-w-32 truncate px-1 py-0.5 transition-colors hover:bg-elevated hover:text-foreground {index ===
               crumbs.length - 1
                 ? 'font-medium text-foreground'
                 : 'text-muted'}"
@@ -298,13 +302,13 @@
       {/if}
       <button
         type="button"
-        class="flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        class="flex shrink-0 items-center gap-1.5 border px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
         title="Create a folder in this directory"
         aria-label="Create a folder in this directory"
         disabled={disabled || loading || !current}
         onclick={startCreate}
       >
-        <FolderPlus size={13} />
+        <CioFolderPlus size={13} />
         New folder
       </button>
     </div>
@@ -315,13 +319,13 @@
   {/if}
 
   <div
-    class="max-h-56 overflow-y-auto rounded-lg border bg-elevated/40"
+    class="max-h-56 overflow-y-auto border bg-elevated/40"
     role="group"
     aria-label="Folders on the Oven"
   >
     {#if loading}
       <p class="flex items-center gap-2 px-3 py-3 text-xs text-muted">
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
         Reading folders…
       </p>
     {:else if error}
@@ -337,7 +341,7 @@
           {disabled}
           onclick={() => void open(joinPath(current, entry.path, separator))}
         >
-          <Folder size={14} class="shrink-0 text-muted" />
+          <CioFolder size={14} class="shrink-0 text-muted" />
           <span class="min-w-0 flex-1 truncate">{entry.path}</span>
         </button>
       {/each}

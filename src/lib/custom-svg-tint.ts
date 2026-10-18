@@ -2,7 +2,7 @@
  * The tinting half of the custom-SVG pipeline, kept apart from the parsing half.
  *
  * `lib/custom-svg` parses a pasted SVG with `@xmldom/xmldom`, which is ~236 KB of
- * renderer JavaScript. Project and routine icons only ever need to tint an
+ * renderer JavaScript. Project and assistant icons only ever need to tint an
  * already-sanitized SVG, and both resolve on the first paint (the sidebar and the
  * assistant search read them), so importing that parser for a tint pinned the
  * whole XML DOM into the entry chunk. This module carries the one function they

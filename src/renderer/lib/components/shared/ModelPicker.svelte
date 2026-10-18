@@ -1,9 +1,14 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCpu from '@pillardash-oss/cio-icon/CioCpu.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
   import { onMount, tick } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { Brain, Check, Cpu, Star, UserRound } from '@lucide/svelte'
+
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import { isGeneratedAccountLabelFor } from '$shared/account-label'
   import { applyModelProfile, type ModelProfileSettings } from '$shared/model-profiles'
@@ -144,7 +149,7 @@
     onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Removes a model from the caller's recently-used history; when provided,
-     *  recent rows show a small "x" next to the favorite star. No confirmation  
+     *  recent rows show a small "x" next to the favorite star. No confirmation
      *  removing from history is trivially re-triggered by using the model. */
     onRemoveRecent?: (modelKey: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
@@ -498,10 +503,10 @@
    *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
-      ? 'flex w-full min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
+      ? 'flex w-full min-w-0 items-center border bg-elevated transition-colors hover:bg-overlay'
       : variant === 'action'
-        ? `flex min-w-0 items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay ${fullWidth ? 'w-full' : ''}`
-        : `flex min-w-0 items-center rounded-lg transition-colors hover:bg-elevated ${fullWidth ? 'w-full' : ''}`
+        ? `flex min-w-0 items-center border bg-elevated transition-colors hover:bg-overlay ${fullWidth ? 'w-full' : ''}`
+        : `flex min-w-0 items-center transition-colors hover:bg-elevated ${fullWidth ? 'w-full' : ''}`
   )
   let modelButtonClasses = $derived(
     variant === 'field'
@@ -720,12 +725,12 @@
         {:else if selectedHarnessIcon}
           <ModelPickerHarnessIcon {harnessId} />
         {:else}
-          <Cpu size={12} />
+          <CioCpu size={12} />
         {/if}
         <span class="min-w-0 flex-auto truncate text-left">{selectedLabelDisplay}</span>
         {#if selectedPeak}
           <span
-            class={`shrink-0 rounded-sm px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
+            class={`shrink-0 px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
               selectedPeak.state === 'peak'
                 ? 'bg-amber-500/15 text-amber-500'
                 : 'bg-green-500/15 text-green-500'
@@ -740,12 +745,12 @@
       {#if supportsThinking}
         <DropdownMenu.Root bind:open={thinkingMenuOpen}>
           <DropdownMenu.Trigger
-            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Thinking level: ${currentThinkingLabel}`}
             title="Thinking level"
             {disabled}
           >
-            <Brain size={10} class="shrink-0" />
+            <CioMemory size={10} class="shrink-0" />
             <span class="min-w-0 truncate capitalize">{currentThinkingLabel}</span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -755,12 +760,12 @@
               sideOffset={4}
               collisionPadding={12}
               onCloseAutoFocus={(event) => event.preventDefault()}
-              class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+              class="z-90 w-52 border border-border bg-surface p-1 shadow-xl"
             >
               {#each effectiveThinkingPresets as preset (preset.id)}
                 {@const active = thinkingLevel === preset.id}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                  class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
                     ? 'text-primary'
                     : ''}"
                   title={preset.description ?? `Set thinking to ${preset.label}`}
@@ -769,7 +774,7 @@
                   }}
                 >
                   {#if active}
-                    <Check size={11} class="shrink-0 text-primary" />
+                    <CioCheck size={11} class="shrink-0 text-primary" />
                   {:else}
                     <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                   {/if}
@@ -795,9 +800,7 @@
           fastMultiplier={fastMultiplierFor(modelId)}
           {contextWindows}
           contextWindow={runtimeSettings?.contextWindow}
-          defaultContextWindow={harnessId === 'codex' && providerId === 'openai'
-            ? contextWindows[0]
-            : (runtimeModel?.contextWindow ?? contextWindows[0])}
+          defaultContextWindow={runtimeModel?.contextWindow ?? contextWindows[0]}
           bind:menuOpen={runtimeMenuOpen}
           disabled={disabled || !onSelectRuntime}
           onSelect={chooseSpeed}
@@ -808,12 +811,12 @@
       {#if showAccountPicker}
         <DropdownMenu.Root bind:open={accountMenuOpen}>
           <DropdownMenu.Trigger
-            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Account: ${selectedAccount?.label ?? 'Default'}`}
             title="Account"
             {disabled}
           >
-            <UserRound size={10} class="shrink-0" />
+            <CioPerson size={10} class="shrink-0" />
             <span class="min-w-0 max-w-24 truncate">{selectedAccount?.label ?? 'Default'}</span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -823,7 +826,7 @@
               sideOffset={4}
               collisionPadding={12}
               onCloseAutoFocus={(event) => event.preventDefault()}
-              class="z-90 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+              class="z-90 w-52 border border-border bg-surface p-1 shadow-xl"
             >
               {#if accountLoading}
                 <div class="px-2 py-2 text-xs text-muted">Loading accounts…</div>
@@ -831,7 +834,7 @@
                 {#each providerAccounts as account (account.id)}
                   {@const active = account.id === effectiveAccountId}
                   <DropdownMenu.Item
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                    class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
                       ? 'text-primary'
                       : ''}"
                     title={`Use ${account.label}`}
@@ -840,14 +843,14 @@
                     }}
                   >
                     {#if active}
-                      <Check size={11} class="shrink-0 text-primary" />
+                      <CioCheck size={11} class="shrink-0 text-primary" />
                     {:else}
                       <span class="w-[11px] shrink-0" aria-hidden="true"></span>
                     {/if}
                     <span class="min-w-0 flex-1 truncate">{account.label}</span>
                     {#if account.isDefault}
                       <span
-                        class="shrink-0 rounded bg-raised px-1 text-[0.625rem] font-medium text-muted"
+                        class="shrink-0 bg-raised px-1 text-[0.625rem] font-medium text-muted"
                         title="Default account for this provider"
                       >
                         Default
@@ -855,7 +858,7 @@
                     {:else if providerAccounts.length > 1}
                       <button
                         type="button"
-                        class="flex size-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-accent"
+                        class="flex size-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-accent"
                         title={`Set ${account.label} as the default account for this provider`}
                         aria-label={`Set ${account.label} as the default account for this provider`}
                         onclick={(event) => {
@@ -863,7 +866,7 @@
                           void setDefaultAccount(account)
                         }}
                       >
-                        <Star size={11} />
+                        <CioStar size={11} />
                       </button>
                     {/if}
                   </DropdownMenu.Item>
@@ -881,11 +884,11 @@
           is truncated to the same width the menu trigger uses.
         -->
         <span
-          class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+          class="ml-0.5 mr-1.5 flex min-w-0 shrink items-center gap-1 bg-elevated px-1.5 py-0.5 text-[0.625rem] text-dimmed"
           title={`Account: ${soleAccountLabel}`}
           aria-label={`Account: ${soleAccountLabel}`}
         >
-          <UserRound size={10} class="shrink-0" aria-hidden="true" />
+          <CioPerson size={10} class="shrink-0" aria-hidden="true" />
           <span class="min-w-0 max-w-24 truncate">{soleAccountLabel}</span>
         </span>
       {/if}
@@ -905,7 +908,7 @@
         align="start"
         sideOffset={4}
         collisionPadding={12}
-        class="z-90 flex w-72 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        class="z-90 flex w-72 flex-col overflow-hidden border bg-surface shadow-lg"
         style="max-height: min(calc(22.75rem + 3px), var(--bits-popover-content-available-height))"
         onOpenAutoFocus={(event) => {
           event.preventDefault()

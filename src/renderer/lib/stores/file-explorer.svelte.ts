@@ -21,6 +21,8 @@ export interface FileExplorerProjectState {
   selectedPaths: string[]
   explorerVisible: boolean
   width: number
+  /** User choice to keep the automatically applied checkpoint filter off. */
+  lastTurnAutoOverride: boolean
 }
 
 export interface FileExplorerSnapshot {
@@ -41,7 +43,8 @@ export function emptyFileExplorerProjectState(): FileExplorerProjectState {
     revealedPath: null,
     selectedPaths: [],
     explorerVisible: true,
-    width: FILE_EXPLORER_DEFAULT_WIDTH
+    width: FILE_EXPLORER_DEFAULT_WIDTH,
+    lastTurnAutoOverride: false
   }
 }
 
@@ -91,7 +94,8 @@ function parseProjectState(value: unknown): FileExplorerProjectState | null {
     revealedPath: isValidPath(value.revealedPath) ? value.revealedPath : null,
     selectedPaths: parseSelectedPaths(value.selectedPaths),
     explorerVisible: value.explorerVisible !== false,
-    width: parseWidth(value.width)
+    width: parseWidth(value.width),
+    lastTurnAutoOverride: value.lastTurnAutoOverride === true
   }
 }
 
@@ -149,9 +153,14 @@ class FileExplorerStore {
 
   /** Merge a patch into a project's persisted explorer position. */
   update(projectId: string, patch: Partial<FileExplorerProjectState>): void {
+    const current = this.project(projectId)
+    // Effects may persist a preference that is already settled. Replacing the
+    // snapshot in that case retriggers its readers and can create a flush loop.
+    const keys = Object.keys(patch) as (keyof FileExplorerProjectState)[]
+    if (keys.every((key) => Object.is(current[key], patch[key]))) return
     this.byProject = {
       ...this.byProject,
-      [projectId]: { ...this.project(projectId), ...patch }
+      [projectId]: { ...current, ...patch }
     }
     this.schedulePersist()
   }

@@ -284,7 +284,8 @@ async function buildEmergencyCheckpoint(
   model: { contextWindow?: number; maxTokens?: number } | undefined,
   tokensBefore: number,
   sessionFile: string | undefined,
-  signal: AbortSignal
+  signal: AbortSignal,
+  requestEntries: SessionEntry[] = entries
 ): Promise<{ summary: string; firstKeptEntryId: string; tokensBefore: number; details: Record<string, unknown> } | undefined> {
   if (signal.aborted) return undefined
   const budget = model && (model.contextWindow ?? 0) > 0 ? Math.min(EMERGENCY_TAIL_TOKENS, retainedTraceTokens(model)) : EMERGENCY_TAIL_TOKENS
@@ -319,7 +320,11 @@ async function buildEmergencyCheckpoint(
   const context = await readCompactionContext()
   const plan = await freshestText(context?.planPath ?? null, context?.plan ?? null)
   const progress = await freshestText(context?.progressPath ?? null, context?.progress ?? null)
-  const lastUser = requestIndex >= 0 ? entries[requestIndex] : undefined
+  // Earlier checkpoints may already have cut the original user entry out of
+  // entries. Recover its owner from the full branch, not just the retained
+  // suffix, so repeated rebuilds never replace the task with a recovery nudge.
+  const ownerIndex = requestEntries === entries ? requestIndex : await requestUserIndex(requestEntries)
+  const lastUser = ownerIndex >= 0 ? requestEntries[ownerIndex] : undefined
   const sections = [
     '# Continuation checkpoint (rebuilt without a summary model)',
     'The transcript had grown past what could be summarized in place, so it was rebuilt from the request that started the turn, the plan and progress this thread is executing, and the most recent steps. Nothing else was carried over; the dropped entries remain in the session file and in the account container should more detail be needed.',
@@ -497,14 +502,16 @@ function isUser(entry: SessionEntry): boolean {
   return entry.type === 'message' && entry.message.role === 'user'
 }
 
-// The driver's own post-checkpoint prompts. They are user entries in the
+// The driver and engine's recovery prompts. They are user entries in the
 // transcript, so a naive newest-first search carries one of these as "the
 // request that started the turn" and drops the user's real request after the
-// first checkpoint. Kept in step with the driver's continuation texts; an
+// first checkpoint. Kept in step with their continuation texts; an
 // unmatched variant only falls back to the previous behavior.
 const CONTINUATION_PROMPT_PREFIXES = [
   'Continue from the Last working trace in the checkpoint.',
-  'Continue.'
+  'Continue.',
+  'Your previous turn ended without a final response. Continue the same task from where you stopped,',
+  'Your previous turn ended before you answered the request below. It still stands:'
 ]
 
 /** Plain text of a user entry, without serialization chrome. */
@@ -620,7 +627,7 @@ async function pagesFrom(entries: SessionEntry[]): Promise<Page[]> {
     const assistant = entry.type === 'message' && entry.message.role === 'assistant'
     // Tool results stay with the assistant that requested them. A new user
     // after a final answer starts a new task; a user mid-work is steering.
-    if (page.entries.length && settled && isUser(entry)) {
+    if (page.entries.length && settled && isUser(entry) && !isContinuationPrompt(entry)) {
       pages.push(page)
       page = { entries: [], users: [] }
     }
@@ -726,7 +733,7 @@ export default function (pi: ExtensionAPI): void {
       // Only a request genuinely past its usable budget needs a rebuild: a
       // small transcript is summarized better, and more cheaply, by Pi itself.
       if (usable > 0 && event.preparation.tokensBefore < usable * COMPACT_WINDOW_SHARE) return undefined
-      const compaction = await buildEmergencyCheckpoint(entries, model, event.preparation.tokensBefore, ctx.sessionManager.getSessionFile(), event.signal)
+      const compaction = await buildEmergencyCheckpoint(entries, model, event.preparation.tokensBefore, ctx.sessionManager.getSessionFile(), event.signal, event.branchEntries)
       if (!compaction) return undefined
       try {
         ctx.ui.notify('Context was rebuilt from the request, plan, and progress: the transcript could not be summarized.', 'warning')

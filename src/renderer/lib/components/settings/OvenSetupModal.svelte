@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { Loader2, Circle, CheckCircle2, AlertCircle, X, Minus } from '@lucide/svelte'
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCircle from '@pillardash-oss/cio-icon/CioCircle.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioMinus from '@pillardash-oss/cio-icon/CioMinus.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
@@ -233,7 +238,7 @@
     <label class="block space-y-1.5 text-sm">
       <span class="text-muted">Remote Oven</span>
       <select
-        class="w-full rounded-lg border bg-elevated px-3 py-2 text-foreground"
+        class="w-full border bg-elevated px-3 py-2 text-foreground"
         bind:value={ovenId}
         onchange={() => readPreflight(ovenId)}
       >
@@ -242,7 +247,7 @@
     </label>
 
     {#if !ovens.length}
-      <p class="rounded-lg border border-dashed p-3 text-sm text-muted">
+      <p class="border border-dashed p-3 text-sm text-muted">
         Add an SSH Oven before running setup. Local ovens do not receive package upgrades or full
         setup.
       </p>
@@ -250,14 +255,14 @@
 
     {#if preflightBusy}
       <p class="flex items-center gap-2 text-sm text-muted">
-        <Loader2 size={15} class="animate-spin" /> Checking the Oven without making changes
+        <CioSpinner size={15} class="animate-spin" /> Checking the Oven without making changes
       </p>
     {:else if peek?.error}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
         {peek.error}
       </p>
     {:else if preflight}
-      <section class="space-y-2 rounded-lg border p-3" aria-label="Preflight results">
+      <section class="space-y-2 border p-3" aria-label="Preflight results">
         <div class="flex items-center justify-between gap-3">
           <h3 class="text-sm font-medium">
             {preflight.report.osName} · {preflight.report.architecture}
@@ -296,7 +301,7 @@
         />
       </section>
 
-      <section class="space-y-3 rounded-lg border p-3">
+      <section class="space-y-3 border p-3">
         <Switch
           checked={gitEnabled}
           onchange={(checked) => (gitEnabled = checked)}
@@ -309,7 +314,7 @@
             <span class="text-muted">Dedicated GitHub SSH private key</span>
             <div class="flex items-start gap-2">
               <textarea
-                class="min-h-28 w-full rounded-lg border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
+                class="min-h-28 w-full border bg-elevated px-3 py-2 font-mono text-xs text-foreground"
                 style="-webkit-text-security: {showPrivateKey ? 'none' : 'disc'}"
                 bind:value={privateKey}
                 autocomplete="off"
@@ -334,15 +339,13 @@
   </div>
   {#snippet footer()}
     <div class="flex justify-between gap-2">
-      <button
-        type="button"
-        class="rounded-lg border px-3 py-2 text-sm hover:bg-elevated"
-        onclick={onClose}>Close</button
+      <button type="button" class="border px-3 py-2 text-sm hover:bg-elevated" onclick={onClose}
+        >Close</button
       >
       <button
         type="button"
         data-modal-primary
-        class="flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
+        class="flex items-center gap-2 bg-primary px-3 py-2 text-sm font-medium text-on-primary disabled:opacity-50"
         disabled={!selectedOven ||
           !preflight ||
           preflightBusy ||
@@ -353,7 +356,7 @@
           (gitEnabled && !privateKey.trim())}
         onclick={() => void start()}
       >
-        {#if startBusy}<Loader2 size={14} class="animate-spin" />{/if}Start setup
+        {#if startBusy}<CioSpinner size={14} class="animate-spin" />{/if}Start setup
       </button>
     </div>
   {/snippet}
@@ -373,21 +376,21 @@
   >
     {#snippet dock()}
       <DockRow storageKey="codeinoven.ovenSetup.progress.v1" label="Move docked oven setup">
-        <div class="flex items-center gap-1 rounded-xl border bg-surface p-1.5 shadow-xl">
+        <div class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl">
           <button
             type="button"
-            class="flex items-center gap-2 rounded-lg px-2 py-1 text-xs hover:bg-elevated"
+            class="flex items-center gap-2 px-2 py-1 text-xs hover:bg-elevated"
             title="Show oven setup progress"
             aria-label="Show oven setup progress"
             onclick={() => (minimized = false)}
           >
-            {#if active}<Loader2
+            {#if active}<CioSpinner
                 size={14}
                 class="animate-spin"
-              />{:else if operation?.status === 'succeeded'}<CheckCircle2
+              />{:else if operation?.status === 'succeeded'}<CioCheckCircle
                 size={14}
                 class="text-success"
-              />{:else}<AlertCircle size={14} class="text-danger" />{/if}
+              />{:else}<CioAlertCircle size={14} class="text-danger" />{/if}
             <span
               >Oven setup · {completedSteps}/{operation?.steps.length ?? 0} · {currentStep?.name ??
                 operation?.status}{#if active && currentStep?.installProgress}
@@ -402,10 +405,10 @@
             <span class="h-4 w-px bg-border"></span>
             <button
               type="button"
-              class="rounded-lg p-1.5 text-muted hover:bg-elevated"
+              class="p-1.5 text-muted hover:bg-elevated"
               title="Close oven setup progress"
               aria-label="Close oven setup progress"
-              onclick={closeProgress}><X size={14} /></button
+              onclick={closeProgress}><CioClose size={14} /></button
             >
           {/if}
         </div>
@@ -421,12 +424,12 @@
         </div>
         {#if active}<button
             type="button"
-            class="rounded-lg border px-2.5 py-1.5 text-xs hover:bg-elevated"
+            class="border px-2.5 py-1.5 text-xs hover:bg-elevated"
             onclick={() => void cancel()}>Cancel setup</button
           >{:else if ['failed', 'cancelled', 'blocked'].includes(operation.status)}<button
             type="button"
             data-modal-primary
-            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs text-on-primary"
+            class="bg-primary px-2.5 py-1.5 text-xs text-on-primary"
             onclick={() => void retry()}>Retry unfinished steps</button
           >{/if}
       </div>
@@ -435,20 +438,20 @@
         </p>{/if}
       <ol class="space-y-2">
         {#each operation.steps as step (step.id)}
-          <li class="flex items-start gap-2 rounded-lg border px-3 py-2">
-            {#if step.status === 'succeeded' || (step.status === 'skipped' && /already installed|meets the service requirement|is installed/u.test(step.skippedReason ?? ''))}<CheckCircle2
+          <li class="flex items-start gap-2 border px-3 py-2">
+            {#if step.status === 'succeeded' || (step.status === 'skipped' && /already installed|meets the service requirement|is installed/u.test(step.skippedReason ?? ''))}<CioCheckCircle
                 size={15}
                 class="mt-0.5 shrink-0 text-success"
-              />{:else if step.status === 'skipped'}<Minus
+              />{:else if step.status === 'skipped'}<CioMinus
                 size={15}
                 class="mt-0.5 shrink-0 text-muted"
-              />{:else if step.status === 'failed' || step.status === 'blocked'}<AlertCircle
+              />{:else if step.status === 'failed' || step.status === 'blocked'}<CioAlertCircle
                 size={15}
                 class="mt-0.5 shrink-0 text-danger"
-              />{:else if step.status === 'running'}<Loader2
+              />{:else if step.status === 'running'}<CioSpinner
                 size={15}
                 class="mt-0.5 shrink-0 animate-spin text-primary"
-              />{:else}<Circle size={15} class="mt-0.5 shrink-0 text-muted" />{/if}
+              />{:else}<CioCircle size={15} class="mt-0.5 shrink-0 text-muted" />{/if}
             <div class="min-w-0 flex-1">
               <p class="text-sm">{step.name}</p>
               {#if step.status === 'running' && step.installProgress}

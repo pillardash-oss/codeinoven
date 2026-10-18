@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { Cpu, Loader2, X } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCpu from '@pillardash-oss/cio-icon/CioCpu.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -178,29 +180,26 @@
   </div>
 
   {#if loading}
-    <div class="flex items-center gap-2 rounded-xl border bg-surface px-4 py-3 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading auxiliary agents…
+    <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
+      <CioSpinner size={14} class="animate-spin" /> Loading auxiliary agents…
     </div>
   {:else}
     {#if error}
-      <p
-        class="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger"
-        role="alert"
-      >
+      <p class="border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger" role="alert">
         {error}
       </p>
     {/if}
 
     {#if rows.length === 0}
-      <div class="rounded-xl border border-dashed bg-surface">
+      <div class="border border-dashed bg-surface">
         <EmptyState
-          icon={Cpu}
+          icon={CioCpu}
           title="No harnesses installed"
           description="Install a harness to assign an auxiliary model."
         />
       </div>
     {:else}
-      <div class="rounded-xl border bg-surface">
+      <div class="border bg-surface">
         <div class="divide-y">
           {#each rows as row (row.id)}
             {@const savedEntry = savedEntryFor(row.id)}
@@ -209,7 +208,7 @@
             <div class="flex flex-wrap items-center gap-3 p-4">
               <div class="flex min-w-0 flex-1 items-center gap-3">
                 <div
-                  class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-elevated"
+                  class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
                 >
                   <AgentIcon agentId={row.id} label={row.name} size={20} />
                 </div>
@@ -224,7 +223,7 @@
               <label class="flex min-w-0 shrink-0 items-center gap-2 text-xs text-muted">
                 <span class="shrink-0">Runs on</span>
                 <select
-                  class="max-w-44 rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary"
+                  class="max-w-44 border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary"
                   aria-label={`Harness that runs auxiliary work for ${row.name}`}
                   value={targetHarness}
                   onchange={(event) => onRunsOnChange(row.id, event.currentTarget.value)}
@@ -267,12 +266,12 @@
                 {#if savedEntry}
                   <button
                     type="button"
-                    class="rounded-lg p-2 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    class="p-2 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                     title={`Clear the auxiliary model for ${row.name}`}
                     aria-label={`Clear the auxiliary model for ${row.name}`}
                     onclick={() => void clearAssignment(row.id)}
                   >
-                    <X size={14} />
+                    <CioClose size={14} />
                   </button>
                 {/if}
               </div>

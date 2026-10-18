@@ -1,8 +1,14 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import type { OpenCodeV2Catalog, OpenCodeV2DiscoveryResult } from '$shared/types'
-  import { AlertTriangle, Boxes, Loader2, RefreshCw, Server, Sparkles } from '@lucide/svelte'
+
   import { onMount } from 'svelte'
 
   interface Props {
@@ -49,27 +55,27 @@
     </div>
     <button
       type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title="Refresh the {harnessName} catalog"
       aria-label="Refresh the {harnessName} catalog"
       disabled={loading}
       onclick={() => void load(true)}
     >
       {#if loading}
-        <Loader2 size={13} class="animate-spin" />
+        <CioSpinner size={13} class="animate-spin" />
       {:else}
-        <RefreshCw size={13} />
+        <CioRefresh size={13} />
       {/if}
     </button>
   </div>
 
   {#if loading && !result}
     <p class="flex items-center gap-2 text-xs text-dimmed">
-      <Loader2 size={13} class="animate-spin" /> Starting a private V2 server…
+      <CioSpinner size={13} class="animate-spin" /> Starting a private V2 server…
     </p>
   {:else if failure}
-    <div class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 p-2.5">
-      <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+    <div class="flex items-start gap-1.5 border border-warning/30 bg-warning/10 p-2.5">
+      <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
       <div class="min-w-0">
         <p class="text-xs font-medium text-warning">
           {failure.reason === 'not-installed'
@@ -84,15 +90,15 @@
   {:else if catalog}
     <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-muted">
       <span class="flex items-center gap-1.5">
-        <Server size={12} class="text-dimmed" />
+        <CioServer size={12} class="text-dimmed" />
         v{catalog.server.version}
       </span>
       <span class="flex items-center gap-1.5">
-        <Boxes size={12} class="text-dimmed" />
+        <CioTabBoxes size={12} class="text-dimmed" />
         {catalog.providers.length} provider{catalog.providers.length === 1 ? '' : 's'}
       </span>
       <span class="flex items-center gap-1.5">
-        <Sparkles size={12} class="text-dimmed" />
+        <CioSparkles size={12} class="text-dimmed" />
         {catalog.models.length} model{catalog.models.length === 1 ? '' : 's'}
       </span>
       <span class="flex items-center gap-1.5">
@@ -107,7 +113,9 @@
       {:else}
         <ul class="max-h-40 space-y-1 overflow-y-auto">
           {#each catalog.providers as provider (provider.id)}
-            <li class="flex items-center justify-between gap-2 rounded-lg bg-raised px-2.5 py-1.5">
+            <li
+              class="flex items-center justify-between gap-2 border border-border bg-raised px-2.5 py-1.5"
+            >
               <span class="min-w-0 truncate text-xs text-foreground" title={provider.id}>
                 {provider.name}
               </span>
@@ -125,7 +133,9 @@
       {:else}
         <ul class="max-h-64 space-y-1 overflow-y-auto">
           {#each catalog.models as model (model.id)}
-            <li class="flex items-center justify-between gap-2 rounded-lg bg-raised px-2.5 py-1.5">
+            <li
+              class="flex items-center justify-between gap-2 border border-border bg-raised px-2.5 py-1.5"
+            >
               <span
                 class="min-w-0 truncate text-xs text-foreground"
                 title="{model.id} · {model.providerId}"
@@ -150,7 +160,9 @@
       {:else}
         <ul class="max-h-40 space-y-1 overflow-y-auto">
           {#each catalog.agents.filter((agent) => !agent.hidden) as agent (agent.id)}
-            <li class="flex items-center justify-between gap-2 rounded-lg bg-raised px-2.5 py-1.5">
+            <li
+              class="flex items-center justify-between gap-2 border border-border bg-raised px-2.5 py-1.5"
+            >
               <span
                 class="min-w-0 truncate text-xs text-foreground"
                 title={agent.description ?? agent.id}

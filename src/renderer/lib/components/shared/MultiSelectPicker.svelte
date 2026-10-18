@@ -1,21 +1,29 @@
 <script lang="ts">
-  import { Check, ChevronDown, ListFilter, Search } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioFilter from '@pillardash-oss/cio-icon/CioFilter.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { MultiSelectOption } from './multi-select-option'
 
   /**
-   * The palette footer's sub-container filter: a project, routine, or browser
-   * group picked from one entity-agnostic list.
+   * One entity-agnostic filter list: a project, assistant, browser group, or task
+   * sort picked from the same rows.
    *
-   * The list is anchored to the footer and opens upward inside the owning panel,
-   * rather than in a portal popup. The spotlight is a Modal that the native
-   * projection draws above the browser's page view, and that projection refuses
-   * any panel containing an `aria-haspopup` element (a popup it cannot own). A
-   * portaled `bits-ui` DropdownMenu therefore forced the whole palette onto the
-   * app-window DOM presentation, which detaches the browser so the palette can be
-   * seen. In-panel markup carries the same menu with no popup, so the palette
-   * keeps its projection and the browser stays up.
+   * The list is anchored to its trigger and opens inside the owning panel,
+   * rather than in a portal popup. The spotlight and the task manager are Modals
+   * that the native projection draws above the browser's page view, and that
+   * projection refuses any panel containing an `aria-haspopup` element (a popup
+   * it cannot own). A portaled `bits-ui` DropdownMenu therefore forced the whole
+   * modal onto the app-window DOM presentation, which detaches the browser so
+   * the panel can be seen. In-panel markup carries the same menu with no popup,
+   * so the modal keeps its projection and the browser stays up.
+   *
+   * `single` turns the same rows into a single-choice picker: one row replaces
+   * the selection instead of adding to it, and the trigger shows that row's
+   * label. The in-panel menu is unchanged, so a projecting modal carries it the
+   * same way.
    */
   interface Props {
     options: readonly MultiSelectOption[]
@@ -31,6 +39,9 @@
     searchPlaceholder?: string
     emptyMessage?: string
     disabled?: boolean
+    /** Single-choice mode: picking a row replaces the selection rather than
+     *  adding to it, and the trigger shows that row's label. */
+    single?: boolean
   }
 
   let {
@@ -43,7 +54,8 @@
     ariaLabel = 'Filter',
     searchPlaceholder = 'Search…',
     emptyMessage = 'No matching options',
-    disabled = false
+    disabled = false,
+    single = false
   }: Props = $props()
 
   let open = $state(false)
@@ -61,6 +73,10 @@
   )
 
   function toggle(optionId: string): void {
+    if (single) {
+      onSelectionChange(selectedIdSet.has(optionId) ? [] : [optionId])
+      return
+    }
     onSelectionChange(
       selectedIdSet.has(optionId)
         ? selectedIds.filter((candidate) => candidate !== optionId)
@@ -204,8 +220,8 @@
   <button
     type="button"
     class={compact
-      ? `flex h-7 items-center gap-1.5 rounded-md border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
-      : `flex w-full items-center gap-2 rounded-lg border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      ? `flex h-7 items-center gap-1.5 border border-border bg-elevated px-2 text-left text-[0.625rem] font-medium text-dimmed outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`
+      : `flex w-full items-center gap-2 border bg-elevated px-3 text-left text-sm outline-none transition-colors hover:bg-overlay focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
     aria-label={ariaLabel}
     title={ariaLabel}
     aria-expanded={open}
@@ -215,7 +231,7 @@
     <span class="flex -space-x-1.5" aria-hidden="true">
       {#each selectedOptions.slice(0, 3) as option (option.id)}
         <span
-          class="flex h-5 w-5 items-center justify-center overflow-hidden rounded border bg-raised text-dimmed"
+          class="flex h-5 w-5 items-center justify-center overflow-hidden border bg-raised text-dimmed"
           style:border-color={option.color}
         >
           {#if option.iconUrl}
@@ -229,29 +245,30 @@
             {@const Icon = option.icon}
             <Icon size={11} />
           {:else}
-            <span
-              class="h-2 w-2 rounded-full"
-              style:background-color={option.color ?? 'currentColor'}
-            ></span>
+            <span class="h-2 w-2" style:background-color={option.color ?? 'currentColor'}></span>
           {/if}
         </span>
       {/each}
       {#if selectedOptions.length === 0}
-        <span class="flex h-5 w-5 items-center justify-center rounded border bg-raised text-dimmed">
-          <ListFilter size={11} />
+        <span class="flex h-5 w-5 items-center justify-center border bg-raised text-dimmed">
+          <CioFilter size={11} />
         </span>
       {/if}
     </span>
     <span class="min-w-0 flex-1 truncate">
-      {selectedOptions.length === 0 ? allLabel : `${selectedOptions.length} selected`}
+      {selectedOptions.length === 0
+        ? allLabel
+        : single
+          ? (selectedOptions[0]?.label ?? allLabel)
+          : `${selectedOptions.length} selected`}
     </span>
-    <ChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
+    <CioChevronDown size={compact ? 12 : 14} class="shrink-0 text-dimmed" />
   </button>
 
   {#if open}
     <div
       {@attach trackMenu}
-      class="absolute bottom-full end-0 z-10 mb-1 flex min-w-64 flex-col overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
+      class="absolute bottom-full end-0 z-10 mb-1 flex min-w-64 flex-col overflow-hidden border border-border bg-surface p-1 shadow-lg"
     >
       <div class="relative mx-1 mb-1 mt-0.5 shrink-0">
         <input
@@ -259,11 +276,11 @@
           placeholder={searchPlaceholder}
           aria-label={searchPlaceholder}
           bind:value={search}
-          class="w-full rounded-md border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
+          class="w-full border border-border bg-elevated py-1.5 pl-7 pr-2 text-xs text-foreground placeholder:text-dimmed focus:outline-none"
           oninput={refitMenu}
           onkeydown={handleSearchKeydown}
         />
-        <Search
+        <CioSearch
           size={12}
           class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-dimmed"
         />
@@ -274,13 +291,13 @@
           <button
             type="button"
             aria-pressed={selectedIds.length === 0}
-            class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
             onkeydown={handleOptionKeydown}
             onclick={() => onSelectionChange([])}
           >
             <span class="min-w-0 flex-1 truncate text-xs font-medium">{allLabel}</span>
             {#if selectedIds.length === 0}
-              <Check size={12} class="shrink-0 text-primary" />
+              <CioCheck size={12} class="shrink-0 text-primary" />
             {/if}
           </button>
         </li>
@@ -292,21 +309,19 @@
               type="button"
               aria-pressed={selectedIdSet.has(option.id)}
               title={option.description ?? option.label}
-              class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
+              class="flex w-full items-center gap-2 px-2.5 py-2 text-left outline-none transition-colors hover:bg-elevated focus-visible:bg-elevated"
               onkeydown={handleOptionKeydown}
               onclick={() => toggle(option.id)}
             >
               {#if option.color}
-                <span
-                  class="w-0.5 shrink-0 self-stretch rounded-full"
-                  style:background-color={option.color}
+                <span class="w-0.5 shrink-0 self-stretch" style:background-color={option.color}
                 ></span>
               {/if}
               {#if option.iconUrl}
                 <img
                   src={option.iconUrl}
                   alt=""
-                  class="h-4 w-4 shrink-0 rounded object-contain"
+                  class="h-4 w-4 shrink-0 object-contain"
                   onerror={hideBrokenIcon}
                 />
               {:else if option.icon}
@@ -326,7 +341,7 @@
                 {/if}
               </span>
               {#if selectedIdSet.has(option.id)}
-                <Check size={12} class="shrink-0 text-primary" />
+                <CioCheck size={12} class="shrink-0 text-primary" />
               {/if}
             </button>
           </li>

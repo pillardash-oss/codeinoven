@@ -78,7 +78,7 @@ export interface ProjectFilesState {
   listingFromCache: boolean
   /** Thread whose own workspace directory this project's file tree is mounted
    *  on: a chat's `chats-cwd/<threadId>` or an assistant task's
-   *  `assistant-cwd/<routineId ?? threadId>`; `null` for real projects and
+   *  `assistant-cwd/<assistantId ?? threadId>`; `null` for real projects and
    *  threadless views. */
   ovenId?: string
   ovenThreadId?: string

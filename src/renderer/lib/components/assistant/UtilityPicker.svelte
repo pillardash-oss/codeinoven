@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { Check, ExternalLink, Plus, Search } from '@lucide/svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { Popover } from 'bits-ui'
   import { SvelteMap } from 'svelte/reactivity'
   import { utilityKindIcon, utilityKindLabel } from './utility-kind'
@@ -70,12 +73,12 @@
   }}
 >
   <Popover.Trigger
-    class="flex w-full items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-left text-[0.75rem] text-muted transition-colors hover:border-border-strong hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+    class="flex w-full items-center gap-1.5 border border-dashed border-border px-2.5 py-1.5 text-left text-[0.75rem] text-muted transition-colors hover:border-border-strong hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
     {disabled}
     title={label}
     aria-label={label}
   >
-    <Plus size={13} strokeWidth={1.8} />
+    <CioPlus size={13} strokeWidth={1.8} />
     <span class="truncate">{label}</span>
     {#if entries.length > 0}
       <span class="ml-auto shrink-0 text-[0.625rem] text-dimmed">{entries.length}</span>
@@ -88,14 +91,14 @@
       align="start"
       sideOffset={4}
       collisionPadding={12}
-      class="z-90 flex w-[var(--bits-popover-anchor-width)] min-w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+      class="z-90 flex w-[var(--bits-popover-anchor-width)] min-w-64 flex-col overflow-hidden border bg-surface shadow-lg"
       role="dialog"
       aria-label="Choose a connection from the utility library"
       tabindex={-1}
       onCloseAutoFocus={(event) => event.preventDefault()}
     >
       <div class="flex items-center gap-1.5 border-b border-border px-2.5 py-2">
-        <Search size={12} strokeWidth={1.8} class="shrink-0 text-dimmed" />
+        <CioSearch size={12} strokeWidth={1.8} class="shrink-0 text-dimmed" />
         <input
           type="text"
           class="min-w-0 flex-1 bg-transparent text-[0.75rem] text-foreground outline-none placeholder:text-dimmed"
@@ -110,7 +113,7 @@
         <div class="flex flex-wrap gap-1 border-b border-border px-2.5 py-1.5">
           <button
             type="button"
-            class="rounded-md px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === 'all'
+            class="px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === 'all'
               ? 'bg-elevated text-foreground'
               : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
             aria-pressed={kindFilter === 'all'}
@@ -121,7 +124,7 @@
           {#each kindCounts as [kind, count] (kind)}
             <button
               type="button"
-              class="rounded-md px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === kind
+              class="px-1.5 py-0.5 text-[0.625rem] transition-colors {kindFilter === kind
                 ? 'bg-elevated text-foreground'
                 : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
               aria-pressed={kindFilter === kind}
@@ -149,7 +152,7 @@
             {@const KindIcon = utilityKindIcon(entry.kind)}
             <button
               type="button"
-              class="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors {connected
+              class="flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors {connected
                 ? 'cursor-default opacity-60'
                 : 'hover:bg-elevated'}"
               title={connected ? `${entry.name} is already connected` : entry.description}
@@ -158,7 +161,7 @@
               onclick={() => pick(entry)}
             >
               <span
-                class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"
+                class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center bg-elevated text-muted"
               >
                 <KindIcon size={12} strokeWidth={1.8} />
               </span>
@@ -169,13 +172,13 @@
                   </span>
                   {#if !entry.enabled}
                     <span
-                      class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
+                      class="shrink-0 border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
                     >
                       Off
                     </span>
                   {/if}
                   <span
-                    class="shrink-0 rounded-md bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
+                    class="shrink-0 border border-border bg-elevated px-1.5 py-0.5 text-[0.5625rem] font-medium tracking-wide text-muted uppercase"
                   >
                     {connectionSourceLabel(entry.source)}
                   </span>
@@ -187,7 +190,7 @@
                 {/if}
               </span>
               {#if connected}
-                <Check size={12} strokeWidth={2} class="mt-1 shrink-0 text-primary" />
+                <CioCheck size={12} strokeWidth={2} class="mt-1 shrink-0 text-primary" />
               {/if}
             </button>
           {/each}
@@ -205,7 +208,7 @@
             onOpenLibrary?.()
           }}
         >
-          <ExternalLink size={12} strokeWidth={1.8} />
+          <CioExternalLink size={12} strokeWidth={1.8} />
           Manage utilities
         </button>
       {/if}

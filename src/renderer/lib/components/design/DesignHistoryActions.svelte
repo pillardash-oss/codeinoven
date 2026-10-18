@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Undo2, Redo2 } from '@lucide/svelte'
+  import CioRedo from '@pillardash-oss/cio-icon/CioRedo.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   interface Props {
     canUndo: boolean
     canRedo: boolean
@@ -15,7 +16,7 @@
 <button
   type="button"
   class={[
-    'flex h-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
+    'flex h-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
     labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7'
   ]}
   disabled={!canUndo}
@@ -23,13 +24,13 @@
   aria-label={undoTitle}
   onclick={onUndo}
 >
-  <Undo2 size={13} />
+  <CioUndo size={13} />
   {#if labelled}<span>Undo</span>{/if}
 </button>
 <button
   type="button"
   class={[
-    'flex h-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
+    'flex h-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40',
     labelled ? 'gap-1.5 px-2 text-[0.6875rem] font-medium' : 'w-7'
   ]}
   disabled={!canRedo}
@@ -37,6 +38,6 @@
   aria-label={redoTitle}
   onclick={onRedo}
 >
-  <Redo2 size={13} />
+  <CioRedo size={13} />
   {#if labelled}<span>Redo</span>{/if}
 </button>

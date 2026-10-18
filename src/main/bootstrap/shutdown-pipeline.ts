@@ -15,7 +15,7 @@ import { app } from 'electron'
 import type { Database } from '../database/database'
 import { flushDraftWrites } from '../chat/draft-commit-gate'
 import {
-  setBackgroundAttention,
+  setBackgroundTray,
   setNotificationService,
   setPowerWakeService
 } from '../chat/thread-events'
@@ -72,7 +72,7 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
   setNotificationService(null)
   setPowerWakeService(null)
-  setBackgroundAttention(null)
+  setBackgroundTray(null)
   try {
     state.powerWakeService?.stop()
   } catch (error) {
@@ -86,15 +86,22 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    state.connectivity?.stop()
+    state.connectivity = null
+  } catch (error) {
+    Logger.error('Connectivity cleanup failed during shutdown:', error)
+  }
+
+  try {
     state.heartbeatScheduler?.dispose()
   } catch (error) {
     Logger.error('Heartbeat scheduler cleanup failed during shutdown:', error)
   }
 
   try {
-    state.routineScheduler?.dispose()
+    state.assistantScheduler?.dispose()
   } catch (error) {
-    Logger.error('Routine scheduler cleanup failed during shutdown:', error)
+    Logger.error('Assistant scheduler cleanup failed during shutdown:', error)
   }
 
   try {
@@ -224,6 +231,8 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
 
   state.foreignRuns?.dispose()
   state.foreignRuns = null
+  state.crossInstanceThreads?.dispose()
+  state.crossInstanceThreads = null
 
   state.threadTransfer?.dispose()
   state.threadTransfer = null

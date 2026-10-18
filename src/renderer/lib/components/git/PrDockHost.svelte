@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { CircleCheck, GitPullRequest, Loader2, TriangleAlert } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -83,7 +86,7 @@
 {#if store.drafts.some((draft) => draft.minimized)}
   <DockRow storageKey={DOCK_STORAGE_KEY} label="Move docked pull request drafts">
     <div
-      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
+      class="flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto border bg-surface p-1.5 shadow-xl"
       role="group"
       aria-label="Docked pull request drafts"
     >
@@ -97,15 +100,15 @@
             .filter((part) => part.length > 0)
             .join('   ')}
           <button
-            class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+            class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
             title={chipLabel}
             aria-label={`Expand ${chipLabel}`}
             onclick={() => store.expand(draft.id)}
           >
             {#if dock.iconUrl}
-              <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
+              <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0" />
             {:else}
-              <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+              <CioPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
             {/if}
             <span class="flex min-w-0 flex-col">
               {#if dock.projectName}
@@ -126,16 +129,16 @@
               {/if}
             </span>
             {#if dock.status === 'working'}
-              <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+              <CioSpinner size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
             {:else if dock.status === 'attention'}
-              <TriangleAlert
+              <CioAttention
                 size={12}
                 class="shrink-0 text-warning"
                 title="Needs attention"
                 aria-hidden="true"
               />
             {:else if dock.status === 'composed' || dock.status === 'created'}
-              <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
+              <CioCheckCircle size={12} class="shrink-0 text-success" aria-hidden="true" />
             {/if}
           </button>
         {/if}

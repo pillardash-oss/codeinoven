@@ -1,5 +1,11 @@
 <script lang="ts">
-  import { X, Download, FileQuestion, FolderOpen, Loader2, Save, WrapText } from '@lucide/svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFileQuestion from '@pillardash-oss/cio-icon/CioFileQuestion.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -222,22 +228,22 @@
       {/if}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        class="titlebar-no-drag flex h-7 items-center gap-1 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!dirty || saving}
         title="Save attachment (Cmd/Ctrl+S)"
         onclick={() => void saveText()}
       >
         {#if saving}
-          <Loader2 size={11} class="animate-spin" />
+          <CioSpinner size={11} class="animate-spin" />
         {:else}
-          <Save size={11} />
+          <CioSave size={11} />
         {/if}
-        Save
+        CioSave
       </button>
       <button
         type="button"
         class={[
-          'titlebar-no-drag flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-elevated hover:text-foreground',
+          'titlebar-no-drag flex h-7 w-7 items-center justify-center transition-colors hover:bg-elevated hover:text-foreground',
           wrapTextState.wrapped ? 'text-primary' : 'text-dimmed'
         ]}
         aria-label={wrapTitle}
@@ -245,36 +251,36 @@
         title={wrapTitle}
         onclick={() => wrapTextState.toggle()}
       >
-        <WrapText size={14} />
+        <CioWrapText size={14} />
       </button>
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Download attachment"
         title="Download attachment"
         onclick={handleDownload}
       >
-        <Download size={14} />
+        <CioDownload size={14} />
       </button>
       {#if revealable}
         <button
           type="button"
-          class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label={`Reveal path of ${filename}`}
           title="Reveal path"
           onclick={revealFromButton}
         >
-          <FolderOpen size={14} />
+          <CioFolderOpen size={14} />
         </button>
       {/if}
       <button
         type="button"
-        class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Close attachment editor"
         title="Close attachment editor (Esc)"
         onclick={requestClose}
       >
-        <X size={14} />
+        <CioClose size={14} />
       </button>
     </div>
     <ProjectTextEditor
@@ -299,6 +305,48 @@
       return true
     }}
   >
+    <!-- A preview is a chrome-less lightbox, so nothing would otherwise keep its
+         content out of the window controls drawn over the top-left corner. The
+         band doubles as the preview's header: it reserves the same inset the app
+         header occupies, stays draggable like every other full screen surface,
+         and names the file with its actions here instead of below the content. -->
+    <div
+      class="titlebar-drag flex h-12 shrink-0 items-center gap-2 border-b border-border pr-3"
+      style={trafficLightInsetStyle()}
+    >
+      <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+        {filename}
+      </span>
+      {#if revealable}
+        <button
+          type="button"
+          class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={`Reveal path of ${filename}`}
+          title="Reveal path"
+          onclick={revealFromButton}
+        >
+          <CioFolderOpen size={14} />
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Download file"
+        title="Download file"
+        onclick={downloadFromButton}
+      >
+        <CioDownload size={14} />
+      </button>
+      <button
+        type="button"
+        class="titlebar-no-drag flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Close preview"
+        title="Close preview (Esc)"
+        onclick={closeFromButton}
+      >
+        <CioClose size={14} />
+      </button>
+    </div>
     <div
       role="presentation"
       class="relative flex min-h-0 flex-1 items-center justify-center"
@@ -354,35 +402,44 @@
           ></iframe>
         {:else if kind === 'document' && documentLoading}
           <div
-            class="flex h-full w-full items-center justify-center rounded-lg bg-surface text-muted shadow-2xl"
+            class="flex h-full w-full items-center justify-center bg-surface text-muted shadow-2xl"
             role="status"
           >
-            <Loader2 size={24} class="animate-spin" />
+            <CioSpinner size={24} class="animate-spin" />
             <span class="sr-only">Loading document preview</span>
           </div>
         {:else if kind === 'markdown' && text !== undefined}
-          <div
-            class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface p-4 shadow-2xl"
-          >
+          <div class="flex min-h-0 w-full flex-1 flex-col overflow-auto bg-surface p-4 shadow-2xl">
             <MarkdownView {text} class="text-sm text-foreground" />
           </div>
         {:else if kind === 'text' && text !== undefined}
           <pre
-            class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
+            class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
         {:else}
           <div
-            class="flex h-full w-full flex-col items-center justify-center gap-2 rounded-lg bg-surface text-muted shadow-2xl"
+            class="flex h-full w-full flex-col items-center justify-center gap-2 bg-surface text-muted shadow-2xl"
           >
-            <FileQuestion size={32} class="text-dimmed" />
+            <CioFileQuestion size={32} class="text-dimmed" />
             <span class="text-xs">No preview available for this file type</span>
           </div>
         {/if}
-        <div class="mt-3 flex shrink-0 items-center gap-3">
-          <span class="max-w-full truncate text-xs text-muted">{filename}</span>
-        </div>
       </div>
       {#if pagerState || (kind === 'image' && src)}
-        <div class="absolute right-3 bottom-3 flex items-center gap-2">
+        <!-- The floating controls belong to the content, not to the backdrop
+             behind it: the lightbox dismisses on a press of its backdrop, so the
+             cluster's own box and the gap between its controls must not read as
+             one, and an activation key pressed on a focused control (Enter on
+             the zoom toolbar) must not reach the lightbox's activate handler
+             either. The controls guard their own buttons; this guards the
+             region. -->
+        <div
+          class="absolute right-3 bottom-3 flex items-center gap-2"
+          role="presentation"
+          onclick={(event: MouseEvent) => event.stopPropagation()}
+          onkeydown={(event: KeyboardEvent) => {
+            if (keymapState.matches('ui-activate', event)) event.stopPropagation()
+          }}
+        >
           {#if pagerState}
             <PreviewPager pager={pagerState} />
           {/if}
@@ -391,37 +448,6 @@
           {/if}
         </div>
       {/if}
-      <div class="absolute right-4 top-4 flex flex-col gap-2">
-        <button
-          type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-          aria-label="Close preview"
-          title="Close preview (Esc)"
-          onclick={closeFromButton}
-        >
-          <X size={18} />
-        </button>
-        {#if revealable}
-          <button
-            type="button"
-            class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-            aria-label={`Reveal path of ${filename}`}
-            title="Reveal path"
-            onclick={revealFromButton}
-          >
-            <FolderOpen size={16} />
-          </button>
-        {/if}
-        <button
-          type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
-          aria-label="Download file"
-          title="Download file"
-          onclick={downloadFromButton}
-        >
-          <Download size={16} />
-        </button>
-      </div>
     </div>
   </Modal>
 {/if}

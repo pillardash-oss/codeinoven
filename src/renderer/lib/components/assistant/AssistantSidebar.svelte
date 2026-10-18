@@ -3,20 +3,28 @@
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import SidebarListRow from '$lib/components/shared/SidebarListRow.svelte'
+  import { RowPageBudget, THREAD_LIST_PAGE_SIZE } from '$lib/components/shared/RowPageBudget.svelte'
+  import { ListRowReflow, rowArrangement } from '$lib/motion'
+  import { ThreadOrderSettle } from '$lib/components/workspace/thread-order-settle.svelte'
+  import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { pinnedThreadSort } from '$lib/stores/workspace.svelte'
-  import { sortRoutines } from '$shared/routine-order'
+  import { sortAssistants } from '$shared/assistant-order'
   import {
     isAssistantSetupThread,
     isThreadWorking,
-    routineHowToComplete,
-    type Routine,
+    assistantKnowledgeComplete,
+    type Assistant,
     type Thread
   } from '$shared/types'
-  import { threadStatusPolicy } from '$shared/thread-status-policy'
-  import AssistantRoutineRow from './AssistantRoutineRow.svelte'
+  import {
+    countThreadStates,
+    emptyThreadStateCounts,
+    type ThreadStateCounts
+  } from '$lib/thread-state-counts'
+  import AssistantRow from './AssistantRow.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
-  import RoutineEditModal from './RoutineEditModal.svelte'
+  import AssistantEditModal from './AssistantEditModal.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import {
@@ -24,31 +32,32 @@
     assistantForeignThread,
     assistantSubjectName,
     previewRuns,
-    routineSiblingRuns
+    assistantSiblingRuns
   } from './assistant-view'
 
   interface Props {
-    routines: Routine[]
+    assistants: Assistant[]
     /** Assistant tasks only: a run is never a task. */
     tasks: Thread[]
     /**
      * Every task's runs, newest first, keyed by task id. A run executes on its
-     * own thread and renders nested under the task it ran.
+     * own thread; an assistant lifts it out to the assistant's own level, while a
+     * assistant-less task (Pinned or Tasks) renders it nested under the task.
      */
     runsByTask: ReadonlyMap<string, Thread[]>
     /**
-     * Every routine's runs, newest first, keyed by routine id. A run inherits
-     * its task's `routineId`, so a run whose task is hidden still groups here.
+     * Every assistant's runs, newest first, keyed by assistant id. A run inherits
+     * its task's `assistantId`, so a run whose task is hidden still groups here.
      */
-    runsByRoutine: ReadonlyMap<string, Thread[]>
+    runsByAssistant: ReadonlyMap<string, Thread[]>
     selectedThreadId: string | null
     /** Bind the scroll container so the workspace can reveal the active row. */
     scroller?: HTMLElement | null
     onOpenTask: (task: Thread) => void
-    onOpenTaskHowTo: (task: Thread) => void
-    onOpenRoutineHowTo: (routine: Routine) => void
-    /** Create a new task inside a routine (the row's plus action). */
-    onCreateTaskInRoutine: (routine: Routine) => void
+    onOpenTaskKnowledge: (task: Thread) => void
+    onOpenAssistantKnowledge: (assistant: Assistant) => void
+    /** Create a new task inside an assistant (the row's plus action). */
+    onCreateTaskInAssistant: (assistant: Assistant) => void
     /** Full thread action set for task rows, so a task behaves like a thread. */
     onRenameTask: (task: Thread, newName: string) => Promise<void>
     onTogglePinTask: (task: Thread) => void
@@ -57,174 +66,272 @@
     onOpenTaskNotes: (task: Thread) => void
     /** Hand a task off to a project, forking it and seeding a summary. */
     onHandedOffTask: (forked: Thread) => void
-    /** Hide a routine's how-to thread (its row has no other state change). */
-    onHideHowTo: (task: Thread) => void
-    onDeleteRoutine: (routineId: string) => Promise<void>
-    onHasRoutineRunsToday: (routine: Routine) => Promise<boolean>
-    onSkipNextRoutineRun: (routine: Routine) => Promise<void>
-    onSkipRoutineRunsToday: (routine: Routine) => Promise<void>
-    onTogglePinRoutine: (routine: Routine) => void
-    onMoveRoutine: (draggedId: string, targetId: string, position: 'before' | 'after') => void
-    /** Group a dragged task into a routine. */
-    onAssignTask: (taskId: string, routineId: string) => void
+    /** Hide an assistant's knowledge thread (its row has no other state change). */
+    onHideKnowledge: (task: Thread) => void
+    onDeleteAssistant: (assistantId: string) => Promise<void>
+    onHasAssistantRunsToday: (assistant: Assistant) => Promise<boolean>
+    onSkipNextAssistantRun: (assistant: Assistant) => Promise<void>
+    onSkipAssistantRunsToday: (assistant: Assistant) => Promise<void>
+    onTogglePinAssistant: (assistant: Assistant) => void
+    onMoveAssistant: (draggedId: string, targetId: string, position: 'before' | 'after') => void
+    /** Group a dragged task into an assistant. */
+    onAssignTask: (taskId: string, assistantId: string) => void
   }
 
   let {
-    routines,
+    assistants,
     tasks,
     runsByTask,
-    runsByRoutine,
+    runsByAssistant,
     selectedThreadId,
     scroller = $bindable(null),
     onOpenTask,
-    onOpenTaskHowTo,
-    onOpenRoutineHowTo,
-    onCreateTaskInRoutine,
+    onOpenTaskKnowledge,
+    onOpenAssistantKnowledge,
+    onCreateTaskInAssistant,
     onRenameTask,
     onTogglePinTask,
     onDeleteTask,
     onForkTask,
     onOpenTaskNotes,
     onHandedOffTask,
-    onHideHowTo,
-    onDeleteRoutine,
-    onHasRoutineRunsToday,
-    onSkipNextRoutineRun,
-    onSkipRoutineRunsToday,
-    onTogglePinRoutine,
-    onMoveRoutine,
+    onHideKnowledge,
+    onDeleteAssistant,
+    onHasAssistantRunsToday,
+    onSkipNextAssistantRun,
+    onSkipAssistantRunsToday,
+    onTogglePinAssistant,
+    onMoveAssistant,
     onAssignTask
   }: Props = $props()
 
   /**
-   * Toggle one function's clock independently of its routine. The change is
+   * Toggle one function's clock independently of its assistant. The change is
    * persisted and broadcast, so the fresh row flows back through `tasks` and
    * the row re-renders without a local list to keep in sync.
    */
   async function toggleTaskScheduled(task: Thread): Promise<void> {
-    const next = !assistantRoutines.taskScheduled(task)
+    const next = !assistantStore.taskScheduled(task)
     try {
-      await assistantRoutines.setTaskScheduled(task.id, next)
+      await assistantStore.setTaskScheduled(task.id, next)
     } catch (caught) {
       reportError(caught, 'Could not change this function’s schedule')
     }
   }
 
   /**
-   * The open/fold call the user made on a routine row, keyed by routine id. With
-   * no entry the row follows the automatic rule (see `routineExpanded`); an entry
-   * is the user's own decision and always wins, which is what lets the routine
+   * The open/fold call the user made on an assistant row, keyed by assistant id. With
+   * no entry the row follows the automatic rule (see `assistantExpanded`); an entry
+   * is the user's own decision and always wins, which is what lets the assistant
    * holding the active thread be folded.
    */
-  const routineFoldChoice = new SvelteMap<string, boolean>()
+  const assistantFoldChoice = new SvelteMap<string, boolean>()
   /** Tasks whose full run history the user asked to see. */
   const expandedRuns = new SvelteSet<string>()
-  const routineSearchOpen = new SvelteSet<string>()
-  const routineSearchQueries = new SvelteMap<string, string>()
+  const assistantSearchOpen = new SvelteSet<string>()
+  const assistantSearchQueries = new SvelteMap<string, string>()
 
-  let editTarget = $state<Routine | null>(null)
-  let deleteTarget = $state<Routine | null>(null)
+  let editTarget = $state<Assistant | null>(null)
+  let deleteTarget = $state<Assistant | null>(null)
 
   const EMPTY_RUNS: readonly Thread[] = []
   const EMPTY_TASKS: readonly Thread[] = []
+  const EMPTY_STATE_COUNTS = emptyThreadStateCounts()
 
-  /** Every routine's tasks, most recent first, built once per tasks change.
-   *  The sidebar reads a routine's task list from this map instead of re-running
-   *  a filter + sort for each of the five call sites per routine per render. */
-  const tasksByRoutine = $derived.by(() => {
+  /** Every assistant's tasks, most recent first, built once per tasks change.
+   *  The sidebar reads an assistant's task list from this map instead of re-running
+   *  a filter + sort for each of the five call sites per assistant per render. */
+  const tasksByAssistant = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
     for (const task of tasks) {
-      if (!task.routineId) continue
-      const list = map.get(task.routineId) ?? []
+      if (!task.assistantId) continue
+      const list = map.get(task.assistantId) ?? []
       list.push(task)
-      map.set(task.routineId, list)
+      map.set(task.assistantId, list)
     }
     for (const list of map.values()) list.sort((a, b) => b.lastActivity - a.lastActivity)
     return map
   })
 
-  /** The subset of each routine's tasks that render nested under it (a
+  /** The subset of each assistant's tasks that render nested under it (a
    *  user-pinned task leaves for the Pinned section above). */
-  const nestedTasksByRoutine = $derived.by(() => {
+  const nestedTasksByAssistant = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
-    for (const [routineId, list] of tasksByRoutine) {
+    for (const [assistantId, list] of tasksByAssistant) {
       map.set(
-        routineId,
+        assistantId,
         list.filter((task) => !task.pinned || isAssistantSetupThread(task))
       )
     }
     return map
   })
 
-  /** Threads with a pending missed run, and the routines those runs belong to,
+  /** Threads with a pending missed run, and the assistants those runs belong to,
    *  as sets so a row never scans the whole missed-run list. */
   const missedThreadIds = $derived.by(() => {
     const ids = new SvelteSet<string>()
-    for (const run of assistantRoutines.missedRuns) ids.add(run.threadId)
+    for (const run of assistantStore.missedRuns) ids.add(run.threadId)
     return ids
   })
 
-  const missedRoutineIds = $derived.by(() => {
+  const missedAssistantIds = $derived.by(() => {
     const ids = new SvelteSet<string>()
-    for (const run of assistantRoutines.missedRuns) {
-      if (run.routineId) ids.add(run.routineId)
+    for (const run of assistantStore.missedRuns) {
+      if (run.assistantId) ids.add(run.assistantId)
     }
     return ids
   })
 
-  /** Routine rows surface unread work without requiring each task list to open. */
-  const unreadRoutineIds = $derived.by(() => {
+  /**
+   * Assistants with a thread parked on the user (awaiting approval) or failed,
+   * across tasks and runs. The rail already counts these as attention, but the
+   * assistant row only wore unread/missed, so a waiting run was invisible until
+   * its row was opened.
+   */
+  const attentionAssistantIds = $derived.by(() => {
     const ids = new SvelteSet<string>()
+    const isAttention = (thread: Thread): boolean =>
+      thread.status === 'awaiting_approval' || thread.status === 'failed'
     for (const task of tasks) {
-      if (task.routineId && !task.read) ids.add(task.routineId)
+      if (task.assistantId && isAttention(task)) ids.add(task.assistantId)
     }
-    for (const runs of runsByRoutine.values()) {
+    for (const runs of runsByAssistant.values()) {
       for (const run of runs) {
-        if (run.routineId && !run.read) ids.add(run.routineId)
+        if (run.assistantId && isAttention(run)) ids.add(run.assistantId)
       }
     }
     return ids
   })
 
   /**
-   * Pinned routines first, then the user's manual arrangement, then creation
-   * (newest first). `sortRoutines` is the same order the main process lists
-   * routines in, so dragging a row and seeing it stay put agree on one rule.
+   * How each assistant's threads break down   working, attention, error   over
+   * its tasks and their runs, so an assistant row wears the same indicator a
+   * project row does. Built once per tasks/runs change instead of re-scanning a
+   * assistant's whole history on every render.
    */
-  const orderedRoutines = $derived(sortRoutines(routines))
+  const assistantStateCounts = $derived.by(() => {
+    const map = new SvelteMap<string, ThreadStateCounts>()
+    for (const [assistantId, list] of tasksByAssistant) {
+      map.set(
+        assistantId,
+        countThreadStates([...list, ...(runsByAssistant.get(assistantId) ?? EMPTY_RUNS)])
+      )
+    }
+    // A run can outlive the assistant's task list (its task was removed), so any
+    // assistant left with only runs still gets a breakdown.
+    for (const [assistantId, runs] of runsByAssistant) {
+      if (!map.has(assistantId)) {
+        map.set(assistantId, countThreadStates(runs))
+      }
+    }
+    return map
+  })
 
-  /** Routine-less, unpinned tasks, most recently active first. */
+  /**
+   * Pinned assistants first, then the user's manual arrangement, then creation
+   * (newest first). `sortAssistants` is the same order the main process lists
+   * assistants in, so dragging a row and seeing it stay put agree on one rule.
+   */
+  const orderedAssistants = $derived(sortAssistants(assistants))
+
+  /** Assistant-less, unpinned tasks, most recently active first. */
   const standaloneTasks = $derived(
     tasks
-      .filter((task) => !task.routineId && !task.pinned)
+      .filter((task) => !task.assistantId && !task.pinned)
       .sort((a, b) => b.lastActivity - a.lastActivity)
   )
 
   /**
-   * Pinned tasks that leave their routine and join the flat Pinned section, in
+   * Pinned tasks that leave their assistant and join the flat Pinned section, in
    * one shared pin order, exactly as the project sidebar treats pinned threads.
-   * A routine's how-to ("Getting started") thread is the exception: it is pinned
-   * for its whole life so it is never evicted, but it belongs to its routine and
-   * stays nested there. Only a routine-less how-to thread (its routine was
+   * An assistant's knowledge ("Getting started") thread is the exception: it is pinned
+   * for its whole life so it is never evicted, but it belongs to its assistant and
+   * stays nested there. Only an assistant-less knowledge thread (its assistant was
    * removed) rises to this list.
    */
   const pinnedTasks = $derived(
     tasks
-      .filter((task) => task.pinned && !(task.routineId && isAssistantSetupThread(task)))
+      .filter((task) => task.pinned && !(task.assistantId && isAssistantSetupThread(task)))
       .sort((a, b) => pinnedThreadSort(a, b))
   )
 
-  /** Open a pinned task, docking its routine's how-to panel like a nested row. */
+  /**
+   * Holds activity-driven reordering of the task lists back, exactly as the
+   * thread sidebars do: the lists sort by last activity, and a live run ticks
+   * constantly, so without this an assistant's tasks re-sort under the reader on
+   * every tick. Runs sort by creation and never move, so only the task lists are
+   * settled.
+   */
+  const assistantOrderSettle = new ThreadOrderSettle()
+
+  /** One page of tasks per assistant is mounted; the rest is one click away. */
+  const assistantTaskBudget = new RowPageBudget(THREAD_LIST_PAGE_SIZE)
+
+  // The assistant list travels on the same pair of measurements as the thread
+  // lists: where every row was before the DOM updated, and where it is after. The
+  // rows live inside nested containers (an assistant, its task, its runs), so
+  // Svelte's per-list FLIP has nothing to measure; this pair has the whole tree's
+  // boxes. See `ListRowReflow`.
+  const assistantRowReflow = new ListRowReflow()
+  let assistantListElement = $state<HTMLElement | null>(null)
+  /** When the assistant list first painted; a row created after this is an
+   *  arrival and plays the fade, every other row appears at its final place. */
+  const assistantListAttachedAt = Date.now()
+
+  /**
+   * The rows the assistant list is about to draw, in render order: the pinned
+   * tasks, then each assistant's tasks and their runs, then the standalone tasks.
+   *
+   * It is built from the data lists rather than mirrored from every fold, so it
+   * only changes when rows really move. A fold animates its own height (`slide`)
+   * and needs no travel, and an over-inclusive entry costs at most one measurement
+   * in which no row moved, which the reflow skips.
+   */
+  const assistantRowArrangement = $derived(
+    rowArrangement([
+      { key: 'pinned', rowKeys: pinnedTasks.map((task) => task.id) },
+      ...orderedAssistants.map((assistant) => ({
+        key: `assistant:${assistant.id}`,
+        rowKeys: [
+          ...nestedAssistantTasks(assistant.id).map((task) => task.id),
+          ...runsOfAssistant(assistant.id).map((run) => run.id)
+        ]
+      })),
+      { key: 'standalone', rowKeys: standaloneTasks.map((task) => task.id) }
+    ])
+  )
+
+  $effect(() => {
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const activeKeys = new Set<string>(['assistant:standalone'])
+    for (const assistant of orderedAssistants) {
+      const key = `assistant:${assistant.id}`
+      activeKeys.add(key)
+      assistantOrderSettle.sync(key, nestedTasksByAssistant.get(assistant.id) ?? EMPTY_TASKS)
+    }
+    assistantOrderSettle.sync('assistant:standalone', standaloneTasks)
+    assistantOrderSettle.prune(activeKeys)
+  })
+
+  $effect.pre(() => {
+    assistantRowReflow.capture(assistantListElement, scroller ?? null, assistantRowArrangement)
+  })
+
+  $effect(() => {
+    assistantRowReflow.play(assistantListElement, scroller ?? null, assistantRowArrangement)
+  })
+
+  /** Open a pinned task, docking its assistant's knowledge panel like a nested row. */
   function openPinnedTask(task: Thread): void {
     onOpenTask(task)
-    const routine = routines.find((entry) => entry.id === task.routineId)
-    if (routine) onOpenRoutineHowTo(routine)
-    else onOpenTaskHowTo(task)
+    const assistant = assistants.find((entry) => entry.id === task.assistantId)
+    if (assistant) onOpenAssistantKnowledge(assistant)
+    else onOpenTaskKnowledge(task)
   }
 
-  /** Every task of a routine, pinned ones included, most recent first. */
-  function routineTasks(routineId: string): readonly Thread[] {
-    return tasksByRoutine.get(routineId) ?? EMPTY_TASKS
+  /** Every task of an assistant, pinned ones included, most recent first. */
+  function assistantTasks(assistantId: string): readonly Thread[] {
+    return tasksByAssistant.get(assistantId) ?? EMPTY_TASKS
   }
 
   /** One task's runs, newest first (empty while it has never run). */
@@ -232,11 +339,11 @@
     return runsByTask.get(taskId) ?? EMPTY_RUNS
   }
 
-  /** One routine's runs, newest first (empty while it has never run). The row
-   *  reports executions, so this is what its count reads: a routine's Getting
+  /** One assistant's runs, newest first (empty while it has never run). The row
+   *  reports executions, so this is what its count reads: an assistant's Getting
    *  started host is an authoring thread, never an execution. */
-  function runsOfRoutine(routineId: string): readonly Thread[] {
-    return runsByRoutine.get(routineId) ?? EMPTY_RUNS
+  function runsOfAssistant(assistantId: string): readonly Thread[] {
+    return runsByAssistant.get(assistantId) ?? EMPTY_RUNS
   }
 
   /** True while any of a task's runs is actually working. */
@@ -246,7 +353,7 @@
 
   /**
    * The runs a task row shows: the newest slice while folded, the whole history
-   * once the user asks for it. Bounded by default so a routine that has run for
+   * once the user asks for it. Bounded by default so an assistant that has run for
    * months cannot turn the sidebar into a log.
    */
   function toggleRuns(key: string): void {
@@ -255,127 +362,135 @@
   }
 
   /** Every on-screen assistant task by id, so a run's parent can be resolved
-   *  even when that parent renders outside the routine's own list. */
+   *  even when that parent renders outside the assistant's own list. */
   const tasksById = $derived(new Map(tasks.map((task) => [task.id, task])))
 
   /**
-   * The task name a hoisted run row reports. A run lifted to its routine's own
+   * The task name a hoisted run row reports. A run lifted to its assistant's own
    * level has no parent row above it to say which task it ran, so without this
-   * every hoisted run read as a bare time. A run nested under its task already
-   * sits below that task's name, so it needs nothing. The name resolves through
-   * `assistantSubjectName`, so a routine's Getting started host keeps naming the
-   * routine instead of leaking "Getting started" onto its own runs.
+   * every hoisted run read as a bare time. A run nested under its task (a Pinned
+   * or assistant-less task) already sits below that task's name, so it needs
+   * nothing. The name resolves through
+   * `assistantSubjectName`, so an assistant's Getting started host keeps naming the
+   * assistant instead of leaking "Getting started" onto its own runs.
    */
   function runContextLabel(
     run: Thread,
     nested: boolean,
-    routineName: string | null
+    assistantName: string | null
   ): string | null {
     if (nested) return null
     if (!run.assistantTaskId) return null
     const parent = tasksById.get(run.assistantTaskId)
     if (!parent) return null
-    return assistantSubjectName(parent, routineName, '') || null
+    return assistantSubjectName(parent, assistantName, '') || null
   }
 
-  /** The runs a routine shows at its own level, beside its task rows (see
-   *  `routineSiblingRuns`). */
-  function siblingRuns(routine: Routine): readonly Thread[] {
-    const runs = runsOfRoutine(routine.id)
+  /** The runs an assistant shows at its own level, beside its task rows (see
+   *  `assistantSiblingRuns`). */
+  function siblingRuns(assistant: Assistant): readonly Thread[] {
+    const runs = runsOfAssistant(assistant.id)
     if (runs.length === 0) return EMPTY_RUNS
-    const renderedTaskIds = new Set(nestedRoutineTasks(routine.id).map((task) => task.id))
-    return routineSiblingRuns(runs, routineHowToComplete(routine), renderedTaskIds, tasksById)
-  }
-
-  /** Whether a task row nests its own runs. A set-up routine's Getting started
-   *  runs leave that row and render beside it instead. */
-  function taskNestsRuns(task: Thread, routine: Routine): boolean {
-    return !routineHowToComplete(routine) || !isAssistantSetupThread(task)
+    const renderedTaskIds = new Set(nestedAssistantTasks(assistant.id).map((task) => task.id))
+    return assistantSiblingRuns(
+      runs,
+      assistantKnowledgeComplete(assistant),
+      renderedTaskIds,
+      tasksById
+    )
   }
 
   /**
-   * The routine's tasks that render nested under it. A user-pinned task leaves
-   * for the Pinned section above, but a pinned how-to thread stays here: its pin
-   * is retention, not a request to move it out of its routine.
+   * Whether a task row nests its own runs. Only an assistant's Getting started
+   * thread nests, and only while the assistant is still being written: its runs
+   * are the failed startup passes that set the assistant up. Every other task's
+   * runs, and the seed's once its knowledge is saved, lift to the assistant's own
+   * level instead, so a task row never swallows a run. An assistant-less task has
+   * no assistant row to lift them to, so it keeps them (see the Tasks and Pinned
+   * sections, which always nest).
    */
-  function nestedRoutineTasks(routineId: string): readonly Thread[] {
-    return nestedTasksByRoutine.get(routineId) ?? EMPTY_TASKS
+  function taskNestsRuns(task: Thread, assistant: Assistant): boolean {
+    return !assistantKnowledgeComplete(assistant) && isAssistantSetupThread(task)
+  }
+
+  /**
+   * The assistant's tasks that render nested under it. A user-pinned task leaves
+   * for the Pinned section above, but a pinned knowledge thread stays here: its pin
+   * is retention, not a request to move it out of its assistant.
+   */
+  function nestedAssistantTasks(assistantId: string): readonly Thread[] {
+    return nestedTasksByAssistant.get(assistantId) ?? EMPTY_TASKS
   }
 
   /** The accent colour a flat (pinned) row should tint its icon with. */
-  function routineColorFor(task: Thread): string | undefined {
-    if (!task.routineId) return undefined
-    return routines.find((routine) => routine.id === task.routineId)?.color
+  function assistantColorFor(task: Thread): string | undefined {
+    if (!task.assistantId) return undefined
+    return assistants.find((assistant) => assistant.id === task.assistantId)?.color
   }
 
-  /** How many of a routine's tasks are working: either the task's own status is
-   *  working or one of its runs is. The routine row shows this count beside its
-   *  working indicator, exactly as a project row does. */
-  function routineWorkingCount(routineId: string): number {
-    let count = 0
-    for (const task of routineTasks(routineId)) {
-      if (threadStatusPolicy(task.status).tone === 'working' || taskRunWorking(task.id)) count++
-    }
-    return count
-  }
-
-  function routineNextRun(routineId: string): number | null {
+  function assistantNextRun(assistantId: string): number | null {
     let earliest: number | null = null
-    for (const task of routineTasks(routineId)) {
-      const next = assistantRoutines.nextRunForTask(task)
+    for (const task of assistantTasks(assistantId)) {
+      const next = assistantStore.nextRunForTask(task)
       if (next !== null && (earliest === null || next < earliest)) earliest = next
     }
     return earliest
   }
 
   /**
-   * Whether a routine's rows are on screen. The user's own call wins; without
-   * one the routine follows the automatic rule: open while its own inline search
+   * Whether an assistant's rows are on screen. The user's own call wins; without
+   * one the assistant follows the automatic rule: open while its own inline search
    * is open, and open while the selected thread is one of its rows, meaning its
-   * task, a run nested under that task, or a run lifted to the routine's own
+   * task, a run nested under that task, or a run lifted to the assistant's own
    * level, so the row the user is working in stays on screen.
    *
    * `siblingRunRows` is passed in because every render call site already resolves
    * it for the run rows it draws; only a click has to resolve it again.
    */
-  function routineExpanded(routine: Routine, siblingRunRows: readonly Thread[]): boolean {
-    const choice = routineFoldChoice.get(routine.id)
+  function assistantExpanded(assistant: Assistant, siblingRunRows: readonly Thread[]): boolean {
+    const choice = assistantFoldChoice.get(assistant.id)
     if (choice !== undefined) return choice
-    if (routineSearchOpen.has(routine.id)) return true
+    if (assistantSearchOpen.has(assistant.id)) return true
     const selected = selectedThreadId
     if (!selected) return false
     return (
-      nestedRoutineTasks(routine.id).some(
+      nestedAssistantTasks(assistant.id).some(
         (task) => task.id === selected || runsFor(task.id).some((run) => run.id === selected)
       ) || siblingRunRows.some((run) => run.id === selected)
     )
   }
 
-  /** Fold or open a routine: the row flips what the user is looking at, and that
+  /** Fold or open an assistant: the row flips what the user is looking at, and that
    *  decision outranks the automatic rule from then on. */
-  function toggleRoutine(routine: Routine): void {
-    routineFoldChoice.set(routine.id, !routineExpanded(routine, siblingRuns(routine)))
+  function toggleAssistant(assistant: Assistant): void {
+    assistantFoldChoice.set(assistant.id, !assistantExpanded(assistant, siblingRuns(assistant)))
   }
 
-  function openRoutineSearch(routine: Routine): void {
-    routineSearchOpen.add(routine.id)
-    routineFoldChoice.set(routine.id, true)
+  function openAssistantSearch(assistant: Assistant): void {
+    assistantSearchOpen.add(assistant.id)
+    assistantFoldChoice.set(assistant.id, true)
   }
 
-  function closeRoutineSearch(routine: Routine): void {
-    routineSearchOpen.delete(routine.id)
-    routineSearchQueries.delete(routine.id)
+  function closeAssistantSearch(assistant: Assistant): void {
+    assistantSearchOpen.delete(assistant.id)
+    assistantSearchQueries.delete(assistant.id)
   }
 
-  function filteredRoutineTasks(routine: Routine): readonly Thread[] {
-    const query = (routineSearchQueries.get(routine.id) ?? '').trim().toLowerCase()
-    const list = nestedRoutineTasks(routine.id)
-    if (!routineSearchOpen.has(routine.id) || query.length === 0) return list
+  function filteredAssistantTasks(assistant: Assistant): readonly Thread[] {
+    const query = (assistantSearchQueries.get(assistant.id) ?? '').trim().toLowerCase()
+    // The settled order is what the reader sees, so both the open list and the
+    // search filter read from it; the query then narrows the rows, never reorders
+    // them.
+    const list = assistantOrderSettle.view(
+      `assistant:${assistant.id}`,
+      nestedAssistantTasks(assistant.id)
+    )
+    if (!assistantSearchOpen.has(assistant.id) || query.length === 0) return list
     return list.filter((task) => task.title.toLowerCase().includes(query))
   }
 
-  function startEdit(routine: Routine): void {
-    editTarget = routine
+  function startEdit(assistant: Assistant): void {
+    editTarget = assistant
   }
 
   /**
@@ -388,7 +503,7 @@
     const target = deleteTarget
     if (!target) return
     deleteTarget = null
-    void onDeleteRoutine(target.id)
+    void onDeleteAssistant(target.id)
   }
 </script>
 
@@ -398,7 +513,7 @@
   key: string,
   ariaLabel: string,
   nested: boolean,
-  routineName: string | null = null
+  assistantName: string | null = null
 )}
   {#if runs.length > 0}
     <div
@@ -408,29 +523,35 @@
     >
       {#each previewRuns(runs, expandedRuns.has(key)) as run (run.id)}
         {@const runForeignThread = foreignRuns.isForeign(run.projectId, run.id) ? run : null}
-        <AssistantTaskRow
-          task={run}
-          variant="run"
-          foreignThread={runForeignThread}
-          {color}
-          active={run.id === selectedThreadId}
-          missed={false}
-          nextRunAt={null}
-          contextLabel={runContextLabel(run, nested, routineName)}
-          onSelect={onOpenTask}
-          onRename={onRenameTask}
-          onTogglePin={onTogglePinTask}
-          onDelete={onDeleteTask}
-          onFork={onForkTask}
-          onOpenNotes={onOpenTaskNotes}
-          onHandedOff={onHandedOffTask}
-          {onHideHowTo}
-        />
+        <SidebarListRow
+          rowKey={run.id}
+          createdAt={run.createdAt}
+          attachedAt={assistantListAttachedAt}
+        >
+          <AssistantTaskRow
+            task={run}
+            variant="run"
+            foreignThread={runForeignThread}
+            {color}
+            active={run.id === selectedThreadId}
+            missed={false}
+            nextRunAt={null}
+            contextLabel={runContextLabel(run, nested, assistantName)}
+            onSelect={onOpenTask}
+            onRename={onRenameTask}
+            onTogglePin={onTogglePinTask}
+            onDelete={onDeleteTask}
+            onFork={onForkTask}
+            onOpenNotes={onOpenTaskNotes}
+            onHandedOff={onHandedOffTask}
+            {onHideKnowledge}
+          />
+        </SidebarListRow>
       {/each}
       {#if runs.length > TASK_RUN_PREVIEW}
         <button
           type="button"
-          class="flex w-full items-center rounded-md px-2 py-1 text-left text-[0.5625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex w-full items-center px-2 py-1 text-left text-[0.5625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-expanded={expandedRuns.has(key)}
           onclick={() => toggleRuns(key)}
         >
@@ -447,27 +568,29 @@
   select: (task: Thread) => void,
   nestRuns: boolean
 )}
-  <AssistantTaskRow
-    {task}
-    foreignThread={assistantForeignThread(task, runsFor(task.id), (projectId, threadId) =>
-      foreignRuns.isForeign(projectId, threadId)
-    )}
-    {color}
-    active={task.id === selectedThreadId}
-    missed={missedThreadIds.has(task.id)}
-    nextRunAt={assistantRoutines.nextRunForTask(task)}
-    scheduled={assistantRoutines.taskScheduled(task)}
-    onToggleScheduled={(t) => void toggleTaskScheduled(t)}
-    runWorking={nestRuns && taskRunWorking(task.id)}
-    onSelect={select}
-    onRename={onRenameTask}
-    onTogglePin={onTogglePinTask}
-    onDelete={onDeleteTask}
-    onFork={onForkTask}
-    onOpenNotes={onOpenTaskNotes}
-    onHandedOff={onHandedOffTask}
-    {onHideHowTo}
-  />
+  <SidebarListRow rowKey={task.id} createdAt={task.createdAt} attachedAt={assistantListAttachedAt}>
+    <AssistantTaskRow
+      {task}
+      foreignThread={assistantForeignThread(task, runsFor(task.id), (projectId, threadId) =>
+        foreignRuns.isForeign(projectId, threadId)
+      )}
+      {color}
+      active={task.id === selectedThreadId}
+      missed={missedThreadIds.has(task.id)}
+      nextRunAt={assistantStore.nextRunForTask(task)}
+      scheduled={assistantStore.taskScheduled(task)}
+      onToggleScheduled={(t) => void toggleTaskScheduled(t)}
+      runWorking={nestRuns && taskRunWorking(task.id)}
+      onSelect={select}
+      onRename={onRenameTask}
+      onTogglePin={onTogglePinTask}
+      onDelete={onDeleteTask}
+      onFork={onForkTask}
+      onOpenNotes={onOpenTaskNotes}
+      onHandedOff={onHandedOffTask}
+      {onHideKnowledge}
+    />
+  </SidebarListRow>
   {#if nestRuns}
     {@render runRows(runsFor(task.id), color, task.id, `Runs of ${task.title}`, true)}
   {/if}
@@ -476,14 +599,15 @@
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
   <div class="flex h-full min-h-0 flex-col">
     <div
+      bind:this={assistantListElement}
       class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5"
       role="list"
-      aria-label="Routines and tasks"
+      aria-label="Assistants and tasks"
     >
       <!-- No empty note here: the shell paints this sidebar only while it holds a
-           routine or a task, and the view's own empty state is what invites the
+           assistant or a task, and the view's own empty state is what invites the
            first one. -->
-      <!-- Pinned tasks lead the list, above the routines: the shared
+      <!-- Pinned tasks lead the list, above the assistants: the shared
            PinnedSection owns the header, the fold state, and the row list,
            and the assistant supplies its own task row to it. -->
       <PinnedSection
@@ -498,41 +622,48 @@
         onFork={onForkTask}
       >
         {#snippet row(task: Thread)}
-          {@render taskWithRuns(task, routineColorFor(task), openPinnedTask, true)}
+          {@render taskWithRuns(task, assistantColorFor(task), openPinnedTask, true)}
         {/snippet}
       </PinnedSection>
 
-      {#each orderedRoutines as routine (routine.id)}
-        {@const routineTaskList = routineTasks(routine.id)}
-        {@const routineRunList = runsOfRoutine(routine.id)}
-        {@const visibleTasks = filteredRoutineTasks(routine)}
-        {@const searching = routineSearchOpen.has(routine.id)}
-        {@const query = routineSearchQueries.get(routine.id) ?? ''}
-        {@const siblingRunRows = siblingRuns(routine)}
-        {@const isExpanded = routineExpanded(routine, siblingRunRows)}
-        <AssistantRoutineRow
-          {routine}
+      {#each orderedAssistants as assistant (assistant.id)}
+        {@const assistantTaskList = assistantTasks(assistant.id)}
+        {@const assistantRunList = runsOfAssistant(assistant.id)}
+        {@const visibleTasks = filteredAssistantTasks(assistant)}
+        {@const tasksShown = assistantTaskBudget.visibleRows(
+          `assistant:${assistant.id}`,
+          visibleTasks,
+          selectedThreadId
+        )}
+        {@const tasksHidden = assistantTaskBudget.hiddenCount(visibleTasks, tasksShown)}
+        {@const searching = assistantSearchOpen.has(assistant.id)}
+        {@const query = assistantSearchQueries.get(assistant.id) ?? ''}
+        {@const siblingRunRows = siblingRuns(assistant)}
+        {@const isExpanded = assistantExpanded(assistant, siblingRunRows)}
+        <AssistantRow
+          {assistant}
           expanded={isExpanded}
-          workingCount={routineWorkingCount(routine.id)}
-          unread={unreadRoutineIds.has(routine.id)}
-          missed={missedRoutineIds.has(routine.id)}
-          runCount={routineRunList.length}
-          iconUrl={assistantRoutines.iconUrls.get(routine.id) ?? null}
-          nextRunAt={routineNextRun(routine.id)}
+          stateCounts={assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
+          attention={attentionAssistantIds.has(assistant.id)}
+          missed={missedAssistantIds.has(assistant.id)}
+          runCount={assistantRunList.length}
+          iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
+          nextRunAt={assistantNextRun(assistant.id)}
           searchOpen={searching}
           searchQuery={query}
-          onToggle={toggleRoutine}
-          onSearchOpenChange={(r, open) => (open ? openRoutineSearch(r) : closeRoutineSearch(r))}
-          onSearchQueryChange={(r, value) => routineSearchQueries.set(r.id, value)}
-          onCreateTask={onCreateTaskInRoutine}
-          onOpenHowTo={onOpenRoutineHowTo}
+          onToggle={toggleAssistant}
+          onSearchOpenChange={(r, open) =>
+            open ? openAssistantSearch(r) : closeAssistantSearch(r)}
+          onSearchQueryChange={(r, value) => assistantSearchQueries.set(r.id, value)}
+          onCreateTask={onCreateTaskInAssistant}
+          onOpenKnowledge={onOpenAssistantKnowledge}
           onEdit={startEdit}
-          onTogglePin={onTogglePinRoutine}
+          onTogglePin={onTogglePinAssistant}
           onDelete={(r) => (deleteTarget = r)}
-          {onHasRoutineRunsToday}
-          {onSkipNextRoutineRun}
-          {onSkipRoutineRunsToday}
-          {onMoveRoutine}
+          {onHasAssistantRunsToday}
+          {onSkipNextAssistantRun}
+          {onSkipAssistantRunsToday}
+          {onMoveAssistant}
           onDropTask={onAssignTask}
         />
         {#if isExpanded}
@@ -540,69 +671,114 @@
             {#if searching && query.trim().length > 0 && visibleTasks.length === 0}
               <p class="px-2 py-1 text-[0.625rem] text-dimmed">No matching tasks</p>
             {:else}
-              {#each visibleTasks as task (task.id)}
+              {#each tasksShown as task (task.id)}
                 {@render taskWithRuns(
                   task,
-                  routine.color,
+                  assistant.color,
                   (selected) => {
-                    // Working inside a routine keeps it open: the user's own
+                    // Working inside an assistant keeps it open: the user's own
                     // call, so the automatic rule cannot fold it back.
-                    routineFoldChoice.set(routine.id, true)
+                    assistantFoldChoice.set(assistant.id, true)
                     onOpenTask(selected)
-                    onOpenRoutineHowTo(routine)
+                    onOpenAssistantKnowledge(assistant)
                   },
-                  taskNestsRuns(task, routine)
+                  taskNestsRuns(task, assistant)
                 )}
               {:else}
                 {#if siblingRunRows.length === 0}
                   <p class="px-2 py-1 text-[0.625rem] text-dimmed">
-                    {routineTaskList.length > 0
-                      ? `${routineTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
-                      : 'No tasks in this routine yet.'}
+                    {assistantTaskList.length > 0
+                      ? `${assistantTaskList.length === 1 ? 'Its only task is' : 'Its tasks are'} pinned, in the Pinned section above.`
+                      : 'No tasks in this assistant yet.'}
                   </p>
                 {/if}
               {/each}
+              {#if tasksHidden > 0}
+                <button
+                  type="button"
+                  class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  onclick={() =>
+                    assistantTaskBudget.showMore(`assistant:${assistant.id}`, visibleTasks.length)}
+                >
+                  Show {tasksHidden} more
+                </button>
+              {:else if assistantTaskBudget.visibleCount(`assistant:${assistant.id}`) > THREAD_LIST_PAGE_SIZE}
+                <button
+                  type="button"
+                  class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  onclick={() => assistantTaskBudget.showLess(`assistant:${assistant.id}`)}
+                >
+                  Show less
+                </button>
+              {/if}
             {/if}
             {@render runRows(
               siblingRunRows,
-              routine.color,
-              `routine:${routine.id}`,
-              `Runs of ${routine.name}`,
+              assistant.color,
+              `assistant:${assistant.id}`,
+              `Runs of ${assistant.name}`,
               false,
-              routine.name
+              assistant.name
             )}
           </div>
         {/if}
       {/each}
 
       {#if standaloneTasks.length > 0}
+        {@const standaloneShown = assistantTaskBudget.visibleRows(
+          'assistant:standalone',
+          standaloneTasks,
+          selectedThreadId
+        )}
+        {@const standaloneHidden = assistantTaskBudget.hiddenCount(
+          standaloneTasks,
+          standaloneShown
+        )}
         <div
-          class="mt-2 mb-1 px-2 text-[0.5625rem] font-medium tracking-wide text-dimmed uppercase"
+          class="mt-2 mb-1 border-b border-border px-2 pb-1 text-[0.5625rem] font-semibold tracking-wide text-dimmed uppercase"
         >
           Tasks
         </div>
-        {#each standaloneTasks as task (task.id)}
+        {#each standaloneShown as task (task.id)}
           {@render taskWithRuns(
             task,
             undefined,
             (selected) => {
               onOpenTask(selected)
-              onOpenTaskHowTo(selected)
+              onOpenTaskKnowledge(selected)
             },
             true
           )}
         {/each}
+        {#if standaloneHidden > 0}
+          <button
+            type="button"
+            class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            onclick={() =>
+              assistantTaskBudget.showMore('assistant:standalone', standaloneTasks.length)}
+          >
+            Show {standaloneHidden} more
+          </button>
+        {:else if assistantTaskBudget.visibleCount('assistant:standalone') > THREAD_LIST_PAGE_SIZE}
+          <button
+            type="button"
+            class="flex w-full items-center px-2 py-1 text-left text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            onclick={() => assistantTaskBudget.showLess('assistant:standalone')}
+          >
+            Show less
+          </button>
+        {/if}
       {/if}
     </div>
   </div>
 </CollapsibleSidebar>
 
-<RoutineEditModal routine={editTarget} onClose={() => (editTarget = null)} />
+<AssistantEditModal assistant={editTarget} onClose={() => (editTarget = null)} />
 
 <ConfirmDialog
   open={deleteTarget !== null}
-  title="Remove routine"
-  confirmLabel="Remove routine"
+  title="Remove assistant"
+  confirmLabel="Remove assistant"
   onCancel={() => (deleteTarget = null)}
   onConfirm={submitDelete}
   note="This cannot be undone."

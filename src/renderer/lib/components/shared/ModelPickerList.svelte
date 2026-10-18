@@ -1,17 +1,16 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioGrip from '@pillardash-oss/cio-icon/CioGrip.svelte'
+  import CioPlug from '@pillardash-oss/cio-icon/CioPlug.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
   import { tick } from 'svelte'
   import { on } from 'svelte/events'
   import { SvelteSet } from 'svelte/reactivity'
-  import {
-    Check,
-    ChevronRight,
-    GripVertical,
-    Plug,
-    RefreshCw,
-    Search,
-    Star,
-    X
-  } from '@lucide/svelte'
+
   import { modelKey, parseModelKey } from '$lib/model-keys'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -572,7 +571,7 @@
     const ghost = document.createElement('div')
     ghost.textContent = name
     ghost.style.cssText =
-      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     document.body.appendChild(ghost)
     event.dataTransfer!.setDragImage(ghost, 0, 0)
     requestAnimationFrame(() => document.body.removeChild(ghost))
@@ -639,7 +638,7 @@
       {/if}
     {:else}
       <div class="flex shrink-0 items-center gap-2 border-b px-2.5 py-2">
-        <Search size={12} class="shrink-0 text-dimmed" />
+        <CioSearch size={12} class="shrink-0 text-dimmed" />
         <input
           id={searchId}
           {@attach attachSearchInput}
@@ -697,7 +696,7 @@
             aria-label="Clear model search"
             onclick={() => (search = '')}
           >
-            <X size={11} />
+            <CioClose size={11} />
           </button>
         {/if}
         {#if canRefresh}
@@ -709,7 +708,7 @@
             disabled={refreshing}
             onclick={onRefresh}
           >
-            <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
+            <CioRefresh size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
           </button>
         {/if}
       </div>
@@ -733,10 +732,10 @@
             <p class="text-[0.6875rem] text-dimmed">No providers connected</p>
             <button
               type="button"
-              class="mt-1.5 inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
+              class="mt-1.5 inline-flex h-7 items-center gap-1.5 bg-primary px-2.5 text-[0.6875rem] font-semibold text-on-primary transition-colors hover:bg-primary-hover"
               onclick={onOpenConnectFlow}
             >
-              <Plug size={12} />
+              <CioPlug size={12} />
               Connect your AI account
             </button>
           </div>
@@ -782,7 +781,7 @@
           </span>
           <button
             type="button"
-            class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            class="bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover"
             title="Finish selecting models"
             onclick={onClose}
           >
@@ -795,7 +794,7 @@
 </div>
 
 {#snippet groupHeader(
-  Icon: typeof Star,
+  Icon: typeof CioStar,
   id: string,
   text: string,
   iconClass: string,
@@ -804,12 +803,12 @@
   {@const collapsed = collapsedGroups.has(id)}
   <button
     type="button"
-    class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+    class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
     aria-expanded={!collapsed}
     title={collapsed ? `Expand ${text}` : `Collapse ${text}`}
     onclick={() => toggleGroup(id)}
   >
-    <ChevronRight
+    <CioForward
       size={11}
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
@@ -827,12 +826,12 @@
   {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
   <button
     type="button"
-    class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+    class="flex w-full items-center gap-1.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
     aria-expanded={!collapsed}
     title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
     onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
   >
-    <ChevronRight
+    <CioForward
       size={11}
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
@@ -860,7 +859,7 @@
       {item.provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
     </p>
   {:else if item.kind === 'unavailable-model'}
-    <div class="flex h-full items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
+    <div class="flex h-full items-center gap-2 px-2 py-1.5 text-dimmed">
       <span class="min-w-0 flex-1">
         <span class="block truncate text-xs">{item.favorite.modelId}</span>
         {#if item.favorite.providerId}
@@ -880,7 +879,7 @@
               item.favorite.harnessId ?? ''
             )}
         >
-          <X size={11} />
+          <CioClose size={11} />
         </button>
       {/if}
     </div>
@@ -903,7 +902,7 @@
             class="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-dimmed"
             aria-hidden="true"
           >
-            <GripVertical size={11} />
+            <CioGrip size={11} />
           </span>
         {/if}
         {@render modelRow(item.entry, item.key)}
@@ -931,7 +930,7 @@
   {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
   {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
   <button
-    class={`model-row-btn group/row ml-4 flex h-full w-[calc(100%-1rem)] flex-col justify-center rounded-lg px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    class={`model-row-btn group/row ml-4 flex h-full w-[calc(100%-1rem)] flex-col justify-center px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={unavailable
       ? unavailableHarnessTitle(entry.provider.harnessId)
       : `Use ${entry.model.name}`}
@@ -1006,7 +1005,7 @@
       </span>
       {#if peak}
         <span
-          class={`shrink-0 rounded-sm px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
+          class={`shrink-0 px-1 py-px text-[0.4375rem] font-semibold uppercase leading-none ${
             peak.state === 'peak'
               ? 'bg-amber-500/15 text-amber-500'
               : 'bg-green-500/15 text-green-500'
@@ -1019,7 +1018,7 @@
       {/if}
       <span class="ml-auto flex shrink-0 items-center gap-1 text-[0.5625rem] text-dimmed">
         {#if multiSelect && isSelectedModel(entry)}
-          <Check size={11} class="text-primary" aria-label="Selected" />
+          <CioCheck size={11} class="text-primary" aria-label="Selected" />
         {/if}
         {#if onToggleFavorite}
           <span
@@ -1038,7 +1037,7 @@
               }
             }}
           >
-            <Star
+            <CioStar
               size={11}
               class={favoriteModelsSet.has(key) ? 'fill-amber-400 text-amber-400' : ''}
             />
@@ -1048,7 +1047,7 @@
           <span
             role="button"
             tabindex="0"
-            class="shrink-0 cursor-pointer rounded-sm text-dimmed opacity-0 transition-colors group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-foreground"
+            class="shrink-0 cursor-pointer text-dimmed opacity-0 transition-colors group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-foreground"
             title="Remove from recently used"
             aria-label={`Remove ${entry.model.name} from recently used`}
             onclick={(event: MouseEvent) => {
@@ -1063,7 +1062,7 @@
               }
             }}
           >
-            <X size={11} />
+            <CioClose size={11} />
           </span>
         {/if}
       </span>

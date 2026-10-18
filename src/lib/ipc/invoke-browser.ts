@@ -266,6 +266,19 @@ export const invokeBrowserContract = {
    */
   'browser:warmOverlayWindow': {} as Contract<[warm: boolean], boolean>,
   /**
+   * Keep the shared overlay window loaded for the rest of the session.
+   *
+   * The app renderer sends this once, on the session's first gesture
+   * (`renderer/lib/overlay-host-warm.ts`): from then on the session draws modals
+   * into this window, and a document that only begins loading on the gesture that
+   * opens the first dialog leaves the app window painting nothing for it in the
+   * meantime. Unlike `browser:warmOverlayWindow` there is no release, because
+   * what it records is that the user is here, and giving that up puts the load
+   * back on the next open. Answers false when the window could not be created,
+   * which leaves that first dialog to the app window's own panel.
+   */
+  'browser:warmOverlayHostForSession': {} as Contract<[], boolean>,
+  /**
    * Everything on display in the overlay, asked for by the overlay document
    * itself once its listener is bound. First delivery is a pull here because a
    * push straight after `loadURL` loses the same race the permission popup
@@ -353,11 +366,23 @@ export const invokeBrowserContract = {
    */
   'browser:setSwitcherBindings': {} as Contract<[bindings: BrowserSwitcherBindings], void>,
   /**
-   * Every chord the app's own keymap answers, so a key pressed in a page can be
-   * claimed there and handed back to the renderer. A chord the browser answers
-   * itself is checked first and never appears here.
+   * Replace the app keymap chords a page may override.
+   *
+   * A key pressed in a page never reaches the renderer, so an app shortcut the
+   * page did not handle has to be recognised in main and replayed. This is every
+   * app-global chord the keymap answers, resolved per platform; main claims none
+   * of them itself, it only matches a chord the page reported as unhandled and
+   * hands it back.
    */
   'browser:setAppShortcutChords': {} as Contract<[chords: BrowserShortcutChord[]], void>,
+  /**
+   * Report whether a website may override the app's keymaps.
+   *
+   * On, main offers an overridable chord to the page first and only acts when the
+   * page leaves it unhandled. Off, main claims every app chord in the page and
+   * the app wins whether the page is focused or not.
+   */
+  'browser:setSiteKeymapOverride': {} as Contract<[allows: boolean], void>,
   /**
    * Report the address bar's active search engine. Main builds the browser's
    * native context menu and its "Search <engine> for ..." item, and holds no

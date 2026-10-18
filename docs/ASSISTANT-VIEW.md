@@ -1,53 +1,53 @@
 # Assistant View
 
 Assistant View is a top-level view alongside Projects and Chats. It holds
-**routines** and **tasks**, schedules agent runs, and hands task threads off to
+**assistants** and **tasks**, schedules agent runs, and hands task threads off to
 projects. This document is the contract for the assistant model, the scheduler,
-the missed-run surfaces, the how-to authoring flow, and fork hand-off.
+the missed-run surfaces, the knowledge authoring flow, and fork hand-off.
 
 ## Model
 
 ```mermaid
 flowchart LR
-  R["Routine (name, colour, icon, how-to, default schedule, connections)"] --> T1["Task A (own thread)"]
+  R["Assistant (name, colour, icon, knowledge, default schedule, connections)"] --> T1["Task A (own thread)"]
   R --> T2["Task B (own thread)"]
   T1 --> RA["Run (fresh thread)"]
   T1 --> RB["Run (fresh thread)"]
   T2 --> RC["Run (fresh thread)"]
-  F["Routine-less task (own thread)"] -.->|"grouped later"| R
+  F["Assistant-less task (own thread)"] -.->|"grouped later"| R
 ```
 
-- **Routine** is the group ("Triage CodeInOven PRs daily, 9am and 5pm"). It owns
-  the agent-authored how-to, a default schedule, and connection picks. Type:
-  `src/lib/types/routine.ts`; persisted in the `routines` table via
-  `src/main/database/repositories/routine-repo.ts` and managed by
-  `src/lib/engines/routine-manager.ts`.
+- **Assistant** is the group ("Triage CodeInOven PRs daily, 9am and 5pm"). It owns
+  the agent-authored knowledge, a default schedule, and connection picks. Type:
+  `src/lib/types/assistant.ts`; persisted in the `assistants` table via
+  `src/main/database/repositories/assistant-repo.ts` and managed by
+  `src/lib/engines/assistant-manager.ts`.
 - **Task** is a thread in the hidden assistant space container
   (`ASSISTANT_SPACE_ID`, `src/lib/types/project.ts`) with an optional
-  `routineId`. It is the user's own conversation about the task; a task may
-  exist without a routine. Assistant threads are excluded from Projects and
+  `assistantId`. It is the user's own conversation about the task; a task may
+  exist without an assistant. Assistant threads are excluded from Projects and
   Chats because the container is a hidden project, exactly like the inbox.
 - **Run** is one execution of a task, on its **own fresh thread**. Every
-  scheduled fire, missed-run **Run now**, and routine **Run now** creates one,
+  scheduled fire, missed-run **Run now**, and assistant **Run now** creates one,
   so a run never lands in the task's conversation and a run's transcript carries
   only that execution. A run thread is a thread like any other (it can be
   renamed, pinned, forked, noted, handed off, and deleted), it inherits its
-  task's `routineId` so the engine keeps composing the routine's how-to and run
+  task's `assistantId` so the engine keeps composing the assistant's knowledge and run
   contract into its system prompt, and it links back through
-  `Thread.assistantTaskId` (`isAssistantRunThread`). **Only a routine's Getting
+  `Thread.assistantTaskId` (`isAssistantRunThread`). **Only an assistant's Getting
   started thread hosts the getting-started run** the authoring conversation
   and no task's scheduled run ever executes on a task's own thread.
-- **Hierarchy is always Routine -> Task -> runs.** A run is never a task: it is
-  never scheduled, never counted in a routine's task count, and never grouped.
-  Each task may override its routine's schedule (`scheduleOverride`), and shows a
+- **Hierarchy is always Assistant -> Task -> runs.** A run is never a task: it is
+  never scheduled, never counted in an assistant's task count, and never grouped.
+  Each task may override its assistant's schedule (`scheduleOverride`), and shows a
   custom icon (`assistantIconType`) on its row.
 
 ### V1 pillars
 
-1. Core view + how-to panel (`src/renderer/lib/components/assistant/`).
+1. Core view + knowledge panel (`src/renderer/lib/components/assistant/`).
 2. Main-process scheduler with missed-run detection
-   (`src/main/scheduler/routine-scheduler-service.ts`).
-3. Agent-authored how-to flow (in-thread authoring, a recap the user confirms).
+   (`src/main/scheduler/assistant-scheduler-service.ts`).
+3. Agent-authored knowledge flow (in-thread authoring, a recap the user confirms).
 4. Fork hand-off to a project, from the task's own context menu
    (`assistant-handoff.svelte.ts`, `AssistantHandoffModals.svelte`).
 
@@ -57,11 +57,11 @@ Thread-per-run is implemented, not deferred: every run executes on a fresh
 thread (see **Model**). Still deferred: automatic catch-up of missed schedules,
 a standalone Task entity, a new `threadKind` flag, hand-off by move (not fork),
 and a permanent general assistant chat. The header's **New task** action creates
-a routine-less task instead, and creates it with no extra naming step.
+an assistant-less task instead, and creates it with no extra naming step.
 
 ### Workspace
 
-A routine behaves like a project, so its tasks run inside the routine's own
+An assistant behaves like a project, so its tasks run inside the assistant's own
 workspace instead of a shared scratch directory:
 
 - The assistant container itself is hidden with no path, like the inbox. When a
@@ -69,37 +69,37 @@ workspace instead of a shared scratch directory:
   (`src/main/chat/chat-engine.ts`) maps it to the app-storage root
   `assistant-cwd/`.
 - `resolveThreadPath` then scopes every assistant thread to
-  `assistant-cwd/<routineId>/`, so work in one routine can never touch another's
-  files. A routine-less task gets `assistant-cwd/<threadId>/`.
-- A **run thread inherits its task's `routineId`**, so every run of a routine
-  works in that same routine directory and its artifacts land with the routine's
+  `assistant-cwd/<assistantId>/`, so work in one assistant can never touch another's
+  files. An assistant-less task gets `assistant-cwd/<threadId>/`.
+- A **run thread inherits its task's `assistantId`**, so every run of an assistant
+  works in that same assistant directory and its artifacts land with the assistant's
   other work; the file tree mounted in the rail therefore reads the same root
   whether the user opens the task or one of its runs.
-- That routine directory is the session's working directory and its permission
+- That assistant directory is the session's working directory and its permission
   project root, so artifacts, generated images, and any files the agent writes
-  land under the routine. Assistant threads get no chat workspace scratch
+  land under the assistant. Assistant threads get no chat workspace scratch
   path, and `assistant-cwd` is registered as an app artifact root so the
   renderer can show those files.
 - The rail's **Workspace files** panel mounts the file tree on exactly that
   directory: `assistantThreadWorkspaceDirectory` (`src/lib/project-artifacts.ts`)
-  builds the same `assistant-cwd/<routineId ?? threadId>` path for both the
+  builds the same `assistant-cwd/<assistantId ?? threadId>` path for both the
   session and the file surfaces, and `ProjectFilesRootResolver`
   (`src/main/editor/project-files/project-files-roots.ts`) resolves it through
   the assistant mount built by `createThreadWorkspaceRoots`
   (`src/main/editor/project-files/thread-workspace-roots.ts`). Previews of those
   files are served from `appfile://thread/assistant/<threadId>/<path>`, so a
-  task only ever previews inside its own routine's workspace.
-- Because the tree's root **is** the routine's directory, the tree carries the
-  routine's identity instead of the hidden assistant space's:
-  `WorkspaceContextPanelContent.svelte` resolves the mounted thread's routine
-  and passes its name, its `getRoutineIcon` icon, and its accent colour to
-  `ProjectFilesPanel.svelte`. The explorer header draws the routine's icon (its
-  own, else the routine default mark) with the colour as an inset left edge, and
-  the editor's breadcrumb root button draws the same icon. A routine root shows
-  no name label: a routine's name is often a whole sentence, so the icon and
+  task only ever previews inside its own assistant's workspace.
+- Because the tree's root **is** the assistant's directory, the tree carries the
+  assistant's identity instead of the hidden assistant space's:
+  `WorkspaceContextPanelContent.svelte` resolves the mounted thread's assistant
+  and passes its name, its `getAssistantIcon` icon, and its accent colour to
+  `ProjectFilesPanel.svelte`. The explorer header draws the assistant's icon (its
+  own, else the assistant default mark) with the colour as an inset left edge, and
+  the editor's breadcrumb root button draws the same icon. An assistant root shows
+  no name label: an assistant's name is often a whole sentence, so the icon and
   accent carry the identity and the full name is the root icon's tooltip (and
   its image `alt`). A project and a chat root keep their name label, and a
-  routine-less task keeps the assistant space's own identity.
+  assistant-less task keeps the assistant space's own identity.
 - Directory constants live in `src/lib/project-artifacts.ts`
   (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
   `src/main/storage/storage-engine.ts`.
@@ -112,11 +112,11 @@ the engineering agent behavior:
 - **Its own prompt.** `assistant` is a first-class entry in the prompt catalog
   (`src/lib/cio-prompts.ts`, group **Assistant**, file `prompts/assistant.md`),
   so it is editable in Settings like every other mode. The shipped default tells
-  the assistant to treat the routine's how-to as its instruction set, to own the
+  the assistant to treat the assistant's knowledge as its instruction set, to own the
   outcome instead of pointing at a settings screen, to ask through the tools
   rather than prose, and to report what actually happened. Chat, Engineering,
   Assignment and Audit each already had their own prompt; assistant threads used
-  to borrow the generic work-ethics text while the routine's how-to carried the
+  to borrow the generic work-ethics text while the assistant's knowledge carried the
   entire instruction load.
 - **Only the skills discipline is shared.** `SKILLS_SECTION_BODY`
   (`src/lib/agent-behavior.ts`) holds the skill-survey rules, and the work-ethics
@@ -134,8 +134,8 @@ the engineering agent behavior:
   `attributionModeFor`.
 - **Its own workspace guard.** The assistant scope derives
   `WorkspaceScopeMode = 'assistant'`, which ships `assistantWorkspaceGuard`: the
-  harness boundary and the citation rule, with the routine's own
-  `assistant-cwd/<routineId>` workspace named as the workspace instead of a
+  harness boundary and the citation rule, with the assistant's own
+  `assistant-cwd/<assistantId>` workspace named as the workspace instead of a
   project the user never opened. It deliberately does not reuse
   `abbreviatedWorkspaceGuard`, whose text would call that directory "the user's
   project". An assistant turn keeps the mermaid and question instructions
@@ -143,8 +143,8 @@ the engineering agent behavior:
   about its system prompt changed.
 - **Its own lean harness agent.** `cio-assistant`
   (`src/main/opencode/opencode-agent-definitions.ts`, mode `assistant`) is the
-  opencode agent a routine run selects through `leanAgentNameForMode('assistant')`
-  in `sendPrompt`. It keeps the workspace tools inside the routine directory
+  opencode agent an assistant run selects through `leanAgentNameForMode('assistant')`
+  in `sendPrompt`. It keeps the workspace tools inside the assistant directory
   (`read`/`edit`/`glob`/`grep`/`list`/`bash`), the web (`webfetch`/`websearch`),
   the shared skills (`skill`), todos, and the question tool, and denies the rest;
   delegating to a sub-agent stays off the table. The app's permission policy, not
@@ -160,23 +160,23 @@ the engineering agent behavior:
   the project (harness, account, provider, model), never its File System mode or
   permission level: a task stays pinned to auto review until File System is
   turned on for the assistant itself, exactly like a chat. Changing a model in a
-  task commits to the assistant store, so a routine task never reshapes the
+  task commits to the assistant store, so an assistant task never reshapes the
   model a chat or a project thread starts on. The model pickers in a task and in
-  a routine's **Agents** tab read the assistant's own favorites and recently
+  an assistant's **Agents** tab read the assistant's own favorites and recently
   used models (`assistantFavoriteModels` / `assistantRecentModels` in
   `src/renderer/lib/stores/renderer-recovery.svelte.ts`).
 
 ## Scheduler contract
 
-`RoutineSchedulerService` (`src/main/scheduler/routine-scheduler-service.ts`) is
+`AssistantSchedulerService` (`src/main/scheduler/assistant-scheduler-service.ts`) is
 the app's clock for Assistant View.
 
 - **App-open-only firing.** A bounded 30s tick evaluates each scheduled task.
   A slot that comes due while the app is open creates a **fresh run thread**
   linked to its task (`ChatEngine.createAssistantRunThread`) and dispatches one
-  run on it, using the task's bound settings with the routine's primary model
+  run on it, using the task's bound settings with the assistant's primary model
   overlaid (`sendPrompt` with `origin: 'internal'`). The run thread inherits the
-  task's `routineId`, so the engine composes the routine how-to and the run
+  task's `assistantId`, so the engine composes the assistant knowledge and the run
   contract into its system prompt exactly as it does for the task. The tick also
   runs with no window at all in background mode (see **Background mode**), so "the
   app is open" now means "the backend is running", not "a window is visible".
@@ -197,15 +197,15 @@ the app's clock for Assistant View.
   directly shows the same card in place of its composer, exactly as any other
   thread does.
 - **A run is named for what it runs.** The run's visible prompt is built by
-  `routineRunPrompt` (`src/lib/routine-run.ts`). A user's own task is named by
-  its title, but a routine's Getting started thread is its authoring host, not
-  a job: a run of it is named for the routine instead. Naming it "Getting
-  started" made a completed routine's run read (and get answered by the agent)
+  `assistantRunPrompt` (`src/lib/assistant-run.ts`). A user's own task is named by
+  its title, but an assistant's Getting started thread is its authoring host, not
+  a job: a run of it is named for the assistant instead. Naming it "Getting
+  started" made a completed assistant's run read (and get answered by the agent)
   as another getting-started pass.
-- **Paused routines never fire.** `Routine.paused` is checked before the
-  schedule is even read (`RoutineManager.isTaskPaused`), so pausing a routine
-  stops every task in it while keeping the tasks, their how-to, and their
-  history. Resume from the panel's **All** tab. A routine-less task is never
+- **Paused assistants never fire.** `Assistant.paused` is checked before the
+  schedule is even read (`AssistantManager.isTaskPaused`), so pausing an assistant
+  stops every task in it while keeping the tasks, their knowledge, and their
+  history. Resume from the panel's **All** tab. An assistant-less task is never
   paused.
 - **Catch-up is opt-in and bounded.** A slot that came due while the app was
   closed (or a machine slept through it) is recorded as a missed run. By default
@@ -221,11 +221,11 @@ the app's clock for Assistant View.
   surfaces state it instead of always claiming the app was closed.
 - **A slot before the schedule existed is never due.** The scheduler floors a
   due slot at the later of the task's last fire and the moment its schedule
-  became active (`Routine.scheduleUpdatedAt`, stamped when the schedule changes
-  and when a routine first becomes runnable, since the authoring flow saves the
-  how-to and the schedule together). A routine created in the afternoon can
-  never badge a morning slot as missed, and a half-configured routine with no
-  how-to is not evaluated at all. Persisted misses that predate the schedule
+  became active (`Assistant.scheduleUpdatedAt`, stamped when the schedule changes
+  and when an assistant first becomes runnable, since the authoring flow saves the
+  knowledge and the schedule together). An assistant created in the afternoon can
+  never badge a morning slot as missed, and a half-configured assistant with no
+  knowledge is not evaluated at all. Persisted misses that predate the schedule
   (or whose task is gone) are dropped on load (`pruneStaleMisses`), so a record
   written before this rule existed cannot keep badging.
 - **Missed-run persistence.** `MissedRunStore`
@@ -241,8 +241,8 @@ the app's clock for Assistant View.
   snapshot of the run, so deleting the run thread later cannot erase the fact
   that it happened. A user's own "Run now" is deliberately not recorded. The
   ledger feeds the **While you were away** section of the notification panel's
-  Assistants tab and the **Run history** section of a routine's (or task's)
-  how-to panel.
+  Assistants tab and the **Run history** section of an assistant's (or task's)
+  knowledge panel.
 - **Dismiss vs Run Now.** `assistant:dismissMissedRun` acknowledges a record
   without running it; `assistant:runMissedRunNow` creates a fresh run thread,
   dispatches the run on it, settles the record on success, and returns the run so
@@ -253,7 +253,7 @@ the app's clock for Assistant View.
 ## Background mode (menu bar)
 
 Background mode keeps the backend running after the window is closed or after
-Cmd+Q so a routine still fires on time. It is on by default
+Cmd+Q so an assistant still fires on time. It is on by default
 (`backgroundMode: 'scheduled'`) and can be turned off in **General → Threads**.
 
 - **Closed means closed.** Parking destroys the window and its renderer process;
@@ -263,7 +263,7 @@ Cmd+Q so a routine still fires on time. It is on by default
   launch in background mode boots with no splash and no window at all.
 - **One backend, one main instance.** Every process attaches to the same config
   root, and exactly one of them owns the scheduled work
-  (`instanceRegistry.isIncumbentInstance()`); the routine, retry, and heartbeat
+  (`instanceRegistry.isIncumbentInstance()`); the assistant, retry, and heartbeat
   schedulers are all gated on it. The main instance is an explicit, durable
   choice: **Make this the main instance** designates an app, and that app owns
   the schedule whenever it is running, even if another process started earlier,
@@ -356,31 +356,31 @@ for assistant scheduled runs. `StatusBadge.svelte` resolves it automatically.
 
 ## Missed-run surfaces
 
-Missed runs are surfaced **per routine**: a routine's surfaces list every miss
-across its tasks, and a routine-less task lists only its own. Nothing appears
+Missed runs are surfaced **per assistant**: an assistant's surfaces list every miss
+across its tasks, and an assistant-less task lists only its own. Nothing appears
 until a run has actually been missed, so no tab or filter chrome exists by
 default:
 
 - the **Issues** tab of the assistant panel, present only when the panel's
-  routine (or task) has a miss or a run problem;
-- the **missed badge** on the routine row (when any child task has a miss) and on
+  assistant (or task) has a miss or a run problem;
+- the **missed badge** on the assistant row (when any child task has a miss) and on
   the specific missed task row;
 - the **Missed Runs section** of the notification panel (`Assistants` tab),
-  grouped per routine, with per-entry **Dismiss** and **Run now** actions. The
+  grouped per assistant, with per-entry **Dismiss** and **Run now** actions. The
   Assistants tab exposes no sub-filter buttons; with nothing to show it renders
   only a neutral empty state. Each entry states why the fire was not run
   (`missedRunReasonText` in `assistant-view.ts`), so the copy never claims the
   app was closed when the machine simply slept through the window. An entry's
-  title names the task or routine through `assistantSubjectName`, so a run of a
-  routine's Getting started host reads as the routine, never as "Getting
+  title names the task or assistant through `assistantSubjectName`, so a run of a
+  assistant's Getting started host reads as the assistant, never as "Getting
   started";
 - the **While you were away** section of the same Assistants tab, which lists the
   recent unattended runs straight from the ledger (outcome, why it ran, when it
   settled, any persisted failure, and how many gates it answered for you), with a
   per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that removes the
-  durable ledger entry, and a routine profile's **Run history** list in the
-  how-to panel. A run whose thread was later deleted still shows, as
-  non-clickable evidence. These rows name the task or routine the same way, so
+  durable ledger entry, and an assistant profile's **Run history** list in the
+  knowledge panel. A run whose thread was later deleted still shows, as
+  non-clickable evidence. These rows name the task or assistant the same way, so
   the section never falls back to the authoring host's fixed title. Dismissing a
   run is the user acknowledging evidence they no longer need: the row leaves
   every surface and does not return on the next launch.
@@ -420,21 +420,21 @@ main process tags a run thread's notification with `source: 'assistant'`
 the panel routes it to the Assistants tab instead of Projects and the card names
 its own status (done, needs attention, spec ready, error).
 
-A completed run of a **routine** names the report rather than the space: the
-notification's title is the task or routine's own name, so the entry says what
+A completed run of a **assistant** names the report rather than the space: the
+notification's title is the task or assistant's own name, so the entry says what
 finished and whose it is instead of a bare **Assistant Done**. Every assistant
 notice resolves the same subject through `assistantSubjectName`
 (`src/main/notifications/notification-service.ts`): a run names the task it ran,
-a task names itself, and a routine's Getting started authoring host names its
-routine rather than its fixed title. The same rule is what turns a failure into
+a task names itself, and an assistant's Getting started authoring host names its
+assistant rather than its fixed title. The same rule is what turns a failure into
 **Slack digest hit an error** instead of the generic **Assistant hit an error**,
 and the renderer's thread-state hydration
 (`notification-panel.svelte.ts`) resolves the identical subject, so a failure
 surfaced on the next launch reads the same as the live one. The name is resolved
-from the run's `assistantTaskId`/`routineId` (`getViaWorker`), read on the worker
+from the run's `assistantTaskId`/`assistantId` (`getViaWorker`), read on the worker
 so naming a notification never holds the main thread. A completed authoring turn
 keeps the generic assistant copy; a failure or parked card there names the
-routine, because "Assistant hit an error" says nothing about what failed.
+assistant, because "Assistant hit an error" says nothing about what failed.
 
 The assistant is a surface with its own accent colour, the colour stored on the
 hidden assistant space project (the payload's `projectColor`, `#ec4899` by
@@ -477,82 +477,90 @@ therefore reads as assistant, a chat entry as chat, and a project entry as its
 kind, exactly like the project-colour dot beside a project entry's name.
 
 The renderer learns the accent colour two ways: each notification payload
-carries it, and `assistantRoutines.spaceColor`
-(`src/renderer/lib/stores/assistant-routines.svelte.ts`) holds it from
-`routine:ensureSpace`, so the bell can badge a missed run before any notice has
-arrived. The renderer state is fed by the `routine:changed` and
+carries it, and `assistants.spaceColor`
+(`src/renderer/lib/stores/assistants.svelte.ts`) holds it from
+`assistant:ensureSpace`, so the bell can badge a missed run before any notice has
+arrived. The renderer state is fed by the `assistant:changed` and
 `assistant:missedRunsChanged` events. The **toast** for a completed run brands
 itself with the same accent colour (via `--status`) instead of the generic
 success green, mirroring how a chat response toast uses its own colour.
 
 ## Assistant sidebar
 
-The left sidebar shows only routines, their tasks, and each task's runs, with no
+The left sidebar shows only assistants, their tasks, and each task's runs, with no
 title header and no composer. Everything the view offers lives on the app header,
 registered by the workspace through `viewActions`. The header itself wears the
-selected thread's routine icon (`getRoutineIcon`, falling back to
-`RoutineDefaultIcon`), exactly as the sidebar row does, so an open assistant
-thread names its routine at a glance instead of showing no mark at all.
+selected thread's assistant icon (`getAssistantIcon`, falling back to
+`AssistantDefaultIcon`), exactly as the sidebar row does, so an open assistant
+thread names its assistant at a glance instead of showing no mark at all.
 
-- **Search** (`AssistantSearchControl.svelte`) filters routines, tasks, and runs.
+- **Search** (`AssistantSearchControl.svelte`) filters assistants, tasks, and runs.
   Runs get their own result section, since a run is a row on the sidebar too.
-- **New routine** (`RoutineCreateControl.svelte`) asks only for a title and an
-  optional **description** (a note for the user; it is never sent to the agent),
-  then immediately seeds the **Getting started** thread, exactly as adding a
-  project opens a first thread, and opens the routine panel. No model is
-  requested: the primary is the model the user is already working on.
-- **New task** creates a task, and is routine-aware: when the user is inside a
-  routine (the selected task belongs to one, or its how-to panel is docked) the
-  task is created inside that routine; otherwise it is routine-less.
+- **New assistant** (`AssistantCreateControl.svelte`) asks for the assistant's name
+  and, optionally, how it should behave and what its clock is called. Cancel sits at
+  the bottom left; the two ways forward sit on the right. **Create assistant** stores
+  the assistant and seeds the **Getting started** thread, exactly as adding a project
+  opens a first thread. **Create via chat** stores an assistant with nothing known
+  about it and posts the app-owned opening turn (`assistant:startChatSetup`), so the
+  assistant asks the user its questions itself: the turn's visible half is one line
+  ("Creating a new assistant via chat") and the instruction the model receives is
+  hidden, exactly like the saved-assistant next-steps turn. That turn carries the
+  `user` origin, which is what attaches the authoring contract to it; an internal
+  turn would reach the model with the opening line and no contract at all. No model
+  is requested on either path: the primary is the model the user is already working
+  on.
+- **New task** creates a task, and is assistant-aware: when the user is inside a
+  assistant (the selected task belongs to one, or its knowledge panel is docked) the
+  task is created inside that assistant; otherwise it is assistant-less.
 
 Keyboard shortcuts mirror the header actions and are scoped to the Assistant
 view, so they never steal the chords from Projects or Chats:
 
-- **Cmd/Ctrl+N** — new task (inside the routine the user is currently in, else
-  routine-less).
-- **Cmd/Ctrl+Shift+N** — new routine, always.
+- **Cmd/Ctrl+N** — new task (inside the assistant the user is currently in, else
+  assistant-less).
+- **Cmd/Ctrl+Shift+N** — new assistant, always.
 
 Both signals travel through `workspaceState.requestAssistantTask()` and
-`requestAssistantRoutine()` and are consumed by the workspace, which owns the
-routine-aware creation logic.
+`requestAssistant()` and are consumed by the workspace, which owns the
+assistant-aware creation logic.
 
-Routine rows (`AssistantRoutineRow.svelte`) follow the project folder row: the
-icon swaps to a chevron on hover, and hover reveals a search-in-routine control,
+Assistant rows (`AssistantRow.svelte`) follow the project folder row: the
+icon swaps to a chevron on hover, and hover reveals a search-in-assistant control,
 a new-task button, and an ellipsis menu (also opened by right-clicking the row)
-with How to, Edit routine, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
-task dragged onto a routine is grouped into it. A routine's row folds and opens
+with How to, Edit assistant, Pin/Unpin, and Remove. Rows are draggable to reorder, and a
+task dragged onto an assistant is grouped into it. An assistant's row folds and opens
 exactly like a project folder: it starts open while it holds the selected thread
-(that routine's task, a run nested under the task, or a run lifted to the
-routine's own level) and while its own inline task search is open, and a fold or
+(that assistant's task, a run nested under the task, or a run lifted to the
+assistant's own level) and while its own inline task search is open, and a fold or
 open the user performs by hand is the decision that wins from then on, so the
-routine holding the active thread can be folded like any other. The order those
-rows sit in is the user's own: pinned routines lead, then the arrangement a drag
+assistant holding the active thread can be folded like any other. The order those
+rows sit in is the user's own: pinned assistants lead, then the arrangement a drag
 leaves behind, then
-creation with the newest routine on top, so writing a routine's how-to (or any
-other edit) never reshuffles the list. `src/lib/routine-order.ts` holds that one
-comparator, and both the main process's routine list and this sidebar sort
-through it. Hovering a routine reveals a
-popover with its status, schedule type, next run, task count, a how-to preview,
-and when it was created and last updated (`AssistantRoutineHoverPopover.svelte`).
-**Remove** deletes the routine
+creation with the newest assistant on top, so writing an assistant's knowledge (or any
+other edit) never reshuffles the list. `src/lib/assistant-order.ts` holds that one
+comparator, and both the main process's assistant list and this sidebar sort
+through it. Hovering an assistant reveals a
+popover with its status, schedule type, next run, task count, a knowledge preview,
+and when it was created and last updated (`AssistantHoverPopover.svelte`).
+**Remove** deletes the assistant
 and every thread it owns, the hidden getting-started thread included, through the
-same thread-deletion path a plain thread delete uses (`RoutineManager` is handed
-the canonical thread deleter by `src/main/ipc/ipc-handlers.ts`), so a routine
-never leaves orphaned tasks or a how-to thread behind.
+same thread-deletion path a plain thread delete uses (`AssistantManager` is handed
+the canonical thread deleter by `src/main/ipc/ipc-handlers.ts`), so an assistant
+never leaves orphaned tasks or a knowledge thread behind.
 
-Routines are editable exactly like projects: **Edit routine**
-(`RoutineEditModal.svelte`) opens the shared `AppearancePicker` for the accent
+Assistants are editable exactly like projects: **Edit assistant**
+(`AssistantEditModal.svelte`) opens the shared `AppearancePicker` for the accent
 colour and SVG icon, an **Upload Image** action for a custom icon, and the
-routine name. Custom icons are stored under `routines/<routine-id>/` through the
+assistant name. Custom icons are stored under `assistants/<assistant-id>/` through the
 shared `src/lib/icon-file.ts` helpers (the same ones project icons use), served
-back by `routine:getIcon`, and cached on `assistantRoutines.iconUrls`. One
-resolver, `getRoutineIcon` (`src/renderer/lib/routine-icons.ts`), is the single
+back by `assistant:getIcon`, and cached on `assistants.iconUrls`. One
+resolver, `getAssistantIcon` (`src/renderer/lib/assistant-icons.ts`), is the single
 rule every surface reads: custom image, then SVG icon type tinted with the
-routine's accent colour (`routineAccentColor`), then `RoutineDefaultIcon`, the
-routine default mark that same module owns, so a routine always has an icon and
-never falls back to a name. An edited routine icon and colour therefore read
-identically in the sidebar row, the routine search results, and the file tree
-mounted on the routine's workspace; the accent colour stays as the row's left
+assistant's accent colour (`assistantAccentColor`), then `AssistantDefaultIcon`, the
+assistant default mark that same module owns, so an assistant always has an icon and
+never falls back to a name. An edited assistant icon and colour therefore read
+identically in the sidebar row, the assistant search results, and the file tree
+mounted on the assistant's workspace; the accent colour stays as the row's left
 border.
 
 Task rows (`AssistantTaskRow.svelte`) behave exactly like thread rows. Hovering
@@ -561,26 +569,26 @@ whose menu is the shared `createThreadActionsMenu`: Rename, Pin/Unpin, Fork,
 Notes, Copy thread id, and Delete. Right-clicking the row opens the same menu,
 a long press opens it on touch, and hovering shows the regular
 `ThreadHoverPopover` (with the hidden assistant container's project rows
-suppressed via `hideProject`). A new task is created already inside its routine
-(`routineId` travels through `thread:create`), so the creation broadcast can
-never leave it stranded outside the routine.
+suppressed via `hideProject`). A new task is created already inside its assistant
+(`assistantId` travels through `thread:create`), so the creation broadcast can
+never leave it stranded outside the assistant.
 
-**A task's runs render nested under it.** `Workspace.svelte` groups every run
-thread by its `assistantTaskId` (`groupRunsByTask`) and passes it to the sidebar,
-which renders the runs indented under the task row with the same
-`AssistantTaskRow` in its `run` variant (a run mark instead of the task clock,
-and its own last-activity line instead of the task's schedule). The list is
-bounded: only the newest `TASK_RUN_PREVIEW` runs show until the user picks
-**Show all N runs** (`previewRuns`), so a routine that has run for months cannot
-turn the sidebar into a log. The toggle is a plain row under the runs, never a
-control nested inside a row's button. A task row also pulses while any of its
-runs is working (`runWorking`), because the run, not the task, is what is
-executing, and the routine row aggregates the same signal. Missed badges stay on
-the task (and its routine): a miss is a property of the schedule, not of one
-execution. A run lifted to its routine's own level (`routineSiblingRuns`) names
-the task it ran on its own line (`contextLabel`), because it has no parent row
-above it to say which task it belongs to, and a row that is actually working
-reads **Running now** instead of a stale schedule time.
+**A run never nests under a task; it renders at the assistant's own level.**
+`Workspace.svelte` groups every run thread by its `assistantTaskId`
+(`groupRunsByTask`) and by its `assistantId` (`groupRunsByAssistant`) too. The
+sidebar lifts each task's runs out to sit beside its task rows, at the same
+level, through `assistantSiblingRuns`, and draws them with the same `AssistantTaskRow` in its `run` variant (a run mark instead of the
+task clock, and its own last-activity line instead of the task's schedule). A
+lifted run names the task it ran on its own line (`contextLabel`), because it
+has no parent row above it to say which task it belongs to. The list is bounded:
+only the newest `TASK_RUN_PREVIEW` runs show until the user picks **Show all N
+runs** (`previewRuns`), so an assistant that has run for months cannot turn the
+sidebar into a log. The toggle is a plain row under the runs, never a control
+nested inside a row's button. A task row pulses while any of its runs is working
+(`runWorking`), because the run, not the task, is what is executing, and the
+assistant row aggregates the same signal. Missed badges stay on the task (and its
+assistant): a miss is a property of the schedule, not of one execution, and a row
+that is actually working reads **Running now** instead of a stale schedule time.
 
 Selecting a run from a notification follows the same focus-follow rule as every
 other thread: the workspace fetches and adds the run's parent task when it falls
@@ -599,45 +607,45 @@ only while work is actually being produced. A parked run is never blue: its
 session stays bound and reports `waiting` for as long as the card is open, so
 the parked status is the authority until the user answers it.
 
-**A routine's Getting started runs leave that row once the routine is set up.**
-While the routine is still authoring (its how-to unsaved) its runs stay nested
-inside the Getting started thread, since they are still about setting the
-routine up. Once `routineHowToComplete` holds, `Workspace.svelte` also groups
-every run by its `routineId` (`groupRunsByRoutine`) and the sidebar lifts the
-seed thread's runs out to sit beside its task rows, at the same level, through
-`routineSiblingRuns`. A run whose task is no longer on screen (the Getting
-started thread was hidden) rises to the routine too, so hiding the seed only
-hides that row and never the runs it produced. A run whose task renders
-elsewhere (a pinned task that left for the Pinned section) keeps nesting under
-that row.
+**An assistant's Getting started thread nests its runs only while it is being set
+up.** The seed thread is the one row that indents, and only while the assistant is
+still authoring (its knowledge unsaved): its runs are the failed startup passes that
+set the assistant up, so they stay nested inside it. Once `assistantKnowledgeComplete`
+holds, `assistantSiblingRuns` lifts the seed's runs out to sit beside its task
+rows like every other task's, and the row stops nesting. A run whose
+task is no longer on screen (the Getting started thread was hidden) rises to the
+assistant too, so hiding the seed only hides that row and never the runs it
+produced. A run whose task renders elsewhere (a pinned task that left for the
+Pinned section, or an assistant-less task in the Pinned or Tasks section) keeps
+nesting under that row, since there is no assistant row to lift it to.
 
-Pinned tasks lead the sidebar **above** the routines, in one shared **Pinned**
+Pinned tasks lead the sidebar **above** the assistants, in one shared **Pinned**
 section rendered by the same `PinnedSection.svelte` the project sidebar uses.
 The section is the thread sidebar's, not a copy of it: `PinnedSection` takes an
 optional `row` snippet, so the assistant supplies its own `AssistantTaskRow`
 while the header, the persisted fold state (`pinnedFold`, keyed `assistant`),
 the divider, and the row list stay one implementation. A pinned task leaves its
-routine's nested list and the Tasks list, so it appears exactly once, and its
-row carries the pin indicator next to the title. The routine row's task count
-still counts it, and a routine whose every task is pinned says so in place of an
-empty list. The one exception is a routine's **how-to thread**: it is pinned for
-life so it is never evicted, but it belongs to its routine and renders nested
+assistant's nested list and the Tasks list, so it appears exactly once, and its
+row carries the pin indicator next to the title. The assistant row's task count
+still counts it, and an assistant whose every task is pinned says so in place of an
+empty list. The one exception is an assistant's **knowledge thread**: it is pinned for
+life so it is never evicted, but it belongs to its assistant and renders nested
 there, so it never rises into the Pinned section. Assistant tasks are excluded
 from the Projects sidebar's pinned section and from the Threads timeline, so a
-pinned assistant thread (every routine's how-to thread) is only ever a row in
+pinned assistant thread (every assistant's knowledge thread) is only ever a row in
 Assistant View, never a Projects row.
 
 Task rows carry no generic assistant robot. The icon slot resolves a custom
-`assistantIconType` image first, then the **Hammer** for a routine's how-to
+`assistantIconType` image first, then the **Hammer** for an assistant's knowledge
 ("Getting started") thread, then the **RotateCcw** run mark for one execution of
 a task (`assistantTaskId`), then the plain task clock (`Clock1`). The task row's
 fallback is the same `Clock1` the header's **New task** action and the search
-results use, and the Hammer is the single how-to mark everywhere it appears: the
-row, the rail's **How to** item, the routine row's **How to** menu item, the
-`assistant-how-to` sidebar tab, and the panel's Show/Hide action.
+results use, and the Hammer is the single knowledge mark everywhere it appears: the
+row, the rail's **How to** item, the assistant row's **How to** menu item, the
+`assistant-knowledge` sidebar tab, and the panel's Show/Hide action.
 
-The how-to panel opens in the right context sidebar from the rail's **How to**
-toggle or a routine's **How to** menu item. An assistant thread's rail carries
+The knowledge panel opens in the right context sidebar from the rail's **How to**
+toggle or an assistant's **How to** menu item. An assistant thread's rail carries
 the conversation tools only: **History**, **How to**, **Workspace files**
 (mounted on the task's own workspace directory), **Sources** and **Memory**, plus
 **Debugger** in development builds. It never carries terminal, actions, changes
@@ -646,7 +654,7 @@ or cloud tools.
 Memory is scoped by **audience**, never by one flat scope word. An entry
 carries a scope set that either names audiences (**Projects**, **Chats**,
 **Assistants**, with an empty set meaning every audience) or pins itself to
-exactly one place (`project`, `thread`, `routine`, `task`). The scope control is
+exactly one place (`project`, `thread`, `assistant`, `task`). The scope control is
 a multi-select that mirrors the projects picker: an **All audiences** row plus
 one toggle per scope (`MemoryScopeSelect.svelte`), and the set is stored as
 `scopes:` metadata on the entry in its own memory file. `memory-scopes.ts`
@@ -657,89 +665,130 @@ Where an entry lives follows from its set: audience-level entries live in their
 audience's own file (the root memory file for the projects audience or a mix of
 audiences, the inbox file for chats, the assistant container's file for
 assistants), a `project`/`thread` entry lives in that project's or thread's
-file, a `routine` entry lives in the assistant container's file keyed by
-`routineId`, and a `task` entry lives in that task's thread file.
+file, a `assistant` entry lives in the assistant container's file keyed by
+`assistantId`, and a `task` entry lives in that task's thread file.
 
 Memory on an assistant task uses the `sidebar-assistant` surface
 (`src/renderer/lib/components/memory/memory-routing.ts`), which pins the project
 to the hidden assistant container instead of a pickable project and offers the
 assistant's three scopes: **Assistant** (the assistant container's own file,
-which reaches every task), **Routine** (this task's routine, whose entries live
-in that same file keyed by `routineId`) and **Task** (this task's own thread
+which reaches every task), **Assistant** (this task's assistant, whose entries live
+in that same file keyed by `assistantId`) and **Task** (this task's own thread
 file). The panel shows an entry only when its scope set applies to assistants,
 which is exactly what the engine loads: `MemoryService.current`
-(`src/main/chat/memory-service.ts`) resolves the task's `routineId` from the
-thread record and filters the container file by it, so one routine can never
-receive another routine's memory, and a project-only or chat-only entry never
+(`src/main/chat/memory-service.ts`) resolves the task's `assistantId` from the
+thread record and filters the container file by it, so one assistant can never
+receive another assistant's memory, and a project-only or chat-only entry never
 reaches an assistant task.
 
 ## Scheduled and on-demand
 
-A routine is scheduled by default and can be turned off, so an assistant can be
-a chat with connectors instead of a job on a clock. The flag is `Routine.scheduled`
-(absent means on, so every routine that predates it keeps firing) and it is set
-on create (`RoutineCreateControl.svelte`, a **Run on a schedule** switch that
-starts on) and on edit (`RoutineEditModal.svelte`). Turning it off clears the
-routine's schedule outright, so nothing downstream can fire a slot it no longer
-has; turning it back on leaves the routine re-authored rather than silently
-restoring a cadence the user may have forgotten. `routineIsScheduled`
-(`src/lib/types/routine.ts`) is the single rule every surface reads.
+An assistant is scheduled by default and can be turned off, so an assistant can be
+a chat with connectors instead of a job on a clock. The flag is `Assistant.scheduled`
+(absent means on, so every assistant that predates it keeps firing) and it is set
+on create (`AssistantCreateControl.svelte`, a **Run on a schedule** switch that
+starts on) and on edit (`AssistantEditModal.svelte`). Turning it off clears the
+assistant's schedule outright, so nothing downstream can fire a slot it no longer
+has; turning it back on leaves the assistant re-authored rather than silently
+restoring a cadence the user may have forgotten. `assistantIsScheduled`
+(`src/lib/types/assistant.ts`) is the single rule every surface reads.
 
 What the flag changes:
 
 - **The authoring interview never asks for a schedule.** The chat engine passes
-  the flag into `routineAuthoringContext` (`src/lib/routine-authoring.ts`), which
-  replaces the cadence ask with an instruction that the routine is on demand, tells
+  the flag into `assistantAuthoringContext` (`src/lib/assistant-authoring.ts`), which
+  replaces the cadence ask with an instruction that the assistant is on demand, tells
   the agent to leave `schedule` out of the plan (or set it to null), and drops the
   schedule from the checkpoint, the recap and the confirm wording.
-  `routineHowToUpdateContext` does the same on a later tweak turn, and the plan
+  `assistantKnowledgeUpdateContext` does the same on a later tweak turn, and the plan
   schema now allows a null schedule.
-- **The scheduler never fires it.** `RoutineManager.resolveTaskSchedule` returns
-  null for a task of an unscheduled routine, so `evaluateTask`, `nextDueAt`,
+- **The scheduler never fires it.** `AssistantManager.resolveTaskSchedule` returns
+  null for a task of an unscheduled assistant, so `evaluateTask`, `nextDueAt`,
   `pruneStaleMisses` and the skip helpers all see nothing to fire, exactly as they
-  already did for a routine with no cadence.
-- **Every surface says so.** A routine row, its hover popover, the panel's All
-  and Routine tabs, the search results and the recap card all read the flag: a row
+  already did for an assistant with no cadence.
+- **Every surface says so.** An assistant row, its hover popover, the panel's All
+  and Assistant tabs, the search results and the recap card all read the flag: a row
   wears a small **Scheduled** / **Unscheduled** badge, and the schedule line reads
   **Runs on demand** instead of a cadence. The **Skip next run** menu items are
-  hidden for an on-demand routine, because it has nothing to skip.
+  hidden for an on-demand assistant, because it has nothing to skip.
 
 ### Scheduling is per function
 
-A routine can hold several functions (its tasks), and each one can be scheduled
-independently. `Thread.scheduled` is a task's own override of its routine's
-flag: `true` schedules it even under an on-demand routine, `false` keeps it off
-the clock even under a scheduled one, and absent follows the routine. This is
+An assistant can hold several functions (its tasks), and each one can be scheduled
+independently. `Thread.scheduled` is a task's own override of its assistant's
+flag: `true` schedules it even under an on-demand assistant, `false` keeps it off
+the clock even under a scheduled one, and absent follows the assistant. This is
 what lets one function fire on the cadence while another the user only drives by
-hand. `RoutineManager.resolveTaskScheduled` owns the rule, and the renderer
+hand. `AssistantManager.resolveTaskScheduled` owns the rule, and the renderer
 store's `taskScheduled` mirrors it so the sidebar and the scheduler never
 disagree.
 
 A task row shows the state on its line (**On demand** when off) and reveals a
 calendar toggle on hover (`AssistantTaskRow.svelte`); the toggle calls
 `assistant:setTaskScheduled`, which persists the flag and broadcasts the fresh
-row. Turning a function off never touches its routine's schedule, and turning an
-on-demand routine's function on reuses the routine's saved cadence when it has
+row. Turning a function off never touches its assistant's schedule, and turning an
+on-demand assistant's function on reuses the assistant's saved cadence when it has
 one.
 
-## How-to authoring
+**A task the user creates starts on demand.** Creating a thread inside an assistant
+stores `scheduled: false` on it (`Workspace.svelte` `createThreadInProject`,
+carried through `thread:create` and validated in
+`src/main/ipc/validation/threads.ts`), so a thread the user opens to work with
+the assistant never quietly becomes a recurring job of the assistant. The
+assistant's seed **Getting started** thread is the exception: it carries the
+assistant's own clock, so the assistant still has a scheduled job the moment it is
+created. The user switches a function on from its row, or the agent schedules it
+in the knowledge.
 
-Every routine has a required how-to. The UI **never** uses the term "system
-prompt"; the user-facing term is how-to.
+## Knowledge authoring
 
-- A routine shows an amber **Incomplete** icon (`AlertTriangle`,
+Every assistant has a required knowledge. The UI **never** uses the term "system
+prompt"; the user-facing term is knowledge.
+
+### The setup conversation
+
+The authoring contract (`assistantAuthoringContext`, `src/lib/assistant-authoring.ts`)
+walks the interview in one order, one question at a time, and the same order holds
+whether the assistant came from the form or from the chat path:
+
+1. the name the user gives it (`name`),
+2. how they want it to behave, in their own words (`personality`),
+3. the activities they want it to take on,
+4. whether it runs on a clock, and, when it does, what they call that clock
+   (`scheduled`, `scheduleName`) and the cadence and times (`schedule`),
+5. everything it needs to run: the services, the accounts, the tools.
+
+Every answer is reflected back in one short line before the next question, and the
+app-owned checkpoint is saved at the same time, so the user can see that they and
+the assistant are on the same page. The contract asks through the question tool
+whenever the answer is a choice or a short phrase, because that is where the user
+can answer by voice and where the answer is recorded as a resolved decision.
+
+When the work the user asked for is technical, medical, legal or otherwise
+specialist, the contract asks once whether they want to be spoken to in that
+language, and records the answer so every later run keeps to it.
+
+The answers that are not prose travel in the plan block's identity fields
+(`name`, `personality`, `scheduled`, `scheduleName`), validated by
+`parseAssistantPlanValue` (`src/lib/assistant-plan.ts`), and the recap commit
+applies them to the assistant on the same save as the knowledge
+(`saveAssistantKnowledge` in `ThreadView.svelte`). That is how an assistant built by
+talking ends up with the name the user gave it rather than the placeholder the
+create flow had to store (`ASSISTANT_PLACEHOLDER_NAME`).
+
+- An assistant shows an amber **Incomplete** icon (`AlertTriangle`,
   `--color-warning`) whenever it cannot run yet, with the exact gap on hover.
-  `routineGap` (`assistant-view.ts`) is the single source for that rule and names
-  what is missing ("Needs a how-to and a model"); the missed state uses the same
-  icon in `--color-missed`. Routine rows never carry the state as text, and the
+  `assistantGap` (`assistant-view.ts`) is the single source for that rule and names
+  what is missing ("Needs a knowledge and a model"); the missed state uses the same
+  icon in `--color-missed`. Assistant rows never carry the state as text, and the
   badge shares the second row with the task count. The sidebar, the hover
   popover, and the search results all read the same helper, so they cannot
   disagree.
-- The how-to is authored conservatively in the routine's task thread, never in
-  a panel. The first task's head start asks _how the routine should happen_ and
+- The knowledge is authored conservatively in the assistant's task thread, never in
+  a panel. The first task's head start asks _how the assistant should happen_ and
   the user describes it; the agent works out what it needs, asks about anything
-  missing, and drafts the how-to with them.
-- The routine's seed task is its **Getting started** thread. It carries a fixed
+  missing, and drafts the knowledge with them.
+- The assistant's seed task is its **Getting started** thread. It carries a fixed
   title (`ASSISTANT_SETUP_TITLE`) and is never auto-titled, and it runs no
   auxiliary work: `isAssistantSetupThread` gates the engine so prompt-derived
   titles and memory extraction are skipped, and a `propose_memory` call answers
@@ -749,18 +798,18 @@ prompt"; the user-facing term is how-to.
   databases), so it survives reloads and regroups. It is created **pinned**
   (`ThreadManager.prepareCreateThread` owns that invariant, and a migration pins
   the threads that predate it), so it is never an automatic-eviction candidate.
-  That pin is retention, not a move: `AssistantSidebar` keeps a pinned how-to
-  thread nested inside its routine instead of lifting it into the Pinned
+  That pin is retention, not a move: `AssistantSidebar` keeps a pinned knowledge
+  thread nested inside its assistant instead of lifting it into the Pinned
   section, so the pin only ever means "never evicted".
-- **The how-to thread is pinned for its whole life.** `ThreadManager.setPinned`
-  refuses to unpin it, and its task menu offers **Hide how-to thread** instead of
+- **The knowledge thread is pinned for its whole life.** `ThreadManager.setPinned`
+  refuses to unpin it, and its task menu offers **Hide knowledge thread** instead of
   Pin/Unpin and carries no Delete item at all. Hiding is an archive:
-  `assistant:setHowToHidden` (with `RoutineManager.howToThread` and
-  `setHowToHidden`) writes `Thread.archived` while forcing `pinned: true`, the
-  sidebar drops the row, and `RoutineManager.listAssistantTasks` stops returning
-  archived rows so a hidden thread is also never scheduled. The how-to panel is
-  the way back: its **Show how-to thread** action reveals the thread through
-  `assistant:howToThread` (which finds the routine's thread even while hidden,
+  `assistant:setKnowledgeHidden` (with `AssistantManager.knowledgeThread` and
+  `setKnowledgeHidden`) writes `Thread.archived` while forcing `pinned: true`, the
+  sidebar drops the row, and `AssistantManager.listAssistantTasks` stops returning
+  archived rows so a hidden thread is also never scheduled. The knowledge panel is
+  the way back: its **Show knowledge thread** action reveals the thread through
+  `assistant:knowledgeThread` (which finds the assistant's thread even while hidden,
   because archived rows never reach the hydrated thread list) and opens it.
 - **The agent finishes the setup instead of describing it.** The contract makes
   connection setup a phase that completes before the recap. It names the
@@ -778,26 +827,26 @@ prompt"; the user-facing term is how-to.
   the user to confirm the plan instead of walking them through OAuth and asking
   for the credentials.
 - The authoring contract asks the agent to agree on the instructions, the
-  schedule, the connections, and how the routine reports back, then present a
-  short **recap** plus **two** fenced blocks: the how-to itself (tag `how-to`)
-  and a machine-readable plan (tag `routine`) holding one JSON object. The plan
+  schedule, the connections, and how the assistant reports back, then present a
+  short **recap** plus **two** fenced blocks: the knowledge itself (tag `knowledge`)
+  and a machine-readable plan (tag `assistant`) holding one JSON object. The plan
   is validated against the schedule, connections, delivery and priority schemas
-  in `src/lib/routine-plan.ts` (`ROUTINE_SCHEDULE_JSON_SCHEMA`,
-  `ROUTINE_CONNECTION_JSON_SCHEMA`, `ROUTINE_PLAN_JSON_SCHEMA`) and
-  `src/lib/routine-reporting.ts` (`ROUTINE_DELIVERY_JSON_SCHEMA`,
-  `ROUTINE_PRIORITY_JSON_SCHEMA`), and the agent is shown the plan schema in the
+  in `src/lib/assistant-plan.ts` (`ASSISTANT_SCHEDULE_JSON_SCHEMA`,
+  `ASSISTANT_CONNECTION_JSON_SCHEMA`, `ASSISTANT_PLAN_JSON_SCHEMA`) and
+  `src/lib/assistant-reporting.ts` (`ASSISTANT_DELIVERY_JSON_SCHEMA`,
+  `ASSISTANT_PRIORITY_JSON_SCHEMA`), and the agent is shown the plan schema in the
   contract. Delivery and priority are optional, so a draft that omits them still
   commits; see [Reporting](#reporting).
 - A connection the agent could not install itself carries a `setup` prompt in its
   plan entry: a ready-to-run instruction for the utility setup agent naming what
   the capability is, where it comes from, and what the user must supply. It is
-  stored on the routine connection (`RoutineConnection.setup`) and prefills the
+  stored on the assistant connection (`AssistantConnection.setup`) and prefills the
   **Set up** button in the panel's Connections tab, so the user only picks a
   model and runs the setup instead of describing the capability again.
 - The contract belongs to the thread, so the chat engine composes it into the
-  system prompt of every user turn while the routine's how-to is missing
-  (`ChatEngine.routineAuthoringInstruction`, text in
-  `src/lib/routine-authoring.ts`). The composer does not assemble it. A turn
+  system prompt of every user turn while the assistant's knowledge is missing
+  (`ChatEngine.assistantAuthoringInstruction`, text in
+  `src/lib/assistant-authoring.ts`). The composer does not assemble it. A turn
   that arrives from the message editor's resend, a steer, or a queued delivery
   therefore reaches the agent with the same contract as a fresh composer send.
 - **The interview keeps app-owned checkpoints.** A Getting started conversation
@@ -808,10 +857,10 @@ prompt"; the user-facing term is how-to.
   turn's behavior, so they ride the system prompt and never accumulate in the
   harness transcript:
   - the **checkpoint** the agent keeps current, saved through the app-owned
-    `cio:routine-authoring` capability (`save_checkpoint { markdown }`, bound to
+    `cio:assistant-authoring` capability (`save_checkpoint { markdown }`, bound to
     the live authoring turn and never banked or installed) and stored at
-    `routines/<routineId>/getting-started.md`
-    (`RoutineAuthoringCheckpoints`, `src/main/chat/routine-authoring-checkpoints.ts`);
+    `assistants/<assistantId>/getting-started.md`
+    (`AssistantAuthoringCheckpoints`, `src/main/chat/assistant-authoring-checkpoints.ts`);
   - the **resolved decisions**: every answer the user actually submitted, read
     back verbatim from the stored question cards (`formatInterviewDecisions`,
     `src/main/chat/chat-engine/chat-engine-message-text.ts`), because the app's
@@ -826,22 +875,22 @@ prompt"; the user-facing term is how-to.
   separate single-choice questions, because one question carrying both brackets
   produces a combined answer no turn can resolve back into brackets.
 
-- The how-to panel shows that checkpoint under **Agreed so far** while the
-  how-to is incomplete, so the interview is auditable from the panel instead of
-  only from the thread. The main process broadcasts `routine:checkpointChanged`
-  (routine id only; the body is read on demand by `routine:gettingStartedCheckpoint`)
+- The knowledge panel shows that checkpoint under **Agreed so far** while the
+  knowledge is incomplete, so the interview is auditable from the panel instead of
+  only from the thread. The main process broadcasts `assistant:checkpointChanged`
+  (assistant id only; the body is read on demand by `assistant:gettingStartedCheckpoint`)
   so an open panel follows the interview.
-- The agent then asks the user to confirm it never saves the routine itself
+- The agent then asks the user to confirm it never saves the assistant itself
   and never tells the user to run a command. Confirming is one click on the
-  **recap card** (`RoutineRecapCard.svelte`) that appears above the composer
+  **recap card** (`AssistantRecapCard.svelte`) that appears above the composer
   with the schedule, the connections, and the instruction section count; a plain
   typed "yes" commits the same pending draft. The card's **Keep editing** hides
   it for that draft revision only, so a revised draft brings it back.
 - The app commits all three together: the instructions, the schedule, and the
-  connections. `/save-how-to` remains only as a fallback: it is offered only
+  connections. `/save-knowledge` remains only as a fallback: it is offered only
   while a complete draft is waiting to be committed, and it disappears for good
-  once the routine is saved.
-- Once the routine is saved the app posts one hidden internal turn into the
+  once the assistant is saved.
+- Once the assistant is saved the app posts one hidden internal turn into the
   Getting started thread (`assistant:postSetup`, prompt in
   `src/lib/assistant-next-steps.ts`), so the agent lists a short prose
   **next-steps** message for the user. Adding fallback models on the Agents tab
@@ -849,12 +898,12 @@ prompt"; the user-facing term is how-to.
   run. The turn forbids tools, so it can never start a run, and it is persisted
   hidden (`origin: 'orchestrator'`, `visibility: 'hidden'`), so the user sees
   only the agent's prose and never a user bubble. Both the recap card's Save
-  button and a typed confirmation route through `confirmRoutineSave`
+  button and a typed confirmation route through `confirmAssistantSave`
   (`ThreadView.svelte`), which saves first and then posts the turn.
 - The user never hand-builds a schedule. The plan is JSON matching the schemas,
   so a schedule or connection the schema rejects contributes nothing instead of
   silently changing the cadence. The tolerant `key: value` text parser
-  (`parseRoutinePlan`) stays as a fallback so an older or non-conforming draft
+  (`parseAssistantPlan`) stays as a fallback so an older or non-conforming draft
   can still commit; it accepts `8`, `8:30`, `8am`, `8:30 pm` and `18:00` as
   times, full or abbreviated weekday names, and a free-text
   `schedule: every day at 8:05am` line.
@@ -864,72 +913,72 @@ prompt"; the user-facing term is how-to.
   needing setup.
 - Draft detection is deliberately tolerant, because the commit command has to
   work against how a model actually formats the block, not only the contract.
-  `extractHowToDraft` and `extractRoutinePlanDraft` in `assistant-view.ts`
+  `extractKnowledgeDraft` and `extractAssistantPlanDraft` in `assistant-view.ts`
   accept both a fence tagged with the block name (optionally with a
-  `: <title>` suffix) and a bare fence whose first line is a `how-to:` or
-  `routine:` marker, strip that marker line, and take the newest matching block
+  `: <title>` suffix) and a bare fence whose first line is a `knowledge:` or
+  `assistant:` marker, strip that marker line, and take the newest matching block
   in the newest assistant message. Every other fenced block is ignored, and a
   block that is only a marker line is not a draft. Blocks are matched by fence
-  nesting rather than to the first closing fence, so a how-to that carries its
+  nesting rather than to the first closing fence, so a knowledge that carries its
   own command fence (a `bash` example inside the instructions) is kept whole
   instead of being silently truncated, and prose written after a block stays out
   of the saved content.
-- The how-to authoring thread carries the CodeInOven utility gateway from the
+- The knowledge authoring thread carries the CodeInOven utility gateway from the
   start: `sendPrompt` grants the same management contract an explicit
-  `@cio-utility` invocation does whenever the thread is a routine whose how-to
-  is still missing (`routineAuthoringInstruction`), so the agent can search the
+  `@cio-utility` invocation does whenever the thread is an assistant whose knowledge
+  is still missing (`assistantAuthoringInstruction`), so the agent can search the
   library with `cio_util_find`, research compatible skills/MCPs/plugins, and
   install them itself with `cio_util_manage` once the user agrees. The grant is
   derived from the thread every turn, never memoized, so it ends the moment the
-  how-to is saved. The contract text itself rides the turn's system prompt (see
+  knowledge is saved. The contract text itself rides the turn's system prompt (see
   the placement note below), so it is restated per turn without accumulating in
   the harness transcript. Credentials are collected with `cio_ask_secret`, never pasted
   into chat, and nothing is installed without the user's agreement; the only
   acceptable blockers are network and a closed app.
-- A saved routine's run provisions itself the same way. The how-to is the
-  instruction set, and a turn on an assistant task whose routine already has its
-  how-to carries the run contract (`routineRunContext` in
-  `src/lib/routine-run.ts`): when something the routine needs is not set up, the
+- A saved assistant's run provisions itself the same way. The knowledge is the
+  instruction set, and a turn on an assistant task whose assistant already has its
+  knowledge carries the run contract (`assistantRunContext` in
+  `src/lib/assistant-run.ts`): when something the assistant needs is not set up, the
   agent searches the library with `cio_util_find`, and when the library has
   nothing it goes online to find the official source (its own web tools, or a
   web/search capability activated with `cio_util_init`), installs what it finds
   with `cio_util_manage`, collects credentials with `cio_ask_secret`, and asks
   the user for anything else with `cio_ask_user`. Pointing the user at the
   Connections tab is the last resort, not the answer.
-- **The Getting started thread never runs the routine.** `ChatEngine.routineConversation`
+- **The Getting started thread never runs the assistant.** `ChatEngine.assistantConversation`
   (`src/main/chat/chat-engine.ts`) is the one place that decides which of the
-  three routine conversations a thread is on: `authoring` (any thread of a routine
-  that still has no how-to, the interview that drafts it), `update` (the Getting
-  started thread once the routine is saved), and `run` (every other thread of a
-  saved routine). A run of the routine
-  dispatches its own run thread (`assistantRunTitle`, `routineRunPrompt`), so a
-  message on the Getting started thread is always about the routine itself. It
+  three assistant conversations a thread is on: `authoring` (any thread of an assistant
+  that still has no knowledge, the interview that drafts it), `update` (the Getting
+  started thread once the assistant is saved), and `run` (every other thread of a
+  saved assistant). A run of the assistant
+  dispatches its own run thread (`assistantRunTitle`, `assistantRunPrompt`), so a
+  message on the Getting started thread is always about the assistant itself. It
   carries the editing contract instead of the run contract
-  (`routineHowToUpdateContext` in `src/lib/routine-authoring.ts`): the saved
-  how-to, schedule, connections, delivery and urgency ride along as the starting
+  (`assistantKnowledgeUpdateContext` in `src/lib/assistant-authoring.ts`): the saved
+  knowledge, schedule, connections, delivery and urgency ride along as the starting
   point, the agent changes only what the user asked for, and it is told plainly
-  to never start doing the routine's job or treat the message as the routine
+  to never start doing the assistant's job or treat the message as the assistant
   having fired. This was a real bug: the thread was handed the run contract as
-  soon as the how-to was saved, so "more Nigerian news, less politics" was
+  soon as the knowledge was saved, so "more Nigerian news, less politics" was
   answered by searching the web and writing the brief instead of revising the
-  how-to. The editing turn keeps the management grant a run has (a tweak that
-  names a new service installs it here; `CIO_UTILITY_ROUTINE_EDIT_PROMPT` in
+  knowledge. The editing turn keeps the management grant a run has (a tweak that
+  names a new service installs it here; `CIO_UTILITY_ASSISTANT_EDIT_PROMPT` in
   `src/main/utilities/cio-utility-prompt.ts`), and a steer on that thread keeps
   it too, while the interview checkpoint capability stays bound to the authoring
   conversation alone.
 - **A revision commits through the same recap card.** The draft path is open on
   the Getting started thread after the first save, not only before it:
-  `assistantRoutineDraft` (`ThreadView.svelte`) keeps parsing the thread's newest
-  `how-to` and `routine` fences there, while a task or run thread of the same
-  routine still never proposes one. A draft is offered only when it is a real
-  change: it must be newer than `Routine.howToUpdatedAt` (a draft left in a
+  `assistantDraft` (`ThreadView.svelte`) keeps parsing the thread's newest
+  `knowledge` and `assistant` fences there, while a task or run thread of the same
+  assistant still never proposes one. A draft is offered only when it is a real
+  change: it must be newer than `Assistant.knowledgeUpdatedAt` (a draft left in a
   reopened thread after an edit elsewhere is not) and it must differ from what is
   saved, counting a plan-only change (a new time, an added connection) because the
-  how-to text often carries no schedule at all. `RoutineRecapCard` carries an
-  `update` flag, so it says **Ready to update**, lists the connections the routine
+  knowledge text often carries no schedule at all. `AssistantRecapCard` carries an
+  `update` flag, so it says **Ready to update**, lists the connections the assistant
   keeps beside the ones the plan adds, keeps the saved schedule when the plan does
-  not name it, and commits through the same `confirmRoutineSave`/
-  `saveRoutineHowTo` pair. The app-owned next-steps turn is posted for a routine's
+  not name it, and commits through the same `confirmAssistantSave`/
+  `saveAssistantKnowledge` pair. The app-owned next-steps turn is posted for an assistant's
   first save only.
 - The contract is a property of the thread, so it applies to every turn on the
   task, not just the internal run: a scheduled run, a missed-run **Run now**, and
@@ -937,17 +986,17 @@ prompt"; the user-facing term is how-to.
   (`CIO_UTILITY_RUN_PROMPT`), so installing is in scope however the turn starts.
   `rearmSteerUtilities` keeps the grant for a steer landing mid-run. The app's
   own next-steps message sent right after a save is excluded
-  (`isRoutineNextStepsPrompt`), so it stays a no-tool informational turn. Gating
+  (`isAssistantNextStepsPrompt`), so it stays a no-tool informational turn. Gating
   the contract on an internal origin was a real bug: a follow-up got only the
   reuse contract, which reserves installing, and the assistant dead-ended on
   "connect it yourself" instead of supplying the connection.
-- The routine's instruction set and its contract ride the SYSTEM PROMPT, not
-  the user message. `sendPrompt` composes one `routineInstruction` layer from
-  `composeRoutineInstruction(howTo, contract)` (`src/lib/routine-run.ts`) and
+- The assistant's instruction set and its contract ride the SYSTEM PROMPT, not
+  the user message. `sendPrompt` composes one `assistantInstruction` layer from
+  `composeAssistantInstruction(knowledge, contract)` (`src/lib/assistant-run.ts`) and
   passes it to `composeTurnSystemPrompt` / `composeBrainstormSystemPrompt` in
   `src/main/chat/chat-engine/chat-engine-prompts.ts`, alongside
-  `utilityInstructions`. The how-to comes first because the contract opens by
-  calling it the instruction set. The scheduler no longer hands the how-to to
+  `utilityInstructions`. The knowledge comes first because the contract opens by
+  calling it the instruction set. The scheduler no longer hands the knowledge to
   `sendPrompt` as prompt context, and a scheduled run's message is now just
   `Run this scheduled task now: <title>`. Every harness rewrites the system
   prompt on each turn (codex replaces `developer_instructions` on
@@ -957,8 +1006,8 @@ prompt"; the user-facing term is how-to.
   replay one more copy on every later turn, and a session rotation would drop it
   from the native transcript while the contract that refers to it survived. That
   placement is pinned by `tests/main/send-composition.test.ts` and
-  `tests/lib/routine-run.test.ts`, which assert the contract lands in the system
-  prompt, the how-to precedes it, and the user message stays the user's own
+  `tests/lib/assistant-run.test.ts`, which assert the contract lands in the system
+  prompt, the knowledge precedes it, and the user message stays the user's own
   words. A steer needs no re-statement either: it runs under the prompt the turn
   already started with, and `rearmSteerUtilities` republishes only the gateway
   endpoint, never the prompt.
@@ -1005,7 +1054,7 @@ prompt"; the user-facing term is how-to.
 
 ## Assistant panel
 
-`AssistantPanel.svelte` is the routine's whole surface, docked in the right
+`AssistantPanel.svelte` is the assistant's whole surface, docked in the right
 context sidebar and openable full screen from its own header button. The full
 screen render reuses the app's full screen surface
 (`src/renderer/lib/components/workspace/FullscreenPanelDialog.svelte`), so it
@@ -1014,28 +1063,28 @@ minimize with the browser, terminal and pull request reader, and the panel's
 sections become that strip's tabs. It is read-only where the app must own the
 value and editable where the user must.
 
-- **All** — pause or resume the routine, plus one summary row per section with
+- **All** — pause or resume the assistant, plus one summary row per section with
   the state in one line and a **More** button that opens that tab. An amber icon
   marks each section that still needs setup. Under the pause toggle sits **Run
-  now**, which dispatches the routine's tasks immediately regardless of its
-  schedule and pause state, so a routine can be tested before its next fire;
+  now**, which dispatches the assistant's tasks immediately regardless of its
+  schedule and pause state, so an assistant can be tested before its next fire;
   beneath it are **Last run** and **Last success**. Last run is the last
   dispatch (`lastDispatchedAt`), kept apart from the scheduler's internal slot
   claim (`lastRunAt`, which a missed slot also writes) so a slot that never ran
   cannot read as a run; last success is stamped when a run's turn actually
-  settles (`RoutineSchedulerService.settleRun` records `lastSuccessAt` only for a
+  settles (`AssistantSchedulerService.settleRun` records `lastSuccessAt` only for a
   task the scheduler dispatched a run on, so a user's own chat never counts as a
-  run). Both timestamps are read across the routine's tasks.
-- **Routine** — the saved how-to, parsed into foldable sections by
-  `parseHowToSections`. It recognises markdown headings and the ALL-CAPS title
+  run). Both timestamps are read across the assistant's tasks.
+- **Assistant** — the saved knowledge, parsed into foldable sections by
+  `parseKnowledgeSections`. It recognises markdown headings and the ALL-CAPS title
   style the agent actually writes (`DRAIN PROCEDURE (0600 and 1800)` is a title;
   an indented numbered line is not), never splits inside a fenced code block, and
-  round-trips through `serializeHowToSections`. Each section is edited on its own
+  round-trips through `serializeKnowledgeSections`. Each section is edited on its own
   with `RichMarkdownEditor` and rendered with `MarkdownView`. The schedule appears
   here as a read-only line: the agent sets it from the plan block the user
   confirmed, so no manual
   schedule editor exists anywhere in the app.
-- **Connections** — the routine's utilities, resolved against the connection
+- **Connections** — the assistant's utilities, resolved against the connection
   library by `resolveConnections`. Each row carries its kind and a **Ready / Off /
   Incomplete / Needs setup** state with the reason: a connection the library does
   not carry, a switched-off utility, an MCP with no command or URL, and an MCP
@@ -1048,16 +1097,21 @@ value and editable where the user must.
   A row that still needs setup carries a **Set up** button that opens the
   **Add capability** modal the Utilities page uses, so the user can wire the
   capability up without leaving the panel. A capability the library does not
-  carry yet lands on the create step, and the agent-assisted path is prefilled:
+  carry yet lands on the create step, and its agent-assisted path is prefilled:
   when the authoring agent could not install a connection itself it records a
   `setup` prompt on that connection (in the plan's `connections` entry), and
-  `ConnectionRow` hands it to `UtilityEditorModal` as `agentRequestSeed`. The user
-  only picks a model and runs it. A capability the library already has but that
-  is switched off or half-configured opens its own editor instead, because asking
-  the user to add what they already have would be nonsense. Installing reloads
-  both catalogs through `loadConnectionLibrary`, so the row flips to ready in
-  place; a required connection relinks by label, so a later `Slack MCP` install
-  satisfies a connection the plan named `Slack`.
+  `ConnectionRow` hands it to `UtilityEditorModal` as `setupRequestSeed`.
+  Pressing **Setup with agent** then opens a new thread of the assistant
+  (`openAssistantUtilitySetupThread` in `src/renderer/lib/utility-setup-thread.ts`)
+  whose composer already carries `@cio-utility` plus that recorded request, on
+  the assistant's primary model and off the assistant's clock, so the user watches
+  the agent work, steers it, and answers any credential card it raises. A
+  capability the library already has but that is switched off or
+  half-configured opens its own editor instead, because asking the user to add
+  what they already have would be nonsense. Installing through that editor
+  reloads both catalogs through `loadConnectionLibrary`, so the row flips to
+  ready in place; a required connection relinks by label, so a later
+  `Slack MCP` install satisfies a connection the plan named `Slack`.
 
   The library is the same union the Utilities page renders, built by
   `buildConnectionLibrary` in `connection-library.ts`: the registry utilities the
@@ -1075,73 +1129,73 @@ value and editable where the user must.
 
 - **Agents** — one primary model and any number of fallbacks, each picked with
   the app's `ModelPicker` so thinking level and account stay visible
-  (`RoutineAgentPicker.svelte`). Creating a routine never asks for a model: the
+  (`AssistantAgentPicker.svelte`). Creating an assistant never asks for a model: the
   primary is the model the user was already working on
   (`currentAssistantModelSelection` in the workspace, applied through
-  `withDefaultRoutinePrimary` in `src/lib/routine-agents.ts`), which is the
+  `withDefaultAssistantPrimary` in `src/lib/assistant-agents.ts`), which is the
   selected task's model when there is one, else the assistant's own last-used
   model, else the model the project work last ran on, and while the
-  how-to is still being written the composer's model is written back to the
-  primary on each turn (`syncRoutinePrimaryToCurrentModel` in
+  knowledge is still being written the composer's model is written back to the
+  primary on each turn (`syncAssistantPrimaryToCurrentModel` in
   `ThreadView.svelte`), so a model switched before the first turn still becomes
-  the model the routine runs on. The picker
+  the model the assistant runs on. The picker
   seeds two empty fallback rows; more can be added and any row removed, so the
   set can shrink back to the primary alone. The agent points the user here in its
   post-save next-steps list.
-- **Reporting** — where the routine's output goes and how urgent it is, shown as
-  one line in **All** and edited in the **Routine** tab. See
+- **Reporting** — where the assistant's output goes and how urgent it is, shown as
+  one line in **All** and edited in the **Assistant** tab. See
   [Reporting](#reporting).
 
 ### How the model set is used at run time
 
 The model set is not decoration; it decides which model a run executes on.
 
-- A scheduled dispatch overlays the routine's **primary** onto the task's thread
-  settings (`routinePrimaryModel` + `settingsWithRoutineModel` in
-  `src/lib/routine-agents.ts`), so the models picked for a routine are the models
-  its runs use. A routine with no model set keeps the task's own settings.
-- A task created inside a routine is seeded on the routine's primary, so the
-  composer shows the model the routine actually runs on.
+- A scheduled dispatch overlays the assistant's **primary** onto the task's thread
+  settings (`assistantPrimaryModel` + `settingsWithAssistantModel` in
+  `src/lib/assistant-agents.ts`), so the models picked for an assistant are the models
+  its runs use. An assistant with no model set keeps the task's own settings.
+- A task created inside an assistant is seeded on the assistant's primary, so the
+  composer shows the model the assistant actually runs on.
 - When a run hits a **provider failure**, the chat engine moves the run's
-  thread onto the routine's next model and re-runs at once, instead of parking
+  thread onto the assistant's next model and re-runs at once, instead of parking
   the thread for the failed provider's reset window (`tryAssistantModelFallback`
-  in `src/main/chat/chat-engine.ts`, fed by `RoutineManager.resolveTaskAgents`,
-  which reads the routine off the run thread's inherited `routineId`). The order
-  comes from `routineModelCandidates`, so the primary is tried first and the
+  in `src/main/chat/chat-engine.ts`, fed by `AssistantManager.resolveTaskAgents`,
+  which reads the assistant off the run thread's inherited `assistantId`). The order
+  comes from `assistantModelCandidates`, so the primary is tried first and the
   fallbacks after it, in the order they are listed.
 - Fallover stops at the end of the list: once every model has failed, the normal
   reset wait and the **Issues** tab take over. A model the user picked by hand,
-  which is not part of the routine's set, is never overridden.
+  which is not part of the assistant's set, is never overridden.
 - **Issues** — missed runs with **Dismiss** and **Run now**, plus run problems:
   a rate limit with its retry time, a failed run, and an interrupted run. The
-  panel scans every thread that carries the routine's id, so a run's own thread
+  panel scans every thread that carries the assistant's id, so a run's own thread
   is what reports a failed or interrupted execution. Every entry opens its
   thread: the run that had the problem, or the task for a schedule-level miss.
 
 ## Reporting
 
-A routine that produces something for the user to read has to say where that
+An assistant that produces something for the user to read has to say where that
 output goes and how urgent it is, or the run finishes with the report buried in a
 transcript nobody opened. Both are agreed during authoring and stored on the
-routine (`Routine.delivery`, `Routine.priority`). The vocabulary, labels, JSON
-schemas and tolerant normalisers live in `src/lib/routine-reporting.ts`, so the
+assistant (`Assistant.delivery`, `Assistant.priority`). The vocabulary, labels, JSON
+schemas and tolerant normalisers live in `src/lib/assistant-reporting.ts`, so the
 contracts, the panel and the validators cannot drift apart.
 
 ### Delivery
 
-`RoutineDelivery` names a channel and, when the channel takes one, the concrete
+`AssistantDelivery` names a channel and, when the channel takes one, the concrete
 destination. The channels are `in-app`, `slack`, `telegram`, `whatsapp`,
 `signal`, `email`, and `other`. **In-app is the only channel wired up today**: it
 means a normal thread notification inside CodeInOven, and the app delivers it by
 the run thread itself. Note what that does and does not mean today. The report is
 the run thread's message, and the thread is listed in the assistant sidebar under
-its routine, and the run raises its own entry on the notification panel's
+its assistant, and the run raises its own entry on the notification panel's
 **Assistants** tab, tagged with the assistant source. Every other channel is
 _external_, and picking one is
-also a statement that the routine needs a connection: the authoring contract
+also a statement that the assistant needs a connection: the authoring contract
 tells the agent to add that channel to the plan's `connections` and set it up
 like any other, and the panel warns (and the All tab's summary row marks) a
-delivery whose channel has no ready connection. An action-only routine that
+delivery whose channel has no ready connection. An action-only assistant that
 reports nothing has no delivery, and the contract says so explicitly instead of
 inventing a channel.
 
@@ -1150,7 +1204,7 @@ inventing a channel.
 A run thread is capped and evicted, so a report that only ever lived in the
 transcript would eventually disappear. Every assistant task turn that settles
 with a report therefore also lands one Markdown file under `reports/` in the
-routine's own workspace (`assistant-cwd/<routineId>/reports/`), which the
+assistant's own workspace (`assistant-cwd/<assistantId>/reports/`), which the
 **Workspace files** panel mounts. `isAssistantReportThread`
 (`src/lib/assistant-reports.ts`) excludes the Getting started authoring thread,
 and `assistantReportIsTerminal` limits the copy to the terminal outcomes
@@ -1176,45 +1230,45 @@ different questions:
   is the bracket for something that affects more than the user alone and cannot
   wait.
 
-`RoutinePriority` stores both, and both are required together: a half-resolved
+`AssistantPriority` stores both, and both are required together: a half-resolved
 pair is rejected rather than silently defaulted, in the plan normaliser and again
 at the IPC boundary (`sanitizePriority`). A run may refine the bracket it
 actually falls into, because the agent often only learns the real urgency from
-what it found; the routine's value is the agreed default, not a fixed label.
+what it found; the assistant's value is the agreed default, not a fixed label.
 
 ### Where the ask happens
 
-`routineAuthoringContext` (`src/lib/routine-authoring.ts`) asks for both, in the
-reporting order that matters: whether the routine reports to the user at all,
+`assistantAuthoringContext` (`src/lib/assistant-authoring.ts`) asks for both, in the
+reporting order that matters: whether the assistant reports to the user at all,
 which channel, which destination, and then both priority brackets as two
 separate single-choice questions, with the
 choices listed and their meanings spelled out. The agent may decide the brackets
 itself when the user would rather not, but it must say which it picked and why,
-and it must leave `delivery` out entirely for an action-only routine. The plan
-schema (`ROUTINE_PLAN_JSON_SCHEMA`) carries `delivery` and `priority` alongside
+and it must leave `delivery` out entirely for an action-only assistant. The plan
+schema (`ASSISTANT_PLAN_JSON_SCHEMA`) carries `delivery` and `priority` alongside
 `schedule` and `connections`, and both are optional, so an older or narrower
 draft still commits.
 
 ### Where the answer is used
 
-`routineRunContext` (`src/lib/routine-run.ts`) turns the stored agreement into the
-run's instruction: an in-app routine is told to write the report as the message
+`assistantRunContext` (`src/lib/assistant-run.ts`) turns the stored agreement into the
+run's instruction: an in-app assistant is told to write the report as the message
 itself and lead with what needs attention, an external one is told to deliver
 through its channel and to supply that connection itself rather than drop the
 report, and both are told the agreed brackets and to move them when what they
-found differs. A routine with a report but no agreed priority is told to decide
-both brackets from what it found. An action-only routine gets neither line, so
+found differs. An assistant with a report but no agreed priority is told to decide
+both brackets from what it found. An action-only assistant gets neither line, so
 the reporting contract never leaks into a run that has nothing to report.
 
 ### Editing by hand
 
-The **Routine** tab's Reporting card edits both halves with the app's dropdown
+The **Assistant** tab's Reporting card edits both halves with the app's dropdown
 idiom (`src/renderer/lib/components/ui/EnumSelect.svelte`, composed on the same
 `bits-ui` dropdown `MemoryScopeSelect` uses), each option carrying a one-line
 hint so the choice is understandable rather than only recognisable. Choosing a
 channel keeps an already-typed destination and note; the in-app channel drops the
 destination because it has none. Both halves can be cleared, which is what a
-routine that stops reporting (or stops carrying a default urgency) needs, and
+assistant that stops reporting (or stops carrying a default urgency) needs, and
 clearing is a real `null` patch rather than an empty object.
 
 ## Fork hand-off

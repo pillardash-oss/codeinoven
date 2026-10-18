@@ -3,15 +3,15 @@ import type {
   AutoAnswerItem,
   BackgroundRun,
   MissedRun,
-  Routine,
-  SkippedRoutineRun
+  Assistant,
+  SkippedRun
 } from '../../lib/types'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
-/** Push the full routine list so routine rows and the how-to panel stay live. */
-export function broadcastRoutinesChanged(routines: Routine[]): void {
+/** Push the full assistant list so assistant rows and the knowledge panel stay live. */
+export function broadcastAssistantsChanged(assistants: Assistant[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'routine:changed', routines)
+    sendToRenderer(win.webContents, 'assistant:changed', assistants)
   }
 }
 
@@ -29,10 +29,10 @@ export function broadcastBackgroundRunsChanged(runs: BackgroundRun[]): void {
   }
 }
 
-/** Push skipped slots so every renderer recalculates task and routine next runs. */
-export function broadcastSkippedRoutineRunsChanged(runs: SkippedRoutineRun[]): void {
+/** Push skipped slots so every renderer recalculates task and assistant next runs. */
+export function broadcastSkippedRunsChanged(runs: SkippedRun[]): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'assistant:skippedRoutineRunsChanged', runs)
+    sendToRenderer(win.webContents, 'assistant:skippedAssistantRunsChanged', runs)
   }
 }
 
@@ -44,11 +44,11 @@ export function broadcastAutoAnswersChanged(items: AutoAnswerItem[]): void {
 }
 
 /**
- * Push one routine's new Getting started checkpoint, so an open how-to panel
+ * Push one assistant's new Getting started checkpoint, so an open knowledge panel
  * refreshes what the interview has agreed instead of waiting to be reopened.
  */
-export function broadcastRoutineCheckpointChanged(routineId: string): void {
+export function broadcastAssistantCheckpointChanged(assistantId: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    sendToRenderer(win.webContents, 'routine:checkpointChanged', routineId)
+    sendToRenderer(win.webContents, 'assistant:checkpointChanged', assistantId)
   }
 }

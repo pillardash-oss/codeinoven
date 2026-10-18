@@ -37,7 +37,8 @@ class BrowserKeyboardFocus {
     sidebar: null,
     fullscreen: null,
     workspace: null,
-    peek: null
+    peek: null,
+    panel: null
   }
   /** The tab main was last told about, so a repeated claim is not re-sent. */
   private published: string | null = null
@@ -57,7 +58,11 @@ class BrowserKeyboardFocus {
   /** The browser tab whose chrome currently owns renderer keyboard shortcuts. */
   get tabId(): string | null {
     return (
-      this.claims.peek ?? this.claims.workspace ?? this.claims.fullscreen ?? this.claims.sidebar
+      this.claims.peek ??
+      this.claims.workspace ??
+      this.claims.fullscreen ??
+      this.claims.panel ??
+      this.claims.sidebar
     )
   }
 

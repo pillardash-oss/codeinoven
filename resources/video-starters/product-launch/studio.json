@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "captionStyle": "plain",
+  "controls": [
+    { "key": "brand", "label": "Brand", "kind": "text", "value": "HELIO" },
+    {
+      "key": "claim",
+      "label": "Claim",
+      "kind": "text",
+      "value": "Everything you ship, in one place."
+    },
+    { "key": "tagline", "label": "Tagline", "kind": "text", "value": "Built to be changed." },
+    { "key": "accent", "label": "Accent", "kind": "color", "value": "#d9a13b" },
+    { "key": "cool", "label": "Cool", "kind": "color", "value": "#7aa2f7" },
+    { "key": "gridStep", "label": "Grid step", "kind": "number", "value": 72, "min": 24, "max": 200 },
+    { "key": "showReadout", "label": "Readout strip", "kind": "switch", "value": true }
+  ],
+  "captions": [],
+  "audioTracks": []
+}

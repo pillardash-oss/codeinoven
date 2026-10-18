@@ -7,6 +7,8 @@ import type {
   BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest,
+  BaseUrlProviderUsageFormat,
+  BaseUrlProviderUsagePreviewRequest,
   ThinkingLevel,
   ThinkingPreset
 } from '../../lib/types'
@@ -17,7 +19,11 @@ import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { serializeProviderClipboard } from '../../lib/provider-clipboard'
 import { discoverBaseUrlModels } from './base-url-model-discovery'
-import { normalizeUsagePath, normalizeModelsPath } from './base-url-provider-service'
+import {
+  normalizeUsageFormat,
+  normalizeUsagePath,
+  normalizeModelsPath
+} from './base-url-provider-service'
 import { CustomProviderUsageClient } from './custom-provider-usage-client'
 
 const CREATE_FIELDS = new Set([
@@ -29,6 +35,7 @@ const CREATE_FIELDS = new Set([
   'headers',
   'models',
   'usagePath',
+  'usageFormat',
   'modelsPath',
   'enabled',
   'id'
@@ -42,6 +49,7 @@ const UPDATE_FIELDS = new Set([
   'headers',
   'models',
   'usagePath',
+  'usageFormat',
   'modelsPath',
   'enabled'
 ])
@@ -91,6 +99,7 @@ export function registerBaseUrlProviderIpc(
         headers: input.headers,
         models: input.models,
         ...(input.usagePath === undefined ? {} : { usagePath: input.usagePath }),
+        ...(input.usageFormat === undefined ? {} : { usageFormat: input.usageFormat }),
         ...(input.modelsPath === undefined ? {} : { modelsPath: input.modelsPath }),
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         ...(input.id === undefined ? {} : { id: input.id })
@@ -135,6 +144,7 @@ export function registerBaseUrlProviderIpc(
           ...(patch.headers === undefined ? {} : { headers: patch.headers }),
           ...(patch.models === undefined ? {} : { models: patch.models }),
           ...(patch.usagePath === undefined ? {} : { usagePath: patch.usagePath }),
+          ...(patch.usageFormat === undefined ? {} : { usageFormat: patch.usageFormat }),
           ...(patch.modelsPath === undefined ? {} : { modelsPath: patch.modelsPath }),
           ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
           ...(patch.removeApiKey === true ? { removeApiKey: true } : {}),
@@ -179,6 +189,7 @@ export function registerBaseUrlProviderIpc(
         apiKey,
         headers: input.headers ?? '',
         ...(input.usagePath ? { usagePath: input.usagePath } : {}),
+        ...(input.usageFormat ? { usageFormat: input.usageFormat } : {}),
         ...(input.modelsPath ? { modelsPath: input.modelsPath } : {}),
         models: input.models,
         enabled: input.enabled
@@ -217,10 +228,35 @@ export function registerBaseUrlProviderIpc(
         provider.baseURL,
         provider.usagePath,
         apiKey,
-        provider.headers
+        provider.headers,
+        provider.usageFormat
       )
     }
   )
+
+  ipcMain.handle('baseUrlProviders:previewUsage', async (_, rawInput: unknown) => {
+    const input = parseUsagePreviewRequest(rawInput)
+    let apiKey = input.apiKey
+    let headers = input.headers
+    // A saved provider falls back to its vaulted key and stored headers, so the
+    // editor's preview matches what the real read will send.
+    if (input.harnessId && input.id) {
+      const provider = await providers.getProvider(input.harnessId, input.id)
+      apiKey ??= provider?.apiKeyRef
+        ? await vault.resolve(provider.apiKeyRef)
+        : await providers.readNativeApiKey(input.harnessId, input.id)
+      headers ??= provider?.headers
+    }
+    return usageClient.preview(
+      input.id ?? input.baseURL,
+      input.harnessId ?? 'preview',
+      input.baseURL,
+      input.usagePath,
+      apiKey,
+      headers,
+      input.usageFormat
+    )
+  })
 }
 
 // ─── Request parsing & validation ────────────────────────────────────────────
@@ -234,6 +270,7 @@ interface ParsedCreateRequest {
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   usagePath?: string
+  usageFormat?: BaseUrlProviderUsageFormat
   modelsPath?: string
   enabled?: boolean
   /** Reuses an existing provider id to link this record to sibling harnesses. */
@@ -249,6 +286,7 @@ interface ParsedUpdateRequest {
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   usagePath?: string
+  usageFormat?: BaseUrlProviderUsageFormat | ''
   modelsPath?: string
   enabled?: boolean
 }
@@ -267,6 +305,7 @@ function parseCreateRequest(value: unknown): ParsedCreateRequest {
     headers: parseHeaders(raw['headers']),
     models: raw['models'] === undefined ? [] : parseModels(raw['models']),
     ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
+    ...(raw['usageFormat'] === undefined ? {} : parseCreateUsageFormat(raw['usageFormat'])),
     ...(raw['modelsPath'] === undefined ? {} : { modelsPath: parseModelsPath(raw['modelsPath']) }),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') }),
     ...(raw['id'] === undefined
@@ -284,6 +323,7 @@ function parseCopyClipboardRequest(value: unknown): {
   apiKey?: string
   headers?: string
   usagePath?: string
+  usageFormat?: BaseUrlProviderUsageFormat | ''
   modelsPath?: string
   models: Array<{
     id: string
@@ -314,6 +354,9 @@ function parseCopyClipboardRequest(value: unknown): {
     ...(raw['usagePath'] === undefined
       ? {}
       : { usagePath: preserveStr(raw['usagePath'], 'Usage route', 0, 2_048) }),
+    ...(raw['usageFormat'] === undefined
+      ? {}
+      : { usageFormat: parseUsageFormat(raw['usageFormat']) }),
     ...(raw['modelsPath'] === undefined
       ? {}
       : { modelsPath: preserveStr(raw['modelsPath'], 'Model list route', 0, 2_048) }),
@@ -386,6 +429,31 @@ function parseFetchModelsRequest(value: unknown): BaseUrlProviderFetchModelsRequ
   }
 }
 
+function parseUsagePreviewRequest(value: unknown): BaseUrlProviderUsagePreviewRequest {
+  const raw = record(value, 'Base URL provider usage preview request')
+  const usagePath = normalizeUsagePath(preserveStr(raw['usagePath'], 'Usage route', 1, 2_048))
+  if (!usagePath) throw new TypeError('A usage route is required to preview usage')
+  return {
+    ...(raw['harnessId'] === undefined
+      ? {}
+      : { harnessId: validateEntityId(raw['harnessId'], 'Base URL provider harness ID', 256) }),
+    ...(raw['id'] === undefined
+      ? {}
+      : { id: validateEntityId(raw['id'], 'Base URL provider ID', 256) }),
+    baseURL: boundedStr(raw['baseURL'], 'Base URL provider base URL', 1, 2_048),
+    ...(raw['apiKey'] === undefined
+      ? {}
+      : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
+    ...(raw['headers'] === undefined ? {} : { headers: parseHeaders(raw['headers']) }),
+    usagePath,
+    ...(raw['usageFormat'] === undefined
+      ? {}
+      : {
+          usageFormat: normalizeUsageFormat(preserveStr(raw['usageFormat'], 'Usage format', 0, 64))
+        })
+  }
+}
+
 function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
   const raw = record(value, 'Base URL provider update request')
   rejectUnknownFields(raw, UPDATE_FIELDS, 'Base URL provider update request')
@@ -408,9 +476,24 @@ function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
     headers: raw['headers'] === undefined ? undefined : parseHeaders(raw['headers']),
     models: raw['models'] === undefined ? undefined : parseModels(raw['models']),
     ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
+    ...(raw['usageFormat'] === undefined
+      ? {}
+      : { usageFormat: parseUsageFormat(raw['usageFormat']) }),
     ...(raw['modelsPath'] === undefined ? {} : { modelsPath: parseModelsPath(raw['modelsPath']) }),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') })
   }
+}
+
+/** Validate an optional usage response format (empty string clears it). */
+function parseUsageFormat(value: unknown): BaseUrlProviderUsageFormat | '' {
+  const raw = preserveStr(value, 'Usage format', 0, 64)
+  return normalizeUsageFormat(raw) ?? ''
+}
+
+/** Create request: an empty format means "not set", so the field is omitted. */
+function parseCreateUsageFormat(value: unknown): { usageFormat?: BaseUrlProviderUsageFormat } {
+  const format = normalizeUsageFormat(preserveStr(value, 'Usage format', 0, 64))
+  return format ? { usageFormat: format } : {}
 }
 
 /** Validate an optional status/usage route (absolute URL or root-relative path). */

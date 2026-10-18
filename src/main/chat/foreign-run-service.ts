@@ -20,15 +20,25 @@
  * coalesces bursts before re-reading the ledger. Nothing here polls, and the
  * ledger read is one bounded query over a table that holds at most a handful of
  * in-flight turns.
+ *
+ * A thread that *leaves* the notice set is the one moment this instance is
+ * provably holding a stale row for it. Its window hydrated that row from the
+ * shared database while the sibling was running the turn, and it never saw the
+ * status the sibling persisted when the turn ended, so the row would keep
+ * claiming work in progress for good. The notice is not the whole truth then:
+ * the departed rows are re-read from that same shared database and pushed, so
+ * the row stops reading as work nobody is doing.
  */
 
 import { BrowserWindow } from 'electron'
-import type { ForeignRunNotice } from '../../lib/types'
+import type { ForeignRunNotice, Thread } from '../../lib/types'
 import type { Database } from '../database/database'
+import { ThreadRepo } from '../database/repositories/thread-repo'
 import { trustedIpcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
+import { broadcastCrossInstanceThreadUpdate } from './thread-events'
 
 /** Coalesce the burst of registry writes one turn boundary produces. */
 const REFRESH_DEBOUNCE_MS = 200
@@ -52,6 +62,10 @@ export interface ForeignRunServiceOptions {
   hasLiveSibling?: () => boolean
   /** Whether the process that recorded a turn is still running. */
   isRunOwnerAlive?: (pid: number) => boolean
+  /** Persisted rows for thread ids, read off the main thread. */
+  readThreads?: (ids: readonly string[]) => Promise<Thread[]>
+  /** Hand one corrected row to this instance's renderers. */
+  publishThread?: (thread: Thread) => void
 }
 
 export class ForeignRunService {
@@ -62,8 +76,16 @@ export class ForeignRunService {
   private started = false
   private readonly hasLiveSibling: () => boolean
   private readonly isRunOwnerAlive: (pid: number) => boolean
+  private readonly readThreads: (ids: readonly string[]) => Promise<Thread[]>
+  private readonly publishThread: (thread: Thread) => void
   /** Last published set, so an unchanged snapshot never reaches a renderer. */
   private signature = ''
+  /**
+   * Threads the last published snapshot named, keyed `projectId:threadId`. Kept
+   * as the pair rather than the key alone because the rows of the threads that
+   * leave this set have to be re-read by id.
+   */
+  private published = new Map<string, { projectId: string; threadId: string }>()
 
   constructor(
     private readonly db: Database,
@@ -72,6 +94,9 @@ export class ForeignRunService {
     this.hasLiveSibling = options.hasLiveSibling ?? (() => instanceRegistry.hasOtherLiveInstance())
     this.isRunOwnerAlive =
       options.isRunOwnerAlive ?? ((pid) => instanceRegistry.isRunOwnerAlive(pid))
+    this.readThreads =
+      options.readThreads ?? ((ids) => new ThreadRepo(this.db).listByIdsViaWorker(ids))
+    this.publishThread = options.publishThread ?? broadcastCrossInstanceThreadUpdate
   }
 
   /**
@@ -181,7 +206,7 @@ export class ForeignRunService {
     try {
       do {
         this.refreshAgain = false
-        this.publish(await this.listForeignRuns())
+        await this.publish(await this.listForeignRuns())
       } while (this.refreshAgain)
     } catch (error) {
       // Advisory only: a renderer keeps the last snapshot it was given, and the
@@ -192,14 +217,44 @@ export class ForeignRunService {
     }
   }
 
-  private publish(notices: ForeignRunNotice[]): void {
+  private async publish(notices: ForeignRunNotice[]): Promise<void> {
+    const keys = new Set(notices.map((notice) => `${notice.projectId}:${notice.threadId}`))
+    const departed = [...this.published.values()].filter(
+      (thread) => !keys.has(`${thread.projectId}:${thread.threadId}`)
+    )
+    this.published = new Map(
+      notices.map((notice) => [`${notice.projectId}:${notice.threadId}`, notice])
+    )
     const signature = notices
       .map((notice) => `${notice.projectId}:${notice.threadId}:${notice.workflow ? 'w' : '-'}`)
       .join('|')
-    if (signature === this.signature) return
-    this.signature = signature
-    for (const win of BrowserWindow.getAllWindows()) {
-      sendToRenderer(win.webContents, 'thread:foreignRuns', notices)
+    if (signature !== this.signature) {
+      this.signature = signature
+      for (const win of BrowserWindow.getAllWindows()) {
+        sendToRenderer(win.webContents, 'thread:foreignRuns', notices)
+      }
+    }
+    if (departed.length > 0) await this.pushSettledThreads(departed)
+  }
+
+  /**
+   * Re-read the rows of threads that just stopped being foreign, and push them.
+   *
+   * A row is read after the sibling released its turn, so the terminal status the
+   * sibling persisted is already there. The read rides the database worker (a
+   * main-thread read of the shared table is never allowed), and a failure is
+   * advisory: the next announcement re-reads the same rows.
+   */
+  private async pushSettledThreads(
+    departed: readonly { projectId: string; threadId: string }[]
+  ): Promise<void> {
+    try {
+      const threads = await this.readThreads(departed.map((thread) => thread.threadId))
+      for (const thread of threads) {
+        this.publishThread(thread)
+      }
+    } catch (error) {
+      Logger.error('Foreign run settlement refresh failed (non-fatal):', error)
     }
   }
 }

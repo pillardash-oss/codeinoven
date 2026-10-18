@@ -43,7 +43,7 @@
     <img
       src={customIcon}
       alt=""
-      class="h-full w-full rounded-sm bg-white object-contain"
+      class="h-full w-full bg-white object-contain"
       style:padding={`${size * 0.08}px`}
       onerror={() => {
         failedIcon = customIcon
@@ -54,7 +54,7 @@
     {@html svg}
   {:else}
     <span
-      class="flex h-full w-full items-center justify-center rounded-[3px] bg-elevated font-semibold text-dimmed"
+      class="flex h-full w-full items-center justify-center bg-elevated font-semibold text-dimmed"
       style:font-size={`${Math.round(size * 0.6)}px`}
     >
       {monogram}

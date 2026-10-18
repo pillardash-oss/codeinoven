@@ -1,5 +1,5 @@
 import { isActivityOnlyUserMessage } from './thread-turn-parts'
-import { messageText } from './thread-message-presentation'
+import { isActionUserMessage, messageText } from './thread-message-presentation'
 import type { AgentMessage, UserMessageSummary } from '$shared/types'
 
 /**
@@ -28,6 +28,7 @@ export function mergedUserMessageSummaries(
     byId[message.id] = {
       id: message.id,
       content: messageText(message),
+      isAction: isActionUserMessage(message),
       createdAt: message.createdAt
     }
   }

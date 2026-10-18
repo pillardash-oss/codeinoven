@@ -43,14 +43,15 @@ import type { HarnessManifestService } from '../../agents/harness-manifest-servi
 import type { PowerWakeService } from '../../system/power-wake-service'
 import type { BackgroundLifecycleService } from '../../system/background-lifecycle-service'
 import type { RetrySchedulerService } from '../../system/retry-scheduler-service'
+import type { ConnectivityService } from '../../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../../system/heartbeat-scheduler-service'
 import type { AttachmentGrantRepo } from '../../database/repositories/attachment-grant-repo'
 import type { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
 import type { ModelRankingRepo } from '../../database/repositories/model-ranking-repo'
 import type { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { NoteRepo } from '../../database/repositories/note-repo'
-import type { RoutineManager } from '../../../lib/engines/routine-manager'
-import type { RoutineSchedulerService } from '../../scheduler/routine-scheduler-service'
+import type { AssistantManager } from '../../../lib/engines/assistant-manager'
+import type { AssistantSchedulerService } from '../../scheduler/assistant-scheduler-service'
 import type { AutoAnswerStore } from '../../system/auto-answer-store'
 import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { BrowserService } from '../../browser/browser-service'
@@ -71,14 +72,20 @@ export interface RegisterIpcHandlersOptions {
   backgroundLifecycle?: BackgroundLifecycleService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService
+  /**
+   * Verified device connectivity. The renderer's connection events wake it
+   * here; they never decide for it, and the handler prefers it over the
+   * renderer's own guess.
+   */
+  connectivity?: ConnectivityService
   /** Timed usage-window "keep warm" ping scheduler backing the Heartbeat settings page. */
   heartbeatScheduler?: HeartbeatSchedulerService
-  /** Assistant View's routine scheduler (app-open-only firing, missed-run records). */
-  routineScheduler?: RoutineSchedulerService
+  /** Assistant View's assistant scheduler (app-open-only firing, missed-run records). */
+  assistantScheduler?: AssistantSchedulerService
   /** Durable record of gates the app resolved without the user (attention rail). */
   autoAnswerStore?: AutoAnswerStore
-  /** Shared assistant routine manager; defaults to a database-backed instance. */
-  routineManager?: RoutineManager
+  /** Shared assistant manager; defaults to a database-backed instance. */
+  assistantManager?: AssistantManager
   /** Confirmed-override layer on the declarative harness behavior manifests. */
   harnessManifestService?: HarnessManifestService
   /** Hydration channels already registered before BrowserWindow navigation. */
@@ -145,7 +152,7 @@ export type IpcChatEngine = Pick<
   | 'abort'
   | 'recordUserFileSave'
   | 'sendPrompt'
-  | 'readRoutineCheckpoint'
+  | 'readAssistantCheckpoint'
   | 'noteUserActivity'
 > &
   Partial<
@@ -171,6 +178,8 @@ export interface IpcHandlerContext {
   updaterService: UpdaterService | undefined
   chatEngine: IpcChatEngine | undefined
   options: RegisterIpcHandlersOptions
+  /** Verified device connectivity, so a reconnection wakes the resume queue. */
+  connectivity: ConnectivityService | undefined
   projectManager: ProjectManager
   threadCreation: ThreadCreationCoordinator
   threadDeletion: ThreadDeletionCoordinator
@@ -212,8 +221,8 @@ export interface IpcHandlerContext {
   /** Transient grading queue behind the ranking aggregates, cleared with them. */
   rankingSnapshotRepo: ModelRankingSnapshotRepo
   noteRepo: NoteRepo
-  routineManager: RoutineManager
-  routineScheduler: RoutineSchedulerService | undefined
+  assistantManager: AssistantManager
+  assistantScheduler: AssistantSchedulerService | undefined
   autoAnswerStore: AutoAnswerStore | undefined
   privilegedIpc: PrivilegedIpcValidator
   /** Register a privileged channel whose sender frame must be trusted. */

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { GitCommit, Loader2 } from '@lucide/svelte'
+  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { GitCommitInfo, GitStatus } from '$shared/types'
   import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 
@@ -50,13 +51,13 @@
   <div class="shrink-0 border-t border-border bg-surface">
     {#if amendMode}
       <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
-        <GitCommit size={11} class="shrink-0 text-warning" />
+        <CioCommit size={11} class="shrink-0 text-warning" />
         <p class="min-w-0 flex-1 text-[0.5625rem] leading-relaxed text-warning">
           Amending the most recent commit no new commit will be created.
         </p>
         <button
           type="button"
-          class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted hover:bg-elevated"
+          class="shrink-0 px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted hover:bg-elevated"
           onclick={() => (amendMode = false)}
         >
           Cancel
@@ -66,7 +67,7 @@
     <div class="px-2 pt-2">
       <textarea
         bind:this={commitTextarea}
-        class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+        class="min-h-11 w-full resize-none border border-border bg-elevated px-2.5 py-2 font-mono text-[0.6875rem] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
         bind:value={commitMessage}
         onkeydown={onCommitMessageKeydown}></textarea>
@@ -75,14 +76,14 @@
       <span class="flex-1"></span>
       <button
         type="button"
-        class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
+        class="flex h-7 items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
         disabled={!commitMessage.trim() || commitBusy || (!amendMode && stagedCount === 0)}
         onclick={onCommitInline}
       >
         {#if commitBusy}
-          <Loader2 size={11} class="animate-spin" />
+          <CioSpinner size={11} class="animate-spin" />
         {:else}
-          <GitCommit size={11} />
+          <CioCommit size={11} />
         {/if}
         {amendMode ? 'Amend commit' : `Commit${stagedCount > 0 ? ` (${stagedCount})` : ''}`}
       </button>

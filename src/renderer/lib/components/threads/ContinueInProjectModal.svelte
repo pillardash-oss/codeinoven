@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Folder, Search } from '@lucide/svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import Modal from '../ui/Modal.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ProjectIdentity from '../shared/ProjectIdentity.svelte'
@@ -67,17 +68,17 @@
     </p>
 
     <div class="relative">
-      <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-dimmed" />
+      <CioSearch size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-dimmed" />
       <input
         type="text"
-        class="w-full rounded-lg border bg-elevated py-2 pl-9 pr-3 text-sm text-foreground placeholder:text-dimmed"
+        class="w-full border bg-elevated py-2 pl-9 pr-3 text-sm text-foreground placeholder:text-dimmed"
         placeholder="Search projects…"
         aria-label="Search projects"
         bind:value={query}
       />
     </div>
 
-    <div class="max-h-72 overflow-y-auto rounded-xl border border-border">
+    <div class="max-h-72 overflow-y-auto border border-border">
       {#if filtered.length > 0}
         <ul class="divide-y divide-border">
           {#each filtered as project (project.id)}
@@ -102,7 +103,7 @@
                     onerror={projectIconOnError(project)}
                   />
                 {:else}
-                  <Folder size={16} class="shrink-0 text-muted" />
+                  <CioFolder size={16} class="shrink-0 text-muted" />
                 {/if}
                 <ProjectIdentity {project} class="min-w-0 flex-1" showLocation />
               </button>
@@ -111,7 +112,7 @@
         </ul>
       {:else}
         <div class="flex flex-col items-center gap-2 px-4 py-8 text-center">
-          <Folder size={20} class="text-dimmed" />
+          <CioFolder size={20} class="text-dimmed" />
           <p class="text-sm text-muted">No {query.trim() ? 'matching' : ''} projects</p>
           <p class="text-xs text-dimmed">
             Add a local folder or an Oven project below to continue.
@@ -133,7 +134,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Cancel"
       onclick={onClose}
     >
@@ -141,7 +142,7 @@
     </button>
     <button
       type="button"
-      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+      class="bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
       title="Continue this chat in the selected project"
       disabled={!selectedId || busy}
       onclick={confirm}

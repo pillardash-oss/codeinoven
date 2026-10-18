@@ -1,6 +1,11 @@
 <script lang="ts">
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioEnter from '@pillardash-oss/cio-icon/CioEnter.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
   import { Command } from 'bits-ui'
-  import { ArrowLeft, CornerDownLeft, FolderTree, GitBranch, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
@@ -19,7 +24,7 @@
 
   /**
    * The optional footer filter: a search screen's own sub-container picker. The
-   * palette is entity agnostic, so a project search, a routine search, and a
+   * palette is entity agnostic, so a project search, an assistant search, and a
    * browser-group search all drive the same picker from a description instead of
    * a component per entity.
    */
@@ -86,7 +91,7 @@
     closeOnSelect = true,
     shortcutLabel,
     onQueryChange,
-    headerIcon = Zap,
+    headerIcon = CioZap,
     headerIconBadge = false,
     headerIconBadgeClass = '',
     serverFiltered = false,
@@ -191,7 +196,7 @@
 
 {#snippet paletteBody()}
   <Command.Root
-    class="overflow-hidden rounded-xl bg-surface"
+    class="overflow-hidden bg-surface"
     label={title}
     shouldFilter={false}
     loop
@@ -204,10 +209,7 @@
       {#if headerIconBadge}
         {@const Icon = headerIcon}
         <span
-          class={[
-            'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border',
-            headerIconBadgeClass
-          ]}
+          class={['flex h-7 w-7 shrink-0 items-center justify-center border', headerIconBadgeClass]}
         >
           <Icon size={15} strokeWidth={1.9} aria-hidden="true" />
         </span>
@@ -228,7 +230,7 @@
       {#if query}
         <button
           type="button"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Clear action search"
           title="Clear action search"
           onclick={() => {
@@ -238,14 +240,14 @@
             inputElement?.focus()
           }}
         >
-          <X size={14} aria-hidden="true" />
+          <CioClose size={14} aria-hidden="true" />
         </button>
       {/if}
       {#if mode === 'dialog'}
         <span class="flex items-center gap-1 border-l border-border pl-2">
           {#if shortcutLabel}
             <kbd
-              class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
+              class="border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[0.625rem] font-medium text-dimmed"
             >
               {displayShortcutLabel(shortcutLabel)}
             </kbd>
@@ -268,7 +270,7 @@
           value={action.id}
           disabled={Boolean(action.disabledReason)}
           class={[
-            'group flex min-h-11 w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left outline-none transition-colors',
+            'group flex min-h-11 w-full items-center gap-3 px-2.5 py-2 text-left outline-none transition-colors',
             action.disabledReason
               ? 'cursor-not-allowed opacity-50'
               : selectedActionId === action.id
@@ -286,7 +288,7 @@
         >
           <span
             class={[
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border',
+              'flex h-7 w-7 shrink-0 items-center justify-center border',
               selectedActionId === action.id && !action.disabledReason
                 ? 'border-border-strong bg-surface text-foreground'
                 : 'border-border bg-raised text-dimmed'
@@ -309,27 +311,25 @@
             <span class="flex min-w-0 items-center gap-2">
               <span class="truncate text-sm font-medium">{action.title}</span>
               <span
-                class="shrink-0 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+                class="shrink-0 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
               >
                 {categoryLabel(action)}
               </span>
               {#if action.showSourceBadge !== false}
                 {#if action.source.color}
                   <span
-                    class="inline-flex min-w-0 shrink-0 items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[0.5625rem] font-medium"
+                    class="inline-flex min-w-0 shrink-0 items-center gap-1 truncate border px-1.5 py-0.5 text-[0.5625rem] font-medium"
                     style="color: {action.source.color}; border-color: color-mix(in srgb, {action
                       .source.color} 35%, transparent); background-color: color-mix(in srgb, {action
                       .source.color} 12%, transparent)"
                   >
-                    <span
-                      class="h-1.5 w-1.5 shrink-0 rounded-full"
-                      style="background: {action.source.color}"
+                    <span class="h-1.5 w-1.5 shrink-0" style="background: {action.source.color}"
                     ></span>
                     <span class="truncate">{action.source.label}</span>
                   </span>
                 {:else}
                   <span
-                    class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
+                    class="min-w-0 truncate border border-border px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
                   >
                     {action.source.label}
                   </span>
@@ -337,7 +337,7 @@
               {/if}
               {#if action.status}
                 <span
-                  class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
+                  class="inline-flex shrink-0 items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.5625rem] font-medium text-dimmed"
                 >
                   <StatusBadge
                     stage={action.status.stage}
@@ -345,7 +345,6 @@
                     kind={action.status.kind}
                     variant={action.status.variant ?? 'dot'}
                     icon={action.status.icon}
-                    animated={action.status.animated}
                     size="sm"
                     title={action.status.label}
                   />
@@ -362,7 +361,7 @@
                       aria-label="Managed Git worktree scope on {scope.root.branch}"
                       title="Managed Git worktree scope on {scope.root.branch}"
                     >
-                      <FolderTree size={11} class="text-warning" />
+                      <CioFiles size={11} class="text-warning" />
                     </span>
                   {/if}
                   <ScopeBadge bucket={scope} size="xs" />
@@ -397,7 +396,7 @@
                     class="flex shrink-0 items-center gap-1 text-[0.6875rem] text-dimmed"
                     title={`Branch: ${action.threadMeta.branch}`}
                   >
-                    <GitBranch size={11} class="shrink-0" aria-hidden="true" />
+                    <CioTabGit size={11} class="shrink-0" aria-hidden="true" />
                     <span class="font-mono">{threadBranchRowLabel(action.threadMeta.branch)}</span>
                   </span>
                 {/if}
@@ -443,14 +442,14 @@
             >
               {#each action.shortcut as key (key)}
                 <kbd
-                  class="min-w-5 rounded-md border border-border-strong bg-raised px-1 py-0.5 text-center font-sans text-[0.625rem] font-medium text-dimmed"
+                  class="min-w-5 border border-border-strong bg-raised px-1 py-0.5 text-center font-sans text-[0.625rem] font-medium text-dimmed"
                 >
                   {displayShortcutKey(key)}
                 </kbd>
               {/each}
             </span>
           {:else if selectedActionId === action.id && !action.disabledReason}
-            <CornerDownLeft size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+            <CioEnter size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
           {/if}
         </Command.Item>
       {:else}
@@ -467,12 +466,12 @@
         {#if onBack}
           <button
             type="button"
-            class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex shrink-0 items-center gap-1 px-1.5 py-0.5 font-medium text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Back to actions"
             title="Back to actions"
             onclick={onBack}
           >
-            <ArrowLeft size={12} aria-hidden="true" />
+            <CioArrowLeft size={12} aria-hidden="true" />
             Back
           </button>
         {/if}
@@ -497,8 +496,13 @@
 {/snippet}
 
 {#if mode === 'dialog'}
-  <!-- Keep the query in one document: projected header changes can move the
-       focused input and interrupt typing before the native paint restores it. -->
+  <!--
+    Drawn through the native projection like every other dialog, so the panel
+    paints above the browser's page view and the page stays up behind it. Its
+    footer filter keeps its pickers inside the panel for the same reason (see
+    `MultiSelectPicker`), so nothing here forces a fall back to the app-window
+    DOM presentation, which would detach the browser to show the panel.
+  -->
   <Modal
     {open}
     {title}
@@ -506,7 +510,6 @@
     placement="palette"
     size="lg"
     chrome={false}
-    nativePresentation={false}
     onEscapeKeydown={handleEscapeKeydown}
     onCloseAutoFocus={(event) => {
       if (onRestoreFocus?.()) event.preventDefault()
@@ -516,7 +519,7 @@
   </Modal>
 {:else if open}
   <section
-    class="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
+    class="absolute inset-x-0 bottom-full z-40 mb-2 overflow-hidden border border-border bg-surface shadow-xl"
     aria-label={title}
   >
     {@render paletteBody()}

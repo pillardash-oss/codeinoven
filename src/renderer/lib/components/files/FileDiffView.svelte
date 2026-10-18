@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
   import DiffRows from './DiffRows.svelte'
   import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
@@ -106,7 +107,7 @@
     {#if !isFolded && hidden > 0}
       <button
         type="button"
-        class="shrink-0 rounded px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+        class="shrink-0 px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
         title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
         onclick={(e: MouseEvent) => {
           e.stopPropagation()
@@ -117,9 +118,9 @@
       </button>
     {/if}
     {#if isFolded}
-      <ChevronRight size={12} class="shrink-0 text-dimmed" />
+      <CioForward size={12} class="shrink-0 text-dimmed" />
     {:else}
-      <ChevronDown size={12} class="shrink-0 text-dimmed" />
+      <CioChevronDown size={12} class="shrink-0 text-dimmed" />
     {/if}
   </div>
 {/snippet}

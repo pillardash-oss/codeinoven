@@ -10,6 +10,12 @@ export default defineConfig(
   globalIgnores([
     '.cio/**',
     '.svelte-check/**',
+    // svelte-package writes generated declaration files here when a workspace
+    // package is built (packages/cio-icons, packages/cio-oven). They are build
+    // output, not source: `bun run check` generates them before the local gate
+    // lints, which failed the gate with 476 empty-object errors in files nobody
+    // edits.
+    '**/.svelte-kit/**',
     '**/dist/**',
     '**/node_modules/**',
     '**/out/**',

@@ -1,13 +1,11 @@
 <script lang="ts">
-  import {
-    AlertTriangle,
-    Files,
-    FolderInput,
-    FolderKanban,
-    GitBranch,
-    Loader2,
-    Server
-  } from '@lucide/svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioDocuments from '@pillardash-oss/cio-icon/CioDocuments.svelte'
+  import CioFolderInput from '@pillardash-oss/cio-icon/CioFolderInput.svelte'
+  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
   import GitCloneModal from './GitCloneModal.svelte'
@@ -161,12 +159,12 @@
 {#if mode === 'dropdown'}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
       data-shortcut={keymapState.keysFor('nav-new-project').join(',')}
     >
-      <FolderKanban size={15} strokeWidth={1.8} />
+      <CioProjects size={15} strokeWidth={1.8} />
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content
@@ -174,30 +172,30 @@
         align="end"
         sideOffset={6}
         collisionPadding={8}
-        class="z-60 w-44 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+        class="z-60 w-44 overflow-hidden border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
           title="Add a folder from this device"
           onSelect={() => void addLocalFolder()}
         >
-          <FolderInput size={14} class="shrink-0 text-muted" />
+          <CioFolderInput size={14} class="shrink-0 text-muted" />
           Local Folder
         </DropdownMenu.Item>
         <DropdownMenu.Item
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
           title="Add a project on one of your Ovens"
           onSelect={addOvenProject}
         >
-          <Server size={14} class="shrink-0 text-muted" />
+          <CioServer size={14} class="shrink-0 text-muted" />
           Remote Oven
         </DropdownMenu.Item>
         <DropdownMenu.Item
-          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
           title="Clone a Git repository"
           onSelect={addGitCloneProject}
         >
-          <GitBranch size={14} class="shrink-0 text-muted" />
+          <CioTabGit size={14} class="shrink-0 text-muted" />
           Clone Git Repo
         </DropdownMenu.Item>
       </DropdownMenu.Content>
@@ -209,11 +207,11 @@
     <div class="grid gap-2">
       <button
         type="button"
-        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
+        class="flex items-center gap-3 border p-3 text-left transition-colors hover:bg-elevated"
         title="Add a folder from this device"
         onclick={() => void addLocalFolder()}
       >
-        <FolderInput size={16} class="shrink-0 text-muted" />
+        <CioFolderInput size={16} class="shrink-0 text-muted" />
         <span>
           <span class="block text-sm font-medium">Local Folder</span>
           <span class="mt-0.5 block text-xs text-dimmed">Add a folder from this device.</span>
@@ -221,11 +219,11 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
+        class="flex items-center gap-3 border p-3 text-left transition-colors hover:bg-elevated"
         title="Add a project on one of your Ovens"
         onclick={addOvenProject}
       >
-        <Server size={16} class="shrink-0 text-muted" />
+        <CioServer size={16} class="shrink-0 text-muted" />
         <span>
           <span class="block text-sm font-medium">Oven Project</span>
           <span class="mt-0.5 block text-xs text-dimmed">Pick an Oven and a folder on it.</span>
@@ -233,11 +231,11 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
+        class="flex items-center gap-3 border p-3 text-left transition-colors hover:bg-elevated"
         title="Clone a Git repository"
         onclick={addGitCloneProject}
       >
-        <GitBranch size={16} class="shrink-0 text-muted" />
+        <CioTabGit size={16} class="shrink-0 text-muted" />
         <span>
           <span class="block text-sm font-medium">Clone Git Repo</span>
           <span class="mt-0.5 block text-xs text-dimmed">Clone from https or ssh.</span>
@@ -257,8 +255,8 @@
 
 <Modal open={showTrackingModal} title="Set Up Change Tracking" onClose={closeTrackingModal}>
   <div class="space-y-4">
-    <div class="flex gap-3 rounded-xl border bg-elevated p-3">
-      <AlertTriangle size={18} class="mt-0.5 shrink-0 text-warning" />
+    <div class="flex gap-3 border bg-elevated p-3">
+      <CioAttention size={18} class="mt-0.5 shrink-0 text-warning" />
       <div>
         <p class="text-sm font-medium">
           {repositoryPreflight?.status === 'git_unavailable'
@@ -273,14 +271,14 @@
     </div>
 
     <p
-      class="truncate rounded-lg bg-raised px-3 py-2 font-mono text-xs text-muted"
+      class="truncate bg-raised px-3 py-2 font-mono text-xs text-muted"
       title={pendingProjectFolder}
     >
       {pendingProjectFolder}
     </p>
 
     {#if trackingSetupError}
-      <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">
+      <p class="bg-danger/10 px-3 py-2 text-xs text-danger">
         {trackingSetupError}
       </p>
     {/if}
@@ -288,12 +286,12 @@
     <div class="grid gap-2 sm:grid-cols-2">
       <button
         type="button"
-        class="flex items-start gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-elevated disabled:opacity-50"
+        class="flex items-start gap-2 border p-3 text-left transition-colors hover:bg-elevated disabled:opacity-50"
         disabled={trackingSetupBusy}
         title="Track changes with {APP_NAME} file snapshots"
         onclick={() => void createProjectWithManualTracking()}
       >
-        <Files size={16} class="mt-0.5 shrink-0 text-muted" />
+        <CioDocuments size={16} class="mt-0.5 shrink-0 text-muted" />
         <span>
           <span class="block text-sm font-medium">Track Changes Manually</span>
           <span class="mt-0.5 block text-xs text-dimmed">Use {APP_NAME} file snapshots.</span>
@@ -302,15 +300,15 @@
 
       <button
         type="button"
-        class="flex items-start gap-2 rounded-xl bg-primary p-3 text-left text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="flex items-start gap-2 bg-primary p-3 text-left text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         disabled={trackingSetupBusy || repositoryPreflight?.status === 'git_unavailable'}
         title="Initialize a Git repository in this folder"
         onclick={() => void initializeGitAndCreateProject()}
       >
         {#if trackingSetupBusy}
-          <Loader2 size={16} class="mt-0.5 shrink-0 animate-spin" />
+          <CioSpinner size={16} class="mt-0.5 shrink-0 animate-spin" />
         {:else}
-          <GitBranch size={16} class="mt-0.5 shrink-0" />
+          <CioTabGit size={16} class="mt-0.5 shrink-0" />
         {/if}
         <span>
           <span class="block text-sm font-medium">Init Git</span>
@@ -323,7 +321,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       disabled={trackingSetupBusy}
       title="Cancel"
       onclick={closeTrackingModal}

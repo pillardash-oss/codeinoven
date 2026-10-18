@@ -184,7 +184,7 @@ export function cioCleanupPathCovers(excludedPath: string, candidatePath: string
 
 /**
  * Stable key of one workspace mount. A scope id alone is not enough because a
- * conversation's own workspace (`chats-cwd/<threadId>`, `assistant-cwd/<routine>`,
+ * conversation's own workspace (`chats-cwd/<threadId>`, `assistant-cwd/<assistant>`,
  * `browser-cwd/<threadId>`) is a separate scratch folder under the same project.
  */
 export function cioCleanupMountKey(mount: CioCleanupMount): string {

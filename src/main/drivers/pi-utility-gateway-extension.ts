@@ -12,12 +12,10 @@
  * catalog in `src/lib/gateway-tools.ts`, so updating that catalog updates
  * this extension everywhere   no surface can drift.
  *
- * Visibility contract: pi's system prompt lists a custom tool only when it
- * carries a `promptSnippet`. The three always-on tools (find/init/use) carry
- * one so the model discovers them on every turn. `cio_util_manage` and
- * `cio_util_diagnose` are registered WITHOUT a snippet: they stay callable
- * whenever an explicit @cio-utility setup turn names them in prose, but they
- * never advertise themselves during ordinary work.
+ * Visibility contract: only the core discovery, invocation, documentation,
+ * diagnostics and secret tools are registered. Optional app, workstation,
+ * engineering and setup schemas are loaded through cio:gateway on demand.
+ * The turn's original grant list still governs every invocation.
  *
  * The gateway URL and bearer token are turn-scoped, while a Pi session process
  * persists across turns   extensions load at spawn, so their source cannot
@@ -37,6 +35,8 @@
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
+  CORE_GATEWAY_TOOL_NAMES,
+  gatewayToolForModel,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
@@ -55,28 +55,20 @@ import {
   APP_CONTROL_CALL_TOOL_NAME,
   APP_CONTROL_CATALOG_TOOL_NAME
 } from '../../lib/app-control-tools'
+import {
+  CREATE_ASSIGNMENT_TOOL_NAME,
+  CREATE_BRAINSTORM_TOOL_NAME,
+  CREATE_PRD_TOOL_NAME,
+  CREATE_SPEC_TOOL_NAME
+} from '../../lib/engineering-tools'
 
 /** The gateway tools the extension registers as first-class Pi tools. */
-export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
-  UTILITY_SEARCH_TOOL_NAME,
-  UTILITY_ACTIVATE_TOOL_NAME,
-  UTILITY_INVOKE_TOOL_NAME,
-  UTILITY_DOCS_TOOL_NAME,
-  ASK_SECRET_TOOL_NAME,
-  UTILITY_MANAGE_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME,
-  ORCHESTRATION_TARGETS_TOOL_NAME,
-  ORCHESTRATION_DISPATCH_TOOL_NAME,
-  ORCHESTRATION_STATUS_TOOL_NAME,
-  APP_CONTROL_CATALOG_TOOL_NAME,
-  APP_CONTROL_CALL_TOOL_NAME
-] as const
+export const PI_UTILITY_GATEWAY_TOOL_NAMES = [...CORE_GATEWAY_TOOL_NAMES]
 
 function gatewayTool(name: string): GatewayToolDefinition {
   const definition = GATEWAY_TOOLS.find((tool) => tool.name === name)
   if (!definition) throw new Error(`Gateway tool ${name} is missing from GATEWAY_TOOLS`)
-  return definition
+  return gatewayToolForModel(definition)
 }
 
 const searchTool = gatewayTool(UTILITY_SEARCH_TOOL_NAME)
@@ -92,6 +84,10 @@ const orchestrationDispatchTool = gatewayTool(ORCHESTRATION_DISPATCH_TOOL_NAME)
 const orchestrationStatusTool = gatewayTool(ORCHESTRATION_STATUS_TOOL_NAME)
 const appCatalogTool = gatewayTool(APP_CONTROL_CATALOG_TOOL_NAME)
 const appCallTool = gatewayTool(APP_CONTROL_CALL_TOOL_NAME)
+const createBrainstormTool = gatewayTool(CREATE_BRAINSTORM_TOOL_NAME)
+const createPrdTool = gatewayTool(CREATE_PRD_TOOL_NAME)
+const createSpecTool = gatewayTool(CREATE_SPEC_TOOL_NAME)
+const createAssignmentTool = gatewayTool(CREATE_ASSIGNMENT_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFile } from 'node:fs/promises'
@@ -295,6 +291,7 @@ const CIO_GATEWAY_OUTPUT_SCHEMAS = ${JSON.stringify(
 
 /** Register one gateway tool, with its output schema when the catalog declares one. */
 function registerCioGatewayTool(pi, definition) {
+  if (!${JSON.stringify([...CORE_GATEWAY_TOOL_NAMES])}.includes(definition.name)) return
   const outputSchema = CIO_GATEWAY_OUTPUT_SCHEMAS[definition.name]
   pi.registerTool(outputSchema === undefined ? definition : { ...definition, outputSchema })
 }
@@ -482,10 +479,10 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
-  // Setup/diagnostics tools: registered without a promptSnippet so they stay
-  // out of the always-on system prompt, but remain callable whenever an
-  // explicit @cio-utility turn names them in prose. The gateway server still
-  // enforces allowManagement, so ordinary turns cannot misuse them.
+  // Setup tool: registered without a promptSnippet so it stays out of the
+  // always-on system prompt, but remains callable on a turn whose gateway
+  // carries the setup route   an explicit @cio-utility setup turn. The gateway
+  // server still enforces allowManagement, so ordinary turns cannot misuse it.
   registerCioGatewayTool(pi, {
     name: ${JSON.stringify(manageTool.name)},
     label: 'Install a CodeInOven utility bundle',
@@ -556,10 +553,19 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     }
   })
 
+  // Read-only app diagnostics, advertised like the other app capabilities: the
+  // gateway grants the route on every turn, because a user reporting a problem
+  // must never have to re-send their message before the agent can look at the
+  // thread or the log they named.
   registerCioGatewayTool(pi, {
     name: ${JSON.stringify(diagnosticsTool.name)},
     label: 'Run CodeInOven app diagnostics',
     description: ${JSON.stringify(diagnosticsTool.description)},
+    promptSnippet: 'Look up an app, thread, assistant or log problem yourself with read-only CodeInOven diagnostics',
+    promptGuidelines: [
+      'When the user reports a problem with the app, a thread, an assistant, or a log line, look it up with ${JSON.stringify(diagnosticsTool.name)} instead of asking them to re-send their request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs.',
+      'Diagnostics output is redacted and bounded and the capability never writes, deletes, or reconfigures anything. Report the evidence you actually read, and say plainly when it is insufficient instead of guessing.'
+    ],
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('lookup_thread'),
@@ -709,6 +715,90 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
         ...(params.params !== undefined ? { params: params.params } : {}),
         ...(params.destructiveConfirmed !== undefined ? { destructiveConfirmed: params.destructiveConfirmed } : {})
       })
+      return textResult(result)
+    }
+  })
+
+  // Engineering artifact tools: real callable tools the agent reaches for when
+  // the user wants a durable Brainstorm, PRD, specification or Assignment.
+  // Granted by the turn's own flag, and the gateway refuses a route the turn
+  // never received.
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createBrainstormTool.name)},
+    label: "Create this thread's Brainstorm",
+    description: ${JSON.stringify(createBrainstormTool.description)},
+    promptSnippet: "Create this thread's durable Brainstorm artifact",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the artifact should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createBrainstormTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createPrdTool.name)},
+    label: "Create this thread's PRD",
+    description: ${JSON.stringify(createPrdTool.description)},
+    promptSnippet: "Create this thread's product requirements document (PRD)",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the artifact should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createPrdTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createSpecTool.name)},
+    label: "Create this thread's specification",
+    description: ${JSON.stringify(createSpecTool.description)},
+    promptSnippet: "Create this thread's engineering specification",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the artifact should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createSpecTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(createAssignmentTool.name)},
+    label: "Create this thread's Assignment",
+    description: ${JSON.stringify(createAssignmentTool.description)},
+    promptSnippet: "Create this thread's Assignment and split work across promptable workers",
+    parameters: Type.Object({
+      instructions: Type.Optional(Type.String({ description: 'What the split should cover, as the user described it.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(
+        ${JSON.stringify(createAssignmentTool.route)},
+        {
+          ...(params.instructions !== undefined ? { instructions: params.instructions } : {})
+        },
+        HUMAN_PACED_TIMEOUT_MS
+      )
       return textResult(result)
     }
   })

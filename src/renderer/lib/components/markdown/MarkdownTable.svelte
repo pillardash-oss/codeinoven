@@ -1,6 +1,11 @@
 <script lang="ts">
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioLock from '@pillardash-oss/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pillardash-oss/cio-icon/CioLockOpen.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
   import { onDestroy } from 'svelte'
-  import { Check, Copy, Expand, Lock, LockOpen, TextWrap } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import Modal from '../ui/Modal.svelte'
   import { attachTableColumnResize, type TableColumnResizeSession } from './table-column-resize'
@@ -98,7 +103,7 @@
     title={wrapLabel}
     onclick={() => (wrapped = !wrapped)}
   >
-    <TextWrap size={12} />
+    <CioWrapText size={12} />
   </button>
   {#if withResize}
     <button
@@ -110,9 +115,9 @@
       onclick={() => (unlocked = !unlocked)}
     >
       {#if unlocked}
-        <LockOpen size={12} />
+        <CioLockOpen size={12} />
       {:else}
-        <Lock size={12} />
+        <CioLock size={12} />
       {/if}
     </button>
   {/if}
@@ -124,9 +129,9 @@
     onclick={() => void copyTable()}
   >
     {#if copied}
-      <Check size={12} class="text-success" />
+      <CioCheck size={12} class="text-success" />
     {:else}
-      <Copy size={12} />
+      <CioCopy size={12} />
     {/if}
   </button>
   {#if withExpand}
@@ -137,7 +142,7 @@
       title="Expand table"
       onclick={() => (expanded = true)}
     >
-      <Expand size={12} />
+      <CioMaximize size={12} />
     </button>
   {/if}
 {/snippet}
@@ -164,8 +169,8 @@
   open={expanded}
   title="Table"
   onClose={() => (expanded = false)}
-  size="full"
-  fill
+  placement="fullscreen"
+  panelClass="bg-surface"
   contentClass="flex min-h-0 flex-col overflow-hidden p-0"
 >
   <div class="markdown-body md-table-fullscreen">

@@ -1,5 +1,5 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-import { logRendererError } from '$lib/system/renderer-logger'
+import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   NATIVE_DOCK_TAGS,
@@ -119,6 +119,18 @@ export class NativeDockController {
   private focusables = new SvelteMap<string, HTMLElement>()
   private scrollTargets = new SvelteMap<string, HTMLElement>()
   private scrollIds = new WeakMap<Element, string>()
+  /**
+   * The position this controller last wrote onto a scroll host to mirror the
+   * overlay's own scrolling.
+   *
+   * The overlay owns the gesture   it holds the pointer and the keyboard   and
+   * the app only follows it so hit-testing rects stay true. That mirror is a
+   * scroll the overlay already made, so publishing it would re-project the whole
+   * panel to echo a position the overlay is at or past, and every frame of the
+   * echo dragged the live gesture backwards. Recognising the mirror keeps the
+   * scroll path one-way: a gesture drives the app, never a repaint.
+   */
+  private mirroredScrolls = new WeakMap<HTMLElement, number>()
   private actionCounter = 0
   private imageCounter = 0
   private imageSources = new SvelteMap<string, string>()
@@ -138,6 +150,17 @@ export class NativeDockController {
   /** Distinct original sources admitted to the frame being built. */
   private frameImageSources = new SvelteSet<string>()
   private signature = ''
+  /**
+   * Whether this dock's host has ever answered for it.
+   *
+   * A host that has never drawn a frame may still be loading its document   a
+   * shared overlay created with the first modal of a session, or a bounded
+   * panel host whose renderer is still coming up. That load is not the dock's
+   * failure, so the first projection gets the generous, bounded window below;
+   * once the host has answered once it is proven and every later frame must
+   * confirm promptly or the fallback is the right answer.
+   */
+  private confirmed = false
   private active = false
   constructor(
     private id: string,
@@ -173,6 +196,7 @@ export class NativeDockController {
     const unsubscribeAck = subscribe('browser:overlay:dockDrawn', (ack) => {
       if (this.active && ack.id === this.id && ack.revision === this.revision) {
         clearTimeout(this.timer)
+        this.confirmed = true
         const firstDraw = !this.ready
         this.ready = true
         this.modalOptions?.onReady?.()
@@ -252,8 +276,10 @@ export class NativeDockController {
       }
       if (report.kind === 'scroll') {
         const target = this.scrollTargets.get(report.target)
-        if (target && root.contains(target) && target.scrollTop !== report.top)
+        if (target && root.contains(target) && target.scrollTop !== report.top) {
+          this.mirroredScrolls.set(target, report.top)
           target.scrollTop = report.top
+        }
         return
       }
       if (report.kind !== 'click' && report.kind !== 'context') {
@@ -298,7 +324,12 @@ export class NativeDockController {
       // to close it.
       this.modalOptions?.onDismiss()
     })
-    const scrolled = (): void => this.schedule()
+    const scrolled = (event: Event): void => {
+      const target = event.target
+      if (target instanceof HTMLElement && this.mirroredScrolls.get(target) === target.scrollTop)
+        return
+      this.schedule()
+    }
     root.addEventListener('scroll', scrolled, true)
     this.schedule()
     return () => {
@@ -340,7 +371,12 @@ export class NativeDockController {
     // than believing the host still holds what it was sent before the hide.
     const resumed = !this.active
     this.active = true
-    if (resumed) this.deliveredImages.clear()
+    if (resumed) {
+      this.deliveredImages.clear()
+      // A hidden dock leaves its native host, so the one that answers next is
+      // not necessarily the one that answered before. It starts unproven again.
+      this.confirmed = false
+    }
     this.schedule()
   }
 
@@ -602,7 +638,10 @@ export class NativeDockController {
     if (this.modalOptions?.requireCompleteProjection) {
       const refusal = nativeModalRefusal(this.root, { panel: this.modalOptions.panel === true })
       if (refusal) {
-        this.refuse(`its content cannot be projected: ${refusal}`)
+        // Content the projection cannot carry is a supported limitation, not a
+        // failure: the app window is the designed fallback for it, so it is
+        // logged at dev level. Only a broken projection is an error.
+        this.refuse(`its content cannot be projected: ${refusal}`, true)
         return
       }
     }
@@ -653,14 +692,9 @@ export class NativeDockController {
         revision: ++this.revision
       })
       clearTimeout(this.timer)
-      // A modal shares the always-warm full-window overlay, so two seconds is
-      // enough for it to prove it drew. A bounded panel host is loaded while the
-      // browser view is up, but a reveal can still land while that load is in
-      // flight, and nothing is drawn in the app window while it waits: five
-      // seconds bounds that wait without turning a slow start into a fallback.
       this.timer = setTimeout(
         () => this.refuse('its host never confirmed the panel it was given'),
-        this.passive ? OVERLAY_ACK_TIMEOUT_MS : this.modalOptions?.panel ? 5000 : 2000
+        this.ackDeadline()
       )
       void invoke('browser:setDockOverlay', this.id, request)
         .then((accepted) => {
@@ -680,6 +714,27 @@ export class NativeDockController {
     }
   }
 
+  /**
+   * How long this frame's host gets to confirm it drew, in milliseconds.
+   *
+   * A modal draws in the shared full-window overlay, which the session's first
+   * gesture loads and keeps (`renderer/lib/overlay-host-warm.ts`), so two
+   * seconds is enough for it to prove it drew. A bounded panel host is loaded
+   * while the browser view is up, but a reveal can still land while that load is
+   * in flight, and nothing is drawn in the app window while it waits: five
+   * seconds bounds that wait without turning a slow start into a fallback. The
+   * first projection to a host that has never answered is different again: its
+   * document may still be loading, on a cold, busy boot that load is what the
+   * user watches, and the same generous window the passive surfaces already use
+   * bounds it without letting a host that never answers keep the panel forever.
+   * Every later frame is held to the short deadline because a host that has
+   * answered once has proven it can.
+   */
+  private ackDeadline(): number {
+    if (this.passive || !this.confirmed) return OVERLAY_ACK_TIMEOUT_MS
+    return this.modalOptions?.panel ? 5000 : 2000
+  }
+
   private typography(): NonNullable<import('$shared/native-dock').NativeDockRequest['typography']> {
     const style = getComputedStyle(document.documentElement)
     return {
@@ -689,10 +744,13 @@ export class NativeDockController {
     }
   }
 
-  private refuse(reason?: string): void {
+  private refuse(reason?: string, supported = false): void {
     this.failed = true
-    if (reason)
-      logRendererError(`The native dock '${this.id}' fell back to the app window: ${reason}`)
+    if (reason) {
+      const message = `The native dock '${this.id}' fell back to the app window: ${reason}`
+      if (supported) logRendererDev(message)
+      else logRendererError(message)
+    }
     this.modalOptions?.onFailure?.(reason)
     this.ready = false
     this.active = false

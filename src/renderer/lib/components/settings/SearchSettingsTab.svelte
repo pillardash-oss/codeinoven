@@ -1,14 +1,13 @@
 <script lang="ts">
+  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
+  import CioClipboardPaste from '@pillardash-oss/cio-icon/CioClipboardPaste.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { onDestroy, onMount } from 'svelte'
-  import {
-    CircleAlert,
-    ClipboardPaste,
-    Download,
-    LoaderCircle,
-    RefreshCw,
-    Trash2,
-    Upload
-  } from '@lucide/svelte'
+
   import { invoke } from '$lib/ipc.svelte'
   import { searchSettingsStore as search } from '$lib/stores/search.svelte'
   import { formatCompactAge } from '../../../../lib/date-time-format'
@@ -126,8 +125,9 @@
     <div class="min-w-0">
       <h1 class="text-xl font-bold tracking-tight">Search by intent</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Blends keyword hits with meaning-based matches on every thread search. Title matches stay
-        first, semantic matches follow, keyword-only finds come last.
+        Ranks the Cmd+K thread search with meaning-based matches as well as keywords. Title matches
+        stay first, semantic matches follow, keyword-only finds come last. The search buttons on the
+        panels stay keyword-only.
       </p>
       {#if !canEnable}
         <p class="mt-1.5 text-xs text-dimmed">
@@ -148,26 +148,26 @@
       />
       <button
         type="button"
-        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-elevated text-muted hover:text-foreground"
+        class="flex h-8 w-8 shrink-0 items-center justify-center border bg-elevated text-muted hover:text-foreground"
         title="Refresh search settings"
         aria-label="Refresh search settings"
         onclick={() => void search.load()}
       >
-        <RefreshCw size={14} class={search.loading ? 'animate-spin' : ''} aria-hidden="true" />
+        <CioRefresh size={14} class={search.loading ? 'animate-spin' : ''} aria-hidden="true" />
       </button>
     </div>
   </div>
 
   {#if search.error}
-    <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
       {search.error}
     </p>
   {/if}
 
   <div class="space-y-4">
     {#if status && (!status.runtimeAvailable || runtimeTooOld)}
-      <div class="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
-        <CircleAlert size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
+      <div class="flex items-start gap-3 border border-warning/40 bg-warning/10 p-4">
+        <CioAlertCircle size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
         <div class="min-w-0 flex-1">
           <p class="text-sm font-medium">
             {runtimeTooOld
@@ -190,15 +190,15 @@
         </div>
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+          class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
           disabled={installingRuntime}
           onclick={() => void installRuntime()}
         >
           {#if installingRuntime}
-            <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+            <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
             Installing
           {:else}
-            <Download size={12} aria-hidden="true" />
+            <CioDownload size={12} aria-hidden="true" />
             {runtimeTooOld ? 'Update' : 'Install'}
           {/if}
         </button>
@@ -206,18 +206,18 @@
     {/if}
 
     <!-- Index -->
-    <div class="rounded-xl border bg-surface p-4">
-      <div class="mb-3 flex items-center justify-between gap-3">
-        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Index</h3>
+    <div class="border bg-surface p-4">
+      <div class="mb-3 flex items-center justify-between gap-3 border-b border-border pb-2">
+        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Index</h3>
         <button
           type="button"
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+          class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
           title="Rebuild the thread index from scratch"
           aria-label="Rebuild thread index"
           disabled={!enabled || status?.indexing}
           onclick={() => void search.rebuildIndex()}
         >
-          <RefreshCw size={12} class={status?.indexing ? 'animate-spin' : ''} aria-hidden="true" />
+          <CioRefresh size={12} class={status?.indexing ? 'animate-spin' : ''} aria-hidden="true" />
           Rebuild
         </button>
       </div>
@@ -234,7 +234,7 @@
           <p class="text-[0.6875rem] uppercase tracking-wide text-dimmed">Progress</p>
           <p class="flex items-center gap-1.5 text-sm font-medium">
             {#if status?.indexing}
-              <LoaderCircle size={13} class="animate-spin text-primary" aria-hidden="true" />
+              <CioSpinner size={13} class="animate-spin text-primary" aria-hidden="true" />
               {totalThreads === null ? 'Counting threads…' : `${indexingPercent}%`}
             {:else}
               <span class="tabular-nums">
@@ -271,35 +271,37 @@
     </div>
 
     <!-- Models -->
-    <div class="rounded-xl border bg-surface p-4">
-      <div class="mb-1 flex items-center justify-between gap-3">
-        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Embedding model</h3>
+    <div class="border bg-surface p-4">
+      <div class="mb-1 flex items-center justify-between gap-3 border-b border-border pb-2">
+        <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
+          Embedding model
+        </h3>
         <div class="flex items-center gap-1.5">
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+            class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
             title="Paste a path to a GGUF embedding model"
             aria-label="Paste an embedding model path"
             onclick={() => (pasteOpen = true)}
           >
-            <ClipboardPaste size={12} aria-hidden="true" />
+            <CioClipboardPaste size={12} aria-hidden="true" />
             Paste path
           </button>
           <button
             type="button"
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+            class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
             title="Import a GGUF embedding model from disk"
             aria-label="Import an embedding model"
             onclick={() => void search.importModel()}
           >
-            <Upload size={12} aria-hidden="true" />
+            <CioUpload size={12} aria-hidden="true" />
             Import
           </button>
         </div>
       </div>
 
       {#if models.length === 0}
-        <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">
+        <p class="border border-dashed px-3 py-2 text-xs text-dimmed">
           No embedding model is installed. Download one below, or import a compatible GGUF model of
           your own.
         </p>
@@ -309,9 +311,7 @@
             {@const isActive = status?.activeModelId === model.id}
             <li class="flex items-center gap-3 py-2.5">
               <span
-                class="size-1.5 shrink-0 rounded-full {isActive
-                  ? 'bg-primary'
-                  : 'bg-border-strong'}"
+                class="size-1.5 shrink-0 {isActive ? 'bg-primary' : 'bg-border-strong'}"
                 aria-hidden="true"
               ></span>
               <div class="min-w-0 flex-1">
@@ -325,13 +325,13 @@
               </div>
               {#if isActive}
                 <span
-                  class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[0.6875rem] font-medium text-primary"
+                  class="shrink-0 border border-primary/30 bg-primary/10 px-2 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-primary"
                   >Active</span
                 >
               {:else}
                 <button
                   type="button"
-                  class="shrink-0 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+                  class="shrink-0 border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
                   title="Use this model for intent search"
                   aria-label="Use {model.label} for intent search"
                   onclick={() => void search.setActiveModel(model.id)}
@@ -341,12 +341,12 @@
               {/if}
               <button
                 type="button"
-                class="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                class="flex size-7 shrink-0 items-center justify-center text-muted hover:bg-danger/10 hover:text-danger"
                 title="Remove this model"
                 aria-label="Remove {model.label}"
                 onclick={() => (pendingDelete = { id: model.id, label: model.label })}
               >
-                <Trash2 size={13} aria-hidden="true" />
+                <CioTrash size={13} aria-hidden="true" />
               </button>
             </li>
           {/each}
@@ -371,14 +371,15 @@
           <div class="min-w-0">
             <p class="text-sm font-medium">Context window</p>
             <p class="mt-0.5 text-xs leading-relaxed text-muted">
-              How many tokens of each thread the model reads when it embeds. A wider window keeps
-              more of a long conversation; a narrower one is faster.
+              How many tokens the model may read in one pass. Each thread is indexed by several
+              windows spread across the conversation, so this bounds one window's size rather than
+              how much of a thread is searched.
             </p>
             <p class="mt-1 text-xs text-dimmed">Changing it clears the index and rebuilds it.</p>
           </div>
           <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
             <input
-              class="w-24 rounded-lg border bg-elevated px-2 py-1 text-right tabular-nums"
+              class="w-24 border bg-elevated px-2 py-1 text-right tabular-nums"
               type="number"
               min={SEARCH_CONTEXT_TOKENS_MIN}
               max={SEARCH_CONTEXT_TOKENS_MAX}
@@ -402,7 +403,7 @@
       <div class="min-w-0 flex-1">
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p class="text-sm font-medium">{artifact.label}</p>
-          <span class="rounded-full bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
+          <span class="border border-border bg-raised px-1.5 py-0.5 text-[0.6875rem] text-muted"
             >{artifact.quantization}</span
           >
         </div>
@@ -415,12 +416,12 @@
       {#if !download || download.state === 'cancelled' || download.state === 'failed'}
         <button
           type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
+          class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90"
           title="Download {artifact.label}"
           aria-label="Download {artifact.label}"
           onclick={() => void search.download(artifact.id)}
         >
-          <Download size={12} aria-hidden="true" />
+          <CioDownload size={12} aria-hidden="true" />
           {download?.state === 'failed' ? 'Retry' : 'Download'}
         </button>
       {/if}

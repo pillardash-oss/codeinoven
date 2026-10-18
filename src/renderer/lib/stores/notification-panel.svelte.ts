@@ -16,8 +16,11 @@ import {
   type Project,
   type Thread
 } from '$shared/types'
-import { assistantRoutines } from './assistant-routines.svelte'
-import { threadStatusPolicy } from '$shared/thread-status-policy'
+import { assistants } from './assistants.svelte'
+import {
+  threadAwaitsIndependentAuditReview,
+  threadStatusPolicy
+} from '$shared/thread-status-policy'
 
 /** Top-level panel sections. */
 export type NotificationTopTab = 'projects' | 'chats' | 'assistants' | 'app-errors'
@@ -27,9 +30,9 @@ export type NotificationSubFilter = 'all' | 'done' | 'attention' | 'spec' | 'iss
 
 /**
  * The assistant-subject narrowing behind the Assistants tab's filter button:
- * everything, only runs owned by a routine, or only standalone task runs.
+ * everything, only runs owned by an assistant, or only standalone task runs.
  */
-export type NotificationAssistantSubject = 'all' | 'routine' | 'task'
+export type NotificationAssistantSubject = 'all' | 'assistant' | 'task'
 
 export interface InAppNotification {
   id: string
@@ -44,9 +47,9 @@ export interface InAppNotification {
   temporaryChatId?: string
   projectName: string
   projectColor?: string
-  /** Owning routine of an assistant run, when the task belongs to one. Absent
-   *  for a standalone task run; drives the routines/tasks filter. */
-  routineId?: string
+  /** Owning assistant of an assistant run, when the task belongs to one. Absent
+   *  for a standalone task run; drives the assistants/tasks filter. */
+  assistantId?: string
   /** Full diagnostic text (message plus raw detail/stack) for `error`
    *  notifications; drives the panel's copy action. */
   errorDetail?: string
@@ -97,25 +100,24 @@ export function backgroundRunNotificationKind(
  * Canonical accent colour for a notification kind, keyed to the very token the
  * app paints the same meaning with everywhere else: a spec is the spec purple,
  * a failure the danger red, a request for attention the warning amber, the chat
- * response a temporary (side) chat delivers the temporary-chat indicator blue,
+ * response a temporary (side) chat delivers the chat-completion teal,
  * and a completed thread the success green its entry already carries. The bell's
  * dots and an entry's leading dot both read from here, so the colour on the
  * notification badge is always the status colour the rest of the app uses for
  * the same thing   never a one-off hue.
  *
- * `chat-completed` is raised only by a temporary chat, so it wears that side
- * chat's own colour rather than the chat teal: a side chat is a temporary
- * conversation pinned to one thread, not a message in the Chats inbox.
+ * `chat-completed` is raised only by a temporary chat, and it wears the chat
+ * completion tone: that colour names the outcome (a chat response landed), never
+ * the fact that the conversation is a side one. A side chat carries no colour of
+ * its own anywhere   its dashed glyph is the only thing that marks it.
  *
  * An assistant notice raised by the assistant space's own activity wears the
  * assistant colour instead (see `accentColor`), which is how the assistant is
  * identified across the app. A status kind never does: see `STATUS_KINDS`.
  */
-export const TEMPORARY_CHAT_COLOR = 'var(--color-temporary-chat)'
-
 export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string> = {
   completed: 'var(--color-success)',
-  'chat-completed': TEMPORARY_CHAT_COLOR,
+  'chat-completed': 'var(--color-chat-success)',
   attention: 'var(--color-warning)',
   spec: 'var(--color-thread-spec)',
   error: 'var(--color-danger)'
@@ -153,7 +155,7 @@ class NotificationPanelState {
   private _dismissed = new SvelteSet<string>()
   topTab: NotificationTopTab = $state('projects')
   subFilter: NotificationSubFilter = $state('all')
-  /** The Assistants tab's routines/tasks narrowing. Ignored by every other tab. */
+  /** The Assistants tab's assistants/tasks narrowing. Ignored by every other tab. */
   assistantSubject: NotificationAssistantSubject = $state('all')
 
   /**
@@ -167,7 +169,7 @@ class NotificationPanelState {
     return n.source === 'chat' || n.projectId === INBOX_PROJECT_ID
   }
 
-  /** Assistant notices come from the hidden assistant space (routine runs).
+  /** Assistant notices come from the hidden assistant space (assistant runs).
    *  The source tag is authoritative; the project id covers any payload that
    *  predates the dedicated source. */
   isAssistant(n: InAppNotification): boolean {
@@ -176,15 +178,14 @@ class NotificationPanelState {
 
   /**
    * The colour a notification wears on its leading dot and its card border: a
-   * status kind always takes its canonical status colour, a temporary chat its
-   * own indicator colour, and every other assistant notice the assistant space
+   * status kind always takes its canonical status colour, an activity notice the
+   * outcome colour it reports, and every other assistant notice the assistant space
    * colour. One rule shared by the bell, the panel and the view rails, so the
    * surfaces can never disagree about what colour a notification is   and a
    * failed run reads as an error on all of them, never as brand colour.
    */
   accentColor(n: InAppNotification): string {
     if (STATUS_KINDS.has(n.kind)) return NOTIFICATION_KIND_COLORS[n.kind]
-    if (n.source === 'temporary-chat') return TEMPORARY_CHAT_COLOR
     if (this.isAssistant(n)) return this.assistantColor ?? 'var(--color-dimmed)'
     return NOTIFICATION_KIND_COLORS[n.kind]
   }
@@ -196,12 +197,12 @@ class NotificationPanelState {
 
   /**
    * Whether an assistant entry (a notice, a missed fire, or an unattended run)
-   * answers to the routines/tasks filter. A routine-owned entry has a routine;
+   * answers to the assistants/tasks filter. An assistant-owned entry has an assistant;
    * a standalone task run does not.
    */
-  matchesAssistantSubject(hasRoutine: boolean): boolean {
+  matchesAssistantSubject(hasAssistant: boolean): boolean {
     if (this.assistantSubject === 'all') return true
-    return this.assistantSubject === 'routine' ? hasRoutine : !hasRoutine
+    return this.assistantSubject === 'assistant' ? hasAssistant : !hasAssistant
   }
 
   get projectNotifications(): InAppNotification[] {
@@ -212,7 +213,7 @@ class NotificationPanelState {
     return this._notifications.filter((n) => this.isChat(n))
   }
 
-  /** Assistant-space notices (routine runs). The panel renders them beside the
+  /** Assistant-space notices (assistant runs). The panel renders them beside the
    *  scheduled missed runs, which live in the assistant store rather than here. */
   get assistantNotifications(): InAppNotification[] {
     return this._notifications.filter((n) => this.isAssistant(n))
@@ -223,7 +224,7 @@ class NotificationPanelState {
     return this.assistantNotifications.filter(
       (n) =>
         notificationMatchesSubFilter(n.kind, this.subFilter) &&
-        this.matchesAssistantSubject(Boolean(n.routineId))
+        this.matchesAssistantSubject(Boolean(n.assistantId))
     )
   }
 
@@ -241,10 +242,10 @@ class NotificationPanelState {
   }
 
   private assistantMissedRunsFor(sub: NotificationSubFilter): MissedRun[] {
-    return assistantRoutines.missedRuns.filter(
+    return assistants.missedRuns.filter(
       (run) =>
         notificationMatchesSubFilter('attention', sub) &&
-        this.matchesAssistantSubject(Boolean(run.routineId))
+        this.matchesAssistantSubject(Boolean(run.assistantId))
     )
   }
 
@@ -256,11 +257,11 @@ class NotificationPanelState {
    */
   private assistantBackgroundRunsFor(sub: NotificationSubFilter): BackgroundRun[] {
     const noticedRunThreads = new Set(this.assistantNotifications.map((n) => n.threadId))
-    return assistantRoutines.recentBackgroundRuns.filter(
+    return assistants.recentBackgroundRuns.filter(
       (run) =>
         !noticedRunThreads.has(run.runThreadId) &&
         notificationMatchesSubFilter(backgroundRunNotificationKind(run.outcome), sub) &&
-        this.matchesAssistantSubject(Boolean(run.routineId))
+        this.matchesAssistantSubject(Boolean(run.assistantId))
     )
   }
 
@@ -276,9 +277,7 @@ class NotificationPanelState {
    */
   assistantRunPairedWithNotice(n: InAppNotification): BackgroundRun | null {
     if (!this.isAssistant(n)) return null
-    return (
-      assistantRoutines.recentBackgroundRuns.find((run) => run.runThreadId === n.threadId) ?? null
-    )
+    return assistants.recentBackgroundRuns.find((run) => run.runThreadId === n.threadId) ?? null
   }
 
   /** Items for the currently active top tab + sub filter. Project and chat
@@ -321,7 +320,7 @@ class NotificationPanelState {
     const notices = this.assistantNotifications.filter(
       (n) =>
         notificationMatchesSubFilter(n.kind, sub) &&
-        this.matchesAssistantSubject(Boolean(n.routineId))
+        this.matchesAssistantSubject(Boolean(n.assistantId))
     ).length
     return (
       notices +
@@ -340,7 +339,7 @@ class NotificationPanelState {
   get assistantColor(): string | null {
     return (
       this.assistantNotifications.findLast((n) => n.projectColor)?.projectColor ??
-      assistantRoutines.spaceColor
+      assistants.spaceColor
     )
   }
 
@@ -362,8 +361,8 @@ class NotificationPanelState {
 
     // The dots list the accents actually waiting on the family, deduped and in
     // a stable order (a side-chat response first, then a settled turn). Reading
-    // each entry's accent   rather than mapping its kind   is what keeps a
-    // temporary chat's own colour on the rail of the entity that spawned it.
+    // each entry's own outcome accent, rather than mapping its kind, is what
+    // keeps it on the rail of the entity that spawned it.
     const priority: InAppNotification['kind'][] = ['chat-completed', 'completed']
     const ordered = [...entries].sort((a, b) => priority.indexOf(a.kind) - priority.indexOf(b.kind))
     const colors: string[] = []
@@ -371,7 +370,8 @@ class NotificationPanelState {
       const color = this.accentColor(entry)
       if (!colors.includes(color)) colors.push(color)
     }
-    const familyLabel = family === 'projects' ? 'project' : family === 'chats' ? 'chat' : 'routine'
+    const familyLabel =
+      family === 'projects' ? 'project' : family === 'chats' ? 'chat' : 'assistant'
     return {
       count,
       label: `${count} unread ${familyLabel}${count === 1 ? '' : 's'}`,
@@ -386,7 +386,7 @@ class NotificationPanelState {
   get hasAssistant(): boolean {
     return (
       this.assistantNotifications.some((n) => n.kind === 'completed') ||
-      assistantRoutines.missedRuns.length > 0
+      assistants.missedRuns.length > 0
     )
   }
 
@@ -397,8 +397,8 @@ class NotificationPanelState {
   }
 
   /** A completed temporary (side) chat turn, which the bell shows as a dot in
-   *  the temporary-chat indicator colour. A failed side chat lights the error
-   *  dot instead, so a failure is never hidden behind the side-chat colour. */
+   *  the chat-completion tone its entry carries. A failed side chat lights the
+   *  error dot instead, so a failure is never hidden behind a completion. */
   get hasTemporaryChat(): boolean {
     return this._notifications.some(
       (n) => n.source === 'temporary-chat' && n.kind === 'chat-completed'
@@ -598,19 +598,19 @@ class NotificationPanelState {
 
   /**
    * The name an assistant failure or parked card reports when its live payload
-   * never arrived: the task it ran, else its routine, else its own non-authoring
-   * title. A routine's fixed "Getting started" title is an authoring host, not a
+   * never arrived: the task it ran, else its assistant, else its own non-authoring
+   * title. An assistant's fixed "Getting started" title is an authoring host, not a
    * job, so it is never returned as a name.
    */
   private assistantThreadSubject(thread: Thread, threads: readonly Thread[]): string {
-    const routineName = thread.routineId
-      ? assistantRoutines.routines.find((routine) => routine.id === thread.routineId)?.name.trim()
+    const assistantName = thread.assistantId
+      ? assistants.assistants.find((assistant) => assistant.id === thread.assistantId)?.name.trim()
       : ''
     const task = thread.assistantTaskId
       ? threads.find((candidate) => candidate.id === thread.assistantTaskId)
       : undefined
     if (task && !isAssistantSetupThread(task) && task.title.trim()) return task.title.trim()
-    if (routineName) return routineName
+    if (assistantName) return assistantName
     return isAssistantSetupThread(thread) ? '' : thread.title.trim()
   }
 
@@ -649,7 +649,7 @@ class NotificationPanelState {
           ...(errorDetail ? { errorDetail } : {}),
           projectId: thread.projectId,
           threadId: thread.id,
-          ...(thread.routineId ? { routineId: thread.routineId } : {}),
+          ...(thread.assistantId ? { assistantId: thread.assistantId } : {}),
           source: isChat ? 'chat' : isAssistant ? 'assistant' : 'project',
           projectName: project?.name ?? '',
           projectColor: project?.color
@@ -657,6 +657,10 @@ class NotificationPanelState {
         continue
       }
 
+      // A ready independent-audit report parks its thread on `spec` and is already
+      // announced by its own card, which the durable inbox holds. Synthesizing a
+      // second "spec is ready" entry would report that one moment twice.
+      if (threadAwaitsIndependentAuditReview(thread)) continue
       if (thread.status === 'awaiting_approval' || thread.status === 'spec') {
         const sourceName = isChat ? 'Chat' : (project?.name ?? thread.title)
         this.add({
@@ -674,7 +678,7 @@ class NotificationPanelState {
               : `${thread.title} is waiting for your input in ${project?.name ?? ''}.`,
           projectId: thread.projectId,
           threadId: thread.id,
-          ...(thread.routineId ? { routineId: thread.routineId } : {}),
+          ...(thread.assistantId ? { assistantId: thread.assistantId } : {}),
           source: isChat ? 'chat' : 'project',
           projectName: project?.name ?? '',
           projectColor: project?.color

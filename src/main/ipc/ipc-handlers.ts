@@ -17,7 +17,7 @@ import {
   validatePrNumber
 } from './ipc-validation'
 import { ProjectManager } from '../../lib/engines/project-manager'
-import { RoutineManager } from '../../lib/engines/routine-manager'
+import { AssistantManager } from '../../lib/engines/assistant-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ScopeWorktreeService } from '../git/scope-worktree-service'
@@ -104,7 +104,7 @@ export function registerIpcHandlers(
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
-  const routineManager = options.routineManager ?? new RoutineManager(database)
+  const assistantManager = options.assistantManager ?? new AssistantManager(database)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
@@ -169,9 +169,9 @@ export function registerIpcHandlers(
           )
       : null
   )
-  // A routine's threads (its hidden how-to thread included) are deleted through
-  // this same canonical path when the routine is removed.
-  routineManager.attachThreadDeleter((threadId) =>
+  // An assistant's threads (its hidden knowledge thread included) are deleted through
+  // this same canonical path when the assistant is removed.
+  assistantManager.attachThreadDeleter((threadId) =>
     threadManager.deleteThread(ASSISTANT_SPACE_ID, threadId)
   )
   // The merge lifecycle deletes/moves threads in the source scope after the
@@ -350,7 +350,7 @@ export function registerIpcHandlers(
           join(getConfigRoot(), 'chats-artifacts'),
           // The chat workspace root: one directory per chat thread.
           join(getConfigRoot(), 'chats-cwd'),
-          // The assistant workspace, one directory per routine.
+          // The assistant workspace, one directory per assistant.
           join(getConfigRoot(), 'assistant-cwd'),
           // The browser workspace: one directory per tab's agent chat.
           join(getConfigRoot(), 'browser-cwd'),
@@ -406,12 +406,12 @@ export function registerIpcHandlers(
   async function attachmentStorageDirectory(scope: AttachmentStorageScope): Promise<string> {
     const project = await projectManager.getProject(scope.projectId)
     // An assistant task stages its attachments inside the workspace it runs in,
-    // and its routine decides that directory, so the task's row is read here.
-    const routineId =
+    // and its assistant decides that directory, so the task's row is read here.
+    const assistantId =
       scope.projectId === ASSISTANT_SPACE_ID
-        ? (await threadManager.getThread(scope.projectId, scope.threadId))?.routineId
+        ? (await threadManager.getThread(scope.projectId, scope.threadId))?.assistantId
         : null
-    return threadAttachmentDirectory(project ?? null, { ...scope, routineId })
+    return threadAttachmentDirectory(project ?? null, { ...scope, assistantId })
   }
 
   const resolveProjectPath = async (projectId: string, scopeBucketId?: string): Promise<string> => {
@@ -500,9 +500,10 @@ export function registerIpcHandlers(
     modelRankingRepo,
     rankingSnapshotRepo,
     noteRepo,
-    routineManager,
-    routineScheduler: options.routineScheduler,
+    assistantManager,
+    assistantScheduler: options.assistantScheduler,
     autoAnswerStore: options.autoAnswerStore,
+    connectivity: options.connectivity,
     privilegedIpc,
     privileged,
     attachmentStorageDirectory,

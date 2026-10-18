@@ -99,7 +99,7 @@
     <div
       id={TOOLTIP_ID}
       role="tooltip"
-      class="relative max-w-sm whitespace-normal break-words rounded-lg bg-surface px-2.5 py-1.5 text-xs text-foreground shadow-xl transition-opacity duration-150"
+      class="relative max-w-sm whitespace-normal break-words bg-surface px-2.5 py-1.5 text-xs text-foreground shadow-xl transition-opacity duration-150"
       class:opacity-100={tooltipState.visible}
       class:opacity-0={!tooltipState.visible}
     >
@@ -111,7 +111,7 @@
       {/if}
       <span
         class={[
-          'absolute h-2 w-2 rotate-45 rounded-[0.0625rem] bg-surface',
+          'absolute h-2 w-2 rotate-45 bg-surface',
           side === 'top' && '-bottom-1 left-1/2 -ml-1',
           side === 'bottom' && '-top-1 left-1/2 -ml-1',
           side === 'left' && '-right-1 top-1/2 -mt-1',

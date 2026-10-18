@@ -1,3 +1,6 @@
+import { designMotionPageScript } from '../design/design-motion-page'
+import type { AuthoredMotion } from '../../lib/design/motion-policy'
+import { agentDialog, dialog } from '../system/file-dialogs'
 import {
   showBrowserNewTabMenu,
   validateBrowserNewTabMenuInput
@@ -18,7 +21,6 @@ import {
   app,
   BrowserWindow,
   clipboard,
-  dialog,
   ipcMain as electronIpcMain,
   Menu,
   screen,
@@ -58,6 +60,7 @@ import type {
   BrowserLoadError,
   BrowserPageState,
   BrowserPanelShortcutAction,
+  BrowserPageKey,
   BrowserPermissionRequest,
   BrowserShortcutAction,
   BrowserShortcutBindings,
@@ -105,6 +108,7 @@ import {
   validateExtensionInstallInput,
   validateExtensionUpdatePatch
 } from './extensions/browser-extension-validation'
+import { ownedExtensionPageUrl } from './extensions/browser-extension-page-url'
 import { fetchIconAsDataUrl } from '../editor/favicon-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
@@ -153,6 +157,7 @@ import {
 import {
   matchBrowserShortcut,
   matchesBrowserChord,
+  isReservedBrowserAction,
   type ShortcutKeyInput
 } from './browser-service/browser-shortcuts'
 import {
@@ -202,6 +207,7 @@ import {
   PEEK_ORIGIN_PROBE_TIMEOUT_MS,
   PEEK_SNAPSHOT_MAX_WIDTH,
   resolvePeekOrigin,
+  type BrowserPeekMediaTarget,
   type BrowserPeekPoint,
   type BrowserPeekRect
 } from './browser-service/browser-peek'
@@ -213,6 +219,7 @@ import {
 } from './browser-service/browser-profile-store'
 import { applyBrowserPageBackground } from './browser-service/browser-page-background'
 import { installBrowserHistorySwipe } from './browser-service/browser-history-swipe'
+import { BrowserPageKeys } from './browser-service/browser-page-keys'
 import {
   AGENT_REVEAL_GRACE_MS,
   DEFAULT_PARKED_VIEWPORT,
@@ -244,8 +251,8 @@ import {
   validateBoundedHost,
   validateBrowserBoxMenuInput,
   validateBrowserSearchEngine,
-  validateBrowserShortcutBindings,
   validateBrowserAppShortcutChords,
+  validateBrowserShortcutBindings,
   validateBrowserStripInteraction,
   validateBrowserStripOverlayRequest,
   validateBrowserSwitcherBindings,
@@ -279,6 +286,7 @@ import {
   validateViewportRequest
 } from './browser-service/browser-validation'
 import { designScreenEntryFromUrl } from '../../lib/design/screens'
+import { compositionBoardTabId } from './browser-service/composition-board-tab'
 import { designScreenTabId } from './browser-service/design-screen-tab'
 
 /**
@@ -288,16 +296,7 @@ import { designScreenTabId } from './browser-service/design-screen-tab'
  */
 const PANEL_SHORTCUT_TARGETS: Readonly<
   Record<
-    | 'designUndo'
-    | 'designRedo'
-    | 'focusAddress'
-    | 'closeTab'
-    | 'newTab'
-    | 'reopenTab'
-    | 'toggleNotes'
-    | 'find'
-    | 'findNext'
-    | 'findPrevious',
+    'designUndo' | 'designRedo' | 'focusAddress' | 'closeTab' | 'newTab' | 'reopenTab',
     BrowserPanelShortcutAction
   >
 > = {
@@ -306,11 +305,7 @@ const PANEL_SHORTCUT_TARGETS: Readonly<
   focusAddress: 'focus-address',
   closeTab: 'close-tab',
   newTab: 'new-tab',
-  reopenTab: 'reopen-tab',
-  toggleNotes: 'toggle-notes',
-  find: 'find',
-  findNext: 'find-next',
-  findPrevious: 'find-previous'
+  reopenTab: 'reopen-tab'
 }
 
 /**
@@ -328,19 +323,34 @@ function isRendererAnsweredAction(
 }
 
 /**
+ * The page-key shape of a key pressed in a page.
+ *
+ * The app chord table is matched against Electron's `Input`, while what travels
+ * to the renderer is the DOM event the page would have seen, so this is the one
+ * conversion between the two.
+ */
+function pageKeyFromInput(input: ShortcutKeyInput): BrowserPageKey {
+  return {
+    key: input.key.toLowerCase(),
+    code: input.code,
+    meta: input.meta,
+    control: input.control,
+    shift: input.shift,
+    alt: input.alt,
+    repeat: input.isAutoRepeat
+  }
+}
+
+/**
  * Browser chords a popup window deliberately leaves unclaimed.
  *
- * Find is the chrome's own tool: its bar is a row of the surface that shows the
- * page, and a popup's page is shown by the rail, which carries no toolbar of its
- * own by design. Claiming the chord in a popup would swallow the key and open
- * nothing, so it is left to the page instead.
+ * Screen history belongs to the authored page a tab shows; a popup has none, so
+ * its own page keeps the chord instead of the popup swallowing it for an undo
+ * that could not run.
  */
 const POPUP_UNCLAIMED_ACTIONS: ReadonlySet<BrowserShortcutAction> = new Set<BrowserShortcutAction>([
   'designUndo',
-  'designRedo',
-  'find',
-  'findNext',
-  'findPrevious'
+  'designRedo'
 ])
 
 import {
@@ -374,7 +384,8 @@ import {
   COMPOSITION_TRANSPORT_GLOBAL,
   compositionTransportCommandScript,
   compositionTransportScript,
-  compositionTransportStateScript
+  compositionTransportStateScript,
+  frameSettleScript
 } from './browser-service/browser-transport-script'
 
 /**
@@ -624,11 +635,27 @@ export class BrowserService {
    *  pressed in a page never reaches the renderer, so main claims these here. */
   private switcherBindings: BrowserSwitcherBindings = []
   /**
-   * Every chord the app's own keymap answers, claimed in a page so the app's
-   * shortcuts survive a focused page. The browser's own table is matched first,
-   * and a chord with no Command/Control/Alt never arrives here.
+   * Every app-global chord the keymap answers, pushed by the renderer.
+   *
+   * Main claims none of these itself. It matches a chord a page reported as
+   * unhandled against them and replays the chord so the app's own handler runs,
+   * which is the half of the browser's keyboard behaviour that has to happen after
+   * the page has had its turn.
    */
   private appShortcutChords: BrowserShortcutChord[] = []
+  /**
+   * Whether a page may keep a chord the app also binds.
+   *
+   * On, the shipped default: an overridable chord is offered to the page first and
+   * only runs the browser's or the app's action when the page leaves it unhandled.
+   * Off, the app claims every app chord in the page, so it wins whether the page is
+   * focused or not.
+   */
+  private allowSiteKeymapOverride = true
+  /** The page-side observer that reports a chord a page did not handle. */
+  private readonly pageKeys = new BrowserPageKeys({
+    onKey: (contents, key) => this.handlePageKey(contents, key)
+  })
   /**
    * Which find request each tab's page is answering.
    *
@@ -673,6 +700,27 @@ export class BrowserService {
    * switch focused instead of losing the race to the page's own mount.
    */
   private pendingPageFocusTabId: string | null = null
+  /**
+   * The tab whose page last gained the keyboard, or null while the window's own
+   * renderer did.
+   *
+   * Claimed by page clicks and explicit keyboard handovers, and released when
+   * the app renderer gains focus. It is read on the window's `blur`, because
+   * nothing inside the app gains focus while the whole window is losing it, so
+   * at that moment it still names the page the user was typing in.
+   */
+  private keyboardOwnerTabId: string | null = null
+  /**
+   * The tab whose page should get the keyboard back when the app window is
+   * reactivated, captured from {@link keyboardOwnerTabId} at the window's
+   * `blur`.
+   *
+   * Reactivating a window hands the keyboard to the window's own web contents,
+   * not to the `WebContentsView` that had it (the same handoff
+   * `browser-history-swipe.ts` corrects for history traversal), so a page the
+   * user was typing in comes back unfocused unless it is deliberately refocused.
+   */
+  private restorePageFocusTabId: string | null = null
   /** Last known content bounds of the active tab's native view (window-content
    *  coordinates). The permission popup centres itself over this area, so the
    *  prompt opens over the page it belongs to rather than over the app's chrome. */
@@ -817,8 +865,21 @@ export class BrowserService {
       this.nativeToasts.setHost(host ?? window)
     )
     // Chromium drops its own status bubble when the window loses the pointer's
-    // context; so does this.
-    window.on('blur', () => this.dismissStatusOverlay())
+    // context; so does this. The same moment captures which surface held the
+    // keyboard, so reactivating the window can hand the page its keyboard back;
+    // see `restorePageFocusTabId`.
+    window.on('blur', () => {
+      this.restorePageFocusTabId = this.keyboardOwnerTabId
+      this.dismissStatusOverlay()
+    })
+    window.on('focus', () => this.restorePageFocus())
+    // The renderer owns the keyboard whenever the user works in the app chrome
+    // rather than the page, so this is what keeps a page from being refocused on
+    // return when the user had actually been in the toolbar.
+    window.webContents.on('focus', () => {
+      this.keyboardOwnerTabId = null
+      this.pendingPageFocusTabId = null
+    })
     this.stage = new BrowserTabStage(window)
     this.permissionMemory = new BrowserPermissionMemory(permissionPersistence)
     this.projects = new ProjectRepo(db)
@@ -887,7 +948,7 @@ export class BrowserService {
       },
       closeSidePanel: (extensionId, extensionTabId) =>
         this.sidePanels.closeForExtension(extensionId, extensionTabId, 'the extension closed it'),
-      openPopup: (request) => this.openExtensionPopupFromWorker(request)
+      openPopup: (request) => this.openExtensionWindowFromWorker(request)
     })
     this.capture = new BrowserCaptureObserver({
       // A capture change is a tab-level fact the user must see, so it is
@@ -1114,19 +1175,6 @@ export class BrowserService {
     await this.tabHistory.flush()
   }
 
-  /**
-   * Load the overlay document once and keep it for the session.
-   *
-   * Called after the primary window is up: the first modal, switcher or toast of
-   * a session then draws into a document that is already loaded, instead of
-   * paying its load on the gesture that asks for it   and, past the
-   * acknowledgement deadline, falling back to the app window's DOM, which hides
-   * the browser behind it.
-   */
-  warmOverlay(): void {
-    this.overlay.warmForSession()
-  }
-
   register(): void {
     this.guardAgainstStrandedView()
     // The page-tabs preload is asked for on every document an extension surface
@@ -1317,6 +1365,10 @@ export class BrowserService {
     replaceHandler('browser:warmOverlayWindow', (_event, warm) =>
       this.overlay.setWarm(warm === true)
     )
+    // The renderer's first gesture rather than the browser view: from that moment
+    // the session is drawing modals into the shared window, so it is loaded for
+    // the rest of the session. See `renderer/lib/overlay-host-warm.ts`.
+    replaceHandler('browser:warmOverlayHostForSession', () => this.overlay.warmForSession())
     replaceHandler('browser:setDockOverlay', (_event, rawId, rawRequest) => {
       const id = validateNativeDockId(rawId)
       const request = rawRequest === null ? null : validateNativeDockRequest(rawRequest)
@@ -1477,6 +1529,12 @@ export class BrowserService {
     })
     replaceHandler('browser:setAppShortcutChords', (_event, rawChords) => {
       this.appShortcutChords = validateBrowserAppShortcutChords(rawChords)
+    })
+    replaceHandler('browser:setSiteKeymapOverride', (_event, rawAllows) => {
+      if (typeof rawAllows !== 'boolean') {
+        throw new TypeError('Browser site keymap override must be a boolean')
+      }
+      this.allowSiteKeymapOverride = rawAllows
     })
     replaceHandler('browser:setSearchEngine', (_event, rawEngine) => {
       this.contextMenuSearchEngine = validateBrowserSearchEngine(rawEngine)
@@ -1859,6 +1917,20 @@ export class BrowserService {
     void this.tabHistory.flush()
   }
 
+  relocateWorkFolder(projectId: string, from: string, to: string): void {
+    for (const [tabId, tab] of this.tabs) {
+      if (
+        tab.projectId !== projectId ||
+        (tab.design?.directory !== from && tab.composition?.directory !== from)
+      )
+        continue
+      if (tab.design?.directory === from) tab.design = { ...tab.design, directory: to }
+      if (tab.composition?.directory === from)
+        tab.composition = { ...tab.composition, directory: to }
+      this.publishState(tabId)
+    }
+  }
+
   /**
    * Record that a tab is rendering a design folder. Non-null `design` on the
    *  published state is what makes the panel offer the element inspector, so only
@@ -1919,7 +1991,7 @@ export class BrowserService {
     return (
       '::-webkit-scrollbar{width:6px;height:6px}' +
       '::-webkit-scrollbar-track{background:transparent}' +
-      `::-webkit-scrollbar-thumb{background:${theme.thumb};border-radius:3px}` +
+      `::-webkit-scrollbar-thumb{background:${theme.thumb}}` +
       `::-webkit-scrollbar-thumb:hover{background:${theme.thumbHover}}`
     )
   }
@@ -1966,6 +2038,11 @@ export class BrowserService {
       this.applyTabMark(tabId, tab, url, NO_TAB_MARK)
       return
     }
+    // Recognition is a mark, never a write: the app is told which folder the page
+    // shows, and the thread's own authored-work record is left to the session that
+    // started the work. A user opening a design folder in a tab of their own, a
+    // reload, or a tab restored after a restart therefore marks the tab (the
+    // inspector and the transport still follow it) without claiming the thread.
     void recogniser(tab.projectId, tab.threadId, url)
       .then((recognised) => {
         if (contents.isDestroyed() || contents.getURL() !== url) return
@@ -2326,7 +2403,7 @@ export class BrowserService {
       }
     } else {
       const filters = fileChooserFilters(accept)
-      const choice = await dialog.showOpenDialog(this.window, {
+      const choice = await agentDialog.showOpenDialog(this.window, {
         title: `Choose files for upload to ${safeOrigin(beforeUrl)}`,
         buttonLabel: 'Upload',
         properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
@@ -2558,7 +2635,15 @@ export class BrowserService {
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
-    const tabId = designScreenTabId(input)
+    const movedTab = [...this.tabs].find(
+      ([id, tab]) =>
+        id.startsWith('browser:screen:') &&
+        tab.projectId === input.projectId &&
+        tab.threadId === input.threadId &&
+        tab.design?.directory === input.directory &&
+        this.tabUrl(id) === input.url
+    )
+    const tabId = movedTab?.[0] ?? designScreenTabId(input)
     const reused = this.tabs.has(tabId)
     const tab = this.ensureTab(tabId, input.projectId, input.threadId)
     if (!reused) {
@@ -2643,6 +2728,63 @@ export class BrowserService {
       boxId: tab.boxId
     })
     return { tabId, tab: reused ? 'reused' : 'opened' }
+  }
+
+  /**
+   * Show one composition in the video board's own view.
+   *
+   * The board is a player rather than a page the user opened, so this is the one
+   * open path that deliberately sends no `browser:openRequested`: that event is
+   * what puts a tab in the strip, and a composition the user is watching in the
+   * board must not appear as a second browser tab they never asked for. The view
+   * is still an ordinary registered tab, so the tab-mark pipeline marks it as a
+   * composition and the transport drives it exactly as it drives any other.
+   *
+   * The view is named from the composition ({@link compositionBoardTabId}), so
+   * coming back to the board finds the view it already had, and a page already
+   * showing the composition is left on it rather than reloaded: a reload resets
+   * the playhead of a composition the user is watching.
+   */
+  async showCompositionBoardTab(input: {
+    projectId: string
+    threadId: string
+    /** Project-relative folder of the composition, with forward slashes. */
+    directory: string
+    url: string
+  }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
+    const projectId = validateProjectId(input.projectId)
+    const threadId = validateThreadId(input.threadId)
+    const url = validateBrowserUrl(input.url)
+    const movedTab = [...this.tabs].find(
+      ([id, tab]) =>
+        id.startsWith('browser:board:') &&
+        tab.projectId === projectId &&
+        tab.threadId === threadId &&
+        tab.composition?.directory === input.directory
+    )
+    const tabId =
+      movedTab?.[0] ?? compositionBoardTabId({ projectId, threadId, directory: input.directory })
+    const existing = this.tabs.get(tabId)
+    if (existing) {
+      // A view already on this page is the one being asked for again, so it is
+      // not reloaded. Anything else is a folder switch, and the new page loads
+      // over a view that is either on screen or staged offscreen.
+      if (this.tabUrl(tabId) === url) return { tabId, tab: 'reused' }
+      if (this.activeTabId !== tabId && !this.stage.isParked(existing.view)) {
+        // A view the parked cap evicted has no stage window left, so it is mounted
+        // again before it navigates, exactly as an agent's operation revives one.
+        this.parkTab(tabId)
+      }
+      this.load(tabId, url)
+      return { tabId, tab: 'reused' }
+    }
+    const tab = this.ensureTab(tabId, projectId, threadId)
+    tab.initialNavigationStarted = true
+    // Mount the view offscreen before anything else: the page must run whether or
+    // not the board is on screen to place it yet.
+    this.parkTab(tabId)
+    this.load(tabId, url)
+    return { tabId, tab: 'opened' }
   }
 
   /**
@@ -2750,11 +2892,54 @@ export class BrowserService {
    *
    * A composition owns how a frame is drawn   the render contract is a global
    * function the project defines   so the app calls it and waits rather than
-   * reimplementing it. The page is asked to draw the frame itself, then two
-   * animation frames are waited out, because a project that redraws from its own
-   * loop during a settle would otherwise be captured mid-paint. A project that
-   * defines no render function is reported rather than captured as a guess.
+   * reimplementing it. The page is asked to draw the frame itself, then the paint
+   * is waited out, because a project that redraws from its own loop during a
+   * settle would otherwise be captured mid-paint. A project that defines no render
+   * function is reported rather than captured as a guess.
+   *
+   * The wait goes through the transport when one is armed, and that is not a
+   * detail: arming parks the page's own `requestAnimationFrame`, so a wait built
+   * on it is never called back and every capture of a composition the app had
+   * shown timed out instead of answering.
    */
+  designMotionTab(projectId: string, threadId: string, expectedUrl: string): string | null {
+    const id = this.agentTabFor(projectId, threadId)
+    const tab = id ? this.tabs.get(id) : null
+    return id &&
+      tab &&
+      !tab.view.webContents.isDestroyed() &&
+      tab.view.webContents.getURL() === expectedUrl
+      ? id
+      : null
+  }
+
+  async inspectDesignMotion(
+    tabId: string,
+    expectedUrl: string,
+    input: { targetId?: string; motion?: AuthoredMotion; sampleMs?: number }
+  ): Promise<unknown> {
+    const tab = this.tabs.get(tabId)
+    if (!tab || tab.view.webContents.isDestroyed())
+      throw new Error('The design preview is unavailable')
+    const contents = tab.view.webContents
+    if (contents.getURL() !== expectedUrl)
+      throw new Error('The preview navigated. Reopen the screen before inspecting motion.')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const result: unknown = await Promise.race([
+        contents.executeJavaScript(designMotionPageScript(input)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Motion observation timed out')), 4000)
+        })
+      ])
+      if (contents.isDestroyed() || contents.getURL() !== expectedUrl)
+        throw new Error('The preview changed during motion observation')
+      return result
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   async renderTabFrame(
     tabId: string,
     seconds: number
@@ -2766,8 +2951,8 @@ export class BrowserService {
     const drawn: unknown = tab.view.webContents.executeJavaScript(`(async () => {
       const transport = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
       if (transport && typeof transport.freezeAt === 'function') {
-        const state = transport.freezeAt(${JSON.stringify(seconds)});
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const state = await transport.freezeAt(${JSON.stringify(seconds)});
+        if (typeof transport.settle === 'function') await transport.settle();
         const failure = state && state.error;
         return failure ? { rendered: false, reason: String(failure) } : { rendered: true };
       }
@@ -2780,7 +2965,9 @@ export class BrowserService {
       } catch (error) {
         return { rendered: false, reason: String(error) };
       }
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      // Bounded like the transport's own settle: a page whose frames are throttled
+      // answers with the frame as drawn rather than timing the whole capture out.
+      await ${frameSettleScript()};
       return { rendered: true };
     })()`)
     // Bounded, because a page that never settles, or one whose animation frames
@@ -3001,32 +3188,20 @@ export class BrowserService {
     this.publishState(tabId)
   }
 
-  /** Deliver view navigation to the existing shell handlers, with renderer focus. */
-  private forwardNavigationShortcut(action: BrowserShortcutAction): boolean {
-    if (!action.startsWith('nav-')) return false
-    const chord = this.shortcutBindings[action]?.[0]
-    if (chord && !this.window.webContents.isDestroyed()) {
-      this.window.webContents.focus()
-      sendToRenderer(this.window.webContents, 'browser:navigationKey', chord)
-    }
-    return true
-  }
-
   /**
    * Run one claimed browser action on a tab.
    *
    * The actions split by owner: what acts on the page happens here, and what
-   * acts on the tab strip (focusing the address bar, closing or opening a tab,
-   * showing the tab's notes) is forwarded to the renderer, which is the only side
-   * that knows the strip. Saving is asynchronous because the save dialog is, and
-   * it must never block the key event that asked for it.
+   * acts on the tab strip (focusing the address bar, closing or opening a tab)
+   * is forwarded to the renderer, which is the only side that knows the strip.
+   * Saving is asynchronous because the save dialog is, and it must never block
+   * the key event that asked for it.
    */
   private runBrowserShortcut(tabId: string, action: BrowserShortcutAction): void {
-    if (this.forwardNavigationShortcut(action)) return
-    // The strip, the address field and the find bar are the renderer's, so their
-    // actions are forwarded before this process looks for a page to act on. A
-    // claimed tab with no view (a sleeping or blank tab) still has a row the
-    // renderer owns, and that row is what these actions act on.
+    // The address field and the tab strip are the renderer's, so their actions
+    // are forwarded before this process looks for a page to act on. A claimed
+    // tab with no view (a sleeping or blank tab) still has a row the renderer
+    // owns, and that row is what these actions act on.
     if (isRendererAnsweredAction(action)) {
       this.requestPanelShortcut(tabId, PANEL_SHORTCUT_TARGETS[action])
       return
@@ -3104,19 +3279,72 @@ export class BrowserService {
    * When the key came from the page, this process still holds the OS keyboard
    * through the page's own `WebContentsView`, so the renderer can move its
    * `document.activeElement` into the address field but not take the user's
-   * typing with it. A shortcut whose whole point is a DOM field therefore hands
-   * the window's web contents the focus first: `focus-address`, `new-tab` and
-   * `find` all open a field the renderer immediately focuses. The tab-strip
-   * actions that do not involve a field (`close-tab`, `toggle-notes`, and a find
-   * step) deliberately do not, because the page must keep the keyboard after
-   * them.
+   * typing with it. The actions whose whole point is a DOM field (`focus-address`
+   * and `new-tab`) therefore hand the window's web contents the focus first. The
+   * tab-strip actions that do not involve a field (`close-tab`, `reopen-tab`)
+   * deliberately do not, because the page must keep the keyboard after them.
    */
   private requestPanelShortcut(tabId: string, action: BrowserPanelShortcutAction): void {
     if (this.window.webContents.isDestroyed()) return
-    if (action === 'focus-address' || action === 'new-tab' || action === 'find') {
+    if (action === 'focus-address' || action === 'new-tab') {
       this.window.webContents.focus()
     }
     sendToRenderer(this.window.webContents, 'browser:panelShortcut', tabId, action)
+  }
+
+  /**
+   * Act on a chord a page reported as unhandled.
+   *
+   * The page observer only reports what the page's own handlers left alone, so
+   * this is the app's turn. A browser action still runs when it is the browser
+   * that answers the chord (Save, which a page may override), an app chord is
+   * replayed into the renderer, which owns the DOM its keymap handlers live in,
+   * and anything else is a page key that merely carried a modifier and is dropped.
+   */
+  private handlePageKey(contents: WebContents, key: BrowserPageKey): void {
+    if (!this.allowSiteKeymapOverride) return
+    const input: ShortcutKeyInput = {
+      type: 'keyDown',
+      key: key.key,
+      code: key.code,
+      meta: key.meta,
+      control: key.control,
+      shift: key.shift,
+      alt: key.alt,
+      isAutoRepeat: key.repeat
+    }
+    const action = matchBrowserShortcut(input, this.shortcutBindings)
+    const popup = this.popupWindows.recordForContents(contents.id)
+    if (popup) {
+      if (action && !POPUP_UNCLAIMED_ACTIONS.has(action)) {
+        this.runPopupWindowShortcut(popup, action)
+        return
+      }
+    } else {
+      const owner = this.tabForContents(contents.id)
+      if (
+        owner &&
+        action &&
+        ((action !== 'designUndo' && action !== 'designRedo') || this.canUseScreenHistory(owner.id))
+      ) {
+        this.runBrowserShortcut(owner.id, action)
+        return
+      }
+    }
+    if (matchesBrowserChord(input, this.appShortcutChords)) this.dispatchPageKey(key)
+  }
+
+  /**
+   * Replay a chord into the renderer, which owns the keymap handlers.
+   *
+   * The app's web contents takes the keyboard first: the chords this carries open
+   * DOM surfaces (the spotlight's field, a dialog) that cannot receive typing
+   * while a page holds the OS keyboard.
+   */
+  private dispatchPageKey(key: BrowserPageKey): void {
+    if (this.window.webContents.isDestroyed()) return
+    this.window.webContents.focus()
+    sendToRenderer(this.window.webContents, 'browser:pageKey', key)
   }
 
   /**
@@ -3344,12 +3572,40 @@ export class BrowserService {
     ])
 
     const publish = (): void => this.publishState(tabId)
+    // A native click is explicit keyboard intent. Page scripts, reloads and
+    // agent DOM operations may focus the contents too, but cannot claim it.
+    view.webContents.on('before-mouse-event', (_event, mouse) => {
+      if (mouse.type !== 'mouseDown' || !this.isPageOnScreen(tabId)) return
+      this.pendingPageFocusTabId = null
+      this.focusPageView(tabId, tab)
+    })
+    view.webContents.on('focus', () => {
+      if (this.keyboardOwnerTabId === tabId) return
+      // Native focus can precede mouseDown. Let that click claim ownership
+      // before rejecting an unsolicited handover, and recheck after the turn.
+      setImmediate(() => {
+        if (this.window.isDestroyed() || view.webContents.isDestroyed()) return
+        if (!view.webContents.isFocused() || this.keyboardOwnerTabId === tabId) return
+        const ownerId = this.keyboardOwnerTabId
+        const owner = ownerId ? this.tabs.get(ownerId) : undefined
+        if (ownerId && owner && this.isPageOnScreen(ownerId)) {
+          this.focusPageView(ownerId, owner)
+        } else if (!this.window.webContents.isDestroyed()) {
+          this.window.webContents.focus()
+        }
+      })
+    })
     // A key pressed in the page reaches this view's web contents and nothing
-    // else in the app, so this is where the browser claims its own shortcuts.
-    // Preventing the event also prevents the application menu from acting on
-    // the key, which is what keeps Cmd/Ctrl+R from reloading the whole app (in
-    // a development build the menu is Electron's default one) and Cmd/Ctrl+W
-    // from closing its window.
+    // else in the app, so this is where the browser claims the chords it
+    // reserves. Preventing the event also prevents the application menu from
+    // acting on the key, which is what keeps Cmd/Ctrl+R from reloading the whole
+    // app (in a development build the menu is Electron's default one) and
+    // Cmd/Ctrl+W from closing its window.
+    //
+    // Only reserved chrome chords are claimed, so a page keeps every shortcut it
+    // can answer itself, including `mod+f` for its own find. A key the page
+    // receives is dispatched to the page first; nothing here intercepts an app
+    // shortcut, so the page's own handler always wins.
     view.webContents.on('before-input-event', (event, input) => {
       if (this.peekTabs.has(tabId) && input.type === 'keyDown' && input.key === 'Escape') {
         event.preventDefault()
@@ -3363,29 +3619,31 @@ export class BrowserService {
         return
       }
       const action = matchBrowserShortcut(input, this.shortcutBindings)
-      if (
+      const usable =
         action &&
         ((action !== 'designUndo' && action !== 'designRedo') || this.canUseScreenHistory(tabId))
-      ) {
-        event.preventDefault()
-        this.runBrowserShortcut(tabId, action)
+          ? action
+          : null
+      if (this.allowSiteKeymapOverride) {
+        // The page goes first. Reserved chrome is still claimed here   no page can
+        // answer a reload or a tab close, and the application menu would take the
+        // key instead   and every other chord is left to the page, which reports
+        // back the ones it did not handle (see `handlePageKey`).
+        if (usable && isReservedBrowserAction(usable)) {
+          event.preventDefault()
+          this.runBrowserShortcut(tabId, usable)
+        }
         return
       }
-      // The app's own keymap, claimed after the browser's table so a page still
-      // gets `mod+r` and every other key the browser answers itself. Handing the
-      // chord back is what makes the spotlight open from inside a page.
+      // The app wins every chord, whether the page is focused or not.
+      if (usable) {
+        event.preventDefault()
+        this.runBrowserShortcut(tabId, usable)
+        return
+      }
       if (matchesBrowserChord(input, this.appShortcutChords)) {
         event.preventDefault()
-        if (!this.window.webContents.isDestroyed()) {
-          this.window.webContents.focus()
-          sendToRenderer(this.window.webContents, 'browser:navigationKey', {
-            key: input.key.toLowerCase(),
-            meta: input.meta,
-            control: input.control,
-            shift: input.shift,
-            alt: input.alt
-          })
-        }
+        this.dispatchPageKey(pageKeyFromInput(input))
       }
     })
     // The page itself never sees the application's DOM menus, so this is where
@@ -3408,6 +3666,9 @@ export class BrowserService {
     // for the microphone.
     view.webContents.on('dom-ready', () => {
       installBrowserHistorySwipe(view.webContents)
+      // The observer that reports a chord the page did not handle, so the app's
+      // own shortcuts still reach the app from inside a page.
+      this.pageKeys.install(view.webContents)
       this.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
       // The document that just arrived drops the last one's stylesheet, so the
@@ -3785,26 +4046,6 @@ export class BrowserService {
     return { action: 'deny' }
   }
 
-  /** Accept only a popout page belonging to the requesting extension. */
-  private ownedExtensionPageUrl(extensionId: string, rawUrl: string | undefined): string | null {
-    if (!rawUrl) return null
-    try {
-      const url = new URL(rawUrl)
-      if (
-        url.protocol !== 'chrome-extension:' ||
-        url.host !== extensionId ||
-        url.username !== '' ||
-        url.password !== '' ||
-        url.searchParams.get('uilocation') !== 'popout'
-      ) {
-        return null
-      }
-      return url.toString()
-    } catch {
-      return null
-    }
-  }
-
   /**
    * Host the popup window a page asked for, or answer null to let the caller
    * fall back to opening it as a tab.
@@ -3846,12 +4087,32 @@ export class BrowserService {
     }
   }
 
-  /** Resolve a worker popup request and route its extension page to the rail. */
-  private openExtensionPopupFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
+  /** Resolve a worker window request and route it to the surface it belongs on. */
+  private openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
     const owner = this.tabForContents(request.extensionTabId)
     if (!owner) return
     const tab = owner.tab
     if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
+
+    if (request.kind === 'open-tab') {
+      // The extension asked for a window that is not its own popout, and this app
+      // has one browser window: the page becomes a tab beside the one the
+      // extension is acting on. The URL is held to the same rule a link click is,
+      // so a web page is admitted and nothing else is.
+      try {
+        const url = this.validateTabNavigationUrl(request.projectId, tab.boxId, request.url)
+        this.openNewTabFor(
+          { tabId: owner.id, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
+          url
+        )
+      } catch (error: unknown) {
+        Logger.dev('An extension window request used an invalid URL:', {
+          extensionId: request.extensionId,
+          error
+        })
+      }
+      return
+    }
 
     if (request.kind === 'focus-browser') {
       if (!this.window.isDestroyed()) {
@@ -3875,7 +4136,7 @@ export class BrowserService {
 
     const requestedUrl =
       request.kind === 'open-window' || request.kind === 'focus-window'
-        ? (this.ownedExtensionPageUrl(request.extensionId, request.url) ?? undefined)
+        ? (ownedExtensionPageUrl(request.extensionId, request.url) ?? undefined)
         : undefined
     if ((request.kind === 'open-window' || request.kind === 'focus-window') && !requestedUrl) {
       Logger.dev('An extension popup request used an invalid extension URL:', {
@@ -4281,6 +4542,8 @@ export class BrowserService {
     })
     // A popup's keys reach its own page and then the application menu, where
     // Cmd/Ctrl+W would close the app window rather than this popup.
+    contents.on('dom-ready', () => this.pageKeys.install(contents))
+    contents.on('destroyed', () => this.pageKeys.release(contents))
     contents.on('before-input-event', (event, input) => {
       if (this.consumeSwitcherKey(input)) {
         event.preventDefault()
@@ -4290,9 +4553,25 @@ export class BrowserService {
       // A popup answers the browser's chords except the ones that need chrome it
       // does not have (see `POPUP_UNCLAIMED_ACTIONS`): those are left to the page
       // rather than prevented into a no-op.
-      if (!action || POPUP_UNCLAIMED_ACTIONS.has(action)) return
-      event.preventDefault()
-      this.runPopupWindowShortcut(record, action)
+      const usable = action && !POPUP_UNCLAIMED_ACTIONS.has(action) ? action : null
+      if (this.allowSiteKeymapOverride) {
+        // Reserved chrome is claimed; the rest is the page's until it reports it
+        // did not handle it, exactly as for a tab's page.
+        if (usable && isReservedBrowserAction(usable)) {
+          event.preventDefault()
+          this.runPopupWindowShortcut(record, usable)
+        }
+        return
+      }
+      if (usable) {
+        event.preventDefault()
+        this.runPopupWindowShortcut(record, usable)
+        return
+      }
+      if (matchesBrowserChord(input, this.appShortcutChords)) {
+        event.preventDefault()
+        this.dispatchPageKey(pageKeyFromInput(input))
+      }
     })
     contents.on('context-menu', (_event, params) => {
       this.showPopupWindowContextMenu(record, params)
@@ -4364,14 +4643,13 @@ export class BrowserService {
    *
    * Cmd/Ctrl+W dismisses the popup surface. A page-created window ends; an
    * extension action popup is parked for reuse. The chords that belong to the
-   * app's own chrome (the address bar, a new tab, the note) are forwarded to the
-   * renderer under the owning tab, which is the tab the app would act on.
+   * app's own chrome (the address bar, a new tab) are forwarded to the renderer
+   * under the owning tab, which is the tab the app would act on.
    */
   private runPopupWindowShortcut(
     record: BrowserPopupWindowRecord,
     action: BrowserShortcutAction
   ): void {
-    if (this.forwardNavigationShortcut(action)) return
     const contents = record.view.webContents
     if (contents.isDestroyed()) return
     switch (action) {
@@ -4407,7 +4685,6 @@ export class BrowserService {
         return
       case 'focusAddress':
       case 'newTab':
-      case 'toggleNotes':
         this.requestPanelShortcut(record.tabId, PANEL_SHORTCUT_TARGETS[action])
         return
     }
@@ -5941,7 +6218,7 @@ export class BrowserService {
       },
       ...(owner.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? {
-            openPeekWindow: (url: string): void => {
+            openPeekWindow: (url: string, media?: BrowserPeekMediaTarget | null): void => {
               const current = live()
               if (!current) return
               let target: string
@@ -5951,7 +6228,7 @@ export class BrowserService {
                 Logger.error('Browser Peek refused a link:', error)
                 return
               }
-              this.openPeekFrom(owner, current, target, frame, point)
+              this.openPeekFrom(owner, current, target, frame, point, media ?? null)
             }
           }
         : {}),
@@ -6014,24 +6291,29 @@ export class BrowserService {
   }
 
   /**
-   * Open an ephemeral peek page, growing out of the link it was asked for.
+   * Open an ephemeral peek page, growing out of the thing it was asked for.
    *
-   * The probe is what makes the opening flight start on the link rather than at a
-   * corner of the window, and it is bounded: the page is asked once, within
-   * `PEEK_ORIGIN_PROBE_TIMEOUT_MS`, and the tab is created afterwards with whatever
-   * answer came back. In practice that is a few milliseconds, because the question
-   * is a containment test in a frame that is already running; the budget is what a
-   * page that is busy, mid-navigation or without a document can cost, and it is
-   * spent before the surface exists rather than while it is on screen.
+   * The probe is what makes the opening flight start on the link, the picture or
+   * the player rather than at a corner of the window, and it is bounded: the page
+   * is asked once, within `PEEK_ORIGIN_PROBE_TIMEOUT_MS`, and the tab is created
+   * afterwards with whatever answer came back. In practice that is a few
+   * milliseconds, because the question is a containment test in a frame that is
+   * already running; the budget is what a page that is busy, mid-navigation or
+   * without a document can cost, and it is spent before the surface exists rather
+   * than while it is on screen.
+   *
+   * `media` names the element a menu already knows the page was clicked on, and is
+   * null for a link or for a gesture that names nothing.
    */
   private openPeekFrom(
     owner: BrowserPageOwner,
     contents: WebContents,
     url: string,
     frame: BrowserViewBounds | null,
-    point: BrowserPeekPoint | null
+    point: BrowserPeekPoint | null,
+    media: BrowserPeekMediaTarget | null = null
   ): void {
-    void this.peekOriginFor(contents, frame, point).then((origin) => {
+    void this.peekOriginFor(contents, frame, point, media).then((origin) => {
       try {
         this.openNewTabFor(owner, url, true, origin)
       } catch (error: unknown) {
@@ -6069,9 +6351,9 @@ export class BrowserService {
   }
 
   /**
-   * The rectangle a peek's flight starts from: the link under `point`, or null
-   * when there is no point to speak of, because the page is not on screen, the
-   * click never landed on it, or the page answered nothing in time.
+   * The rectangle a peek's flight starts from: the link, picture or player under
+   * `point`, or null when there is no point to speak of, because the page is not
+   * on screen, the click never landed on it, or the page answered nothing in time.
    *
    * `point` arrives in the page view's own pixels, which is what Electron reports
    * for a right-click and what the pointer is read as, and the answer has to be in
@@ -6081,10 +6363,11 @@ export class BrowserService {
   private async peekOriginFor(
     contents: WebContents,
     frame: BrowserViewBounds | null,
-    point: BrowserPeekPoint | null
+    point: BrowserPeekPoint | null,
+    media: BrowserPeekMediaTarget | null = null
   ): Promise<BrowserViewBounds | null> {
     if (frame === null || point === null) return null
-    const link = await this.probeLinkRect(contents, point)
+    const link = await this.probePeekRect(contents, point, media)
     return resolvePeekOrigin({
       link,
       point: { x: frame.x + point.x, y: frame.y + point.y },
@@ -6093,13 +6376,14 @@ export class BrowserService {
     })
   }
 
-  /** Ask the page which link is under a point, bounded. */
-  private async probeLinkRect(
+  /** Ask the page which link or media element is under a point, bounded. */
+  private async probePeekRect(
     contents: WebContents,
-    point: BrowserPeekPoint
+    point: BrowserPeekPoint,
+    media: BrowserPeekMediaTarget | null = null
   ): Promise<BrowserPeekRect | null> {
     if (contents.isDestroyed()) return null
-    const script = peekProbeScript(peekProbePoint(point, contents.getZoomFactor()))
+    const script = peekProbeScript(peekProbePoint(point, contents.getZoomFactor()), media)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const answer = await Promise.race([
@@ -6579,8 +6863,36 @@ export class BrowserService {
    * the moment a switch lands on the tab rather than at the next mouse move.
    */
   private focusPageView(tabId: string, tab: BrowserTab): void {
+    this.keyboardOwnerTabId = tabId
     tab.view.webContents.focus()
     this.primePagePointer(tab, this.activeTabId === tabId ? this.activeTabBounds : null)
+  }
+
+  /**
+   * Hand the keyboard back to the page the user was in before the app window
+   * lost focus.
+   *
+   * Called on the window's `focus`. The capture happens at `blur` (see
+   * {@link restorePageFocusTabId}), so a page that was not the last surface the
+   * user worked in is left alone. A page that is no longer the one on screen is
+   * skipped as well: the surface may have changed to another tab or away from
+   * the browser while the app was in the background, and focus must not follow a
+   * page the user can no longer see.
+   */
+  private restorePageFocus(): void {
+    const tabId = this.restorePageFocusTabId
+    this.restorePageFocusTabId = null
+    if (!tabId) return
+    // The reactivated window settles its own focus a beat after the event, so
+    // the handover waits a turn; otherwise the window's focus lands last and the
+    // page loses the race it was just won.
+    setImmediate(() => {
+      if (this.window.isDestroyed()) return
+      const tab = this.tabs.get(tabId)
+      if (!tab || tab.view.webContents.isDestroyed()) return
+      if (!this.isPageOnScreen(tabId)) return
+      this.focusPageView(tabId, tab)
+    })
   }
 
   /** Whether a tab's page is the native view the window is currently showing. */
@@ -6879,6 +7191,10 @@ export class BrowserService {
     // A destroyed tab can no longer hold the keyboard, so its toolbar must not
     // stay the tab the window-level interception routes to.
     if (this.focusedChromeTabId === tabId) this.focusedChromeTabId = null
+    // Likewise a destroyed page cannot be given the keyboard back on return.
+    if (this.keyboardOwnerTabId === tabId) this.keyboardOwnerTabId = null
+    if (this.restorePageFocusTabId === tabId) this.restorePageFocusTabId = null
+    if (removedContents) this.pageKeys.release(removedContents)
     this.injectedDialogLabels.delete(tabId)
     this.extensionNavigationUrls.delete(tabId)
     this.forgetParked(tabId)

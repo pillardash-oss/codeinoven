@@ -1,6 +1,8 @@
 <script lang="ts">
+  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
-  import { Loader2, RefreshCw, ScrollText } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import { formatDate } from '$shared/date-time-format'
@@ -37,15 +39,17 @@
   })
 </script>
 
-<div id="settings-block-about-changelog" class="mt-4 rounded-xl border bg-surface p-4">
-  <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-    <h3 class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
-      <ScrollText size={13} />
+<div id="settings-block-about-changelog" class="mt-4 border bg-surface p-4">
+  <div class="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
+    <h3
+      class="flex items-center gap-1.5 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+    >
+      <CioBook size={13} />
       Changelog
     </h3>
     {#if changelog}
       <div class="flex items-center gap-2 text-[0.6875rem] text-muted">
-        <span class="rounded-lg bg-elevated px-2 py-0.5 font-mono">{changelog.tag}</span>
+        <span class="border border-border bg-elevated px-2 py-0.5 font-mono">{changelog.tag}</span>
         {#if formattedDate}
           <span>{formattedDate}</span>
         {/if}
@@ -55,7 +59,7 @@
 
   {#if loading}
     <div class="flex items-center gap-2 text-xs text-muted">
-      <Loader2 size={13} class="animate-spin" />
+      <CioSpinner size={13} class="animate-spin" />
       Fetching release notes…
     </div>
   {:else if changelog}
@@ -67,11 +71,11 @@
       <span>Changelog is unavailable right now.</span>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1 text-xs font-medium hover:bg-overlay"
+        class="flex items-center gap-1.5 border bg-elevated px-2.5 py-1 text-xs font-medium hover:bg-overlay"
         title="Retry fetching the changelog"
         onclick={() => void load()}
       >
-        <RefreshCw size={12} />
+        <CioRefresh size={12} />
         Retry
       </button>
     </div>

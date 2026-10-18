@@ -36,9 +36,9 @@
 </script>
 
 <script lang="ts" generics="Row, SortKey extends string">
+  import CioArrowDown from '@pillardash-oss/cio-icon/CioArrowDown.svelte'
+  import CioArrowUp from '@pillardash-oss/cio-icon/CioArrowUp.svelte'
   import type { Snippet } from 'svelte'
-  import { ArrowDown, ArrowUp } from '@lucide/svelte'
-
   interface Props {
     rows: Row[]
     columns: ReadonlyArray<DataTableColumn<Row, SortKey>>
@@ -152,7 +152,7 @@
   }
 </script>
 
-<div class="overflow-x-auto rounded-xl border bg-surface">
+<div class="overflow-x-auto border bg-surface">
   <table class="w-full text-left text-xs" aria-label={label}>
     <thead>
       <tr class="border-b text-[0.6875rem] uppercase tracking-wide text-muted">
@@ -176,9 +176,9 @@
                 {column.header}
                 {#if sortKey === column.key}
                   {#if sortDirection === 'desc'}
-                    <ArrowDown size={11} class="shrink-0 text-primary" aria-hidden="true" />
+                    <CioArrowDown size={11} class="shrink-0 text-primary" aria-hidden="true" />
                   {:else}
-                    <ArrowUp size={11} class="shrink-0 text-primary" aria-hidden="true" />
+                    <CioArrowUp size={11} class="shrink-0 text-primary" aria-hidden="true" />
                   {/if}
                 {/if}
               </button>

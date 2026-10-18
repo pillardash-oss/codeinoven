@@ -1,8 +1,15 @@
 <script lang="ts">
-  import { FileText, Lightbulb, PenLine } from '@lucide/svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioLightbulb from '@pillardash-oss/cio-icon/CioLightbulb.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { slide } from 'svelte/transition'
   import type { ProviderCatalog, ThreadSettings } from '$shared/types'
-  import CardFoldToggle from '../shared/CardFoldToggle.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import { type CardChipData } from '../shared/CardTimer.svelte'
   import { dismissSlide, foldSlide } from '../shared/card-motion'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
 
@@ -46,67 +53,74 @@
   let folded = $state(false)
 
   const label = $derived(target === 'prd' ? 'PRD' : 'Spec')
+
+  const chip: CardChipData = {
+    text: 'No deadline',
+    tone: 'paused',
+    title: 'Nothing runs until you choose a path'
+  }
 </script>
 
-<section
-  out:slide={dismissSlide()}
-  class="rounded-2xl border bg-surface p-4 shadow-sm"
-  aria-labelledby="engineering-entry-title"
->
-  <div class="flex items-start justify-between gap-2">
-    <h2 id="engineering-entry-title" class="text-sm font-semibold text-foreground">
-      Engineer this message
-    </h2>
-    <CardFoldToggle bind:folded label="engineering entry" />
-  </div>
-  {#if !folded}
-    <div transition:slide={foldSlide()}>
-      <p class="mt-1 text-xs leading-5 text-muted">
-        Explore the direction with a Brainstorm first, or jump straight into the {label} using the message
-        you typed.
-      </p>
-      <div class="mt-4 grid gap-2 sm:grid-cols-2">
-        <button
-          type="button"
-          class="rounded-xl bg-thread-spec px-3 py-2.5 text-left text-xs font-medium text-foreground disabled:opacity-50"
-          disabled={busy}
-          onclick={() => void onBrainstormFirst()}
-        >
-          <span class="flex items-center gap-2">
-            <Lightbulb size={14} class="shrink-0" />
-            Brainstorm first
-          </span>
-        </button>
-        <button
-          type="button"
-          class="rounded-xl border px-3 py-2.5 text-left text-xs font-medium text-foreground hover:bg-elevated disabled:opacity-50"
-          disabled={busy}
-          onclick={() => void onJumpIn()}
-        >
-          <span class="flex items-center gap-2">
-            <PenLine size={14} class="shrink-0" />
-            {target === 'prd' ? 'Start PRD' : 'Jump into Spec'}
-          </span>
-        </button>
+<div out:slide={dismissSlide()}>
+  <CardFrame placement="replace" label="Engineer this message">
+    <CardHead
+      icon={CioTabGit}
+      title="Engineer this message"
+      {chip}
+      bind:folded
+      foldLabel="engineering entry"
+    />
+
+    {#if !folded}
+      <div transition:slide={foldSlide()}>
+        <div class="flex flex-col gap-1.5 px-3 py-2.5">
+          <p class="text-xs leading-relaxed text-muted">
+            Explore the direction with a Brainstorm first, or jump straight into the {label} using the
+            message you typed.
+          </p>
+          <p class="flex min-w-0 items-center gap-1.5 text-[0.6875rem] leading-relaxed text-dimmed">
+            <CioFileText size={12} class="shrink-0" />
+            Jumping in still lets the Sr. Engineer ask alignment questions it just skips the Brainstorm
+            document.
+          </p>
+        </div>
+
+        <CardFoot>
+          {#snippet right()}
+            <EngineeringModelSwitch
+              {settings}
+              {providers}
+              {projectId}
+              {favoriteModels}
+              {recentModels}
+              {onRemoveRecent}
+              {onModelChange}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+            <CardButton
+              label="Brainstorm first"
+              title="Explore the direction with a Brainstorm first"
+              icon={CioLightbulb}
+              variant="secondary"
+              disabled={busy}
+              loading={busy}
+              onclick={() => void onBrainstormFirst()}
+            />
+            <CardButton
+              label={target === 'prd' ? 'Start PRD' : 'Jump into Spec'}
+              title={target === 'prd'
+                ? 'Jump straight into the PRD using this message'
+                : 'Jump straight into the Spec using this message'}
+              icon={CioPencil}
+              variant="primary"
+              disabled={busy}
+              loading={busy}
+              onclick={() => void onJumpIn()}
+            />
+          {/snippet}
+        </CardFoot>
       </div>
-      <div class="mt-3 flex items-center justify-between gap-2">
-        <p class="flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-muted">
-          <FileText size={12} class="shrink-0" />
-          Jumping in still lets the Sr. Engineer ask alignment questions   it just skips the Brainstorm
-          document.
-        </p>
-        <EngineeringModelSwitch
-          {settings}
-          {providers}
-          {projectId}
-          {favoriteModels}
-          {recentModels}
-          {onRemoveRecent}
-          {onModelChange}
-          {onToggleFavorite}
-          {onReorderFavorite}
-        />
-      </div>
-    </div>
-  {/if}
-</section>
+    {/if}
+  </CardFrame>
+</div>

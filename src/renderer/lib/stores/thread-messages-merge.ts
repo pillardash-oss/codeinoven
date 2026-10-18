@@ -31,20 +31,47 @@ export function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
 }
 
-/** Whether the newest turn's user prompt is inside this page. Activity-only
- *  envelopes (compaction notices, sub-agent reports) ride the user role
- *  mid-turn and do not count as the turn's prompt. */
-export function containsNewestTurnPrompt(messages: AgentMessage[]): boolean {
+/** Activity-only user messages (compaction notices, sub-agent envelopes) ride
+ *  the user role mid-turn. They never open a turn, so they can never be the
+ *  prompt a page is aligned to. */
+function isActivityOnlyMessage(message: AgentMessage): boolean {
+  return (
+    message.parts.length > 0 &&
+    message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
+  )
+}
+
+/**
+ * Whether this page reaches back to the prompt that opens the turn owning the
+ * newest assistant message   the user message the newest output answers.
+ *
+ * A trailing unanswered prompt (a steer, or a follow-up the agent has not
+ * answered yet) is NOT that prompt. That distinction is the whole point: the
+ * tail page of a thread almost always ends on one, so a predicate that only
+ * asked "is any real user message here" declared the page aligned while the
+ * turn's own prompt sat dozens of messages further back. The transcript then
+ * mounted mid-turn, opening on the working trace with the initiating message
+ * cut off above it, and the reader had to click "Load earlier messages" just
+ * to see what the output was answering.
+ *
+ * A page holding no assistant row answers nothing, so there is no turn whose
+ * prompt could be missing.
+ */
+export function pageOpensNewestTurn(messages: readonly AgentMessage[]): boolean {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]
-    if (!message) return false
-    if (message.role !== 'user') continue
-    const activityOnly =
-      message.parts.length > 0 &&
-      message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
-    if (!activityOnly) return true
+    if (!message || message.inlineArtifact || message.role !== 'assistant') continue
+    for (let cursor = index - 1; cursor >= 0; cursor--) {
+      const previous = messages[cursor]
+      if (!previous) return false
+      if (previous.inlineArtifact) continue
+      if (previous.role === 'assistant') continue
+      if (isActivityOnlyMessage(previous)) continue
+      return previous.role === 'user'
+    }
+    return false
   }
-  return false
+  return true
 }
 
 export function messageText(msg: AgentMessage): string {

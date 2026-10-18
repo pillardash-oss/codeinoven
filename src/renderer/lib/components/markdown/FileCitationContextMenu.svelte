@@ -1,16 +1,13 @@
 <script lang="ts">
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { ContextMenu } from 'bits-ui'
-  import {
-    ChevronRight,
-    Clipboard,
-    Copy,
-    ExternalLink,
-    FileText,
-    FolderOpen,
-    Save
-  } from '@lucide/svelte'
+
   import { invoke } from '$lib/ipc.svelte'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -30,7 +27,7 @@
     /** Project whose root the citations resolve against. Defaults to the active project. */
     projectId?: string
     /**
-     * Force the whole wrapped content to act as this citation on right-click  
+     * Force the whole wrapped content to act as this citation on right-click
      * for elements that are not citation anchors (e.g. agent file chips).
      */
     citation?: CitationTarget
@@ -71,13 +68,18 @@
   }
 
   let menuOpen = $state(false)
-  let pendingTarget = $state<CitationTarget | null>(null)
+  // Raw, not deeply reactive: an async resolution is kept only when the menu
+  // still holds the very target it began from, and a deep `$state` proxy is
+  // never equal to the plain object it was made from. A proxied target made
+  // every identity check below fail, so `resolved` stayed null and the menu's
+  // Copy path and reveal actions stayed disabled.
+  let pendingTarget = $state.raw<CitationTarget | null>(null)
   let resolved = $state<ResolvedCitation | null>(null)
   let editors = $state<EditorInfo[]>([])
   let openInEditor = $state(false)
 
   const itemClass =
-    'flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
+    'flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-xs text-foreground outline-none data-[highlighted]:bg-elevated data-[disabled]:opacity-40'
   const dangerItemClass = `${itemClass} text-danger data-[highlighted]:bg-danger/10`
 
   function citationFromLink(link: HTMLAnchorElement): CitationTarget | null {
@@ -98,22 +100,26 @@
   }
 
   /**
+   * The citation a right-click names: the fixed citation this menu wraps, or the
+   * link or chip the pointer landed on. Read once per event, because the
+   * `citation` prop is a fresh object on every parent render and a later read
+   * would name a different object than the one the resolution began from.
+   */
+  function citationFromEvent(event: MouseEvent): CitationTarget | null {
+    if (citation) return citation
+    const link = (event.target as Element | null)?.closest('a')
+    const linkCitation = link instanceof HTMLAnchorElement ? citationFromLink(link) : null
+    return linkCitation ?? citationFromChip(event)
+  }
+
+  /**
    * Gate for right-clicks. Citation links let bits-ui's trigger open the menu at
    * the pointer (this handler only records the target); everything else (plain
    * text, external links) stops the event so the native OS context menu keeps
    * working untouched.
    */
   function handleContextMenu(event: MouseEvent): void {
-    if (citation) {
-      pendingTarget = citation
-      void resolveCitation(citation).then((value) => {
-        if (pendingTarget === citation) resolved = value
-      })
-      return
-    }
-    const link = (event.target as Element | null)?.closest('a')
-    const linkCitation = link instanceof HTMLAnchorElement ? citationFromLink(link) : null
-    const target = linkCitation ?? citationFromChip(event)
+    const target = citationFromEvent(event)
     if (!target) {
       event.stopPropagation()
       return
@@ -241,21 +247,6 @@
     if (safeProjectId) void revealCitationFile(safeProjectId, path, line)
   }
 
-  async function openInPreferred(): Promise<void> {
-    const mount = resolved?.mount
-    if (!mount) return
-    try {
-      await invoke(
-        'projectFiles:openInEditor',
-        mount.projectId,
-        mount.relativePath,
-        mount.scopeBucketId
-      )
-    } catch (error) {
-      reportError(error, 'Could not open the file.')
-    }
-  }
-
   async function openWithEditor(editorId: EditorId): Promise<void> {
     const mount = resolved?.mount
     if (!mount) return
@@ -272,45 +263,9 @@
     }
   }
 
-  async function saveAs(): Promise<void> {
-    const mount = resolved?.mount
-    if (!mount) return
-    try {
-      const savedPath = await invoke(
-        'projectFiles:saveAs',
-        mount.projectId,
-        mount.relativePath,
-        mount.scopeBucketId
-      )
-      if (savedPath) toast.success('File saved.')
-    } catch (error) {
-      reportError(error, 'Could not save the file.')
-    }
-  }
-
   async function copyPath(): Promise<void> {
     if (!resolved) return
     await copyText(resolved.absolutePath, 'Path copied to clipboard.')
-  }
-
-  async function copyContents(): Promise<void> {
-    const mount = resolved?.mount
-    if (!mount) return
-    try {
-      const textFile = await invoke(
-        'projectFiles:read',
-        mount.projectId,
-        mount.relativePath,
-        mount.scopeBucketId
-      )
-      if (!textFile) {
-        toast.error('This file cannot be copied as text.')
-        return
-      }
-      await copyText(textFile.content, 'File contents copied to clipboard.')
-    } catch {
-      toast.error('This file cannot be copied as text.')
-    }
   }
 
   /**
@@ -328,8 +283,6 @@
     )
     if (!revealed) toast.error('This file no longer exists on disk.')
   }
-
-  let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'Editor')
 </script>
 
 <ContextMenu.Root open={menuOpen} onOpenChange={handleOpenChange}>
@@ -344,94 +297,73 @@
       collisionPadding={12}
       sticky="always"
       updatePositionStrategy="always"
-      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
+      class="z-50 max-h-[calc(100vh-1.5rem)] min-w-44 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
     >
       {#if pendingTarget}
         <ContextMenu.Item class={itemClass} onSelect={openInApp}>
-          <FileText size={13} class="text-muted" />
+          <CioFileText size={13} class="text-muted" />
           Open file
         </ContextMenu.Item>
-        {#if resolved}
-          {#if resolved.mount?.kind === 'file'}
-            <ContextMenu.Item class={itemClass} onSelect={openInPreferred}>
-              <ExternalLink size={13} class="text-muted" />
-              Open in {preferredName}
-            </ContextMenu.Item>
-          {/if}
-          {#if resolved.mount}
-            <ContextMenu.Sub
-              open={openInEditor}
-              onOpenChange={(open) => {
-                openInEditor = open
-                if (open) void loadEditors()
-              }}
-            >
-              <ContextMenu.SubTrigger class={itemClass}>
-                <FolderOpen size={13} class="text-muted" />
-                Open with
-                <ChevronRight size={13} class="ml-auto text-muted" />
-              </ContextMenu.SubTrigger>
-              <ContextMenu.Portal>
-                <ContextMenu.SubContent
-                  avoidCollisions
-                  collisionPadding={12}
-                  class="z-50 max-h-[calc(100vh-1.5rem)] min-w-40 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
-                >
-                  {#if editors.length === 0}
-                    <ContextMenu.Item class={itemClass} disabled>No editors found</ContextMenu.Item>
-                  {:else}
-                    {#each editors as editor (editor.id)}
-                      <ContextMenu.Item
-                        class={itemClass}
-                        onSelect={() => void openWithEditor(editor.id)}
-                      >
-                        {#if editor.iconDataUrl}
-                          <img
-                            src={editor.iconDataUrl}
-                            alt=""
-                            class="h-3.5 w-3.5 shrink-0 object-contain"
-                          />
-                        {:else}
-                          <ExternalLink size={13} class="text-muted" />
-                        {/if}
-                        <span class="truncate">{editor.name}</span>
-                      </ContextMenu.Item>
-                    {/each}
-                  {/if}
-                </ContextMenu.SubContent>
-              </ContextMenu.Portal>
-            </ContextMenu.Sub>
-          {/if}
+        {#if resolved?.mount}
+          <ContextMenu.Sub
+            open={openInEditor}
+            onOpenChange={(open) => {
+              openInEditor = open
+              if (open) void loadEditors()
+            }}
+          >
+            <ContextMenu.SubTrigger class={itemClass}>
+              <CioFolderOpen size={13} class="text-muted" />
+              Open with
+              <CioForward size={13} class="ml-auto text-muted" />
+            </ContextMenu.SubTrigger>
+            <ContextMenu.Portal>
+              <ContextMenu.SubContent
+                avoidCollisions
+                collisionPadding={12}
+                class="z-50 max-h-[calc(100vh-1.5rem)] min-w-40 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
+              >
+                {#if editors.length === 0}
+                  <ContextMenu.Item class={itemClass} disabled>No editors found</ContextMenu.Item>
+                {:else}
+                  {#each editors as editor (editor.id)}
+                    <ContextMenu.Item
+                      class={itemClass}
+                      onSelect={() => void openWithEditor(editor.id)}
+                    >
+                      {#if editor.iconDataUrl}
+                        <img
+                          src={editor.iconDataUrl}
+                          alt=""
+                          class="h-3.5 w-3.5 shrink-0 object-contain"
+                        />
+                      {:else}
+                        <CioExternalLink size={13} class="text-muted" />
+                      {/if}
+                      <span class="truncate">{editor.name}</span>
+                    </ContextMenu.Item>
+                  {/each}
+                {/if}
+              </ContextMenu.SubContent>
+            </ContextMenu.Portal>
+          </ContextMenu.Sub>
         {/if}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
-        {#if resolved?.mount?.kind === 'file'}
-          <ContextMenu.Item class={itemClass} onSelect={saveAs}>
-            <Save size={13} class="text-muted" />
-            Save as...
-          </ContextMenu.Item>
-        {/if}
         <ContextMenu.Item
           class={itemClass}
           disabled={!resolved}
           title={resolved ? undefined : 'This file could not be located on disk'}
           onSelect={copyPath}
         >
-          <Copy size={13} class="text-muted" />
+          <CioCopy size={13} class="text-muted" />
           Copy path
         </ContextMenu.Item>
-        {#if resolved?.mount?.kind === 'file'}
-          <ContextMenu.Item class={itemClass} onSelect={copyContents}>
-            <Clipboard size={13} class="text-muted" />
-            Copy file contents
-          </ContextMenu.Item>
-        {/if}
-        <ContextMenu.Separator class="my-1 h-px bg-border" />
         <ContextMenu.Item
           class={dangerItemClass}
           disabled={!resolved}
           onSelect={revealInFileManager}
         >
-          <FolderOpen size={13} />
+          <CioFolderOpen size={13} />
           {osFileManagerLabel()}
         </ContextMenu.Item>
       {/if}

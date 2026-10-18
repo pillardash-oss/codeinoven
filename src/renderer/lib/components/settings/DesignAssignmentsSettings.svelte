@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronDown, Loader2, Plus, Sparkles, Trash2 } from '@lucide/svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -44,7 +48,7 @@
    * here is chosen for them.
    *
    * An assignment also says which craft it covers, by naming the practitioner
-   * (Copywriter, Illustrator, Video editor, Voice-over artist), because a model
+   * (Copywriter, Illustrator, Film editor, Voice-over artist), because a model
    * that writes copy cannot make a picture and one trained for pictures is
    * picked for that. Two assignments for one craft are alternatives for the same
    * job, so the order they are listed in is the order they are preferred.
@@ -384,8 +388,12 @@
 </script>
 
 <div class="space-y-4">
-  <div class="rounded-xl border bg-surface p-4">
-    <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Assigned models</h3>
+  <div class="border bg-surface p-4">
+    <h3
+      class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+    >
+      Assigned models
+    </h3>
     <p class="mt-2 text-xs leading-relaxed text-dimmed">
       Name the work, say which craft it belongs to, and pick the model that does it: the copy, an
       SEO pass, the images a page needs, the clip that opens it, the voice-over. A design session
@@ -399,29 +407,26 @@
   </div>
 
   {#if error}
-    <p
-      class="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger"
-      role="alert"
-    >
+    <p class="border border-danger/30 bg-danger/10 px-4 py-3 text-xs text-danger" role="alert">
       {error}
     </p>
   {/if}
 
   {#if loading}
-    <div class="flex items-center gap-2 rounded-xl border bg-surface px-4 py-3 text-xs text-muted">
-      <Loader2 size={14} class="animate-spin" /> Loading harness catalogs…
+    <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
+      <CioSpinner size={14} class="animate-spin" /> Loading harness catalogs…
     </div>
   {:else if catalogs.length === 0 && assignments.length === 0}
-    <div class="rounded-xl border border-dashed bg-surface">
+    <div class="border border-dashed bg-surface">
       <EmptyState
-        icon={Sparkles}
+        icon={CioSparkles}
         title="No harness installed"
         description="Install a harness and sign in to assign a model to design work."
       />
     </div>
   {:else}
     {#if assignments.length > 0}
-      <div class="rounded-xl border bg-surface">
+      <div class="border bg-surface">
         <div class="divide-y">
           {#each assignments as assignment (assignment.id)}
             <div class="p-4">
@@ -435,7 +440,7 @@
                   </label>
                   <input
                     id={`design-assignment-${assignment.id}`}
-                    class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
+                    class="mt-1 w-full border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
                     type="text"
                     maxlength={DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH}
                     value={labelOf(assignment)}
@@ -500,7 +505,7 @@
                       {#if customMediaModels[assignment.id]}
                         <input
                           id={`design-assignment-model-${assignment.id}`}
-                          class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+                          class="mt-1 w-full border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
                           type="text"
                           maxlength={MEDIA_MODEL_MAX_LENGTH}
                           placeholder="owner/model-name"
@@ -560,7 +565,7 @@
                   </div>
                   <button
                     type="button"
-                    class="rounded-lg p-2 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                    class="p-2 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
                     title={`Remove the ${assignment.label} assignment`}
                     aria-label={`Remove the ${assignment.label} assignment`}
                     disabled={!settingsReady}
@@ -568,7 +573,7 @@
                       pendingRemoval = assignment
                     }}
                   >
-                    <Trash2 size={14} />
+                    <CioTrash size={14} />
                   </button>
                 </div>
               </div>
@@ -576,14 +581,14 @@
               <div class="mt-2">
                 <button
                   type="button"
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="flex items-center gap-1 px-1.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                   aria-expanded={expandedId === assignment.id}
                   title={`Standing guidance handed to ${assignment.label} with every request`}
                   onclick={() => {
                     expandedId = expandedId === assignment.id ? null : assignment.id
                   }}
                 >
-                  <ChevronDown
+                  <CioChevronDown
                     size={12}
                     class={expandedId === assignment.id
                       ? 'rotate-180 transition-transform'
@@ -593,7 +598,7 @@
                 </button>
                 {#if expandedId === assignment.id}
                   <textarea
-                    class="mt-1.5 h-20 w-full resize-y rounded-lg border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+                    class="mt-1.5 h-20 w-full resize-y border bg-elevated px-2.5 py-1.5 text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
                     maxlength={DESIGN_ASSIGNMENT_INSTRUCTIONS_MAX_LENGTH}
                     placeholder="Say how this work should be done: size, format, tone, anything the model should always follow."
                     aria-label={`Standing guidance for ${assignment.label}`}
@@ -614,14 +619,18 @@
       </div>
     {/if}
 
-    <div class="rounded-xl border bg-surface p-4">
-      <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Add an assignment</h3>
+    <div class="border bg-surface p-4">
+      <h3
+        class="border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
+      >
+        Add an assignment
+      </h3>
       <div class="mt-3 flex flex-wrap items-start gap-3">
         <div class="min-w-0 flex-1">
           <label class="block text-xs text-muted" for="design-assignment-new">Work</label>
           <input
             id="design-assignment-new"
-            class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
+            class="mt-1 w-full border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
             type="text"
             placeholder="Product copy"
             maxlength={DESIGN_ASSIGNMENT_LABEL_MAX_LENGTH}
@@ -669,7 +678,7 @@
             {#if draftCustomMediaModel}
               <input
                 id="design-assignment-new-model"
-                class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
+                class="mt-1 w-full border bg-elevated px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-primary disabled:opacity-60"
                 type="text"
                 maxlength={MEDIA_MODEL_MAX_LENGTH}
                 placeholder="owner/model-name"
@@ -721,13 +730,13 @@
         </div>
         <button
           type="button"
-          class="mt-5 flex items-center gap-1.5 rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
+          class="mt-5 flex items-center gap-1.5 border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay disabled:opacity-50"
           disabled={!canAdd}
           title="Add this design assignment"
           aria-label="Add this design assignment"
           onclick={() => void addAssignment()}
         >
-          <Plus size={13} /> Add
+          <CioPlus size={13} /> Add
         </button>
       </div>
       <p class="mt-2 text-xs text-dimmed">

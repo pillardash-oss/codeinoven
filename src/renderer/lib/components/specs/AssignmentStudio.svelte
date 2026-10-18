@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { ArrowRight, Check, MessageSquare, Network } from '@lucide/svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -591,7 +594,7 @@
   {#snippet actions()}
     {#if readOnly && auditActive && !finalComplete && onOpenAuditWork}
       <button
-        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
+        class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
         title="Open the Assignment audit work"
         onclick={onOpenAuditWork}
       >
@@ -599,20 +602,20 @@
       </button>
     {:else if !readOnly}
       <button
-        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
         disabled={busy || !validation.valid}
         title="Sign off this assignment and create worker tasks"
         onclick={() => void signOff()}
       >
         Sign off & assign
-        <ArrowRight size={13} />
+        <CioArrowRight size={13} />
       </button>
     {/if}
   {/snippet}
 
   {#snippet sidebarExtra()}
     <div class="border-t p-3">
-      <div class="flex items-center justify-between gap-2">
+      <div class="flex items-center justify-between gap-2 border-b border-border pb-1.5">
         <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Assignment checks
         </p>
@@ -626,15 +629,15 @@
       </div>
       <div class="mt-2 space-y-1.5">
         {#each validation.issues as issue (`${issue.code}:${issue.path}`)}
-          <div class="rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-2">
+          <div class="border border-danger/30 bg-danger/10 px-2.5 py-2">
             <p class="text-xs leading-relaxed text-foreground">{issue.message}</p>
             <p class="mt-0.5 truncate font-mono text-[0.5625rem] text-dimmed" title={issue.path}>
               {issue.path}
             </p>
           </div>
         {:else}
-          <div class="flex items-center gap-2 rounded-lg border border-dashed px-2.5 py-3">
-            <Check size={13} class="text-primary" />
+          <div class="flex items-center gap-2 border border-dashed px-2.5 py-3">
+            <CioCheck size={13} class="text-primary" />
             <p class="text-[0.6875rem] text-dimmed">Ready to assign.</p>
           </div>
         {/each}
@@ -655,7 +658,7 @@
   {#snippet markers()}
     {#each annotationMarkers as marker (marker.annotation.id)}
       <button
-        class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
+        class="absolute z-20 flex h-7 w-7 items-center justify-center border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
         style:left={compactViewport.matches ? undefined : `${marker.x}px`}
         style:top={`${marker.y}px`}
         data-assignment-annotation-marker={marker.annotation.id}
@@ -663,14 +666,14 @@
         aria-label="Open anchored comment"
         onclick={() => void openAnnotation(marker.annotation)}
       >
-        <MessageSquare size={13} />
+        <CioMessage size={13} />
       </button>
     {/each}
   {/snippet}
 
   <div bind:this={documentContent} class="px-6 py-6 md:px-14 md:py-8">
     <div class="mb-6 flex items-center gap-2">
-      <Network size={18} class="text-primary" />
+      <CioNetwork size={18} class="text-primary" />
       <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>
     </div>
     <AssignmentReviewContent

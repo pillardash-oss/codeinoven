@@ -67,6 +67,12 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     reason: REPOSITORY_READ
   },
   {
+    file: 'src/main/database/repositories/design-repo.ts',
+    maxSites: 1,
+    reason:
+      'the indexed single-row relocation redirect lookup that resolves a folder on the preview path immediately before the synchronous upsert writes'
+  },
+  {
     file: 'src/main/database/repositories/expert-settings-repo.ts',
     maxSites: 1,
     reason: REPOSITORY_READ
@@ -89,7 +95,11 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
   },
   { file: 'src/main/database/repositories/note-repo.ts', maxSites: 4, reason: REPOSITORY_READ },
   { file: 'src/main/database/repositories/project-repo.ts', maxSites: 5, reason: REPOSITORY_READ },
-  { file: 'src/main/database/repositories/routine-repo.ts', maxSites: 1, reason: REPOSITORY_READ },
+  {
+    file: 'src/main/database/repositories/assistant-repo.ts',
+    maxSites: 1,
+    reason: REPOSITORY_READ
+  },
   { file: 'src/main/database/repositories/thread-repo.ts', maxSites: 10, reason: REPOSITORY_READ },
   { file: 'src/lib/engines/assignment-engine.ts', maxSites: 2, reason: ENGINE_READ },
   { file: 'src/lib/engines/audit-engine.ts', maxSites: 4, reason: ENGINE_READ },

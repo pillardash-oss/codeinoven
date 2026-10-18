@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioWrench from '@pillardash-oss/cio-icon/CioWrench.svelte'
   import { onMount } from 'svelte'
-  import { TriangleAlert, Wrench, RefreshCw } from '@lucide/svelte'
+
   import { toast } from 'svelte-sonner'
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
@@ -128,14 +131,14 @@
     {#if repairable}
       <button
         type="button"
-        class="rounded-md bg-primary px-2 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+        class="bg-primary px-2 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
         title="Repair the managed worktree of {name ?? 'this scope'}"
         aria-label="Repair the managed worktree of {name ?? 'this scope'}"
         disabled={busyAction !== null}
         onclick={() => void repair()}
       >
         <span class="flex items-center gap-1.5">
-          <Wrench size={11} />
+          <CioWrench size={11} />
           {busyAction === 'repair' ? 'Repairing…' : 'Repair worktree'}
         </span>
       </button>
@@ -143,14 +146,14 @@
     {#if setupStale}
       <button
         type="button"
-        class="rounded-md border border-overlay px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+        class="border border-overlay px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
         title="Re-run the setup commands in the worktree of {name ?? 'this scope'}"
         aria-label="Re-run the setup commands in the worktree of {name ?? 'this scope'}"
         disabled={busyAction !== null}
         onclick={() => void rerunSetup()}
       >
         <span class="flex items-center gap-1.5">
-          <RefreshCw size={11} />
+          <CioRefresh size={11} />
           {busyAction === 'setup' ? 'Running setup…' : 'Re-run setup'}
         </span>
       </button>
@@ -161,10 +164,10 @@
 {#if visible && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
   {#if variant === 'inline'}
     <div
-      class="flex min-w-0 items-center gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2 py-1.5"
+      class="flex min-w-0 items-center gap-2 border border-warning/30 bg-warning/10 px-2 py-1.5"
       role="status"
     >
-      <TriangleAlert size={12} class="shrink-0 text-warning" />
+      <CioAttention size={12} class="shrink-0 text-warning" />
       <div class="min-w-0 flex-1">
         <p class="truncate text-[0.6875rem] text-warning" title="{title}. {fix}">{title}</p>
         {#if actionError}
@@ -181,10 +184,10 @@
     </div>
   {:else}
     <div
-      class="flex items-start gap-2.5 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5"
+      class="flex items-start gap-2.5 border border-warning/30 bg-warning/10 px-3 py-2.5"
       role="status"
     >
-      <TriangleAlert size={14} class="mt-0.5 shrink-0 text-warning" />
+      <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
       <div class="min-w-0 flex-1 space-y-1.5">
         <p class="text-xs font-medium text-warning">{title}</p>
         <p class="text-[0.6875rem] text-muted">{fix}</p>

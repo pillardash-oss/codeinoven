@@ -1,4 +1,17 @@
 <script lang="ts">
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioCalendar from '@pillardash-oss/cio-icon/CioCalendar.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -26,21 +39,6 @@
     SkillMarketInstallRequest,
     UtilityActivation
   } from '$shared/types'
-  import {
-    ArrowLeft,
-    CalendarDays,
-    Check,
-    Download,
-    Earth,
-    ExternalLink,
-    FolderKanban,
-    GitFork,
-    Loader2,
-    ShieldCheck,
-    SquareTerminal,
-    Star,
-    Trash2
-  } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -341,10 +339,10 @@
   One scope destination per row: they are independent choices, so a shared row
   made them read as one segmented selector.
 -->
-{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof Earth)}
+{#snippet scopeOption(id: InstallScope, label: string, Icon: typeof CioBrowser)}
   <button
     type="button"
-    class="flex h-9 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {scope ===
+    class="flex h-9 items-center justify-center gap-2 border px-3 text-xs font-medium transition-colors {scope ===
     id
       ? 'border-primary bg-primary/10 text-primary'
       : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
@@ -364,12 +362,12 @@
   <header class="shrink-0 border-b bg-app px-6 pt-6 pb-4">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+        class="flex h-8 items-center gap-1.5 border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
         type="button"
         title={backLabel}
         onclick={onBack}
       >
-        <ArrowLeft size={13} />
+        <CioArrowLeft size={13} />
         {backLabel}
       </button>
       <SkillBookmarkButton
@@ -402,12 +400,12 @@
   >
     <div class="min-w-0 pt-4 lg:flex-1 lg:overflow-y-auto lg:px-6 lg:pt-5 lg:pb-24">
       {#if error}
-        <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {error}
         </p>
       {/if}
       {#if installedMessage}
-        <p class="mb-4 rounded-lg bg-success/10 px-3 py-2 text-xs text-success" role="status">
+        <p class="mb-4 bg-success/10 px-3 py-2 text-xs text-success" role="status">
           {installedMessage}
         </p>
       {/if}
@@ -416,23 +414,23 @@
         <div class="flex items-center gap-2">
           <h2
             id="skill-content-title"
-            class="text-xs font-semibold uppercase tracking-wide text-muted"
+            class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
           >
             SKILL.md
           </h2>
-          {#if loading}<Loader2 size={12} class="animate-spin text-dimmed" />{/if}
+          {#if loading}<CioSpinner size={12} class="animate-spin text-dimmed" />{/if}
         </div>
         {#if detail?.skillMarkdown}
           <MarkdownView text={skillPreview} class="mt-4" />
         {:else if loading}
           <div class="mt-5 space-y-3" aria-label="Loading skill instructions">
-            <div class="h-4 w-3/5 animate-pulse rounded bg-raised"></div>
-            <div class="h-3 w-full animate-pulse rounded bg-raised"></div>
-            <div class="h-3 w-11/12 animate-pulse rounded bg-raised"></div>
-            <div class="h-3 w-4/5 animate-pulse rounded bg-raised"></div>
+            <div class="h-4 w-3/5 animate-pulse bg-raised"></div>
+            <div class="h-3 w-full animate-pulse bg-raised"></div>
+            <div class="h-3 w-11/12 animate-pulse bg-raised"></div>
+            <div class="h-3 w-4/5 animate-pulse bg-raised"></div>
           </div>
         {:else}
-          <div class="mt-4 rounded-xl border border-dashed p-6">
+          <div class="mt-4 border border-dashed p-6">
             <p class="text-sm font-medium">SKILL.md preview unavailable</p>
             <p class="mt-1 text-xs leading-relaxed text-muted">
               The marketplace metadata loaded, but the source did not expose a readable skill file.
@@ -446,18 +444,18 @@
       class="order-first space-y-4 lg:order-none lg:w-[19rem] lg:shrink-0 lg:overflow-y-auto lg:py-5 lg:pr-6"
       aria-label="Install skill and skill facts"
     >
-      <section class="rounded-xl border bg-surface p-4" aria-labelledby="install-skill-title">
+      <section class="border bg-surface p-4" aria-labelledby="install-skill-title">
         <h2 id="install-skill-title" class="text-sm font-semibold">Install skill</h2>
         <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
           Choose who owns the skill and exactly where it should be available.
         </p>
 
-        <div class="mt-4 grid grid-cols-2 gap-1 rounded-lg bg-elevated p-1">
+        <div class="mt-4 grid grid-cols-2 gap-1 border bg-elevated p-1">
           <button
             type="button"
-            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[0.6875rem] font-medium transition-colors {manager ===
+            class="flex h-8 items-center justify-center gap-1.5 text-[0.6875rem] font-medium transition-colors {manager ===
             'cio'
-              ? 'bg-surface text-foreground shadow-sm'
+              ? 'bg-surface text-foreground'
               : 'text-muted hover:text-foreground'}"
             aria-pressed={manager === 'cio'}
             onclick={() => selectManager('cio')}
@@ -468,14 +466,14 @@
           </button>
           <button
             type="button"
-            class="flex h-8 items-center justify-center gap-1.5 rounded-md text-[0.6875rem] font-medium whitespace-nowrap transition-colors {manager ===
+            class="flex h-8 items-center justify-center gap-1.5 text-[0.6875rem] font-medium whitespace-nowrap transition-colors {manager ===
             'native'
-              ? 'bg-surface text-foreground shadow-sm'
+              ? 'bg-surface text-foreground'
               : 'text-muted hover:text-foreground'}"
             aria-pressed={manager === 'native'}
             onclick={() => selectManager('native')}
           >
-            <SquareTerminal size={12} /> Harnesses
+            <CioTerminal size={12} /> Harnesses
           </button>
         </div>
 
@@ -491,7 +489,7 @@
               >
                 {#each skillPaths as skillPath (skillPath.id)}
                   <span
-                    class="flex h-8 max-w-72 shrink-0 items-center gap-2 rounded-lg bg-elevated px-2.5"
+                    class="flex h-8 max-w-72 shrink-0 items-center gap-2 border bg-elevated px-2.5"
                   >
                     <span class="shrink-0 text-[0.625rem] font-medium text-muted">
                       {skillPath.label}
@@ -517,10 +515,10 @@
           <!-- One destination per row: each scope is a separate decision, and
                side-by-side chips read as one shared choice. -->
           <div class="grid gap-2">
-            {@render scopeOption('global', 'Global', Earth)}
-            {@render scopeOption('projects', 'Projects', FolderKanban)}
+            {@render scopeOption('global', 'Global', CioBrowser)}
+            {@render scopeOption('projects', 'Projects', CioProjects)}
             {#if manager === 'native'}
-              {@render scopeOption('harnesses', 'Harnesses', SquareTerminal)}
+              {@render scopeOption('harnesses', 'Harnesses', CioTerminal)}
             {/if}
           </div>
           {#if scope === 'projects'}
@@ -543,7 +541,7 @@
             </p>
             <button
               type="button"
-              class="flex w-full items-start gap-2 rounded-lg border p-2.5 text-left transition-colors {activation ===
+              class="flex w-full items-start gap-2 border p-2.5 text-left transition-colors {activation ===
               'on_demand'
                 ? 'border-primary bg-primary/10'
                 : 'bg-elevated hover:bg-overlay'}"
@@ -555,7 +553,7 @@
             </button>
             <button
               type="button"
-              class="flex w-full items-start gap-2 rounded-lg border p-2.5 text-left transition-colors {activation ===
+              class="flex w-full items-start gap-2 border p-2.5 text-left transition-colors {activation ===
               'always'
                 ? 'border-primary bg-primary/10'
                 : 'bg-elevated hover:bg-overlay'}"
@@ -577,7 +575,7 @@
               {#each availableHarnesses as harness (harness.id)}
                 <button
                   type="button"
-                  class="flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[0.6875rem] font-medium transition-colors {selectedHarnessIds.includes(
+                  class="flex h-8 items-center gap-1.5 border px-2 text-[0.6875rem] font-medium transition-colors {selectedHarnessIds.includes(
                     harness.id
                   )
                     ? 'border-primary bg-primary/10 text-primary'
@@ -602,7 +600,7 @@
           <p class="mt-4 text-[0.625rem] leading-relaxed text-dimmed">{destinationSummary}</p>
         {/if}
         <button
-          class="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50 {manager ===
+          class="flex h-9 w-full items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50 {manager ===
           'cio'
             ? 'mt-3'
             : 'mt-4'}"
@@ -610,19 +608,19 @@
           disabled={installing || selectionInstalled || selectionIncomplete}
           onclick={() => void installSkill()}
         >
-          {#if installing}<Loader2 size={13} class="animate-spin" />{:else if selectionInstalled}
-            <Check size={13} />{:else}<Download size={13} />{/if}
+          {#if installing}<CioSpinner size={13} class="animate-spin" />{:else if selectionInstalled}
+            <CioCheck size={13} />{:else}<CioDownload size={13} />{/if}
           {installing ? 'Installing…' : selectionInstalled ? 'Installed' : 'Install skill'}
         </button>
 
         {#if installedLocations.length > 0}
           <button
-            class="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-danger/40 px-4 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+            class="mt-2 flex h-9 w-full items-center justify-center gap-1.5 border border-danger/40 px-4 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
             type="button"
             disabled={uninstalling}
             onclick={() => (confirmingUninstall = true)}
           >
-            {#if uninstalling}<Loader2 size={13} class="animate-spin" />{:else}<Trash2
+            {#if uninstalling}<CioSpinner size={13} class="animate-spin" />{:else}<CioTrash
                 size={13}
               />{/if}
             {uninstalling ? 'Uninstalling…' : 'Uninstall'}
@@ -630,7 +628,7 @@
         {/if}
       </section>
 
-      <section class="rounded-xl border bg-surface p-4" aria-label="Skill facts">
+      <section class="border bg-surface p-4" aria-label="Skill facts">
         <div class="grid grid-cols-2 gap-x-4 gap-y-5">
           <div>
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">Installs</p>
@@ -642,7 +640,7 @@
             <p
               class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
-              <Star size={11} /> Stars
+              <CioStar size={11} /> Stars
             </p>
             <p class="mt-1 font-mono text-sm tabular-nums">
               {detail?.githubStars === null || detail?.githubStars === undefined
@@ -654,7 +652,7 @@
             <p
               class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
-              <CalendarDays size={11} /> First seen
+              <CioCalendar size={11} /> First seen
             </p>
             <p class="mt-1 font-mono text-xs">{detail?.firstSeen ?? ' '}</p>
           </div>
@@ -662,7 +660,7 @@
             <p
               class="flex items-center gap-1 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
             >
-              <GitFork size={11} /> Repository
+              <CioFork size={11} /> Repository
             </p>
             <button
               class="mt-1 flex max-w-full items-center gap-1 text-left font-mono text-xs hover:underline"
@@ -671,7 +669,7 @@
               data-external-url={detail?.repositoryUrl ?? entry.url}
               onclick={() => void openInBrowser(detail?.repositoryUrl ?? entry.url)}
             >
-              <span class="truncate">{entry.source}</span><ExternalLink
+              <span class="truncate">{entry.source}</span><CioExternalLink
                 size={10}
                 class="shrink-0"
               />
@@ -683,13 +681,13 @@
           <p
             class="flex items-center gap-1.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted"
           >
-            <ShieldCheck size={12} /> Security audits
+            <CioShieldCheck size={12} /> Security audits
           </p>
           {#if detail?.audits.length}
             <div class="mt-2 flex flex-wrap gap-1.5">
               {#each detail.audits as audit (audit.name)}
                 <span
-                  class="rounded-md px-1.5 py-1 text-[0.5625rem] font-semibold {auditClass(
+                  class="border border-border px-1.5 py-1 text-[0.5625rem] font-semibold tracking-wide {auditClass(
                     audit.status
                   )}"
                 >
@@ -711,7 +709,7 @@
           data-external-url={entry.url}
           onclick={() => void openInBrowser(entry.url)}
         >
-          View on skills.sh <ExternalLink size={12} />
+          View on skills.sh <CioExternalLink size={12} />
         </button>
       </section>
     </aside>

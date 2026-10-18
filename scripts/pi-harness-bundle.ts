@@ -115,10 +115,6 @@ const KEPT_DIST_DIRECTORIES: ReadonlySet<string> = new Set([
  *  - `vendor/jiti/dist/{jiti.cjs,babel.cjs}` are required by
  *    `vendor/jiti/lib/jiti.cjs`, which is what the bundle requires to compile
  *    the app-owned `.ts` extensions.
- *  - `chord/dist/node/bundle.js` is statically imported by `chord/bundler.js`,
- *    which the bundle imports, and it in turn imports the `esbuild` package, so
- *    that package's JS entry must stay resolvable from
- *    `vendor/@earendil-works/chord/node_modules`.
  *  - `pi-ai` is imported in-process by the main process
  *    (see `src/main/providers/pi-ai-registry.ts`).
  */
@@ -130,8 +126,6 @@ export const PI_HARNESS_REQUIRED_RUNTIME_FILES: readonly string[] = [
   ...PI_HARNESS_KEPT_DIST_FILES,
   'vendor/jiti/dist/jiti.cjs',
   'vendor/jiti/dist/babel.cjs',
-  'vendor/@earendil-works/chord/dist/node/bundle.js',
-  'vendor/@earendil-works/chord/node_modules/esbuild/lib/main.js',
   'vendor/pi-ai/dist/index.js',
   'vendor/pi-ai/dist/providers/all.js',
   'vendor/@silvia-odwyer/photon-node/photon_rs.js',
@@ -155,12 +149,6 @@ const DECLARATION_FILE_PATTERN = /\.d\.(?:ts|mts|cts)$/u
  *    bundle), not from disk.
  *  - source maps and type declarations are read by editors and debuggers, never
  *    by Node at run time.
- *  - chord's `src/` is TypeScript source for chord's own build.
- *  - `esbuild/node_modules/` holds the 10MB platform binary (`@esbuild/<os>-<arch>`)
- *    that only chord's facet bundler spawns. That bundler is reachable solely
- *    from pi's server-mode plugin packages, and "facet" appears nowhere in this
- *    app: the driver always launches `--mode rpc`. esbuild's JS entry still
- *    ships, so the module graph loads exactly as before.
  */
 export function piHarnessPruneReason(relativePath: string): string | undefined {
   if (KEPT_DIST_DIRECTORIES.has(relativePath)) return undefined
@@ -168,16 +156,6 @@ export function piHarnessPruneReason(relativePath: string): string | undefined {
   if (PI_HARNESS_KEPT_DIST_FILES.includes(relativePath)) return undefined
   if (relativePath === 'dist' || relativePath.startsWith('dist/')) {
     return "compiled output only pi's own package entrypoints import"
-  }
-  if (relativePath === 'vendor/@earendil-works/chord/src') return 'TypeScript sources'
-  if (relativePath === 'vendor/@earendil-works/chord/node_modules/esbuild/node_modules') {
-    return 'esbuild platform binary for facet bundling'
-  }
-  if (relativePath === 'vendor/@earendil-works/chord/node_modules/esbuild/install.js') {
-    return 'npm install script'
-  }
-  if (relativePath === 'vendor/@earendil-works/chord/node_modules/esbuild/README.md') {
-    return 'package docs'
   }
   if (relativePath.endsWith('.map')) return 'source map'
   if (DECLARATION_FILE_PATTERN.test(relativePath)) return 'type declaration'
@@ -265,27 +243,17 @@ export function defaultBundledPiHarnessDirectory(): string {
  * specifier stays valid for both `import` and `createRequire`.
  *
  * esbuild does not inline these runtime imports of pi's compiled bundle:
- * `@earendil-works/chord` (RPC protocol, incl. /context, /bundler, /node
- * subpath exports), `typebox` (schema validation, imported via /schema,
- * /format, /guard, /system subpaths), `jiti` (loads the app-owned `.ts`
- * extensions), `@silvia-odwyer/photon-node` (pi lazily `import()`s it to
- * decode and downsize an image under the provider's inline limit), and
- * `quickjs-wasi` (the codemode sandbox: pi resolves the package for the
- * QuickJS host and `quickjs-wasi/quickjs.wasm` for the sandbox binary).
- * Without the first three the packaged app fails with
- * `ERR_MODULE_NOT_FOUND: Cannot find package '@earendil-works/chord'` or
- * `Cannot find module 'jiti'`, and every Pi session dies at boot. Without
+ * `typebox` (schema validation via subpaths), `jiti` (loads the app-owned
+ * `.ts` extensions), `@silvia-odwyer/photon-node` (image decoding), and
+ * `quickjs-wasi` (the codemode sandbox). Pi 1.2 removed chord and its esbuild
+ * dependency, so neither is vendored. Without typebox or jiti, sessions fail
+ * at boot with a module resolution error. Without
  * photon every Pi session boots but no image ever reaches the model: see the
  * copy site in `buildBundledPiHarness`. Without quickjs-wasi every session
  * boots and only a codemode script fails, because pi resolves the wasm at
  * script time.
  */
 export const PI_HARNESS_VENDORED_IMPORTS: Record<string, string> = {
-  '@earendil-works/chord': '@earendil-works/chord/dist/index.js',
-  '@earendil-works/chord/context': '@earendil-works/chord/dist/context/index.js',
-  '@earendil-works/chord/delta': '@earendil-works/chord/dist/delta/index.js',
-  '@earendil-works/chord/bundler': '@earendil-works/chord/dist/bundler.js',
-  '@earendil-works/chord/node': '@earendil-works/chord/dist/node.js',
   typebox: 'typebox/build/index.mjs',
   'typebox/schema': 'typebox/build/schema/index.mjs',
   'typebox/system': 'typebox/build/system/index.mjs',
@@ -467,26 +435,13 @@ export async function buildBundledPiHarness(directory: string): Promise<BundledP
     projectRoot
   ])
   const piPackageJsonPath = join(piPackageDirectory, 'package.json')
-  // esbuild does not inline these runtime imports of pi's compiled bundle:
-  // `@earendil-works/chord` (RPC protocol, incl. /context, /bundler, /node
-  // subpath exports), `typebox` (schema validation, imported via /schema,
-  // /format, /guard, /system subpaths) and `jiti` (loads the app-owned `.ts`
-  // extensions). Without them the packaged app fails with
-  // `ERR_MODULE_NOT_FOUND: Cannot find package '@earendil-works/chord'` or
-  // `Cannot find module 'jiti'`.
-  const chordPackageDirectory = installedPackageDirectory('@earendil-works/chord', [
-    piPackageDirectory,
-    projectRoot
-  ])
+  // These imports remain external to Pi's compiled bundle. Pi 1.2 removed
+  // chord, so only packages still used by this runtime are copied below.
   const typeboxPackageDirectory = installedPackageDirectory('typebox', [
     piPackageDirectory,
     projectRoot
   ])
-  const jitiPackageDirectory = installedPackageDirectory('jiti', [
-    piPackageDirectory,
-    chordPackageDirectory,
-    projectRoot
-  ])
+  const jitiPackageDirectory = installedPackageDirectory('jiti', [piPackageDirectory, projectRoot])
 
   const version = readPackageVersion(await readFile(piPackageJsonPath, 'utf8'))
 
@@ -509,10 +464,6 @@ export async function buildBundledPiHarness(directory: string): Promise<BundledP
   const excludeBuildTimeBin = (source: string): boolean =>
     !toPosixPath(source).split('/').includes('.bin')
   await cp(jitiPackageDirectory, join(directory, 'vendor/jiti'), {
-    recursive: true,
-    filter: excludeBuildTimeBin
-  })
-  await cp(chordPackageDirectory, join(directory, 'vendor/@earendil-works/chord'), {
     recursive: true,
     filter: excludeBuildTimeBin
   })

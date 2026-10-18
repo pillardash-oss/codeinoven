@@ -24,14 +24,22 @@ import {
   findCioCleanupExclusion
 } from '../../lib/cio-cleanup'
 import { normalizeCioCleanupExcludedCategories } from '../../lib/types/cio-cleanup'
-import { currentWorkRoots } from '../design/work-roots-state'
+import { protectedWorkRoots } from '../design/work-roots-state'
 import { instanceRegistry } from '../system/instance-registry'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { CioCleanupRepo } from '../database/repositories/cio-cleanup-repo'
 import { listCioCleanupTargets, type CioCleanupScopeResolver } from './cio-cleanup-targets'
 import { sweepCioScratchRoot } from './cio-cleanup-sweeper'
 
-/** How often the service checks whether a day has passed since the last sweep. */
+/**
+ * Shortest wait before the due check runs again.
+ *
+ * The check is set for the moment a day has actually passed (see
+ * {@link CioCleanupService}   `scheduleNextCheck`), so this is the floor and
+ * not the cadence: it is what a check that could not sweep waits, so a state the
+ * app cannot act on yet (another instance owns the schedule, a pass is already in
+ * flight) is retried rather than spun on.
+ */
 const TICK_MS = 15 * 60_000
 
 /** One cleanup per day. */
@@ -124,7 +132,7 @@ export interface CioCleanupRunStart {
  * progress, can be cancelled, and is the only one that appears in the dock.
  */
 export class CioCleanupService {
-  private timer: ReturnType<typeof setInterval> | null = null
+  private timer: ReturnType<typeof setTimeout> | null = null
   private startTimer: ReturnType<typeof setTimeout> | null = null
   private run: LiveRun | null = null
   private lastRunAt: number | null = null
@@ -148,7 +156,7 @@ export class CioCleanupService {
 
   stop(): void {
     if (this.timer !== null) {
-      clearInterval(this.timer)
+      clearTimeout(this.timer)
       this.timer = null
     }
     if (this.startTimer !== null) {
@@ -252,9 +260,30 @@ export class CioCleanupService {
   private arm(): void {
     this.startTimer = setTimeout(() => {
       this.startTimer = null
-      void this.tick('launch')
+      void this.tick('launch').finally(() => this.scheduleNextCheck())
     }, START_DELAY_MS)
-    this.timer = setInterval(() => void this.tick('interval'), TICK_MS)
+    this.startTimer.unref()
+  }
+
+  /**
+   * Wake once, when the next sweep is actually due.
+   *
+   * A fifteen-minute tick spends ninety-six wake-ups a day confirming that a day
+   * has not passed yet, and the due moment is known, so the timer is set for it
+   * instead. The wait never drops below {@link TICK_MS}, which is what stops a
+   * pass that could not run from re-checking at once: it is retried on the next
+   * tick, and a sweep that has just been recorded pushes the next one out by the
+   * full interval.
+   */
+  private scheduleNextCheck(): void {
+    if (this.timer !== null) clearTimeout(this.timer)
+    const next = this.nextRunAt()
+    const wait = next === null ? TICK_MS : Math.max(TICK_MS, next - Date.now())
+    this.timer = setTimeout(() => {
+      this.timer = null
+      void this.tick('interval').finally(() => this.scheduleNextCheck())
+    }, wait)
+    this.timer.unref()
   }
 
   private async tick(reason: 'launch' | 'interval'): Promise<void> {
@@ -300,10 +329,40 @@ export class CioCleanupService {
       // settings, and one pass has to judge every workspace by the same list
       // rather than half of it by the value before a settings save and half by
       // the value after.
-      const protectedPaths = cioCleanupProtectedPaths(
-        currentWorkRoots(),
-        normalizeCioCleanupExcludedCategories(config.cioCleanupExcludedCategories)
+      const excludedCategories = normalizeCioCleanupExcludedCategories(
+        config.cioCleanupExcludedCategories
       )
+      const protectedPaths = [
+        ...new Set(
+          protectedWorkRoots().flatMap((roots) =>
+            cioCleanupProtectedPaths(roots, excludedCategories)
+          )
+        )
+      ]
+      // Protect exact individually relocated work without changing project defaults.
+      const recorded = await this.deps.database.queryViaWorker(
+        'SELECT project_id, directory, kind FROM authored_work_folders',
+        [],
+        0
+      )
+      if (!recorded.ok) throw new Error('Could not read authored-work cleanup protection')
+      const recordedPaths = new Map<string, string[]>()
+      const recordedRows = recorded.rows as unknown as Array<{
+        project_id: string
+        directory: string
+        kind: string
+      }>
+      for (let offset = 0; offset < recordedRows.length; offset += 100) {
+        for (const row of recordedRows.slice(offset, offset + 100)) {
+          if (!excludedCategories.includes(row.kind === 'video' ? 'videos' : 'designs')) continue
+          const path = cioScratchRelativePath(row.directory)
+          if (!path) continue
+          const paths = recordedPaths.get(row.project_id) ?? []
+          paths.push(path)
+          recordedPaths.set(row.project_id, paths)
+        }
+        await new Promise<void>((resume) => setImmediate(resume))
+      }
       const exclusions = await this.pruneAndListExclusions()
       const targets = await listCioCleanupTargets({
         database: this.deps.database,
@@ -325,7 +384,12 @@ export class CioCleanupService {
           target,
           cutoff,
           exclusions,
-          protectedPaths,
+          protectedPaths: [
+            ...new Set([
+              ...protectedPaths,
+              ...target.mounts.flatMap((mount) => recordedPaths.get(mount.projectId) ?? [])
+            ])
+          ],
           control: {
             isCancelled: () => live.cancelled,
             onScanned: () => this.publishProgress()

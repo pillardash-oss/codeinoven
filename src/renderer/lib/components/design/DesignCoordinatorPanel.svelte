@@ -1,43 +1,62 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import {
-    Check,
-    ChevronDown,
-    Copy,
-    Ellipsis,
-    Film,
-    Frame,
-    GlobeCode,
-    History,
-    ImageOff,
-    ListClock,
-    LoaderCircle,
-    Pencil,
-    PlayingCardsFan,
-    Presentation,
-    RefreshCw,
-    RotateCcw,
-    Target,
-    Volume2,
-    VolumeX,
-    X
-  } from '@lucide/svelte'
+  import CioArrowUpDown from '@pillardash-oss/cio-icon/CioArrowUpDown.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioFrame from '@pillardash-oss/cio-icon/CioFrame.svelte'
+  import CioHistory from '@pillardash-oss/cio-icon/CioHistory.svelte'
+  import CioImageOff from '@pillardash-oss/cio-icon/CioImageOff.svelte'
+  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
+  import CioListClock from '@pillardash-oss/cio-icon/CioListClock.svelte'
+  import CioMarquee from '@pillardash-oss/cio-icon/CioMarquee.svelte'
+  import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioStore from '@pillardash-oss/cio-icon/CioStore.svelte'
+  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
+  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pillardash-oss/cio-icon/CioVolumeX.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import { onDestroy, onMount, tick } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
+  import { LastKnown } from '$lib/last-known'
+  import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
+  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
+  import DesignHistoryActions from '$lib/components/design/DesignHistoryActions.svelte'
   import DesignHistoryPanel from '$lib/components/design/DesignHistoryPanel.svelte'
+  import CompositionStage from '$lib/components/design/CompositionStage.svelte'
+  import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
+  import VideoStudioControls from '$lib/components/design/VideoStudioControls.svelte'
+  import VideoTimeline from '$lib/components/design/VideoTimeline.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import { copyText } from '$lib/copy-text'
   import { designCopyFor } from '$lib/design-copy-context'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { loadBrowser } from '$lib/stores/browser-access.svelte'
+  import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
+  import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
+  import { videoPackagesStore } from '$lib/stores/video-packages.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { sendOrQueueThreadMessage } from '$lib/stores/thread-delivery'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { logRendererError } from '$lib/system/renderer-logger'
-  import { workRootMoveSummary } from '$lib/design-work-root-summary'
   import { openInBrowser } from '$lib/open-in-browser'
   import { designContractRequest } from '$shared/design/design-contract'
+  import type { VideoJob } from '$shared/video/studio'
   import { DESIGN_EXPORT_FORMATS, type DesignExportFormat } from '$shared/design/design-export'
   import { isThreadBusyStatus } from '$shared/thread-status-policy'
   import { formatCompactAge, formatDateTime } from '$shared/date-time-format'
@@ -52,10 +71,9 @@
     DesignEntry,
     DesignScreenShot,
     ScreenCanvasState,
-    ThreadDesignState,
-    WorkRootState
+    ThreadDesignState
   } from '$shared/ipc-contract'
-  import type { WorkRoots } from '$shared/design/work-roots'
+  import WorkDetailsDialog from './WorkDetailsDialog.svelte'
 
   /**
    * The coordinator board for a thread's authored work.
@@ -85,6 +103,7 @@
    */
 
   interface Props {
+    viewingThreadId?: string
     projectId: string
     threadId: string
     /**
@@ -94,9 +113,34 @@
      * so it sets the kind here.
      */
     kind?: AuthoredWorkKind
+    active?: boolean
   }
 
-  let { projectId, threadId, kind: forcedKind }: Props = $props()
+  let { projectId, threadId, viewingThreadId, kind: forcedKind, active = true }: Props = $props()
+  let selectionThreadId = $derived(viewingThreadId ?? threadId)
+
+  /** Export playback participates in the same sound registry as native views. */
+  const attachExport: Attachment<HTMLVideoElement> = (element) => {
+    const audioId = `video-export:${projectId}:${threadId}`
+    const report = (): void => {
+      browserAudio.reportThreadTab(
+        audioId,
+        threadId,
+        projectId,
+        !element.paused && !element.ended && !element.muted && element.volume > 0
+      )
+    }
+    const events = ['play', 'pause', 'ended', 'volumechange'] as const
+    for (const event of events) element.addEventListener(event, report)
+    $effect(() => {
+      if (!active) element.pause()
+    })
+    return () => {
+      element.pause()
+      for (const event of events) element.removeEventListener(event, report)
+      browserAudio.forget(audioId)
+    }
+  }
 
   /**
    * How wide a screen is pictured at.
@@ -117,6 +161,50 @@
    */
   const LIVE_PREVIEW_ENTRY = 'index.html'
 
+  /**
+   * The orders the board can show a design's screens in.
+   *
+   * Latest is where the board starts, because a design is iterated and the screen
+   * that moved last is usually the one the user came to look at. The other three
+   * are what a person reaches for when they know a screen's name instead.
+   */
+  const SCREEN_ORDERS = ['latest', 'name', 'name-desc', 'oldest'] as const
+  type ScreenOrder = (typeof SCREEN_ORDERS)[number]
+
+  /** What each order is called in the Sort menu. */
+  const SCREEN_ORDER_LABELS: Record<ScreenOrder, string> = {
+    latest: 'Latest',
+    name: 'Name A-Z',
+    'name-desc': 'Name Z-A',
+    oldest: 'Oldest'
+  }
+
+  /** Whether the menu's own string is one of the board's orders. */
+  function isScreenOrder(value: string): value is ScreenOrder {
+    return SCREEN_ORDERS.some((order) => order === value)
+  }
+
+  /**
+   * The screens of one design in the order the user picked.
+   *
+   * "Latest" is the file's own modification time, stamped when the agent writes
+   * the screen, so the top of the grid is the part of the design that moved last.
+   * Name is the card's label rather than the file path, because the label is what
+   * the user reads, and the entry path settles ties so two screens never swap
+   * places between paints.
+   */
+  function orderScreens(screens: DesignScreenShot[], order: ScreenOrder): DesignScreenShot[] {
+    const byName = (left: DesignScreenShot, right: DesignScreenShot): number =>
+      left.name.localeCompare(right.name) || left.entry.localeCompare(right.entry)
+    if (order === 'name') return screens.toSorted(byName)
+    if (order === 'name-desc') return screens.toSorted((left, right) => byName(right, left))
+    const byAge = (left: DesignScreenShot, right: DesignScreenShot): number =>
+      left.updatedAt - right.updatedAt || byName(left, right)
+    return order === 'latest'
+      ? screens.toSorted((left, right) => byAge(right, left))
+      : screens.toSorted(byAge)
+  }
+
   // Seeded from whatever the workspace already fetched, so the panel paints on
   // its first frame instead of flashing a spinner.
   // svelte-ignore state_referenced_locally
@@ -125,6 +213,21 @@
   )
   let gallery = $state<DesignScreenShot[]>([])
   let galleryBusy = $state(false)
+  /**
+   * The order the screens grid is shown in.
+   *
+   * A view setting of the board rather than of the design: switching designs keeps
+   * it, and a board opened again starts at the default, newest first.
+   */
+  let screenOrder = $state<ScreenOrder>('latest')
+  /**
+   * Whether a turn settled while the board was off screen.
+   *
+   * A board the user is not looking at has nothing to show, so its screens are not
+   * re-pictured behind their back; the flag is what the effect below reads when the
+   * board comes back. Deliberately not reactive: nothing renders it.
+   */
+  let settleMissed = false
   /** The design preview in flight, so its own button shows the wait. */
   let opening = $state(false)
   /** The canvas open in flight, kept apart from the design preview so opening one
@@ -144,13 +247,49 @@
   let historyOpen = $state(false)
 
   /**
-   * The folder the user is looking at, when it is not the thread's own.
+   * The composition's jobs, read by the board.
    *
-   * A design tab is a view change, not a preview: picking another design shows its
-   * screens here and leaves the browser alone, and the thread's own folder takes the
-   * board back the moment the agent or a preview moves it.
+   * The board draws the export above the controls and the controls report progress
+   * below, so the board holds the one list and hands it down: two readers could
+   * disagree about whether an export is running. A design has no jobs, so this
+   * stays empty for it.
    */
-  let viewedDirectory = $state('')
+  let videoJobs = $state.raw<VideoJob[]>([])
+  /**
+   * The export the composition in front already has on disk, as a project-relative
+   * path.
+   *
+   * The job list is this process's memory of this thread's work, so it cannot
+   * answer for a composition exported in another thread of the same project or
+   * before a restart. This is that answer, read from the composition itself, and it
+   * is what the board stands on when no job of its own describes an export.
+   */
+  let savedExport = $state<string | null>(null)
+  /** Whether the studio controls hold unsaved edits, which a reload would discard. */
+  let studioDirty = $state(false)
+  /** Bumped to remount the video timeline and controls, so a refresh re-reads them. */
+  let boardRevision = $state(0)
+  /** Whether the user asked to reload over unsaved video controls. */
+  let reloadRequested = $state(false)
+  /** Whether the reference-brand URL prompt is open. */
+  let referenceOpen = $state(false)
+  /** The reference site URL the brand extraction measures. */
+  let referenceUrl = $state('')
+  /** Why the entered reference URL was rejected, in the user's terms. */
+  let referenceError = $state('')
+  /**
+   * Undo and Redo for the folder in front, published by the history pane.
+   *
+   * The pane owns the history read; the board only shows the two steps, so the
+   * checkpoint is one click away without opening the pane. A design and a
+   * composition share this, which is the point: the same control, the same place.
+   */
+  let historyActions = $state<{
+    canUndo: boolean
+    canRedo: boolean
+    undo: () => void
+    redo: () => void
+  } | null>(null)
 
   /**
    * The design's Screen Canvas: the page that shows every screen at once.
@@ -176,32 +315,28 @@
    *  rail opened carries its kind instead of reading it from the thread. */
   let requestedKind = $derived<AuthoredWorkKind>(forcedKind ?? designState?.kind ?? 'design')
   let video = $derived(requestedKind === 'video')
+  /** The newest finished export, played in the board above the timeline. */
+  let exportPath = $derived.by(() => {
+    if (!video) return null
+    const files = videoJobs.flatMap((job) =>
+      job.operation === 'export' && job.state === 'completed' ? job.files : []
+    )
+    // A job of this session is the freshest answer there can be, because it is
+    // written the moment the export finishes. The composition's own export stands
+    // behind it for every case a job record cannot cover.
+    return files.at(-1) ?? savedExport
+  })
   let noun = $derived(video ? 'composition' : 'design')
   let nounTitle = $derived(video ? 'Composition' : 'Design')
   let listLabel = $derived(video ? 'Compositions in this project' : 'Designs in this project')
-  let WorkIcon = $derived(video ? Film : Frame)
+  let WorkIcon = $derived(video ? CioClapper : CioFrame)
 
-  /**
-   * Where this kind of work is written, and the controls that change it.
-   *
-   * The folder is a setting rather than a constant, so the board is also the
-   * place a user points it at a folder Git tracks: they are looking at the work,
-   * so moving it is one menu item rather than a detour through Settings. Main owns
-   * the value and reports what the move did, which is why the draft is saved
-   * through the same channel the settings card uses.
-   */
+  /** Project defaults are separate from the current design or video's own folder. */
   let kind = $derived<AuthoredWorkKind>(requestedKind)
-  let workRoots = $state<WorkRootState | null>(null)
-  let editingRoot = $state(false)
-  let rootDraft = $state('')
-  let rootBusy = $state(false)
-  let rootError = $state('')
-  let rootNotice = $state('')
+  let detailsMode = $state<'this' | 'all' | 'rename' | null>(null)
 
-  /** The folder in use: main's answer once it has arrived, the board's until then. */
-  let workRoot = $derived(workRoots?.roots[kind] ?? designState?.root ?? '')
-  let defaultRoot = $derived(workRoots?.defaults[kind] ?? '')
-  let rootIsDefault = $derived(workRoot !== '' && workRoot === defaultRoot)
+  /** The folder this project writes new work of this kind into. */
+  let workRoot = $derived(projectWorkState.rootsFor(projectId)[kind] || designState?.root || '')
 
   /**
    * The tab's live audio state, read from the same store the tab strip reads.
@@ -220,12 +355,24 @@
    *
    * A rail-opened board lists the project's folders for its own kind, so the
    * board shows the work whether or not the thread on screen has any; a session
-   * board keeps the listing main answered alongside its own record. */
-  let items = $derived(
-    forcedKind !== undefined
+   * board keeps the listing main answered alongside its own record.
+   *
+   * A composition is the exception, because a video is watched rather than owned:
+   * it belongs to its project, so every thread of that project lists the same
+   * compositions and can watch what another thread made. The read is keyed by this
+   * project's id, which is also what keeps another project's work out of this
+   * panel entirely. The session's own answer stands in until that read lands, so
+   * the board never blanks while it waits.
+   */
+  let items = $derived.by(() => {
+    if (video) {
+      const project = projectWorkState.itemsFor(projectId, 'video')
+      return project.length > 0 ? project : (designState?.items ?? [])
+    }
+    return forcedKind !== undefined
       ? projectWorkState.itemsFor(projectId, forcedKind)
       : (designState?.items ?? [])
-  )
+  })
   /** How many designs sit behind the "Others" trigger. */
   let otherCount = $derived(Math.max(0, items.length - 1))
   /** What the trigger and its menu are called, in this board's own words. */
@@ -238,22 +385,150 @@
     const current = designState?.current ?? null
     if (current === null) return null
     if (forcedKind !== undefined && current.kind !== forcedKind) return null
-    return current
+    return items.some((item) => item.directory === current.directory) ? current : null
   })
   /** The folder in front: the one the user picked, else the thread's own. */
   let selected = $derived.by(() => {
     const current = currentFolder
-    const picked =
-      viewedDirectory !== '' && items.some((item) => item.directory === viewedDirectory)
-        ? viewedDirectory
+    const picked = projectWorkState.selectedDirectory(projectId, requestedKind, selectionThreadId)
+    const inherited =
+      selectionThreadId !== threadId
+        ? projectWorkState.focusedDirectory(projectId, requestedKind)
         : ''
-    const directory =
-      picked !== '' ? picked : (current?.directory ?? items[0]?.directory ?? workRoot)
+    const directory = items.some((item) => item.directory === picked)
+      ? picked
+      : (items.find((item) => item.directory === inherited)?.directory ??
+        current?.directory ??
+        items.find((item) => item.creatorThreadId === threadId)?.directory ??
+        items.find(
+          (item) => item.directory === projectWorkState.focusedDirectory(projectId, requestedKind)
+        )?.directory ??
+        items[0]?.directory ??
+        '')
     return { directory, entry: current?.directory === directory ? current.entry : null }
   })
   /** The folder in front as main lists it, which is where its entry page is known. */
   let selectedItem = $derived(items.find((item) => item.directory === selected.directory) ?? null)
+  let removeRequested = $state<DesignEntry | null>(null)
+  let removeBusy = $state(false)
+  let selectedMissing = $derived(selectedItem?.missing === true)
   let selectedName = $derived(selectedItem?.name ?? selected.directory.split('/').at(-1) ?? '')
+  /**
+   * The view this board plays its composition in, named by main when it opened it.
+   *
+   * The board owns its view rather than borrowing the thread's browser tab, so
+   * the view's id is the only way to be sure which page is being placed in the
+   * stage. Empty until the first open settles.
+   */
+  let boardTabId = $state('')
+  /**
+   * Whether the optional video pack is installed, which is what enables the
+   * live editor.
+   *
+   * The pack is the app's one on-demand video dependency, so it is the signal
+   * for whether the board offers direct editing at all: with it the board plays
+   * the composition, scrubs it and edits its controls, and without it the board
+   * stays a reader and the user edits by prompting the agent.
+   */
+  let liveEditing = $derived(video && videoPackagesStore.state?.installed === true)
+  /**
+   * The composition the board is playing, when its own view is on screen for the
+   * folder in front.
+   *
+   * The view arrives on `browser:state`, and it is addressed by the id main
+   * returned rather than by the thread: a browser tab on the same folder must not
+   * be mistaken for the board's own page. While it is here the board is a player
+   * and an editor at once, and while it is not the stage falls back to the last
+   * export or the captured frame.
+   *
+   * The folder is part of the test, not just the view's existence. Switching to
+   * another composition leaves the folder just left with a live view of its own,
+   * so a board that only asked "is a view open?" kept playing the composition the
+   * user had navigated away from. A null here is what asks main to open the one in
+   * front instead.
+   */
+  let liveTab = $derived.by(() => {
+    if (boardTabId === '') return null
+    const live = videoTimelineState.compositionByTab(boardTabId)
+    if (live === null || live.directory !== selected.directory) return null
+    return live
+  })
+  /**
+   * The board's own menus, so the pane can step aside while one of them is
+   * showing.
+   *
+   * A menu opens downward over the composition, and a native view is composited
+   * above every DOM node, so a menu cannot be raised above the page: the page has
+   * to come off screen for as long as the menu is up. That is the same answer a
+   * modal gives, which is why every root here is watched rather than only the one
+   * the user happened to open first.
+   */
+  let menus = $state({ list: false, sort: false, options: false, card: false })
+  let menuOpen = $derived(menus.list || menus.sort || menus.options || menus.card)
+  /**
+   * Whether the composition is being watched full screen instead of in the pane.
+   *
+   * The board is the control surface and the full screen surface is the picture:
+   * both show the composition's own view, so this is a mode of the board rather
+   * than a hand-off. The tab that plays the film never changes, which is what lets
+   * the board's mute and transport keep driving what the full screen shows.
+   */
+  let compositionFullscreen = $state(false)
+  /**
+   * The composition's tab described as a browser tab, for the full screen surface.
+   *
+   * The board's view is a registered browser tab that deliberately stays out of
+   * every tab strip, so the full screen browser is handed the descriptor it needs
+   * instead of looking one up in a list this tab is not in. Null until the view
+   * exists, so the surface can never open on a tab nothing has served.
+   */
+  let fullscreenCompositionTab = $derived.by((): BrowserContextTab | null => {
+    const live = liveTab
+    if (!video || !compositionFullscreen || live === null) return null
+    return {
+      id: live.tabId,
+      kind: 'browser',
+      title: selectedName === '' ? `${nounTitle} preview` : selectedName,
+      projectId,
+      threadId,
+      url: live.url,
+      favicon: null,
+      boxId: live.boxId
+    }
+  })
+  /**
+   * The tab the full screen surface shows, with the last one it showed as the
+   * floor of every read.
+   *
+   * This is the same rule the stage below follows: the browser panel that hosts
+   * the view reads its tab through a getter that re-reads its source until the
+   * panel is gone, and the tab turns null the moment the user minimizes the
+   * surface (or the composition stops being the one in front). A null read there
+   * would throw out of that panel's own cleanup and take the board's render with
+   * it. `fullscreenCompositionTab` still decides whether the surface exists.
+   */
+  const fullscreenTabs = new LastKnown<BrowserContextTab>()
+  let shownFullscreenTab = $derived(fullscreenTabs.get(fullscreenCompositionTab))
+  /**
+   * Whether the folder in front has an entry page, which is what makes it playable.
+   *
+   * A composition folder with no `index.html` yet is a folder of assets rather than
+   * a composition: there is nothing to serve, so the board says so instead of
+   * opening a tab on a directory listing.
+   */
+  let playable = $derived(video && selectedItem?.hasEntry === true)
+  /** The folder whose composition the board is opening right now, or an empty string. */
+  let composing = $state('')
+  /** Why the last open failed, in the user's terms, or an empty string. */
+  let compositionError = $state('')
+  /**
+   * The folder this board has already asked main to open.
+   *
+   * Deliberately not reactive state: it guards the effect below against asking
+   * twice for one folder, and nothing renders it. A failure is reported and not
+   * retried, so a folder that cannot be served never spins.
+   */
+  let compositionAsked = ''
   /**
    * The thread that created the design in front, or an empty string when none is
    * recorded.
@@ -283,14 +558,22 @@
   })
 
   /**
-   * The two entries that are not screens, and the screens themselves.
+   * The two entries that are not screens, and the screens themselves, in the order
+   * the user picked.
    *
    * The canvas is swept with the screens so its entry has a picture like any other,
    * and the live preview is the design's entry page pictured once more. Both are
-   * split out of the grid's screens rather than listed twice.
+   * split out of the grid's screens rather than listed twice, and both keep the
+   * first two cells of the grid whatever the order is: they are the design's own
+   * doors rather than screens of it.
    */
   let canvasShot = $derived(gallery.find((screen) => isScreenCanvasEntry(screen.entry)) ?? null)
-  let designScreens = $derived(gallery.filter((screen) => !isScreenCanvasEntry(screen.entry)))
+  let designScreens = $derived(
+    orderScreens(
+      gallery.filter((screen) => !isScreenCanvasEntry(screen.entry)),
+      screenOrder
+    )
+  )
   let liveShot = $derived(
     designScreens.find((screen) => screen.entry === LIVE_PREVIEW_ENTRY) ?? null
   )
@@ -331,73 +614,41 @@
   )
 
   async function loadState(): Promise<void> {
-    const before = designState?.current?.directory ?? ''
     try {
       designState = await invoke('design:state', projectId, threadId)
-      const current = designState.current?.directory ?? ''
-      // The thread's own folder is the truth: when the agent, or a preview, moves
-      // it, the board follows rather than staying on a tab the user picked earlier.
-      if (current !== before && current !== viewedDirectory) viewedDirectory = ''
       error = ''
     } catch (failure) {
       error = failure instanceof Error ? failure.message : 'The work state could not be read.'
     }
   }
 
-  /** Read the folders in use, and what the last change moved. */
-  async function loadWorkRoots(): Promise<WorkRootState | null> {
+  async function removeMissingWork(): Promise<void> {
+    const target = removeRequested
+    if (!target || removeBusy) return
+    removeBusy = true
     try {
-      const state = await invoke('design:workRootState')
-      workRoots = state
-      return state
-    } catch {
-      // A board that cannot read the setting still shows the work, so the folder
-      // line falls back to what the board's own state reported.
-      workRoots = null
-      return null
-    }
-  }
-
-  function beginEditRoot(): void {
-    rootDraft = workRoot
-    rootError = ''
-    rootNotice = ''
-    editingRoot = true
-  }
-
-  function cancelEditRoot(): void {
-    editingRoot = false
-    rootError = ''
-  }
-
-  /**
-   * Point this kind of work at another folder, or back at the default.
-   *
-   * The setting is app-wide, so main moves every project's folder and answers with
-   * what it moved. The board re-reads its own state afterwards, because the folder
-   * it was showing may be the one that just moved.
-   */
-  async function applyRoot(next: string): Promise<void> {
-    const roots = workRoots?.roots
-    if (!roots || rootBusy || next === '' || next === workRoot) return
-    const nextRoots: WorkRoots =
-      kind === 'video' ? { ...roots, video: next } : { ...roots, design: next }
-    rootBusy = true
-    rootError = ''
-    rootNotice = ''
-    try {
-      await invoke('config:update', { workRoots: nextRoots })
-      const state = await loadWorkRoots()
+      await invoke('design:removeMissing', projectId, target.directory)
+      removeRequested = null
+      projectWorkState.selectDirectory(projectId, kind, selectionThreadId, '')
+      await projectWorkState.refresh(projectId)
       await loadState()
       await loadGallery()
       await loadCanvas()
-      rootNotice = state ? workRootMoveSummary(state, kind) : ''
-      editingRoot = false
     } catch (failure) {
-      rootError = failure instanceof Error ? failure.message : 'The save path could not be changed.'
+      error = failure instanceof Error ? failure.message : 'The entry could not be removed.'
     } finally {
-      rootBusy = false
+      removeBusy = false
     }
+  }
+
+  async function detailsUpdated(directory: string, moved: number): Promise<void> {
+    projectWorkState.selectDirectory(projectId, kind, selectionThreadId, directory)
+    await projectWorkState.refreshRoots(projectId)
+    await loadState()
+    await projectWorkState.refresh(projectId)
+    await loadGallery()
+    await loadCanvas()
+    toast.success(`${moved} ${noun}${moved === 1 ? '' : 's'} updated`)
   }
 
   /**
@@ -412,15 +663,23 @@
    *
    * A composition has no screens, so its single picture keeps coming from the one
    * thumbnail call, which is also what reports the tab the mute button drives.
+   * That call is skipped only once the board is actually playing the composition
+   * in its own view: a poster then would reload the page to a still under the
+   * playhead. It is taken precisely when the live view has not arrived, so a board
+   * waiting on its stage shows the composition's own frame instead of claiming it
+   * has captured nothing.
    */
   async function loadGallery(force = false): Promise<void> {
-    if (selected.directory === '') {
+    if (selected.directory === '' || selectedMissing) {
       gallery = []
       return
     }
     galleryBusy = true
     try {
-      if (video) {
+      if (video && liveTab !== null) {
+        gallery = []
+        tabId = boardTabId
+      } else if (video) {
         const shot = await invoke(
           'design:thumbnail',
           projectId,
@@ -428,7 +687,7 @@
           selected.directory,
           selected.entry,
           SCREEN_SHOT_WIDTH,
-          forcedKind
+          requestedKind
         )
         gallery = [
           {
@@ -436,7 +695,8 @@
             name: selectedName,
             dataUrl: shot.dataUrl,
             width: shot.width,
-            height: shot.height
+            height: shot.height,
+            updatedAt: selectedItem?.updatedAt ?? 0
           }
         ]
         tabId = shot.tabId ?? ''
@@ -466,7 +726,7 @@
    */
   function selectDesign(directory: string): void {
     if (directory === '' || directory === selected.directory) return
-    viewedDirectory = directory
+    projectWorkState.selectDirectory(projectId, requestedKind, selectionThreadId, directory)
     gallery = []
     void loadGallery()
     void loadCanvas()
@@ -475,6 +735,28 @@
   /** Pick a design from the dropdown, which the radio group reports as a string. */
   function handleDesignChange(directory: string): void {
     selectDesign(directory)
+  }
+
+  // The board's owner stays mounted across empty threads, but its session choice
+  // belongs to the conversation currently on screen.
+  let previousViewingThread: string | undefined
+  async function refreshViewingThread(): Promise<void> {
+    await tick()
+    if (selectedItem) projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
+    if (canvasRead && canvasDirectory === selected.directory) return
+    await loadGallery()
+    await loadCanvas()
+  }
+  const watchViewingThread: Attachment<HTMLDivElement> = () => {
+    const next = selectionThreadId
+    if (previousViewingThread !== undefined && previousViewingThread !== next)
+      void refreshViewingThread()
+    previousViewingThread = next
+  }
+
+  /** The Sort menu reports a string too, so it is checked before it becomes the order. */
+  function handleScreenOrderChange(value: string): void {
+    if (isScreenOrder(value)) screenOrder = value
   }
 
   /**
@@ -496,7 +778,15 @@
   async function openWork(directory: string, entry: string | null): Promise<void> {
     if (directory === '') return
     try {
-      await invoke('design:open', projectId, threadId, directory, entry, true, forcedKind)
+      await invoke(
+        'design:open',
+        projectId,
+        selectionThreadId,
+        directory,
+        entry,
+        true,
+        requestedKind
+      )
       await loadState()
       await loadGallery()
       await loadCanvas()
@@ -506,11 +796,77 @@
     }
   }
 
-  /** Preview one screen, or the design's own entry file. */
+  /**
+   * Open the composition in the background, so the board can play it itself.
+   *
+   * The same call the Live preview action makes, minus the reveal. The board owns
+   * its own composition view rather than borrowing the thread's browser tab, so
+   * nothing the user has to find or open takes part: the view is served, marked as
+   * a composition and reported on `browser:state`, which is what mounts the stage.
+   * The browser is left exactly where it was, because the browser is not where this
+   * board plays.
+   */
+  async function ensureComposition(directory: string, force = false): Promise<void> {
+    if (!video || directory === '' || selectedMissing) return
+    if (!force && compositionAsked === directory) return
+    compositionAsked = directory
+    composing = directory
+    try {
+      // The stage is fed by `browser:state`, and that listener only exists once
+      // the browser runtime is wired. Wiring it before the open is what makes the
+      // board's own composition arrive: without it the open succeeds in main, the
+      // Store never hears about the view, and the stage has nothing to mount.
+      await loadBrowser()
+      const opened = await invoke(
+        'design:open',
+        projectId,
+        threadId,
+        directory,
+        null,
+        false,
+        requestedKind
+      )
+      boardTabId = opened.tabId
+      // A view main already holds on this composition is answered with `reused`
+      // and not reloaded, so no state follows the open. Reading the view's own
+      // state closes that gap rather than waiting for a report that never comes.
+      await videoTimelineState.seed(opened.tabId)
+      compositionError = ''
+    } catch (failure) {
+      compositionError =
+        failure instanceof Error ? failure.message : `The ${noun} could not be opened.`
+    } finally {
+      if (composing === directory) composing = ''
+    }
+  }
+
+  /**
+   * Open the work in the in-app browser.
+   *
+   * A design opens in its own browser tab, which is where a page a visitor
+   * lands on belongs. A composition opens full screen instead, on the board's own
+   * view: the board is the control surface and the full screen browser is the same
+   * tab shown bigger, so this is not a second tab and the transport the user was
+   * just using keeps driving the picture.
+   */
   async function openPreview(entry: string | null): Promise<void> {
     if (opening || openingCanvas) return
     opening = true
     try {
+      if (video) {
+        // A folder with no entry page has nothing to serve, so there is no page to
+        // show full screen. The board says so in the pane instead.
+        if (!playable || selected.directory === '') return
+        await ensureComposition(selected.directory)
+        // A view main already holds is not reloaded, so no state follows the open.
+        // Reading its own state is what guarantees the surface has a tab to show
+        // rather than opening on nothing.
+        if (boardTabId !== '' && videoTimelineState.compositionByTab(boardTabId) === null) {
+          await videoTimelineState.seed(boardTabId)
+        }
+        if (boardTabId !== '') compositionFullscreen = true
+        return
+      }
       await openWork(selected.directory, entry)
     } finally {
       opening = false
@@ -531,7 +887,7 @@
   /** Read the design's canvas state, and remember that main answered. */
   async function loadCanvas(): Promise<void> {
     const directory = selected.directory
-    if (directory === '') {
+    if (directory === '' || selectedMissing) {
       canvasState = null
       canvasDirectory = ''
       canvasRead = true
@@ -601,19 +957,21 @@
   }
 
   async function requestDesignAction(
-    action: 'contract' | 'critique' | 'reference' | 'tweaks'
+    action: 'contract' | 'critique' | 'reference' | 'tweaks',
+    referenceUrl?: string
   ): Promise<void> {
     if (!selected.directory || canvasBusy) return
     canvasBusy = action
     try {
+      const directoryLiteral = JSON.stringify(selected.directory)
       const text =
         action === 'contract'
           ? designContractRequest(selected.directory)
           : action === 'critique'
-            ? `@cio-design Review the design in ${JSON.stringify(selected.directory)}. Render each screen, check phone and desktop widths, exercise its main interactions and run craft lint. Record a single evidence-based critique per screen using the design capability's rubric, report scores and concrete fixes, and mark any failing screens unfinished. Do not silently run critique loops.`
+            ? `@cio-design Review the design in ${directoryLiteral}. Render each screen, check phone and desktop widths, exercise its main interactions and run craft lint. Record a single evidence-based critique per screen using the design capability's rubric, report scores and concrete fixes, and mark any failing screens unfinished. Do not silently run critique loops.`
             : action === 'reference'
-              ? `@cio-design Extract a lightweight brand contract from the reference site I name for the design in ${JSON.stringify(selected.directory)}. If no reference URL is attached or supplied, ask me for it. Use extract-reference to measure it, compare with existing project CSS tokens and the current contract, then generate DESIGN.md with write-contract so existing contracts are preserved as dated backups. Report measured values separately from inferred rules.`
-              : `@cio-design Add lightweight live review controls to the design in ${JSON.stringify(selected.directory)} using data-cio-tweaks and /__cio/tweaks.js. Reuse its actual CSS variables and add only useful controls such as accent, spacing, theme or sample data. Changes must update the existing DOM without reload. Wire cio:tweaks listeners for theme or content controls, test them in the preview, and keep these review controls out of production implementation.`
+              ? `@cio-design Extract a lightweight brand contract from the reference site ${JSON.stringify(referenceUrl ?? '')} for the design in ${directoryLiteral}. Use extract-reference to measure it, compare with existing project CSS tokens and the current contract, then generate DESIGN.md with write-contract so existing contracts are preserved as dated backups. Report measured values separately from inferred rules.`
+              : `@cio-design Add lightweight live review controls to the design in ${directoryLiteral} using data-cio-tweaks and /__cio/tweaks.js. Reuse its actual CSS variables and add only useful controls such as accent, spacing, theme or sample data. Changes must update the existing DOM without reload. Wire cio:tweaks listeners for theme or content controls, test them in the preview, and keep these review controls out of production implementation.`
       const delivery = await sendOrQueueThreadMessage(projectId, threadId, {
         text
       })
@@ -634,32 +992,173 @@
     }
   }
 
+  /**
+   * Open the reference-brand prompt for the folder in front.
+   *
+   * The extraction measures a site the user names, so the URL is collected
+   * up front rather than asked for mid-turn: confirming sends it as part of
+   * the prompt in the same step.
+   */
+  function openReferencePrompt(): void {
+    if (selected.directory === '' || canvasBusy !== '') return
+    referenceUrl = ''
+    referenceError = ''
+    referenceOpen = true
+  }
+
+  /** Send the brand extraction with the entered URL as part of the prompt. */
+  function confirmReferencePrompt(): void {
+    const url = referenceUrl.trim()
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error()
+    } catch {
+      referenceError = 'Enter a full site URL starting with http:// or https://.'
+      return
+    }
+    referenceOpen = false
+    void requestDesignAction('reference', url)
+  }
+
   function startExport(entry: string | null, format: DesignExportFormat): void {
     const directory = selected.directory
     const exportProjectId = projectId
-    void import('$lib/stores/design-export.svelte')
-      .then(({ designExportState }) =>
-        designExportState.start(exportProjectId, directory, entry, format)
+    void import('$lib/stores/export-progress.svelte')
+      .then(({ exportProgressState }) =>
+        exportProgressState.startDesign(exportProjectId, directory, entry, format)
       )
       .catch((failure: unknown) => {
         error = failure instanceof Error ? failure.message : 'Could not start export.'
       })
   }
 
-  /** Re-read the canvas once the agent settles, and picture it when it appeared. */
-  async function refreshCanvas(): Promise<void> {
-    const before = canvasState
+  /**
+   * Catch the board up with what a settled turn wrote.
+   *
+   * The canvas state decides whether the canvas entry is behind, and the sweep
+   * behind `loadGallery` is what pictures a screen the turn just wrote, so a design
+   * that gained a screen shows it without the user pressing Refresh. The sweep is
+   * cached against each file's own stamp, so a settle that changed nothing loads no
+   * page at all.
+   *
+   * A composition is read for its canvas state only: its picture comes from the
+   * thread's own tab, and re-picturing it would move a page the user may be
+   * watching.
+   */
+  async function refreshSettledWork(): Promise<void> {
     await loadCanvas()
-    const appeared = before === null && canvasState !== null
-    const rewritten =
-      before !== null && canvasState !== null && canvasState.updatedAt !== before.updatedAt
-    if (appeared || rewritten) await loadGallery()
+    if (video) return
+    await loadGallery()
   }
 
-  /** Refresh the board's own reading of the work: the screens and the canvas. */
-  function refreshBoard(): void {
+  /**
+   * Refresh the board's own reading of the work.
+   *
+   * A design re-pictures its screens and its canvas. A composition also re-reads
+   * its jobs and remounts its timeline and controls, so the one Refresh in the
+   * header is the whole board's reload and the controls do not need their own. The
+   * remount discards unsaved control edits, so those are confirmed first.
+   */
+  async function refreshBoard(): Promise<void> {
+    await projectWorkState.refresh(projectId)
+    await loadState()
+    if (video) {
+      if (studioDirty) {
+        reloadRequested = true
+        return
+      }
+      reloadVideoBoard()
+      return
+    }
     void loadGallery(true)
     void loadCanvas()
+  }
+
+  /** Re-read a composition after a refresh: picture, jobs, timeline and controls. */
+  function reloadVideoBoard(): void {
+    boardRevision += 1
+    void loadGallery(true)
+    void readVideoJobs()
+    // A view that was closed under the board has nothing to mount, so the one
+    // Refresh asks for it again rather than leaving the stage on a still.
+    if (liveEditing) void ensureComposition(selected.directory, true)
+  }
+
+  /** Read the composition's jobs, the list the board's export stands on. */
+  async function readVideoJobs(): Promise<void> {
+    try {
+      videoJobs = await invoke('video:jobs', projectId, threadId)
+    } catch (failure) {
+      logRendererError('The video jobs could not be read.', failure)
+    }
+    await readSavedExport()
+  }
+
+  /**
+   * Read the export the composition in front already has.
+   *
+   * Asked on every job poll rather than once per folder, because an export the
+   * agent runs from another thread writes this file with no job of ours to report
+   * it, and the board should stand on it as soon as it exists. A read that fails,
+   * or one that is answered for a folder the user has already left, leaves the
+   * answer it had rather than blanking a board the user is watching.
+   */
+  async function readSavedExport(): Promise<void> {
+    const directory = selected.directory
+    if (!video || directory === '') {
+      savedExport = null
+      return
+    }
+    try {
+      const path = await invoke('video:latestExport', projectId, directory)
+      if (selected.directory === directory) savedExport = path
+    } catch (failure) {
+      logRendererError('The export this composition has could not be read.', failure)
+    }
+  }
+
+  /** Cancel a running job, which the controls ask for rather than doing themselves. */
+  async function cancelVideoJob(id: string): Promise<void> {
+    try {
+      await invoke('video:cancel', projectId, threadId, id)
+      await readVideoJobs()
+    } catch (failure) {
+      error = failure instanceof Error ? failure.message : 'The job could not be cancelled.'
+    }
+  }
+
+  /**
+   * Start an export from the board's own menu or the controls' primary action.
+   *
+   * The export reports in the shared dockable export panel, so the board only
+   * hands the folder over; its own job poll picks the running export up again for
+   * the readout above the controls.
+   */
+  function exportVideo(): void {
+    if (selected.directory === '') return
+    const directory = selected.directory
+    void import('$lib/stores/export-progress.svelte')
+      .then(({ exportProgressState }) =>
+        exportProgressState.startVideo(projectId, threadId, directory)
+      )
+      .catch((failure: unknown) => {
+        error = failure instanceof Error ? failure.message : 'The export could not be started.'
+      })
+  }
+
+  /** The controls' unsaved state, so a refresh can ask before discarding it. */
+  function setStudioDirty(value: boolean): void {
+    studioDirty = value
+  }
+
+  /** The history pane's Undo and Redo, mirrored into the board header. */
+  function handleHistoryActions(state: {
+    canUndo: boolean
+    canRedo: boolean
+    undo: () => void
+    redo: () => void
+  }): void {
+    historyActions = state
   }
 
   /**
@@ -670,6 +1169,24 @@
    * the project, scope and machine the design lives on, an absolute path when it
    * does not, and the way to reach another Oven when the design is on one.
    */
+  /**
+   * Show the design folder in the project's file tree: it opens the files
+   * surface, expands the ancestors and selects the entry, so the design
+   * lands in the same tree every other path citation uses instead of a
+   * folder the user has to find again.
+   */
+  async function revealDesignPath(directory: string): Promise<void> {
+    if (directory === '') return
+    try {
+      const { revealProjectFileFromAbsolutePath } = await import('$lib/reveal-file')
+      const revealed = await revealProjectFileFromAbsolutePath(projectId, directory)
+      if (!revealed) toast.error('The design could not be revealed in the file tree.')
+    } catch (failure) {
+      logRendererError('The design could not be revealed in the file tree.', failure)
+      toast.error('The design could not be revealed in the file tree.')
+    }
+  }
+
   async function copyDesignPath(directory: string, entry: string | null = null): Promise<void> {
     if (directory === '') return
     const payload = designCopyFor(directory, entry)
@@ -698,25 +1215,126 @@
   }
 
   onMount(() => {
-    // The agent writes the canvas inside a turn, so the board re-reads when that
-    // turn settles. Nothing polls: a canvas that appeared is read then, and one
-    // that was rewritten is read again then.
+    // The agent writes the work inside a turn, so the board catches up when that
+    // turn settles. Nothing polls. A board that is off screen waits rather than
+    // loading pages in the thread's tab, and the effect below reads then.
     return subscribe('thread:updated', (thread) => {
       if (thread.id !== threadId || thread.projectId !== projectId) return
       if (isThreadBusyStatus(thread.status)) return
-      void refreshCanvas()
+      if (!active) {
+        settleMissed = true
+        return
+      }
+      void refreshSettledWork()
     })
   })
 
+  // Bringing the board back on screen reads what settled while it was away, so a
+  // screen the agent wrote in the meantime is already there.
+  $effect(() => {
+    if (!active || !settleMissed) return
+    settleMissed = false
+    void refreshSettledWork()
+  })
+
   onMount(() => {
-    // A rail-opened board lists the project's folders itself, so the project's
-    // work is read here as well as by the dock; the store coalesces the two.
-    void projectWorkState.ensure(projectId)
-    void loadState().then(async () => {
+    projectWorkState.invalidate(projectId)
+    // The board is one of the surfaces that watches the optional video pack, so
+    // installing it from Settings turns on live editing here without a reload.
+    void videoPackagesStore.load()
+    void projectWorkState.refresh(projectId).then(async () => {
+      await loadState()
+      if (selectedItem)
+        projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
       await loadGallery()
       await loadCanvas()
     })
-    void loadWorkRoots()
+    void projectWorkState.refreshRoots(projectId)
+    return () => {
+      if (selectedItem)
+        projectWorkState.focusDirectory(projectId, requestedKind, selected.directory)
+      videoPackagesStore.dispose()
+    }
+  })
+
+  onMount(() =>
+    subscribe('design:relocated', (changedProjectId) => {
+      if (changedProjectId !== projectId) return
+      void projectWorkState.refresh(projectId).then(async () => {
+        await loadState()
+        await loadGallery()
+        await loadCanvas()
+      })
+    })
+  )
+
+  // Play the composition in the board rather than in the browser.
+  //
+  // The folder in front changes, a rail panel comes back on screen, or a tab was
+  // closed under the board: every one of those leaves the stage with nothing to
+  // mount, and this is what asks for the tab again. Only the folder, the live tab
+  // and whether the folder is playable are read here, so a report from
+  // `browser:state` is what settles it rather than a poll.
+  $effect(() => {
+    const directory = selected.directory
+    const live = liveTab
+    const canPlay = playable
+    const busyFolder = composing
+    const enhanced = liveEditing
+    if (
+      !video ||
+      !enhanced ||
+      !canPlay ||
+      live !== null ||
+      directory === '' ||
+      busyFolder === directory
+    )
+      return
+    void ensureComposition(directory)
+  })
+
+  /**
+   * The composition tab the board has most recently been driving.
+   *
+   * Deliberately outside the reactive graph: a pause has to be sent even after the
+   * view is gone, and the store that holds the tab has already forgotten it by
+   * then.
+   */
+  let drivenTabId = ''
+
+  // The board owns the film: it is the surface the user is on, so leaving the board
+  // stops playback. Going full screen must not, because that is this same board
+  // showing this same tab bigger, and a pause there would freeze the film the user
+  // just asked to watch. It is also why the stage itself must never pause: it
+  // unmounts on the way into full screen (so exactly one surface ever places the
+  // native view), and a teardown pause would freeze the film every time.
+  $effect(() => {
+    const live = liveTab
+    if (live !== null) drivenTabId = live.tabId
+    if (active || drivenTabId === '') return
+    void invoke('browser:transport', drivenTabId, 'pause', 0).catch(() => {})
+  })
+
+  // The board going away takes the film with it, exactly as leaving it does.
+  onDestroy(() => {
+    if (drivenTabId === '') return
+    void invoke('browser:transport', drivenTabId, 'pause', 0).catch(() => {})
+  })
+
+  // A board that is no longer the surface on screen cannot keep a full screen
+  // window: the picture would stay up over whatever the user navigated to.
+  $effect(() => {
+    if (!active) compositionFullscreen = false
+  })
+
+  // The board owns the composition job poll, because it draws the export above the
+  // controls and both must read the same list. A design has no jobs, so nothing
+  // polls for one.
+  $effect(() => {
+    if (!video) return
+    void readVideoJobs()
+    const timer = setInterval(() => void readVideoJobs(), 1500)
+    return () => clearInterval(timer)
   })
 
   /** A design's age, in the same compact form a thread row uses. */
@@ -734,20 +1352,154 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col">
+<div class="flex h-full min-h-0 flex-col" {@attach watchViewingThread}>
+  {#snippet videoStage()}
+    {#if video && selected.directory !== '' && !liveEditing}
+      <!--
+        Live editing is off because the optional video pack is not installed.
+
+        The board stays a reader: it shows the last export or the captured still
+        and the timeline below still places notes, so a user edits by prompting
+        the agent. The pack is what turns the board into a player and a direct
+        editor, so the one thing this asks for is the pack, in one click, rather
+        than explaining a setting the user would have to go and find.
+      -->
+      <div class="mb-2 shrink-0 border border-border bg-surface p-3">
+        <div class="flex items-center gap-1.5">
+          <CioDownload size={13} class="text-accent" aria-hidden="true" />
+          <span class="text-xs font-semibold text-foreground">
+            Install the video pack to edit here
+          </span>
+        </div>
+        <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
+          {exportPath
+            ? 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent and watch the last export here.'
+            : 'The board plays the composition, scrubs it and edits its controls once the optional video pack is installed. Until then, describe the change to the agent.'}
+        </p>
+        <button
+          type="button"
+          class="mt-2 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90"
+          title="Open Design and video settings to install the optional video pack"
+          aria-label="Open Design and video settings to install the optional video pack"
+          onclick={() => workspaceState.navigateToSettings?.('design')}
+        >
+          Open Settings
+        </button>
+      </div>
+    {/if}
+    {#if liveTab && !compositionFullscreen}
+      <!--
+        The live composition, played in the board.
+
+        The stage owns the tab's native view while it is on screen, so the
+        transport above the picture and the timeline below both drive the
+        composition the user is watching rather than a still of it. The stage fits
+        the composition's own aspect ratio inside this pane, so the frame is whole
+        at every panel size.
+
+        It stands aside while the composition is watched full screen, and the
+        full screen surface is what places the view then. That is deliberate: the
+        store resolves one owner per native view but a surface only ever asks
+        whether this tab may be shown, not whether it is the one showing it, so two
+        mounted surfaces for one tab would race for the frame and leave it wherever
+        the loser put it. Unmounting here is also what gives the pane its picture
+        back: the stage places the view as it mounts, after the full screen surface
+        has let it go.
+      -->
+      {#key liveTab.tabId}
+        <!-- The tab's identity is the stage's identity: a re-keyed tab builds a
+             new stage, so the frame this pane claims, the view it places and the
+             transport it draws all belong to the same tab. -->
+        <CompositionStage tab={liveTab} {active} covered={menuOpen} />
+      {/key}
+    {:else if !playable}
+      <div
+        class="flex min-h-0 flex-1 flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+      >
+        <CioImageOff size={16} />
+        <span class="px-4 text-center text-[0.6875rem]">
+          {`This ${noun} has no entry page yet, so there is nothing to play. The agent writes one when it starts the ${noun}.`}
+        </span>
+      </div>
+    {:else}
+      <!--
+        Nothing to play yet: the tab is being served, or the folder holds no
+        composition to serve. The last export stands in while that settles, in the
+        same frame the live stage uses, so the board does not jump when the page
+        lands. The action here is a retry in the panel rather than a hand-off to
+        the browser, because the browser is not where this board plays.
+      -->
+      <div
+        class="flex min-h-0 flex-1 flex-col overflow-hidden border border-border bg-app"
+        aria-label={`${nounTitle} preview`}
+      >
+        {#if exportPath}
+          <video
+            {@attach attachExport}
+            class="min-h-0 flex-1 object-contain"
+            src={`appfile://project/${projectId}/${exportPath}`}
+            controls
+            playsinline
+            preload="metadata"
+            aria-label={`Exported ${noun} ${selectedName}`}
+          >
+            <track kind="captions" />
+          </video>
+        {:else if gallery[0]?.dataUrl}
+          <img
+            src={gallery[0].dataUrl}
+            alt={`Preview of the ${noun} ${selectedName}`}
+            class="min-h-0 flex-1 object-contain"
+          />
+        {:else}
+          <div class="flex min-h-0 flex-1 items-center justify-center gap-1.5 text-dimmed">
+            {#if galleryBusy}
+              <CioSpinner size={14} class="animate-spin" />
+              <span class="text-[0.625rem]">Capturing…</span>
+            {:else}
+              <CioImageOff size={14} />
+              <span class="text-[0.625rem]">No frame captured yet.</span>
+            {/if}
+          </div>
+        {/if}
+        <div
+          class="flex shrink-0 items-center justify-between gap-2 border-t border-border px-2 py-1.5"
+        >
+          <span class="min-w-0 truncate text-[0.625rem] text-dimmed">
+            {composing === selected.directory
+              ? `Opening the ${noun}…`
+              : exportPath
+                ? `Latest export · ${exportPath.split('/').at(-1)}`
+                : `Waiting for the ${noun} preview`}
+          </span>
+          <button
+            type="button"
+            class="shrink-0 border border-border px-1.5 py-0.5 text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            title={`Open the ${noun} preview again`}
+            aria-label={`Open the ${noun} preview again`}
+            disabled={composing !== ''}
+            onclick={() => void ensureComposition(selected.directory, true)}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    {/if}
+  {/snippet}
+
   {#snippet screenCard(screen: DesignScreenShot, full: boolean)}
     {@const cardLabel = video
-      ? `Open the ${noun} in the in-app browser`
+      ? `Watch the ${noun} full screen in the in-app browser`
       : `Open the ${noun} screen ${screen.name} in the in-app browser`}
     {@const onScreen = !video && screen.entry === selected.entry}
     {@const copyLabel = video
       ? `Copy the path of this ${noun}`
       : `Copy ${noun} screen: ${screen.name}`}
-    <ContextMenu.Root>
+    <ContextMenu.Root bind:open={menus.card}>
       <ContextMenu.Trigger class={full ? 'col-span-2' : ''}>
         <button
           type="button"
-          class="group relative block w-full overflow-hidden rounded-md border bg-elevated transition-colors hover:border-primary/60 {onScreen
+          class="group relative block w-full overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen
             ? 'border-accent/60'
             : 'border-border'}"
           title={cardLabel}
@@ -767,10 +1519,10 @@
               class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
             >
               {#if galleryBusy}
-                <LoaderCircle size={14} class="animate-spin" />
+                <CioSpinner size={14} class="animate-spin" />
                 <span class="text-[0.625rem]">Capturing…</span>
               {:else}
-                <ImageOff size={14} />
+                <CioImageOff size={14} />
                 <span class="px-2 text-center text-[0.625rem]">No preview yet.</span>
               {/if}
             </span>
@@ -783,29 +1535,46 @@
           <span
             class="absolute inset-0 flex items-center justify-center bg-black/35 p-2 opacity-0 transition-opacity group-hover:opacity-100"
           >
-            <span class="text-[0.625rem] font-medium text-white">Open in the in-app browser</span>
+            <span class="text-[0.625rem] font-medium text-white"
+              >{video
+                ? 'Watch full screen in the in-app browser'
+                : 'Open in the in-app browser'}</span
+            >
           </span>
         </button>
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content
-          class="z-50 min-w-44 rounded-xl border border-border bg-surface p-1 shadow-lg"
-        >
+        <ContextMenu.Content class="z-50 min-w-44 border border-border bg-surface p-1 shadow-lg">
           <ContextMenu.Item
-            class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
             onSelect={() => void copyDesignPath(selected.directory, screen.entry)}
           >
-            <Copy size={13} class="shrink-0 text-muted" />
+            <CioCopy size={13} class="shrink-0 text-muted" />
             {copyLabel}
           </ContextMenu.Item>
           {#if !video}
-            {#each DESIGN_EXPORT_FORMATS as format (format)}
-              <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => startExport(screen.entry, format)}
-                >Export screen as {format.toUpperCase()}</ContextMenu.Item
+            <ContextMenu.Sub>
+              <ContextMenu.SubTrigger
+                class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated"
               >
-            {/each}
+                <CioDownload size={13} class="shrink-0 text-muted" />
+                Export
+                <CioForward size={13} class="ml-auto text-muted" />
+              </ContextMenu.SubTrigger>
+              <ContextMenu.Portal>
+                <ContextMenu.SubContent
+                  class="z-50 min-w-44 border border-border bg-surface p-1 shadow-lg"
+                >
+                  {#each DESIGN_EXPORT_FORMATS as format (format)}
+                    <ContextMenu.Item
+                      class="flex cursor-pointer items-center gap-2 px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      onSelect={() => startExport(screen.entry, format)}
+                      >Export screen as {format.toUpperCase()}</ContextMenu.Item
+                    >
+                  {/each}
+                </ContextMenu.SubContent>
+              </ContextMenu.Portal>
+            </ContextMenu.Sub>
           {/if}
         </ContextMenu.Content>
       </ContextMenu.Portal>
@@ -813,7 +1582,7 @@
   {/snippet}
 
   {#snippet entryCard(input: {
-    icon: typeof Presentation
+    icon: typeof CioDisplay
     name: string
     shot: DesignScreenShot | null
     label: string
@@ -825,7 +1594,7 @@
     {@const Icon = input.icon}
     <button
       type="button"
-      class="group relative block overflow-hidden rounded-md border border-border bg-elevated transition-colors hover:border-primary/60 disabled:opacity-40"
+      class="group relative block overflow-hidden border border-border bg-elevated transition-colors hover:border-primary/60 disabled:opacity-40"
       title={input.label}
       aria-label={input.label}
       disabled={!input.ready || input.busy}
@@ -842,7 +1611,7 @@
           class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1 text-dimmed"
         >
           {#if input.busy}
-            <LoaderCircle size={14} class="animate-spin" />
+            <CioSpinner size={14} class="animate-spin" />
           {:else}
             <Icon size={16} />
           {/if}
@@ -866,7 +1635,7 @@
   {/snippet}
 
   <header class="shrink-0 border-b border-border">
-    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+    <div class="flex items-center gap-1.5 py-1.5 pl-2.5">
       {#if items.length > 1}
         <!--
           One tab holds the design in front, and every other design of the project
@@ -874,9 +1643,9 @@
           otherwise be a strip that scrolls sideways, hiding the very design the
           user came for; here the tab never moves and the list is one click away.
         -->
-        <DropdownMenu.Root>
+        <DropdownMenu.Root bind:open={menus.list}>
           <DropdownMenu.Trigger
-            class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+            class="group flex max-w-56 min-w-0 cursor-pointer items-center gap-1 px-1.5 py-0.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
             title="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
             aria-label="{switchLabel}, currently {selectedName === '' ? nounTitle : selectedName}"
           >
@@ -889,7 +1658,7 @@
             </span>
             {#if !video && designScreens.length > 0}
               <span
-                class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+                class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
               >
                 {designScreens.length}
               </span>
@@ -898,7 +1667,7 @@
               class="flex shrink-0 items-center gap-0.5 pl-0.5 text-[0.625rem] font-medium text-dimmed transition-colors group-hover:text-foreground"
             >
               Others
-              <ChevronDown size={10} class="shrink-0" />
+              <CioChevronDown size={10} class="shrink-0" />
             </span>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -907,7 +1676,7 @@
               align="start"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 max-h-72 w-64 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-lg"
+              class="z-50 max-h-72 w-64 overflow-y-auto border border-border bg-surface p-1 shadow-lg"
               aria-label={listLabel}
             >
               <DropdownMenu.RadioGroup
@@ -923,17 +1692,20 @@
                       : updated === '' || created === updated
                         ? created
                         : `${created} · ${updated}`}
-                  <div class="flex items-center gap-0.5 rounded-lg pr-0.5">
+                  <div class="flex items-center gap-0.5 pr-0.5">
                     <DropdownMenu.RadioItem
                       value={item.directory}
-                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                       title={designTooltip(item)}
                     >
                       <WorkIcon size={12} class="shrink-0 text-dimmed" />
                       <span class="min-w-0 flex-1 truncate">{item.name}</span>
+                      {#if item.missing}<span class="shrink-0 text-[0.625rem] text-warning"
+                          >Not found</span
+                        >{/if}
                       {#if item.creatorThreadId === threadId}
                         <span
-                          class="shrink-0 rounded-sm bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
+                          class="shrink-0 bg-accent/15 px-1 text-[0.5625rem] font-semibold tracking-wide text-accent uppercase"
                         >
                           Current
                         </span>
@@ -943,7 +1715,7 @@
                           {stamp}
                         </span>
                       {/if}
-                      <Check
+                      <CioCheck
                         size={12}
                         class={[
                           'shrink-0',
@@ -954,7 +1726,7 @@
                     </DropdownMenu.RadioItem>
                     <button
                       type="button"
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                       title={`Copy the path of ${item.name}`}
                       aria-label={`Copy the path of ${item.name}`}
                       onclick={(event) => {
@@ -963,7 +1735,7 @@
                         void copyDesignPath(item.directory)
                       }}
                     >
-                      <Copy size={11} />
+                      <CioCopy size={11} />
                     </button>
                   </div>
                 {/each}
@@ -981,7 +1753,7 @@
         </span>
         {#if !video && designScreens.length > 0}
           <span
-            class="shrink-0 rounded-full bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
+            class="shrink-0 border border-border bg-elevated px-1.5 text-[0.625rem] tabular-nums text-muted"
           >
             {designScreens.length}
           </span>
@@ -992,7 +1764,7 @@
         {#if video && tabId !== ''}
           <button
             type="button"
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground {tabRuntime.muted
               ? 'text-accent'
               : ''}"
             aria-pressed={tabRuntime.muted}
@@ -1001,56 +1773,114 @@
             onclick={() => contextSidebarState.toggleBrowserTabMute(tabId)}
           >
             {#if tabRuntime.muted}
-              <VolumeX size={12} />
+              <CioVolumeX size={12} />
             {:else}
-              <Volume2 size={12} />
+              <CioVolume size={12} />
             {/if}
           </button>
         {/if}
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={!canRevealCreator}
           title={revealLabel}
           aria-label={revealLabel}
           onclick={() => void revealCreator()}
         >
-          <Target size={12} />
+          <CioTarget size={12} />
         </button>
+        {#if historyActions && selected.directory !== '' && !selectedMissing}
+          <DesignHistoryActions
+            canUndo={historyActions.canUndo}
+            canRedo={historyActions.canRedo}
+            undoTitle={`Undo the last change to this ${noun}`}
+            redoTitle={`Redo the change to this ${noun}`}
+            onUndo={historyActions.undo}
+            onRedo={historyActions.redo}
+          />
+        {/if}
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
+          class="flex h-6 w-6 items-center justify-center transition-colors hover:bg-elevated disabled:opacity-40 {historyOpen
             ? 'bg-elevated text-foreground'
             : 'text-dimmed hover:text-foreground'}"
-          disabled={selected.directory === ''}
+          disabled={selected.directory === '' || selectedMissing}
           aria-pressed={historyOpen}
           title={`${nounTitle} history`}
           aria-label={`${nounTitle} history`}
           onclick={() => (historyOpen = !historyOpen)}
         >
-          <History size={12} />
+          <CioHistory size={12} />
         </button>
+        {#if !video && designScreens.length > 1}
+          <!--
+            The order of the screens grid, one click from the grid itself.
+
+            A design is a folder of screens, and the one that moved last is
+            usually the one the user came for, so the board starts there. It is a
+            dropdown rather than a row of buttons because the header has one line
+            to give, and the tooltip names the order in use.
+          -->
+          <DropdownMenu.Root bind:open={menus.sort}>
+            <DropdownMenu.Trigger
+              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+              title={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
+              aria-label={`Sort the screens (${SCREEN_ORDER_LABELS[screenOrder]})`}
+            >
+              <CioArrowUpDown size={12} />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="end"
+                sideOffset={4}
+                collisionPadding={8}
+                class="z-50 w-44 border border-border bg-surface p-1 shadow-lg"
+              >
+                <DropdownMenu.RadioGroup
+                  value={screenOrder}
+                  onValueChange={handleScreenOrderChange}
+                  aria-label="Order the screens"
+                >
+                  {#each SCREEN_ORDERS as order (order)}
+                    <DropdownMenu.RadioItem
+                      value={order}
+                      class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                    >
+                      <span class="min-w-0 flex-1 truncate">{SCREEN_ORDER_LABELS[order]}</span>
+                      <CioCheck
+                        size={12}
+                        class={['shrink-0', order === screenOrder ? 'text-primary' : 'invisible']}
+                        aria-hidden="true"
+                      />
+                    </DropdownMenu.RadioItem>
+                  {/each}
+                </DropdownMenu.RadioGroup>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        {/if}
         <button
           type="button"
-          class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={galleryBusy || selected.directory === ''}
           title={refreshLabel}
           aria-label={refreshLabel}
           onclick={refreshBoard}
         >
           {#if galleryBusy}
-            <LoaderCircle size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <RefreshCw size={12} />
+            <CioRefresh size={12} />
           {/if}
         </button>
-        <DropdownMenu.Root>
+        <DropdownMenu.Root bind:open={menus.options}>
           <DropdownMenu.Trigger
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
             title={`${nounTitle} options`}
             aria-label={`${nounTitle} options`}
           >
-            <Ellipsis size={13} />
+            <CioEllipsis size={13} />
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
@@ -1058,183 +1888,206 @@
               align="end"
               sideOffset={4}
               collisionPadding={8}
-              class="z-50 w-56 rounded-xl border border-border bg-surface p-1 shadow-lg"
+              class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
             >
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={refreshBoard}
               >
-                <RefreshCw size={13} class="shrink-0 text-muted" />
+                <CioRefresh size={13} class="shrink-0 text-muted" />
                 {refreshLabel}
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                 disabled={selected.directory === ''}
                 onSelect={() => void copyDesignPath(selected.directory)}
               >
-                <Copy size={13} class="shrink-0 text-muted" />
+                <CioCopy size={13} class="shrink-0 text-muted" />
                 Copy path
               </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={selected.directory === ''}
+                onSelect={() => void revealDesignPath(selected.directory)}
+              >
+                <CioFiles size={13} class="shrink-0 text-muted" />
+                Reveal path
+              </DropdownMenu.Item>
+              <DropdownMenu.Sub>
+                <DropdownMenu.SubTrigger
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  disabled={selected.directory === ''}
+                >
+                  <CioDownload size={13} class="shrink-0 text-muted" />
+                  Export
+                  <CioForward size={13} class="ml-auto text-muted" />
+                </DropdownMenu.SubTrigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.SubContent
+                    class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
+                    sideOffset={4}
+                  >
+                    {#if video}
+                      <DropdownMenu.Item
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                        disabled={selected.directory === '' ||
+                          videoJobs.some((job) => job.state === 'running')}
+                        onSelect={() => void exportVideo()}
+                      >
+                        Export MP4
+                      </DropdownMenu.Item>
+                    {:else}
+                      {#each DESIGN_EXPORT_FORMATS as format (format)}
+                        <DropdownMenu.Item
+                          class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                          disabled={selected.directory === ''}
+                          onSelect={() => startExport(null, format)}
+                          >Export design as {format.toUpperCase()}</DropdownMenu.Item
+                        >
+                      {/each}
+                    {/if}
+                  </DropdownMenu.SubContent>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Sub>
               {#if !video}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestDesignAction('contract')}
                 >
-                  <Pencil size={13} class="shrink-0 text-muted" />
+                  <CioPencil size={13} class="shrink-0 text-muted" />
                   Generate DESIGN.md
                 </DropdownMenu.Item>
+                <DropdownMenu.Sub>
+                  <DropdownMenu.SubTrigger
+                    class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-[state=open]:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                    disabled={canvasBusy !== '' || selected.directory === ''}
+                  >
+                    <CioPalette size={13} class="shrink-0 text-muted" />
+                    Review Design
+                    <CioForward size={13} class="ml-auto text-muted" />
+                  </DropdownMenu.SubTrigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.SubContent
+                      class="z-50 w-56 border border-border bg-surface p-1 shadow-lg"
+                      sideOffset={4}
+                    >
+                      <DropdownMenu.Item
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                        disabled={canvasBusy !== '' || selected.directory === ''}
+                        onSelect={() => void requestDesignAction('critique')}
+                        ><CioPalette size={13} class="shrink-0 text-muted" />Review design quality</DropdownMenu.Item
+                      >
+                      <DropdownMenu.Item
+                        class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                        disabled={canvasBusy !== '' || selected.directory === ''}
+                        onSelect={() => void requestDesignAction('tweaks')}
+                      >
+                        <CioMarquee size={13} class="shrink-0 text-muted" />
+                        Inspect Designs
+                      </DropdownMenu.Item>
+                    </DropdownMenu.SubContent>
+                  </DropdownMenu.Portal>
+                </DropdownMenu.Sub>
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestDesignAction('critique')}
-                  >Review design quality</DropdownMenu.Item
+                  onSelect={openReferencePrompt}
+                  ><CioThreadBrowser size={ICON_SIZE.inline} class="shrink-0 text-muted" />Extract
+                  brand from reference</DropdownMenu.Item
                 >
+
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
-                  disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestDesignAction('reference')}
-                  >Extract brand from reference</DropdownMenu.Item
-                >
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
-                  disabled={canvasBusy !== '' || selected.directory === ''}
-                  onSelect={() => void requestDesignAction('tweaks')}
-                  >Add live controls</DropdownMenu.Item
-                >
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                   data-external-url="https://github.com/nexu-io/open-design/tree/main/design-templates"
                   onSelect={() =>
                     void openInBrowser(
                       'https://github.com/nexu-io/open-design/tree/main/design-templates'
-                    )}>Browse Open Design prompts</DropdownMenu.Item
+                    )}
                 >
-                {#each DESIGN_EXPORT_FORMATS as format (format)}
-                  <DropdownMenu.Item
-                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-50"
-                    disabled={selected.directory === ''}
-                    onSelect={() => startExport(null, format)}
-                    >Export design as {format.toUpperCase()}</DropdownMenu.Item
-                  >
-                {/each}
+                  <CioStore size={13} class="shrink-0 text-muted" />
+                  Browse Open Design prompts</DropdownMenu.Item
+                >
               {/if}
               {#if !video && canvasRead && canvasState === null}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('create')}
                 >
-                  <Presentation size={13} class="shrink-0 text-muted" />
+                  <CioDisplay size={13} class="shrink-0 text-muted" />
                   Generate Screen Canvas
                 </DropdownMenu.Item>
               {/if}
               {#if !video && canvasRead && !liveReady}
                 <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
                   disabled={canvasBusy !== '' || selected.directory === ''}
                   onSelect={() => void requestCanvas('live')}
                 >
-                  <PlayingCardsFan size={13} class="shrink-0 text-muted" />
+                  <CioLayers size={13} class="shrink-0 text-muted" />
                   Generate Live Preview
                 </DropdownMenu.Item>
               {/if}
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                disabled={selected.directory === ''}
+                class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
+                disabled={selected.directory === '' || selectedMissing}
                 onSelect={() => (historyOpen = !historyOpen)}
               >
-                <History size={13} class="shrink-0 text-muted" />
+                <CioHistory size={13} class="shrink-0 text-muted" />
                 {historyOpen ? 'Hide history' : 'Show history'}
               </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={beginEditRoot}
-              >
-                <Pencil size={13} class="shrink-0 text-muted" />
-                Change save path
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated data-disabled:pointer-events-none data-disabled:opacity-50"
-                disabled={rootIsDefault || rootBusy}
-                onSelect={() => void applyRoot(defaultRoot)}
-              >
-                <RotateCcw size={13} class="shrink-0 text-muted" />
-                Reset save path to default
-              </DropdownMenu.Item>
+              <DropdownMenu.Sub>
+                <DropdownMenu.SubTrigger
+                  class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                  disabled={selected.directory === '' || selectedMissing}
+                >
+                  <CioPencil size={13} class="shrink-0 text-muted" />
+                  Update {noun} details
+                  <CioForward size={12} class="ml-auto" />
+                </DropdownMenu.SubTrigger>
+                <DropdownMenu.SubContent
+                  class="z-50 min-w-48 border border-border bg-surface p-1 shadow-xl"
+                  sideOffset={4}
+                >
+                  {#each [{ mode: 'this', label: 'Change this save path' }, { mode: 'all', label: 'Change all save paths' }, { mode: 'rename', label: `Rename ${noun}` }] as action (action.mode)}
+                    <DropdownMenu.Item
+                      class="flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+                      onSelect={() => {
+                        if (
+                          action.mode === 'this' ||
+                          action.mode === 'all' ||
+                          action.mode === 'rename'
+                        )
+                          detailsMode = action.mode
+                      }}>{action.label}</DropdownMenu.Item
+                    >
+                  {/each}
+                </DropdownMenu.SubContent>
+              </DropdownMenu.Sub>
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
         <button
           type="button"
-          class="ml-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={opening || selected.directory === ''}
-          title={`Show this ${noun} in the in-app browser`}
-          aria-label={`Show this ${noun} in the in-app browser`}
+          class="ml-0.5 flex h-6 w-6 items-center justify-center bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+          disabled={opening || !playable || selected.directory === '' || selectedMissing}
+          title={`Watch this ${noun} full screen in the in-app browser`}
+          aria-label={`Watch this ${noun} full screen in the in-app browser`}
           onclick={() => void openPreview(selected.entry)}
         >
           {#if opening}
-            <LoaderCircle size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <GlobeCode size={12} />
+            <CioThreadBrowser size={ICON_SIZE.inline} />
           {/if}
         </button>
       </span>
     </div>
 
-    {#if editingRoot}
-      <div class="flex items-center gap-1 border-t border-border/60 px-2.5 py-1.5">
-        <input
-          class="h-6 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[0.6875rem] text-foreground outline-none focus:border-primary"
-          bind:value={rootDraft}
-          placeholder={defaultRoot}
-          aria-label={`Folder new ${noun}s are saved in, relative to the project`}
-          onkeydown={(event) => {
-            if (event.key === 'Escape') {
-              event.preventDefault()
-              cancelEditRoot()
-              return
-            }
-            if (event.key !== 'Enter') return
-            event.preventDefault()
-            void applyRoot(rootDraft.trim())
-          }}
-        />
-        <button
-          type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-accent transition-colors hover:bg-elevated disabled:opacity-40"
-          disabled={rootBusy || rootDraft.trim() === ''}
-          title={`Save this ${noun} folder`}
-          aria-label={`Save this ${noun} folder`}
-          onclick={() => void applyRoot(rootDraft.trim())}
-        >
-          {#if rootBusy}
-            <LoaderCircle size={11} class="animate-spin" />
-          {:else}
-            <Check size={12} />
-          {/if}
-        </button>
-        <button
-          type="button"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Cancel"
-          aria-label="Cancel changing the save path"
-          onclick={cancelEditRoot}
-        >
-          <X size={12} />
-        </button>
-      </div>
-    {/if}
-
-    {#if rootError !== ''}
-      <p class="px-2.5 pb-1.5 text-[0.6875rem] text-danger" role="alert">{rootError}</p>
-    {:else if rootNotice !== ''}
-      <p class="px-2.5 pb-1.5 text-[0.6875rem] text-muted">{rootNotice}</p>
-    {/if}
-
     {#if canvasNotice !== ''}
-      <p class="px-2.5 pb-1.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
+      <p class="pb-1.5 pl-2.5 text-[0.625rem] text-dimmed">{canvasNotice}</p>
     {/if}
   </header>
 
@@ -1248,16 +2101,16 @@
       {#snippet action()}
         <button
           type="button"
-          class="ml-auto flex shrink-0 items-center gap-1 rounded border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
+          class="ml-auto flex shrink-0 items-center gap-1 border border-warning/40 px-2 py-0.5 text-xs font-semibold text-warning transition-colors hover:bg-warning/20 disabled:opacity-50"
           disabled={canvasBusy !== ''}
           title="Ask the agent to bring the Screen Canvas up to date with the screens"
           aria-label="Ask the agent to sync the Screen Canvas"
           onclick={() => void requestCanvas('update')}
         >
           {#if canvasBusy === 'update'}
-            <LoaderCircle size={12} class="animate-spin" />
+            <CioSpinner size={12} class="animate-spin" />
           {:else}
-            <ListClock size={12} />
+            <CioListClock size={12} />
           {/if}
           Sync
         </button>
@@ -1266,84 +2119,286 @@
   {/if}
 
   <div class="flex min-h-0 flex-1 flex-col">
-    <div class="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
-      {#if error !== ''}
-        <p
-          class="mb-2 rounded-md border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
-          role="alert"
-        >
-          {error}
-        </p>
-      {/if}
+    {#if error !== '' || compositionError !== ''}
+      <p
+        class="mx-2.5 mt-2 shrink-0 border border-danger/20 bg-danger/10 px-2 py-1 text-[0.6875rem] text-danger"
+        role="alert"
+      >
+        {error !== '' ? error : compositionError}
+      </p>
+    {/if}
 
-      {#if video && gallery.length === 0}
-        <div
-          class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 rounded-md border border-border bg-elevated text-dimmed"
+    {#if selectedMissing}
+      <div class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-4 text-center">
+        <CioImageOff size={20} class="text-warning" />
+        <p class="text-sm font-medium">{nounTitle} not found</p>
+        <p class="break-all font-mono text-xs text-muted">{selected.directory}</p>
+        <p class="text-xs text-muted">
+          Restore the folder and refresh, or remove this entry from the panel.
+        </p>
+        <button
+          type="button"
+          class="flex items-center gap-2 border border-danger/40 px-3 py-1.5 text-xs text-danger"
+          onclick={() => (removeRequested = selectedItem)}
+          ><CioTrash size={13} />Remove from panel</button
         >
-          {#if galleryBusy}
-            <LoaderCircle size={16} class="animate-spin" />
-            <span class="text-[0.6875rem]">Capturing the {noun}…</span>
-          {:else}
-            <ImageOff size={16} />
+      </div>
+    {:else if video && selected.directory !== ''}
+      <!--
+        The composition above, the tools below.
+
+        The picture takes the space the panel has, and the timeline and controls
+        sit under it in their own scroller. That is what keeps the frame whole: a
+        native page cannot be clipped by `overflow`, so a picture sharing a
+        scrolling column with the controls would be drawn past the panel at the
+        sizes where the column is taller than the panel.
+      -->
+      <div class="flex min-h-0 flex-1 flex-col pt-2 pl-2.5">
+        {@render videoStage()}
+      </div>
+      <div class="max-h-[55%] min-h-0 shrink-0 overflow-y-auto py-2 pl-2.5">
+        {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
+          <VideoTimeline {projectId} {threadId} directory={selected.directory} tabId={boardTabId} />
+          {#if liveEditing}
+            <VideoStudioControls
+              {projectId}
+              directory={selected.directory}
+              jobs={videoJobs}
+              onCancelJob={cancelVideoJob}
+              onExport={exportVideo}
+              onDirtyChange={setStudioDirty}
+            />
+          {/if}
+        {/key}
+      </div>
+    {:else}
+      <div class="min-h-0 flex-1 overflow-y-auto py-2 pl-2.5">
+        {#if video}
+          <div
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+          >
+            <CioImageOff size={16} />
             <span class="px-4 text-center text-[0.6875rem]">
-              {items.length === 0
-                ? `The agent has not written a ${noun} yet. It will appear here when it does.`
-                : 'No preview captured yet.'}
-            </span>
-          {/if}
-        </div>
-      {:else}
-        <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
-          {#if !video}
-            {@render entryCard({
-              icon: Presentation,
-              name: 'Screen Canvas',
-              shot: canvasShot,
-              label: 'Open the Screen Canvas in the in-app browser',
-              empty: canvasEntryNote,
-              busy: !canvasRead || openingCanvas,
-              ready: canvasState !== null,
-              onOpen: () => void openCanvas()
-            })}
-            {@render entryCard({
-              icon: PlayingCardsFan,
-              name: 'Live preview',
-              shot: liveShot,
-              label: `Open the live preview of this ${noun} in the in-app browser`,
-              empty: liveEntryNote,
-              busy: opening,
-              ready: liveReady,
-              onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
-            })}
-          {/if}
-          {#each designScreens as screen (screen.entry)}
-            {@render screenCard(screen, video)}
-          {/each}
-        </div>
-        {#if !video && designScreens.length === 0}
-          {#if galleryBusy}
-            <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
-              <LoaderCircle size={12} class="animate-spin" />
-              Capturing the {noun}…
-            </p>
-          {:else}
-            <p class="mt-2 text-center text-[0.6875rem] text-muted">
               {`The agent has not written a ${noun} yet. It will appear here when it does.`}
-            </p>
+            </span>
+          </div>
+        {:else if gallery.length === 0}
+          <div
+            class="flex aspect-[16/10] w-full flex-col items-center justify-center gap-1.5 border border-border bg-elevated text-dimmed"
+          >
+            {#if galleryBusy}
+              <CioSpinner size={16} class="animate-spin" />
+              <span class="text-[0.6875rem]">Capturing the {noun}…</span>
+            {:else}
+              <CioImageOff size={16} />
+              <span class="px-4 text-center text-[0.6875rem]">
+                {items.length === 0
+                  ? `The agent has not written a ${noun} yet. It will appear here when it does.`
+                  : 'No preview captured yet.'}
+              </span>
+            {/if}
+          </div>
+        {:else}
+          <div class="grid grid-cols-2 gap-1.5" aria-label={screensLabel}>
+            {#if !video}
+              {@render entryCard({
+                icon: CioDisplay,
+                name: 'Screen Canvas',
+                shot: canvasShot,
+                label: 'Open the Screen Canvas in the in-app browser',
+                empty: canvasEntryNote,
+                busy: !canvasRead || openingCanvas,
+                ready: canvasState !== null,
+                onOpen: () => void openCanvas()
+              })}
+              {@render entryCard({
+                icon: CioLayers,
+                name: 'Live preview',
+                shot: liveShot,
+                label: `Open the live preview of this ${noun} in the in-app browser`,
+                empty: liveEntryNote,
+                busy: opening,
+                ready: liveReady,
+                onOpen: () => void openPreview(LIVE_PREVIEW_ENTRY)
+              })}
+            {/if}
+            {#each designScreens as screen (screen.entry)}
+              {@render screenCard(screen, video)}
+            {/each}
+          </div>
+          {#if !video && designScreens.length === 0}
+            {#if galleryBusy}
+              <p class="mt-2 flex items-center justify-center gap-1.5 text-[0.6875rem] text-dimmed">
+                <CioSpinner size={12} class="animate-spin" />
+                Capturing the {noun}…
+              </p>
+            {:else}
+              <p class="mt-2 text-center text-[0.6875rem] text-muted">
+                {`The agent has not written a ${noun} yet. It will appear here when it does.`}
+              </p>
+            {/if}
           {/if}
         {/if}
-      {/if}
-    </div>
-    {#key `${projectId}:${threadId}:${selected.directory}`}
-      <DesignHistoryPanel
-        {projectId}
-        {threadId}
-        directory={selected.directory}
-        {noun}
-        open={historyOpen}
-        onRestored={restoreBoard}
-        onClose={() => (historyOpen = false)}
-      />
-    {/key}
+      </div>
+    {/if}
+    {#if selected.directory !== '' && !selectedMissing}
+      {#key `${projectId}:${threadId}:${selected.directory}`}
+        <DesignHistoryPanel
+          {projectId}
+          {threadId}
+          directory={selected.directory}
+          {noun}
+          unit={video ? 'file' : 'screen'}
+          open={historyOpen}
+          onRestored={restoreBoard}
+          onClose={() => (historyOpen = false)}
+          onActions={handleHistoryActions}
+        />
+      {/key}
+    {/if}
   </div>
 </div>
+
+<Modal
+  open={referenceOpen}
+  title="Extract brand from reference"
+  description="Enter the reference site to measure for this design."
+  size="md"
+  onClose={() => {
+    referenceOpen = false
+  }}
+>
+  <div class="flex flex-col gap-2">
+    <label for="reference-url" class="text-[0.8125rem] font-medium text-foreground">
+      Reference site URL
+    </label>
+    <input
+      id="reference-url"
+      type="url"
+      inputmode="url"
+      autocomplete="off"
+      spellcheck={false}
+      placeholder="https://example.com"
+      bind:value={referenceUrl}
+      aria-invalid={referenceError !== ''}
+      aria-describedby={referenceError !== '' ? 'reference-url-error' : undefined}
+      class="h-8 w-full border border-border bg-elevated px-2 text-[0.8125rem] text-foreground outline-none focus:border-primary"
+      onkeydown={(event) => {
+        if (event.key !== 'Enter') return
+        event.preventDefault()
+        confirmReferencePrompt()
+      }}
+    />
+    {#if referenceError !== ''}
+      <p id="reference-url-error" class="text-[0.75rem] text-danger" role="alert">
+        {referenceError}
+      </p>
+    {:else}
+      <p class="text-[0.75rem] text-muted">
+        The agent measures this site, then writes the brand into DESIGN.md for {selectedName === ''
+          ? `this ${noun}`
+          : selectedName}.
+      </p>
+    {/if}
+  </div>
+  {#snippet footer()}
+    <button
+      type="button"
+      class="border border-border px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      title="Close without extracting"
+      aria-label="Close without extracting"
+      onclick={() => {
+        referenceOpen = false
+      }}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      data-modal-primary-action
+      class="bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:opacity-90 disabled:opacity-50"
+      disabled={referenceUrl.trim() === '' || canvasBusy !== ''}
+      title="Extract the brand from this reference site"
+      aria-label="Extract the brand from this reference site"
+      onclick={confirmReferencePrompt}
+    >
+      Extract brand
+    </button>
+  {/snippet}
+</Modal>
+
+<ConfirmDialog
+  open={reloadRequested}
+  title="Discard unsaved video controls?"
+  confirmLabel="Discard and reload"
+  cancelLabel="Keep editing"
+  onCancel={() => {
+    reloadRequested = false
+  }}
+  onConfirm={() => {
+    reloadRequested = false
+    reloadVideoBoard()
+  }}
+>
+  <p>Your unsaved control and caption edits will be replaced with the saved version.</p>
+</ConfirmDialog>
+
+{#if detailsMode}
+  <WorkDetailsDialog
+    {projectId}
+    directory={selected.directory}
+    {kind}
+    root={workRoot}
+    mode={detailsMode}
+    onClose={() => (detailsMode = null)}
+    onUpdated={detailsUpdated}
+  />
+{/if}
+
+<ConfirmDialog
+  open={removeRequested !== null}
+  title={`Remove missing ${noun}?`}
+  confirmLabel="Remove from panel"
+  cancelLabel="Cancel"
+  busy={removeBusy}
+  onCancel={() => {
+    if (!removeBusy) removeRequested = null
+  }}
+  onConfirm={removeMissingWork}
+>
+  <p>
+    Remove {removeRequested?.name ?? ''} from this project's {noun} panel? This removes its saved folder
+    record. No files are deleted.
+  </p>
+</ConfirmDialog>
+
+{#if fullscreenCompositionTab && shownFullscreenTab}
+  <!--
+    The composition's own view, full screen.
+
+    Not a second tab and not a second player: it is the board's tab in a full
+    window surface, so the page the user is already watching moves here and the
+    board's controls keep driving the same tab. It carries the composition's own
+    transport (`BrowserPanel` draws one for any tab showing a composition), so the
+    film keeps playing and stays scrubbable. The dialog hosts the browser's native
+    view, which is why the surface must not suppress it (see `hostsBrowserView`).
+
+    The surface is switched by the live tab (null once it is minimized) while the
+    panel inside reads the remembered one, so minimizing tears the panel down
+    cleanly instead of handing it a null to read on the way out.
+  -->
+  <FullscreenPanelDialog
+    tabs={[{ id: shownFullscreenTab.id, title: shownFullscreenTab.title }]}
+    activeTabId={shownFullscreenTab.id}
+    minimizeLabel="Minimize the composition"
+    hostsBrowserView
+    onSelect={() => {}}
+    onMinimize={() => (compositionFullscreen = false)}
+  >
+    {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
+      {#key shownFullscreenTab.id}
+        <BrowserPanel tab={shownFullscreenTab} fullscreen />
+      {/key}
+    {/await}
+  </FullscreenPanelDialog>
+{/if}

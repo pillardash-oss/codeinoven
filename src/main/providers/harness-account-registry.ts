@@ -161,26 +161,20 @@ export class HarnessAccountRegistry {
 
   async resolve(harnessId: string, accountId?: string): Promise<HarnessAccount> {
     const accounts = await this.list(harnessId)
-    if (accounts.length === 1) return accounts[0]
-    if (!accountId && accounts.length > 0) return defaultAccountFor(accounts)
-    const resolvedId = accountId || legacyHarnessAccountId(harnessId)
-    const account = accounts.find((candidate) => candidate.id === resolvedId)
-    if (account) return account
-    if (accounts.length > 0 && (!accountId || resolvedId === legacyHarnessAccountId(harnessId))) {
-      return defaultAccountFor(accounts)
+    const selected = accounts.find((account) => account.id === accountId)
+    if (selected) return selected
+    // Custom providers have a virtual legacy account even when this harness
+    // also has managed accounts. Its explicit id owns the legacy driver:
+    // substituting the managed default dispatches through a different driver
+    // from the one runtime events and finalization look up by this id.
+    if (accountId === legacyHarnessAccountId(harnessId)) {
+      return this.virtualLegacyAccount(harnessId)
     }
-    if (resolvedId === legacyHarnessAccountId(harnessId)) {
-      const now = Date.now()
-      return {
-        id: resolvedId,
-        harnessId,
-        providerId: '',
-        providerName: '',
-        label: 'Default',
-        containerKind: 'legacy-default',
-        createdAt: now,
-        updatedAt: now
-      }
+    if (accounts.length === 1) return accounts[0]
+    if (!accountId) {
+      return accounts.length > 0
+        ? defaultAccountFor(accounts)
+        : this.virtualLegacyAccount(harnessId)
     }
     throw new Error('The selected account no longer exists.')
   }

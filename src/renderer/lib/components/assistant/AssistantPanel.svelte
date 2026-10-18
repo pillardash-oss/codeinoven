@@ -1,29 +1,26 @@
 <script lang="ts">
+  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
-  import {
-    AlertTriangle,
-    Ban,
-    ChevronRight,
-    Gauge,
-    Hammer,
-    Maximize2,
-    Pause,
-    Pencil,
-    Play,
-    RotateCcw,
-    ScrollText,
-    Workflow
-  } from '@lucide/svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
+  import AssistantIcon, {
+    type AssistantIconMark
+  } from '$lib/components/icons/cio/AssistantIcon.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
+  import { assistants } from '$lib/stores/assistants.svelte'
   import type { AssistantPanelTab } from '$lib/stores/context-sidebar-types'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
@@ -33,42 +30,45 @@
   import {
     describeRelativeTime,
     describeSchedule,
-    routineAgentsComplete,
-    routineHowToComplete,
-    routineIsScheduled,
+    assistantAgentsComplete,
+    assistantKnowledgeComplete,
+    assistantIsScheduled,
+    assistantIsUnnamed,
     type AgentCapabilityCatalog,
     type BackgroundRun,
     type MissedRun,
-    type Routine,
-    type RoutineAgents,
-    type RoutineConnection,
-    type RoutineDeliveryChannel,
-    type RoutineImpact,
-    type RoutineTimeliness,
+    type Assistant,
+    type AssistantAgents,
+    type AssistantConnection,
+    type AssistantDeliveryChannel,
+    type AssistantImpact,
+    type AssistantTimeliness,
     type Thread,
     type UtilityCatalog
   } from '$shared/types'
   import {
     isExternalDeliveryChannel,
-    routineDeliveryChannelLabel,
-    routineDeliveryLabel,
-    routinePriorityLabel,
-    ROUTINE_DELIVERY_OPTIONS,
-    ROUTINE_IMPACT_OPTIONS,
-    ROUTINE_TIMELINESS_OPTIONS
-  } from '$shared/routine-reporting'
+    assistantDeliveryChannelLabel,
+    assistantDeliveryLabel,
+    assistantPriorityLabel,
+    ASSISTANT_DELIVERY_OPTIONS,
+    ASSISTANT_IMPACT_OPTIONS,
+    ASSISTANT_TIMELINESS_OPTIONS
+  } from '$shared/assistant-reporting'
   import {
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
-    parseHowToSections,
+    knowledgeSectionSummary,
+    parseKnowledgeSections,
     previewRuns,
     resolveConnections,
-    serializeHowToSections,
+    serializeKnowledgeSections,
     missedRunReasonText,
     TASK_RUN_PREVIEW,
+    type ConnectionSetupRequest,
     type ConnectionView,
-    type HowToSection
+    type KnowledgeSection
   } from './assistant-view'
   import {
     buildConnectionLibrary,
@@ -78,8 +78,8 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
-  import RoutineAgentPicker from './RoutineAgentPicker.svelte'
-  import RoutineExecutionPicker from './RoutineExecutionPicker.svelte'
+  import AssistantAgentPicker from './AssistantAgentPicker.svelte'
+  import AssistantExecutionPicker from './AssistantExecutionPicker.svelte'
   import UtilityPicker from './UtilityPicker.svelte'
   import UtilityEditorModal, {
     type UtilityEditorTarget
@@ -88,29 +88,43 @@
   interface Props {
     projectId: string
     threadId: string
-    /** Routine snapshot from the tab; the task's own routineId wins when set. */
-    routineId: string | null
+    /** Assistant snapshot from the tab; the task's own assistantId wins when set. */
+    assistantId: string | null
     /** The section on screen. It is bound to the sidebar tab (not local state)
      *  so switching to another sidebar panel and back reopens the same section
      *  instead of resetting the panel to "All". */
     panelTab: AssistantPanelTab
     navigate: (view: MainView) => void
-    /** Open one of the routine's tasks, so the workspace owns the selection. */
+    /** Open one of the assistant's tasks, so the workspace owns the selection. */
     onOpenTask: (task: Thread) => void
+    /**
+     * Hand one connection's setup to the workspace, which opens it as a new
+     * thread of the assistant: the panel owns the request, the workspace owns
+     * thread creation and the selection.
+     */
+    onSetupConnection: (input: ConnectionSetupRequest) => void
+    /**
+     * Move a task that belongs to no assistant into one the user picks. Nothing
+     * in this view runs without an assistant, so a task with no owner is a
+     * question waiting to be answered rather than a working state.
+     */
+    onAdoptTask?: (task: Thread) => void
   }
 
   let {
     projectId,
     threadId,
-    routineId,
+    assistantId,
     panelTab = $bindable(),
     navigate,
-    onOpenTask
+    onOpenTask,
+    onSetupConnection,
+    onAdoptTask
   }: Props = $props()
 
   const TABS: ReadonlyArray<{ id: AssistantPanelTab; label: string }> = [
     { id: 'all', label: 'All' },
-    { id: 'routine', label: 'Routine' },
+    { id: 'assistant', label: 'Assistant' },
     { id: 'connections', label: 'Connections' },
     { id: 'agents', label: 'Agents' },
     { id: 'issues', label: 'Issues' }
@@ -125,14 +139,14 @@
         ) ?? null)
   )
 
-  const routine = $derived.by((): Routine | null => {
-    // The panel's own routine id is authoritative: one panel per routine means
+  const assistant = $derived.by((): Assistant | null => {
+    // The panel's own assistant id is authoritative: one panel per assistant means
     // selecting another task must never re-target this panel (its anchor task
-    // can even belong to a different routine, e.g. a routine with no tasks yet).
-    // The task's routine is only a fallback for a panel opened without one.
-    const id = routineId ?? task?.routineId
+    // can even belong to a different assistant, e.g. an assistant with no tasks yet).
+    // The task's assistant is only a fallback for a panel opened without one.
+    const id = assistantId ?? task?.assistantId
     if (!id) return null
-    return assistantRoutines.routines.find((candidate) => candidate.id === id) ?? null
+    return assistants.assistants.find((candidate) => candidate.id === id) ?? null
   })
 
   let catalog = $state<UtilityCatalog | null>(null)
@@ -170,25 +184,61 @@
   let fullscreen = $state(false)
 
   const visibleTabs = $derived(
-    routine ? TABS : TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
+    assistant ? TABS : TABS.filter((entry) => entry.id === 'all' || entry.id === 'issues')
   )
   const activeTab = $derived(
     visibleTabs.some((entry) => entry.id === panelTab) ? panelTab : ('all' as AssistantPanelTab)
   )
 
-  // ─── Routine content ──────────────────────────────────────────────────────
-
-  const sections = $derived(routine ? parseHowToSections(routine.howTo) : [])
-  const howToComplete = $derived(routine ? routineHowToComplete(routine) : false)
-  const agentsComplete = $derived(routine ? routineAgentsComplete(routine) : false)
-  /** Whether this routine runs on a clock at all; drives the schedule copy. */
-  const scheduled = $derived(routine ? routineIsScheduled(routine) : true)
-  /** The schedule line everywhere in the panel: a cadence, or on-demand. */
-  const scheduleLabel = $derived(
-    scheduled ? describeSchedule(routine?.schedule ?? null) : 'Runs on demand'
+  /** The status pill's ink: a paused assistant is a warning, a running one is a success. */
+  const statusToneColor = $derived(
+    assistant?.paused ? 'var(--color-warning)' : 'var(--color-success)'
   )
 
+  /**
+   * The count a tab carries, or null when it has nothing worth counting. A zero
+   * is noise on a tab label, so every empty section reads as a bare label instead
+   * of a badge that says nothing.
+   */
+  function tabCount(id: AssistantPanelTab): number | null {
+    if (id === 'connections') return connectionViews.length || null
+    if (id === 'agents') {
+      return assistant ? 1 + (assistant.agents?.fallbacks.length ?? 0) : null
+    }
+    if (id === 'issues') return issueCount || null
+    return null
+  }
+
+  // ─── Assistant content ──────────────────────────────────────────────────────
+
+  const sections = $derived(assistant ? parseKnowledgeSections(assistant.knowledge) : [])
+
+  /** The one-line summary a folded section shows in place of its body. */
+  const sectionSummary = knowledgeSectionSummary
+  const knowledgeComplete = $derived(assistant ? assistantKnowledgeComplete(assistant) : false)
+  const agentsComplete = $derived(assistant ? assistantAgentsComplete(assistant) : false)
+  /** Whether this assistant runs on a clock at all; drives the schedule copy. */
+  const scheduled = $derived(assistant ? assistantIsScheduled(assistant) : true)
+  /**
+   * The schedule line everywhere in the panel: what the user named the clock,
+   * then the cadence the assistant agreed, or "runs on demand" when it has none.
+   */
+  const scheduleLabel = $derived.by(() => {
+    if (!scheduled) return 'Runs on demand'
+    const cadence = describeSchedule(assistant?.schedule ?? null)
+    const named = assistant?.scheduleName?.trim()
+    return named ? `${named} · ${cadence}` : cadence
+  })
+
   const collapsed = new SvelteSet<string>()
+  /**
+   * The assistant's name, for copy that would otherwise repeat "this assistant".
+   * An assistant that has not been named yet (the create-by-chat flow starts with
+   * no name at all) is described by what it is rather than by a placeholder.
+   */
+  const assistantLabel = $derived(
+    assistant && !assistantIsUnnamed(assistant) ? assistant.name : 'your new assistant'
+  )
   let editingId = $state<string | null>(null)
   let editDraft = $state('')
 
@@ -197,7 +247,7 @@
     else collapsed.add(id)
   }
 
-  function startEdit(section: HowToSection): void {
+  function startEdit(section: KnowledgeSection): void {
     editingId = section.id
     editDraft = section.body
     collapsed.delete(section.id)
@@ -209,48 +259,51 @@
   }
 
   async function saveSection(sectionId: string): Promise<void> {
-    if (!routine) return
+    if (!assistant) return
     const next = sections.map((section) =>
       section.id === sectionId ? { ...section, body: editDraft.trim() } : section
     )
     editingId = null
-    await persistRoutine({ howTo: serializeHowToSections(next) }, 'Could not save the how-to')
+    await persistAssistant(
+      { knowledge: serializeKnowledgeSections(next) },
+      'Could not save the knowledge'
+    )
   }
 
   // ─── Persistence ──────────────────────────────────────────────────────────
 
-  async function persistRoutine(
-    patch: Parameters<typeof assistantRoutines.updateRoutine>[1],
+  async function persistAssistant(
+    patch: Parameters<typeof assistants.updateAssistant>[1],
     failureMessage: string
   ): Promise<void> {
-    if (!routine) return
+    if (!assistant) return
     try {
-      await assistantRoutines.updateRoutine(routine.id, patch)
+      await assistants.updateAssistant(assistant.id, patch)
     } catch (error) {
       reportError(error, failureMessage)
     }
   }
 
   async function togglePaused(): Promise<void> {
-    if (!routine) return
-    await persistRoutine(
-      { paused: !routine.paused },
-      routine.paused ? 'Could not resume the routine' : 'Could not pause the routine'
+    if (!assistant) return
+    await persistAssistant(
+      { paused: !assistant.paused },
+      assistant.paused ? 'Could not resume the assistant' : 'Could not pause the assistant'
     )
   }
 
-  function setAgents(agents: RoutineAgents): void {
-    void persistRoutine({ agents }, 'Could not save the routine models')
+  function setAgents(agents: AssistantAgents): void {
+    void persistAssistant({ agents }, 'Could not save the assistant models')
   }
 
   // ─── Reporting: where the output goes, and how urgent it is ────────────────
 
   /** The delivery channels, with a hint saying whether the choice needs a connection. */
-  const deliveryChoices = ROUTINE_DELIVERY_OPTIONS.map((option) => ({
+  const deliveryChoices = ASSISTANT_DELIVERY_OPTIONS.map((option) => ({
     id: option.id,
     label: option.label,
     hint: option.external
-      ? 'Needs a connection this routine must have'
+      ? 'Needs a connection this assistant must have'
       : 'A normal thread notification inside CodeInOven'
   }))
 
@@ -259,11 +312,11 @@
    * switching channel does not silently discard what the user already told the
    * agent; the in-app channel drops the destination because it has none.
    */
-  function setDeliveryChannel(channel: RoutineDeliveryChannel): void {
-    if (!routine) return
-    const current = routine.delivery
+  function setDeliveryChannel(channel: AssistantDeliveryChannel): void {
+    if (!assistant) return
+    const current = assistant.delivery
     const target = current?.target?.trim()
-    void persistRoutine(
+    void persistAssistant(
       {
         delivery: {
           channel,
@@ -277,12 +330,12 @@
 
   /** Commit the typed destination. The input is uncontrolled, so this is the only write. */
   function commitDeliveryTarget(raw: string): void {
-    if (!routine) return
-    const delivery = routine.delivery
+    if (!assistant) return
+    const delivery = assistant.delivery
     if (!delivery || delivery.channel === 'in-app') return
     const target = raw.trim()
     if (target === (delivery.target ?? '')) return
-    void persistRoutine(
+    void persistAssistant(
       {
         delivery: {
           channel: delivery.channel,
@@ -295,36 +348,36 @@
   }
 
   function clearDelivery(): void {
-    void persistRoutine({ delivery: null }, 'Could not clear the delivery channel')
+    void persistAssistant({ delivery: null }, 'Could not clear the delivery channel')
   }
 
   /**
-   * Set one priority bracket, keeping the other. When the routine has no
+   * Set one priority bracket, keeping the other. When the assistant has no
    * priority yet the other bracket starts from the middle of its scale, and the
    * panel immediately shows the pair that was actually saved.
    */
-  function setPriorityTimeliness(timeliness: RoutineTimeliness): void {
-    if (!routine) return
-    void persistRoutine(
-      { priority: { timeliness, impact: routine.priority?.impact ?? 'team' } },
+  function setPriorityTimeliness(timeliness: AssistantTimeliness): void {
+    if (!assistant) return
+    void persistAssistant(
+      { priority: { timeliness, impact: assistant.priority?.impact ?? 'team' } },
       'Could not save the priority'
     )
   }
 
-  function setPriorityImpact(impact: RoutineImpact): void {
-    if (!routine) return
-    void persistRoutine(
-      { priority: { timeliness: routine.priority?.timeliness ?? 'today', impact } },
+  function setPriorityImpact(impact: AssistantImpact): void {
+    if (!assistant) return
+    void persistAssistant(
+      { priority: { timeliness: assistant.priority?.timeliness ?? 'today', impact } },
       'Could not save the priority'
     )
   }
 
   function clearPriority(): void {
-    void persistRoutine({ priority: null }, 'Could not clear the priority')
+    void persistAssistant({ priority: null }, 'Could not clear the priority')
   }
 
   const connectionViews = $derived(
-    resolveConnections(routine?.connections ?? [], catalog, capabilities)
+    resolveConnections(assistant?.connections ?? [], catalog, capabilities)
   )
   // A connection that only matched by label still shows as connected, so the
   // picker marks the entry it resolved to rather than the raw stored id.
@@ -341,55 +394,55 @@
    * works, since the app surfaces the run thread itself.
    */
   const deliveryReady = $derived.by(() => {
-    const delivery = routine?.delivery
+    const delivery = assistant?.delivery
     if (!delivery || !isExternalDeliveryChannel(delivery.channel)) return true
-    const channel = routineDeliveryChannelLabel(delivery.channel)
+    const channel = assistantDeliveryChannelLabel(delivery.channel)
     return connectionViews.some(
       (view) => view.status === 'ready' && connectionNamesOverlap(view.connection.label, channel)
     )
   })
 
-  /** The reporting half of the routine as one line, for the All tab's brief. */
+  /** The reporting half of the assistant as one line, for the All tab's brief. */
   const reportingBrief = $derived.by(() => {
-    if (!routine) return 'Nothing agreed yet.'
+    if (!assistant) return 'Nothing agreed yet.'
     const parts: string[] = []
-    if (routine.delivery) parts.push(routineDeliveryLabel(routine.delivery))
-    if (routine.priority) parts.push(routinePriorityLabel(routine.priority))
+    if (assistant.delivery) parts.push(assistantDeliveryLabel(assistant.delivery))
+    if (assistant.priority) parts.push(assistantPriorityLabel(assistant.priority))
     if (parts.length === 0) return 'Nothing agreed yet. Ask the agent, or set it here.'
     return parts.join(' \u00b7 ')
   })
 
   function addConnection(entry: ConnectionLibraryEntry): void {
-    if (!routine) return
-    const connections: RoutineConnection[] = [
-      ...routine.connections,
+    if (!assistant) return
+    const connections: AssistantConnection[] = [
+      ...assistant.connections,
       { utilityId: entry.id, label: entry.name, kind: entry.kind }
     ]
-    void persistRoutine({ connections }, 'Could not add the connection')
+    void persistAssistant({ connections }, 'Could not add the connection')
   }
 
   /**
    * Removing a connection is destructive, so the row's X only stages it and the
    * shared confirmation dialog commits it. The trigger is a small icon, so a
-   * stray click must never drop a connection the routine depends on.
+   * stray click must never drop a connection the assistant depends on.
    */
-  let connectionRemoveTarget = $state<RoutineConnection | null>(null)
+  let connectionRemoveTarget = $state<AssistantConnection | null>(null)
   let connectionRemoveBusy = $state(false)
 
-  function removeConnection(connection: RoutineConnection): void {
-    if (!routine) return
+  function removeConnection(connection: AssistantConnection): void {
+    if (!assistant) return
     connectionRemoveTarget = connection
   }
 
   async function confirmRemoveConnection(): Promise<void> {
     const connection = connectionRemoveTarget
-    if (!routine || !connection) return
+    if (!assistant || !connection) return
     connectionRemoveBusy = true
     try {
-      const connections = routine.connections.filter(
+      const connections = assistant.connections.filter(
         (candidate) => candidate.utilityId !== connection.utilityId
       )
-      await persistRoutine({ connections }, 'Could not remove the connection')
+      await persistAssistant({ connections }, 'Could not remove the connection')
       connectionRemoveTarget = null
     } finally {
       connectionRemoveBusy = false
@@ -411,7 +464,9 @@
    */
   let connectionSetupOpen = $state(false)
   let connectionSetupTarget = $state<UtilityEditorTarget | null>(null)
-  let connectionSetupSeed = $state('')
+  let connectionSetupRequest = $state('')
+  /** Label of the connection the modal is showing, used for the setup thread's title. */
+  let connectionSetupLabel = $state('')
 
   function openConnectionDetails(view: ConnectionView): void {
     if (view.entry?.utility) {
@@ -421,12 +476,14 @@
     } else {
       return
     }
-    connectionSetupSeed = ''
+    connectionSetupRequest = ''
+    connectionSetupLabel = ''
     connectionSetupOpen = true
   }
 
   function openConnectionSetup(view: ConnectionView): void {
-    connectionSetupSeed = view.connection.setup ?? ''
+    connectionSetupRequest = view.connection.setup ?? ''
+    connectionSetupLabel = view.connection.label
     if (view.entry?.utility) {
       connectionSetupTarget = { kind: 'registry', utility: view.entry.utility }
     } else if (view.entry?.capability) {
@@ -437,33 +494,49 @@
     connectionSetupOpen = true
   }
 
+  /**
+   * Run this connection's setup in a thread of its own.
+   *
+   * The thread belongs to the assistant rather than to the project the user
+   * happens to be in: a connection is the assistant's, its setup runs on the
+   * assistant's model, and the conversation lands beside the assistant's other
+   * tasks where the panel can point the user back at it.
+   */
+  function setupConnectionInThread(request: string): void {
+    const assistantIdValue = assistant?.id
+    if (!assistantIdValue) return
+    onSetupConnection({
+      assistantId: assistantIdValue,
+      label: connectionSetupLabel,
+      request
+    })
+  }
+
   // ─── Issues ───────────────────────────────────────────────────────────────
 
   /**
-   * Every thread this panel reports on. A run inherits its task's `routineId`,
-   * so the routine's runs are in here too: the execution status of a run
+   * Every thread this panel reports on. A run inherits its task's `assistantId`,
+   * so the assistant's runs are in here too: the execution status of a run
    * (working, failed, interrupted) lives on the run thread, not the task.
    */
-  const routineTasks = $derived.by((): Thread[] => {
-    if (!routine) return task ? [task] : []
-    return scopeState.allScopeThreads.filter((thread) => thread.routineId === routine.id)
+  const assistantTasks = $derived.by((): Thread[] => {
+    if (!assistant) return task ? [task] : []
+    return scopeState.allScopeThreads.filter((thread) => thread.assistantId === assistant.id)
   })
 
   const missedRuns = $derived(
-    routine
-      ? assistantRoutines.missedForRoutine(routine.id)
-      : assistantRoutines.missedForTask(threadId)
+    assistant ? assistants.missedForAssistant(assistant.id) : assistants.missedForTask(threadId)
   )
 
   /**
-   * Ledger-entried unattended runs for this panel's scope: a routine's runs, or
-   * a routine-less task's own runs, newest first. The ledger keeps working after
+   * Ledger-entried unattended runs for this panel's scope: an assistant's runs, or
+   * an assistant-less task's own runs, newest first. The ledger keeps working after
    * the run thread is gone, which is why it is evidence beside thread issues.
    */
   const backgroundRuns = $derived(
-    routine
-      ? assistantRoutines.backgroundForRoutine(routine.id)
-      : assistantRoutines.backgroundForTask(threadId)
+    assistant
+      ? assistants.backgroundForAssistant(assistant.id)
+      : assistants.backgroundForTask(threadId)
   )
 
   let showAllBackgroundRuns = $state(false)
@@ -481,35 +554,35 @@
     return scopeState.allScopeThreads.find((thread) => thread.id === run.runThreadId) ?? null
   }
 
-  /** Run problems: rate limits, failures, and interrupted runs. Each entry is a
-   *  thread   usually one run, since that is where the execution status lives. */
+  /** Run problems: rate limits, waiting on the user, failures, and interrupted
+   *  runs. Tasks and their run threads are both checked, since execution status
+   *  lives on the run thread. */
   const runIssues = $derived.by(() => {
     const issues: Array<{ id: string; task: Thread; kind: string; detail: string }> = []
-    for (const entry of routineTasks) {
-      const retryAt = agentRuns.retryAt(entry.projectId, entry.id)
+    const seen = new SvelteSet<string>()
+    const pushIssue = (thread: Thread, kind: string, detail: string): void => {
+      const id = `${thread.id}:${kind}`
+      if (seen.has(id)) return
+      seen.add(id)
+      issues.push({ id, task: thread, kind, detail })
+    }
+    const collectFrom = (thread: Thread): void => {
+      const retryAt = agentRuns.retryAt(thread.projectId, thread.id)
       if (retryAt !== null) {
-        issues.push({
-          id: `${entry.id}:limit`,
-          task: entry,
-          kind: 'Rate limited',
-          detail: `Retrying ${describeRelativeTime(retryAt, Date.now())}`
-        })
+        pushIssue(thread, 'Rate limited', `Retrying ${describeRelativeTime(retryAt, Date.now())}`)
       }
-      if (entry.status === 'failed') {
-        issues.push({
-          id: `${entry.id}:failed`,
-          task: entry,
-          kind: 'Failed',
-          detail: 'The last run failed'
-        })
-      } else if (entry.status === 'interrupted') {
-        issues.push({
-          id: `${entry.id}:interrupted`,
-          task: entry,
-          kind: 'Interrupted',
-          detail: 'The last run was interrupted'
-        })
+      if (thread.status === 'awaiting_approval') {
+        pushIssue(thread, 'Needs attention', 'Waiting on you')
+      } else if (thread.status === 'failed') {
+        pushIssue(thread, 'Failed', 'The last run failed')
+      } else if (thread.status === 'interrupted') {
+        pushIssue(thread, 'Interrupted', 'The last run was interrupted')
       }
+    }
+    for (const entry of assistantTasks) collectFrom(entry)
+    for (const run of backgroundRuns) {
+      const thread = runThreadFor(run)
+      if (thread) collectFrom(thread)
     }
     return issues
   })
@@ -531,8 +604,8 @@
 
   // ─── Run history ──────────────────────────────────────────────────────────
 
-  /** The run panel is routine-scoped; a routine-less task reports on itself. */
-  const runScopeTasks = $derived(routine ? routineTasks : task ? [task] : [])
+  /** The run panel is assistant-scoped; an assistant-less task reports on itself. */
+  const runScopeTasks = $derived(assistant ? assistantTasks : task ? [task] : [])
 
   const lastDispatchedAt = $derived(
     runScopeTasks.reduce((latest, entry) => Math.max(latest, entry.lastDispatchedAt ?? 0), 0)
@@ -547,93 +620,130 @@
     lastSuccessAt > 0 ? describeRelativeTime(lastSuccessAt, Date.now()) : 'never'
   )
 
+  /** The soonest intended fire across this panel's tasks, or null when none is scheduled. */
+  const nextRunAt = $derived.by(() => {
+    let earliest: number | null = null
+    for (const entry of runScopeTasks) {
+      const candidate = assistants.nextRunForTask(entry)
+      if (candidate === null) continue
+      if (earliest === null || candidate < earliest) earliest = candidate
+    }
+    return earliest
+  })
+  const nextRunLabel = $derived(nextRunAt === null ? 'Not scheduled' : formatDateTime(nextRunAt))
+  const nextRunRelative = $derived(
+    nextRunAt === null ? null : describeRelativeTime(nextRunAt, Date.now())
+  )
+  /**
+   * How a slot missed while the app was closed is recovered. Read from the live
+   * setting, so the Schedule card states the policy the scheduler actually follows
+   * instead of a sentence that can drift from it.
+   */
+  const missedRunPolicyLabel = $derived(
+    appConfigState.autoRunMissedAssistantRuns
+      ? 'Caught up on the next launch, at most once.'
+      : 'Waits for you in Issues.'
+  )
+
   let running = $state(false)
 
-  // ─── The routine's how-to thread ──────────────────────────────────────────
+  // ─── The assistant's knowledge thread ──────────────────────────────────────────
 
   /**
-   * The routine's how-to ("Getting started") thread, hidden or not. A hidden
+   * The assistant's knowledge ("Getting started") thread, hidden or not. A hidden
    * row never reaches the hydrated thread list the sidebar renders from, so the
-   * panel asks the main process for its own routine's thread instead of reading
+   * panel asks the main process for its own assistant's thread instead of reading
    * the workspace's rows.
    */
-  let howToThread = $state<Thread | null>(null)
-  let howToThreadBusy = $state(false)
+  let knowledgeThread = $state<Thread | null>(null)
+  let knowledgeThreadBusy = $state(false)
 
   $effect(() => {
-    const routineIdValue = routine?.id ?? null
-    if (!routineIdValue) {
-      howToThread = null
+    const assistantIdValue = assistant?.id ?? null
+    if (!assistantIdValue) {
+      knowledgeThread = null
       return
     }
     // The same target drives the interview checkpoint: the panel is looking at
-    // this routine's how-to, so the state its authoring conversation agreed is
+    // this assistant's knowledge, so the state its authoring conversation agreed is
     // worth having loaded (and the store keeps it fresh from then on).
-    void assistantRoutines.refreshCheckpoint(routineIdValue)
+    void assistants.refreshCheckpoint(assistantIdValue)
     let cancelled = false
-    void assistantRoutines
-      .howToThread(routineIdValue)
+    void assistants
+      .knowledgeThread(assistantIdValue)
       .then((thread) => {
-        if (!cancelled) howToThread = thread
+        if (!cancelled) knowledgeThread = thread
       })
       .catch(() => {
-        if (!cancelled) howToThread = null
+        if (!cancelled) knowledgeThread = null
       })
     return () => {
       cancelled = true
     }
   })
 
-  const howToThreadHidden = $derived(howToThread?.archived === true)
+  const knowledgeThreadHidden = $derived(knowledgeThread?.archived === true)
 
   /**
-   * What this routine's Getting started conversation has agreed so far, as the
+   * What this assistant's Getting started conversation has agreed so far, as the
    * agent recorded it. The store keeps it current: it loads one when the panel
-   * targets a routine and refreshes it on `routine:checkpointChanged`, so this
+   * targets an assistant and refreshes it on `assistant:checkpointChanged`, so this
    * is a plain read.
    */
   const gettingStartedCheckpoint = $derived(
-    routine ? (assistantRoutines.checkpoints.get(routine.id) ?? null) : null
+    assistant ? (assistants.checkpoints.get(assistant.id) ?? null) : null
   )
 
   /**
-   * Hide or reveal the how-to thread. It stays pinned either way, so this is
+   * Hide or reveal the knowledge thread. It stays pinned either way, so this is
    * the thread's only state change, and revealing also opens the authoring
-   * thread so the user lands where the how-to is written.
+   * thread so the user lands where the knowledge is written.
    */
-  async function toggleHowToThread(): Promise<void> {
-    if (!routine || !howToThread || howToThreadBusy) return
-    const revealing = howToThreadHidden
-    howToThreadBusy = true
+  async function toggleKnowledgeThread(): Promise<void> {
+    if (!assistant || !knowledgeThread || knowledgeThreadBusy) return
+    const revealing = knowledgeThreadHidden
+    knowledgeThreadBusy = true
     try {
-      const updated = await assistantRoutines.setHowToHidden(routine.id, !revealing)
-      howToThread = updated
+      const updated = await assistants.setKnowledgeHidden(assistant.id, !revealing)
+      knowledgeThread = updated
       if (revealing) onOpenTask(updated)
     } catch (error) {
       reportError(
         error,
-        revealing ? 'Could not show the how-to thread' : 'Could not hide the how-to thread'
+        revealing ? 'Could not show the knowledge thread' : 'Could not hide the knowledge thread'
       )
     } finally {
-      howToThreadBusy = false
+      knowledgeThreadBusy = false
     }
   }
 
   /**
-   * Run the routine immediately, ignoring its schedule and pause state, so the
+   * Open the assistant's authoring thread from the empty state's "Open the task"
+   * action. A hidden thread is revealed first: a hidden row never reaches the
+   * sidebar, so opening it without revealing would land the user nowhere.
+   */
+  function openKnowledgeTask(): void {
+    const thread = knowledgeThread
+    if (!thread) return
+    if (knowledgeThreadHidden) void toggleKnowledgeThread()
+    else onOpenTask(thread)
+  }
+
+  /**
+   * Run the assistant immediately, ignoring its schedule and pause state, so the
    * user can test what they built without waiting for the next fire. Every task
    * runs on a fresh thread, so the first run is opened to show it happening.
    */
-  async function runRoutineNow(): Promise<void> {
-    if (!routine || running) return
+  async function runNow(): Promise<void> {
+    if (!assistant || running) return
     running = true
     try {
-      const runs = await assistantRoutines.runRoutineNow(routine.id)
+      const runs = await assistants.runNow(assistant.id)
       toast.success(runs.length === 1 ? 'Run started' : `${runs.length} runs started`)
       const first = runs[0]
       if (first) onOpenTask(first)
     } catch (error) {
-      reportError(error, 'Could not run the routine')
+      reportError(error, 'Could not run the assistant')
     } finally {
       running = false
     }
@@ -641,15 +751,15 @@
 
   async function dismissRun(id: string): Promise<void> {
     try {
-      await assistantRoutines.dismissMissedRun(id)
+      await assistants.dismissMissedRun(id)
     } catch (error) {
       reportError(error, 'Could not dismiss the missed run')
     }
   }
 
-  async function runNow(run: MissedRun): Promise<void> {
+  async function runMissedNow(run: MissedRun): Promise<void> {
     try {
-      const created = await assistantRoutines.runMissedRunNow(run.id)
+      const created = await assistants.runMissedRunNow(run.id)
       // A run happens on its own thread, so open the run itself.
       if (created) onOpenTask(created)
     } catch (error) {
@@ -668,6 +778,47 @@
     void providerCatalog.refresh(catalogProjectId).catch(() => undefined)
   })
 </script>
+
+{#snippet panelHead()}
+  {#if assistant}
+    <!--
+      The panel opens as a document about one assistant, so its own name, its
+      clock and its state sit above the sections rather than inside one tab.
+      The status pill is the pause control: the panel has no room for a separate
+      row of it, and the state is the one thing that belongs at the top.
+    -->
+    <header class="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2.5">
+      <div class="flex items-center gap-2.5">
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-primary text-on-primary">
+          <AssistantIcon size={20} />
+        </span>
+        <div class="min-w-0 flex-1">
+          <h1 class="truncate text-[0.875rem] font-semibold tracking-tight text-foreground">
+            {assistant.name}
+          </h1>
+          <p class="mt-0.5 truncate text-[0.6875rem] text-muted">
+            {scheduleLabel} · last run {lastRunLabel}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="shrink-0 border border-border px-1.5 py-0.5 text-[0.5625rem] tracking-wide uppercase transition-colors hover:bg-elevated"
+          style="color: {statusToneColor}"
+          title={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
+          aria-label={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
+          onclick={() => void togglePaused()}
+        >
+          {assistant.paused ? 'Paused' : 'Running'}
+        </button>
+      </div>
+      {#if assistant.description?.trim()}
+        <p class="border-l-2 border-border pl-2.5 text-[0.75rem] leading-relaxed text-muted">
+          {assistant.description}
+        </p>
+      {/if}
+    </header>
+  {/if}
+{/snippet}
 
 {#snippet panelHeader()}
   <div class="flex h-9 shrink-0 items-stretch border-b border-border pr-1">
@@ -689,108 +840,123 @@
           onclick={() => (panelTab = entry.id)}
         >
           {entry.label}
-          {#if entry.id === 'issues' && issueCount > 0}
+          {#if tabCount(entry.id) !== null}
             <span
-              class="tabular-nums rounded-full px-1 text-[0.5625rem]"
-              style="color: var(--color-missed); background: color-mix(in srgb, var(--color-missed) 16%, transparent)"
+              class="border border-border bg-elevated px-1 text-[0.5625rem] tabular-nums"
+              style={entry.id === 'issues' ? 'color: var(--color-missed)' : ''}
             >
-              {issueCount}
+              {tabCount(entry.id)}
             </span>
           {/if}
           {#if activeTab === entry.id}
-            <span class="absolute inset-x-1.5 bottom-0 h-[2px] rounded-full bg-primary"></span>
+            <span class="absolute inset-x-1.5 bottom-0 h-[2px] bg-primary"></span>
           {/if}
         </button>
       {/each}
     </div>
     <button
       type="button"
-      class="my-1 flex w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="my-1 flex w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Open in full screen"
       aria-label="Open in full screen"
       onclick={() => (fullscreen = true)}
     >
-      <Maximize2 size={13} strokeWidth={1.8} />
+      <CioMaximize size={13} strokeWidth={1.8} />
     </button>
   </div>
 {/snippet}
 
-{#snippet summaryRow(args: {
+{#snippet glanceRow(args: {
   title: string
   detail: string
   target: AssistantPanelTab
+  icon: AssistantIconMark
   warn?: boolean
 })}
-  <div class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2">
-    <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-1.5">
-        <span class="text-[0.75rem] text-foreground">{args.title}</span>
-        {#if args.warn}
-          <span
-            class="flex items-center"
-            style="color: var(--color-warning)"
-            role="img"
-            aria-label="{args.title} needs setup"
-            title="{args.title} needs setup"
-          >
-            <AlertTriangle size={11} strokeWidth={2} />
-          </span>
-        {/if}
-      </div>
-      <p class="mt-0.5 text-[0.625rem] leading-relaxed text-dimmed">{args.detail}</p>
-    </div>
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open {args.title}"
-      aria-label="Open {args.title}"
-      onclick={() => (panelTab = args.target)}
-    >
-      More
-      <ChevronRight size={12} strokeWidth={1.8} />
-    </button>
-  </div>
+  <!--
+    The All tab is a table of contents, not a second copy of every section, so
+    each line is one door: what the section holds and a way in. The warn line
+    wears the missed-run ink on its left edge, which is the only colour an
+    assistant surface spends on a problem.
+  -->
+  <button
+    type="button"
+    class="flex w-full items-center gap-2.5 border border-border border-l-2 bg-surface px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+    style={args.warn
+      ? 'border-left-color: var(--color-missed)'
+      : 'border-left-color: var(--color-border)'}
+    title="Open {args.title}"
+    aria-label="Open the {args.title} section"
+    onclick={() => (panelTab = args.target)}
+  >
+    <span class="flex h-7 w-7 shrink-0 items-center justify-center bg-elevated text-foreground">
+      <AssistantIcon mark={args.icon} size={16} />
+    </span>
+    <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span class="text-[0.75rem] font-semibold text-foreground">{args.title}</span>
+      <span class="text-[0.625rem] leading-relaxed text-muted">{args.detail}</span>
+    </span>
+    <span class="shrink-0 text-[0.5625rem] tracking-wide text-dimmed uppercase">Open</span>
+  </button>
 {/snippet}
 
-{#snippet routineEmptyState()}
-  <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
-    <span
-      class="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-elevated"
-    >
-      <ScrollText size={17} strokeWidth={1.6} class="text-dimmed" />
+{#snippet assistantEmptyState()}
+  <div
+    class="flex flex-col items-center gap-2.5 border border-border bg-surface px-4 py-8 text-center"
+  >
+    <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
+      <AssistantIcon mark="knowledge" size={24} class="text-dimmed" />
     </span>
-    <p class="text-[0.8125rem] font-medium text-foreground">No how-to yet</p>
+    <p class="text-[0.8125rem] font-semibold text-foreground">Nothing yet</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Describe what this routine should do to the agent in its task. Tell it the goal, the steps,
-      and when it should run. The plan you agree on shows up here.
+      Tell {assistantLabel} what you want in its thread. Tell it the goal, the steps, and when it should
+      run. The plan you agree on shows up here.
     </p>
+    {#if knowledgeThread}
+      <button
+        type="button"
+        class="mt-1 border border-border px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open this assistant's knowledge thread"
+        aria-label="Open this assistant's knowledge thread"
+        onclick={openKnowledgeTask}
+      >
+        Open the task
+      </button>
+    {/if}
   </div>
   {#if gettingStartedCheckpoint}
-    <div class="px-3 pb-3">
-      <div class="rounded-lg border border-border bg-elevated p-2.5">
-        <p class="mb-1 text-[0.6875rem] font-medium text-foreground">Agreed so far</p>
-        <p class="mb-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-          What you and the agent have agreed for this routine so far.
-        </p>
-        <div class="text-[0.6875rem] text-muted">
-          <MarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
-        </div>
+    <div class="flex flex-col gap-1.5 border border-border bg-surface p-2.5">
+      <p class="text-[0.8125rem] font-semibold text-foreground">Agreed so far</p>
+      <p class="text-[0.6875rem] leading-relaxed text-muted">
+        What you and the agent have agreed for this assistant so far. It is not saved until you
+        confirm the recap.
+      </p>
+      <div class="text-[0.6875rem] text-muted">
+        <MarkdownView text={gettingStartedCheckpoint} class="markdown-body-card" />
       </div>
     </div>
   {/if}
 {/snippet}
 
-{#snippet noRoutineState()}
+{#snippet noAssistantState()}
   <div class="flex flex-col items-center gap-2.5 px-4 py-9 text-center">
-    <span
-      class="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-elevated"
-    >
-      <Workflow size={17} strokeWidth={1.6} class="text-dimmed" />
+    <span class="flex h-10 w-10 items-center justify-center border border-border bg-elevated">
+      <AssistantIcon size={40} class="text-dimmed" />
     </span>
-    <p class="text-[0.8125rem] font-medium text-foreground">Not part of a routine</p>
+    <p class="text-[0.8125rem] font-medium text-foreground">Not part of an assistant</p>
     <p class="max-w-[17rem] text-[0.75rem] leading-relaxed text-muted">
-      Group this task into a routine to give it instructions, connections, models, and a schedule.
+      Give it to one and it gets instructions, connections, models, and a schedule.
     </p>
+    {#if onAdoptTask && task}
+      <button
+        type="button"
+        class="mt-1 bg-primary px-3 py-1.5 text-[0.75rem] text-on-primary transition-colors hover:bg-primary-hover"
+        title="Choose the assistant this task belongs to"
+        onclick={() => onAdoptTask?.(task)}
+      >
+        Move it into an assistant
+      </button>
+    {/if}
   </div>
 {/snippet}
 
@@ -831,125 +997,266 @@
 {#snippet panelContent()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if activeTab === 'all'}
-      <div class="flex flex-col gap-2 p-3">
-        {#if routine}
-          <button
-            type="button"
-            class="flex items-center gap-2 rounded-lg border border-border px-2.5 py-2 text-left text-[0.75rem] transition-colors hover:bg-elevated"
-            title={routine.paused ? 'Resume this routine' : 'Pause this routine'}
-            aria-label={routine.paused ? 'Resume this routine' : 'Pause this routine'}
-            onclick={() => void togglePaused()}
-          >
-            {#if routine.paused}
-              <Play size={13} strokeWidth={1.8} class="text-muted" />
-              <span class="min-w-0 flex-1 text-foreground">Resume routine</span>
-              <span class="text-[0.625rem]" style="color: var(--color-warning)">Paused</span>
-            {:else}
-              <Pause size={13} strokeWidth={1.8} class="text-muted" />
-              <span class="min-w-0 flex-1 text-foreground">Pause routine</span>
-              <span class="text-[0.625rem] text-dimmed">Running</span>
-            {/if}
-          </button>
-
-          <div class="flex flex-col gap-2 rounded-lg border border-border px-2.5 py-2">
+      <div class="flex flex-col gap-2 pl-3">
+        {#if assistant}
+          <div class="flex flex-col gap-2 border border-border bg-surface px-2.5 py-2">
             <div class="flex items-center gap-2">
               <button
                 type="button"
-                class="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-                title="Run this routine now, even while paused"
-                aria-label="Run this routine now"
-                disabled={running || !howToComplete}
-                onclick={() => void runRoutineNow()}
+                class="flex shrink-0 items-center gap-1.5 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                title="Run this assistant now, even while paused"
+                aria-label="Run this assistant now"
+                disabled={running || !knowledgeComplete}
+                onclick={() => void runNow()}
               >
-                <RotateCcw size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
+                <CioUndo size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
                 Run now
               </button>
               <span class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
-                {howToComplete
+                {knowledgeComplete
                   ? 'Test it without waiting for the schedule.'
-                  : 'Save a how-to first.'}
+                  : 'Save a knowledge first.'}
               </span>
             </div>
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[0.625rem] text-dimmed">
-              <span title="The last time a run was dispatched">Last run: {lastRunLabel}</span>
-              <span title="The last time a run finished successfully">
-                Last success: {lastSuccessLabel}
-              </span>
-            </div>
+            <dl class="flex flex-wrap gap-x-5 gap-y-1">
+              <div class="flex flex-col gap-0.5">
+                <dt
+                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                  title="The last time a run was dispatched"
+                >
+                  Last run
+                </dt>
+                <dd class="text-[0.75rem] text-foreground">{lastRunLabel}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt
+                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                  title="The last time a run finished successfully"
+                >
+                  Last success
+                </dt>
+                <dd class="text-[0.75rem] text-foreground">{lastSuccessLabel}</dd>
+              </div>
+              <div class="flex flex-col gap-0.5">
+                <dt
+                  class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
+                  title="The next time this assistant is due to run"
+                >
+                  Next run
+                </dt>
+                <dd class="text-[0.75rem] text-foreground">{nextRunLabel}</dd>
+              </div>
+            </dl>
           </div>
 
-          {@render summaryRow({
-            title: 'Routine',
-            detail: howToComplete
-              ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
-              : 'No how-to yet. Describe the routine to the agent in its task.',
-            target: 'routine',
-            warn: !howToComplete
-          })}
-
-          {@render summaryRow({
-            title: 'Connections',
-            detail:
-              connectionViews.length === 0
-                ? 'No connections yet.'
-                : connectionProblems === 0
-                  ? `${connectionViews.length} connected and ready.`
-                  : `${connectionProblems} of ${connectionViews.length} need setup.`,
-            target: 'connections',
-            warn: connectionProblems > 0
-          })}
-
-          {@render summaryRow({
-            title: 'Agents',
-            detail: agentsComplete
-              ? `${1 + (routine.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
-              : 'No model set. Add a primary and fallbacks on the Agents tab.',
-            target: 'agents',
-            warn: !agentsComplete
-          })}
-
-          {@render summaryRow({
-            title: 'Reporting',
-            detail: reportingBrief,
-            target: 'routine',
-            warn: !deliveryReady
-          })}
-
-          {@render summaryRow({
-            title: 'Issues',
-            detail:
-              issueCount === 0
-                ? 'Nothing needs attention.'
-                : `${missedRuns.length} missed · ${runIssues.length} run issue${runIssues.length === 1 ? '' : 's'}.`,
-            target: 'issues',
-            warn: issueCount > 0
-          })}
+          <ul class="flex flex-col gap-2">
+            <li>
+              {@render glanceRow({
+                title: 'Assistant',
+                icon: 'knowledge',
+                detail: knowledgeComplete
+                  ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
+                  : 'No knowledge yet. Describe the assistant to the agent in its task.',
+                target: 'assistant',
+                warn: !knowledgeComplete
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Connections',
+                icon: 'connection',
+                detail:
+                  connectionViews.length === 0
+                    ? 'No connections yet.'
+                    : connectionProblems === 0
+                      ? `${connectionViews.length} connected and ready.`
+                      : `${connectionProblems} of ${connectionViews.length} need setup.`,
+                target: 'connections',
+                warn: connectionProblems > 0
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Agents',
+                icon: 'agent',
+                detail: agentsComplete
+                  ? `${1 + (assistant.agents?.fallbacks.length ?? 0)} models: a primary and its fallbacks.`
+                  : 'No model set. Add a primary and fallbacks on the Agents tab.',
+                target: 'agents',
+                warn: !agentsComplete
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Reporting',
+                icon: 'assistant',
+                detail: reportingBrief,
+                target: 'assistant',
+                warn: !deliveryReady
+              })}
+            </li>
+            <li>
+              {@render glanceRow({
+                title: 'Issues',
+                icon: 'run',
+                detail:
+                  issueCount === 0
+                    ? 'Nothing needs attention.'
+                    : `${missedRuns.length} missed · ${runIssues.length} run issue${runIssues.length === 1 ? '' : 's'}.`,
+                target: 'issues',
+                warn: issueCount > 0
+              })}
+            </li>
+          </ul>
         {:else}
-          {@render noRoutineState()}
+          {@render noAssistantState()}
         {/if}
       </div>
-    {:else if activeTab === 'routine'}
-      {#if !routine}
-        {@render noRoutineState()}
-      {:else if !howToComplete}
-        {@render routineEmptyState()}
+    {:else if activeTab === 'assistant'}
+      {#if !assistant}
+        {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-1.5 p-3">
-          {#if routine.description?.trim()}
-            <p
-              class="mb-1 rounded-lg bg-elevated px-2.5 py-2 text-[0.6875rem] leading-relaxed text-muted"
-              title="Your own note about this routine, never sent to the agent"
-            >
-              {routine.description}
-            </p>
-          {/if}
-          <p class="mb-1 text-[0.625rem] text-dimmed" title="Set by the agent from your prompt">
-            Schedule: {scheduleLabel}
-          </p>
+        <div class="flex flex-col gap pl-3">
+          {#if !knowledgeComplete}
+            {@render assistantEmptyState()}
+          {:else}
+            {#if assistant.personality?.trim()}
+              <div class="border border-border bg-surface px-2.5 py-2">
+                <p
+                  class="mb-1 text-[0.625rem] font-medium text-dimmed"
+                  title="How this assistant behaves and sounds"
+                >
+                  Personality
+                </p>
+                <p class="text-[0.6875rem] leading-relaxed text-muted">{assistant.personality}</p>
+              </div>
+            {/if}
+            <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+              <div class="flex items-center justify-between gap-2">
+                <h2 class="text-[0.875rem] font-semibold text-foreground">What it knows</h2>
+                <span class="text-[0.625rem] text-dimmed"
+                  >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
+                >
+              </div>
+              <p class="text-[0.6875rem] leading-relaxed text-muted">
+                The instructions this assistant follows on every run. The agent follows them
+                literally, so anything not written here does not happen.
+              </p>
+              <ol class="flex flex-col gap-2">
+                {#each sections as section (section.id)}
+                  {@const folded = collapsed.has(section.id) && editingId !== section.id}
+                  <li class="border-t border-border first:border-t-0">
+                    <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+                      <button
+                        type="button"
+                        class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                        aria-expanded={!folded}
+                        title={folded ? `Expand ${section.title}` : `Fold ${section.title}`}
+                        onclick={() => toggleSection(section.id)}
+                      >
+                        <CioForward
+                          size={12}
+                          strokeWidth={1.8}
+                          class="shrink-0 text-dimmed transition-transform duration-150 {folded
+                            ? ''
+                            : 'rotate-90'}"
+                        />
+                        <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
+                          {section.title}
+                        </span>
+                      </button>
+                      {#if editingId !== section.id}
+                        <button
+                          type="button"
+                          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                          title="Edit {section.title}"
+                          aria-label="Edit {section.title}"
+                          onclick={() => startEdit(section)}
+                        >
+                          <CioPencil size={12} strokeWidth={1.8} />
+                        </button>
+                      {/if}
+                    </div>
 
-          <div class="mb-1 flex flex-col gap-2 rounded-lg border border-border px-2.5 py-2">
+                    {#if editingId === section.id}
+                      <div class="border-t border-border p-2">
+                        <!-- The editor grows with its content (no `max-h` cap) so a long
+                       section keeps the same tall box the read view showed instead
+                       of collapsing into a short scroll pane on edit. The panel's
+                       content already scrolls, so an overlong body is still safe. -->
+                        <RichMarkdownEditor
+                          id="assistant-section-{section.id}"
+                          value={editDraft}
+                          onValueChange={(value) => (editDraft = value)}
+                          placeholder="Write this section in Markdown…"
+                          ariaLabel="Edit {section.title}"
+                          autofocus
+                          onSubmit={() => void saveSection(section.id)}
+                          containerClass="border border-border bg-surface"
+                          class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
+                        />
+                        <div class="mt-1.5 flex justify-end gap-1.5">
+                          <button
+                            type="button"
+                            class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                            onclick={cancelEdit}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            class="bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                            onclick={() => void saveSection(section.id)}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    {:else if !folded}
+                      <div class="border-t border-border px-2.5 py-2">
+                        <MarkdownView text={section.body} class="text-[0.75rem]" />
+                      </div>
+                    {:else if sectionSummary(section)}
+                      <!-- A folded section keeps one line of its own prose, so folding
+                     hides detail without hiding what the section is about. -->
+                      <p class="border-t border-border px-2.5 py-1.5 text-[0.6875rem] text-dimmed">
+                        {sectionSummary(section)}
+                      </p>
+                    {/if}
+                  </li>
+                {/each}
+              </ol>
+            </div>
+          {/if}
+
+          <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+            <h2 class="text-[0.875rem] font-semibold text-foreground">Schedule</h2>
+            <dl class="flex flex-col">
+              <div
+                class="flex items-start justify-between gap-4 border-t border-border py-1.5 first:border-t-0"
+              >
+                <dt class="text-[0.75rem] text-muted">Runs</dt>
+                <dd class="text-right text-[0.75rem] text-foreground">{scheduleLabel}</dd>
+              </div>
+              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                <dt class="text-[0.75rem] text-muted">Next run</dt>
+                <dd class="text-right text-[0.75rem] text-foreground">
+                  {nextRunLabel}
+                  {#if nextRunRelative && nextRunRelative !== 'now'}
+                    <span class="ml-1 text-dimmed">{nextRunRelative}</span>
+                  {/if}
+                </dd>
+              </div>
+              <div class="flex items-start justify-between gap-4 border-t border-border py-1.5">
+                <dt class="text-[0.75rem] text-muted">If a run is missed</dt>
+                <dd class="text-right text-[0.75rem] text-foreground">{missedRunPolicyLabel}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
             <div class="flex items-center gap-1.5">
-              <span class="text-[0.75rem] text-foreground">Reporting</span>
+              <h2 class="text-[0.875rem] font-semibold text-foreground">Reporting</h2>
               {#if !deliveryReady}
                 <span
                   class="flex items-center"
@@ -958,192 +1265,131 @@
                   aria-label="The delivery channel needs a connection"
                   title="The delivery channel needs a connection"
                 >
-                  <AlertTriangle size={11} strokeWidth={2} />
+                  <CioAttention size={11} strokeWidth={2} />
                 </span>
               {/if}
             </div>
-            <p class="text-[0.625rem] leading-relaxed text-dimmed">
-              Where this routine's output goes, and how urgent it is. Agree it with the agent, or
+            <p class="text-[0.6875rem] leading-relaxed text-muted">
+              Where this assistant's output goes, and how urgent it is. Agree it with the agent, or
               set it here.
             </p>
-
-            <div class="flex flex-col gap-1.5">
-              <div class="flex items-center gap-1.5">
-                <EnumSelect
-                  options={deliveryChoices}
-                  value={routine.delivery?.channel ?? null}
-                  onChange={setDeliveryChannel}
-                  placeholder="Delivery channel"
-                  ariaLabel="Delivery channel"
-                  title="Where this routine's output is delivered"
-                  class="flex-1"
-                />
-                {#if routine.delivery}
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Clear the delivery channel"
-                    aria-label="Clear the delivery channel"
-                    onclick={clearDelivery}
-                  >
-                    Clear
-                  </button>
-                {/if}
+            <div class="flex flex-col">
+              <div
+                class="flex items-center justify-between gap-3 border-t border-border py-2 first:border-t-0"
+              >
+                <span class="shrink-0 text-[0.75rem] text-muted">Deliver to</span>
+                <div class="flex min-w-0 flex-1 items-center gap-1">
+                  <EnumSelect
+                    options={deliveryChoices}
+                    value={assistant.delivery?.channel ?? null}
+                    onChange={setDeliveryChannel}
+                    placeholder="Delivery channel"
+                    ariaLabel="Delivery channel"
+                    title="Where this assistant's output is delivered"
+                    class="flex-1"
+                  />
+                  {#if assistant.delivery}
+                    <button
+                      type="button"
+                      class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Clear the delivery channel"
+                      aria-label="Clear the delivery channel"
+                      onclick={clearDelivery}
+                    >
+                      Clear
+                    </button>
+                  {/if}
+                </div>
               </div>
 
-              {#if routine.delivery && routine.delivery.channel !== 'in-app'}
-                <input
-                  type="text"
-                  class="w-full rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
-                  placeholder="Destination: a chat, a channel, an address"
-                  aria-label="Delivery destination"
-                  title="The concrete destination, for example #eng-alerts"
-                  value={routine.delivery.target ?? ''}
-                  onblur={(event) => commitDeliveryTarget(event.currentTarget.value)}
-                  onkeydown={(event) => {
-                    if (event.key === 'Enter') event.currentTarget.blur()
-                  }}
-                />
+              {#if assistant.delivery && assistant.delivery.channel !== 'in-app'}
+                <div class="border-t border-border py-2">
+                  <input
+                    type="text"
+                    class="w-full border border-border bg-elevated px-2.5 py-1.5 text-[0.75rem] text-foreground outline-none transition-colors placeholder:text-dimmed focus-visible:ring-2 focus-visible:ring-primary"
+                    placeholder="Destination: a chat, a channel, an address"
+                    aria-label="Delivery destination"
+                    title="The concrete destination, for example #eng-alerts"
+                    value={assistant.delivery.target ?? ''}
+                    onblur={(event) => commitDeliveryTarget(event.currentTarget.value)}
+                    onkeydown={(event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    }}
+                  />
+                </div>
               {/if}
 
-              {#if routine.delivery && !deliveryReady}
-                <p class="text-[0.625rem] leading-relaxed" style="color: var(--color-warning)">
-                  {routineDeliveryChannelLabel(routine.delivery.channel)} is not connected yet. Add it
-                  on the Connections tab; until then runs deliver in CodeInOven.
+              {#if assistant.delivery && !deliveryReady}
+                <p
+                  class="border-t border-border py-2 text-[0.625rem] leading-relaxed"
+                  style="color: var(--color-warning)"
+                >
+                  {assistantDeliveryChannelLabel(assistant.delivery.channel)} is not connected yet. Add
+                  it on the Connections tab; until then runs deliver in CodeInOven.
                 </p>
               {/if}
-            </div>
 
-            <div class="flex items-center gap-1.5">
-              <EnumSelect
-                options={ROUTINE_TIMELINESS_OPTIONS}
-                value={routine.priority?.timeliness ?? null}
-                onChange={setPriorityTimeliness}
-                placeholder="Timeliness"
-                ariaLabel="Time-based priority"
-                title="How soon this routine's output matters"
-                class="flex-1"
-              />
-              <EnumSelect
-                options={ROUTINE_IMPACT_OPTIONS}
-                value={routine.priority?.impact ?? null}
-                onChange={setPriorityImpact}
-                placeholder="Impact"
-                ariaLabel="Scope-based priority"
-                title="How far this routine's output reaches"
-                class="flex-1"
-              />
-              {#if routine.priority}
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  title="Clear the priority"
-                  aria-label="Clear the priority"
-                  onclick={clearPriority}
-                >
-                  Clear
-                </button>
-              {/if}
-            </div>
-          </div>
-          {#each sections as section (section.id)}
-            {@const folded = collapsed.has(section.id) && editingId !== section.id}
-            <div class="rounded-lg border border-border">
-              <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-                <button
-                  type="button"
-                  class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                  aria-expanded={!folded}
-                  title={folded ? `Expand ${section.title}` : `Fold ${section.title}`}
-                  onclick={() => toggleSection(section.id)}
-                >
-                  <ChevronRight
-                    size={12}
-                    strokeWidth={1.8}
-                    class="shrink-0 text-dimmed transition-transform duration-150 {folded
-                      ? ''
-                      : 'rotate-90'}"
+              <div class="flex items-center justify-between gap-3 border-t border-border py-2">
+                <span class="shrink-0 text-[0.75rem] text-muted">Timeliness</span>
+                <div class="flex min-w-0 flex-1 items-center gap-1">
+                  <EnumSelect
+                    options={ASSISTANT_TIMELINESS_OPTIONS}
+                    value={assistant.priority?.timeliness ?? null}
+                    onChange={setPriorityTimeliness}
+                    placeholder="Timeliness"
+                    ariaLabel="Time-based priority"
+                    title="How soon this assistant's output matters"
+                    class="flex-1"
                   />
-                  <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
-                    {section.title}
-                  </span>
-                </button>
-                {#if editingId !== section.id}
-                  <button
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Edit {section.title}"
-                    aria-label="Edit {section.title}"
-                    onclick={() => startEdit(section)}
-                  >
-                    <Pencil size={12} strokeWidth={1.8} />
-                  </button>
-                {/if}
+                </div>
               </div>
 
-              {#if editingId === section.id}
-                <div class="border-t border-border p-2">
-                  <!-- The editor grows with its content (no `max-h` cap) so a long
-                       section keeps the same tall box the read view showed instead
-                       of collapsing into a short scroll pane on edit. The panel's
-                       content already scrolls, so an overlong body is still safe. -->
-                  <RichMarkdownEditor
-                    id="assistant-section-{section.id}"
-                    value={editDraft}
-                    onValueChange={(value) => (editDraft = value)}
-                    placeholder="Write this section in Markdown…"
-                    ariaLabel="Edit {section.title}"
-                    autofocus
-                    onSubmit={() => void saveSection(section.id)}
-                    containerClass="rounded-md border border-border bg-surface"
-                    class="min-h-10 w-full px-3.5 pt-3 pb-1 text-sm leading-5 text-foreground outline-none"
+              <div class="flex items-center justify-between gap-3 border-t border-border py-2">
+                <span class="shrink-0 text-[0.75rem] text-muted">Impact</span>
+                <div class="flex min-w-0 flex-1 items-center gap-1">
+                  <EnumSelect
+                    options={ASSISTANT_IMPACT_OPTIONS}
+                    value={assistant.priority?.impact ?? null}
+                    onChange={setPriorityImpact}
+                    placeholder="Impact"
+                    ariaLabel="Scope-based priority"
+                    title="How far this assistant's output reaches"
+                    class="flex-1"
                   />
-                  <div class="mt-1.5 flex justify-end gap-1.5">
+                  {#if assistant.priority}
                     <button
                       type="button"
-                      class="rounded-md px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                      onclick={cancelEdit}
+                      class="shrink-0 px-1.5 py-1 text-[0.625rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Clear the priority"
+                      aria-label="Clear the priority"
+                      onclick={clearPriority}
                     >
-                      Cancel
+                      Clear
                     </button>
-                    <button
-                      type="button"
-                      class="rounded-md bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                      onclick={() => void saveSection(section.id)}
-                    >
-                      Save
-                    </button>
-                  </div>
+                  {/if}
                 </div>
-              {:else if !folded}
-                <div class="border-t border-border px-2.5 py-2">
-                  <MarkdownView text={section.body} class="text-[0.75rem]" />
-                </div>
-              {/if}
+              </div>
             </div>
-          {/each}
+          </div>
         </div>
       {/if}
     {:else if activeTab === 'connections'}
-      {#if !routine}
-        {@render noRoutineState()}
+      {#if !assistant}
+        {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-2 p-3">
-          {#if connectionViews.length === 0}
-            <p class="text-[0.6875rem] leading-relaxed text-dimmed">
-              No connections yet. Add the tools this routine needs, or let the agent name them as it
-              writes the how-to.
-            </p>
-          {:else}
-            {#each connectionViews as view (view.connection.utilityId)}
-              <ConnectionRow
-                {view}
-                onRemove={removeConnection}
-                onSetup={openConnectionSetup}
-                onView={openConnectionDetails}
-              />
-            {/each}
-          {/if}
+        <div class="flex flex-col gap pl-3">
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            The services this assistant reaches out to. A connection that is not ready pauses only
+            the step that depends on it.
+          </p>
+          {#each connectionViews as view (view.connection.utilityId)}
+            <ConnectionRow
+              {view}
+              onRemove={removeConnection}
+              onSetup={openConnectionSetup}
+              onView={openConnectionDetails}
+            />
+          {/each}
           <UtilityPicker
             entries={connectionLibrary}
             {connectedIds}
@@ -1154,15 +1400,23 @@
         </div>
       {/if}
     {:else if activeTab === 'agents'}
-      {#if !routine}
-        {@render noRoutineState()}
+      {#if !assistant}
+        {@render noAssistantState()}
       {:else}
-        <div class="flex flex-col gap-4 p-3">
-          {#key routine.id}
-            <RoutineExecutionPicker routineId={routine.id} execution={routine.execution} />
-            <div class="border-t border-border pt-4">
-              <RoutineAgentPicker
-                agents={routine.agents}
+        <div class="flex flex-col gap-3 pl-3">
+          <p class="text-[0.6875rem] leading-relaxed text-muted">
+            Which model does the work, and what to fall back to when it cannot.
+          </p>
+          {#key assistant.id}
+            <div class="border border-border bg-surface p-2.5">
+              <AssistantExecutionPicker
+                assistantId={assistant.id}
+                execution={assistant.execution}
+              />
+            </div>
+            <div class="border border-border bg-surface p-2.5">
+              <AssistantAgentPicker
+                agents={assistant.agents}
                 {providers}
                 projectId={projectIdForCatalog}
                 onChange={setAgents}
@@ -1172,38 +1426,42 @@
         </div>
       {/if}
     {:else}
-      <div class="flex flex-col gap-3 p-3">
-        <section aria-label="Missed runs">
-          <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Missed runs</h2>
+      <div class="flex flex-col gap-3 pl-3">
+        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+          <h2 class="text-[0.875rem] font-semibold text-foreground">Missed runs</h2>
           {#if missedRuns.length === 0}
             <p class="text-[0.6875rem] text-dimmed">No scheduled run has been missed.</p>
           {:else}
-            <div class="flex flex-col gap-1.5">
+            <div class="flex flex-col gap-2">
               {#each missedRuns as run (run.id)}
-                <div class="rounded-lg border border-border p-2.5">
+                <div class="flex flex-col gap-1.5 bg-elevated p-2.5">
                   <div class="flex items-center gap-2">
-                    <AlertTriangle size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
+                    <CioAttention size={13} strokeWidth={1.8} style="color: var(--color-missed)" />
                     <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
                       {run.title}
                     </span>
                   </div>
-                  <p class="mt-1 text-[0.625rem] text-dimmed">
+                  <p class="text-[0.625rem] text-dimmed">
                     Was due {formatDateTime(run.dueAt)}. {missedRunReasonText(run.reason)}
                   </p>
-                  <div class="mt-2 flex justify-end gap-1.5">
+                  <div class="flex justify-end gap-1.5">
                     <button
                       type="button"
-                      class="rounded-md px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      class="px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Dismiss this missed run"
+                      aria-label="Dismiss the missed run {run.title}"
                       onclick={() => void dismissRun(run.id)}
                     >
                       Dismiss
                     </button>
                     <button
                       type="button"
-                      class="flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
-                      onclick={() => void runNow(run)}
+                      class="flex items-center gap-1 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover"
+                      title="Run this missed sweep now"
+                      aria-label="Run the missed run {run.title} now"
+                      onclick={() => void runMissedNow(run)}
                     >
-                      <RotateCcw size={12} strokeWidth={1.8} />
+                      <CioUndo size={12} strokeWidth={1.8} />
                       Run now
                     </button>
                   </div>
@@ -1211,29 +1469,31 @@
               {/each}
             </div>
           {/if}
-        </section>
+        </div>
 
-        <section aria-label="Run issues">
-          <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Run issues</h2>
+        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+          <h2 class="text-[0.875rem] font-semibold text-foreground">Run problems</h2>
           {#if runIssues.length === 0}
-            <p class="text-[0.6875rem] text-dimmed">No rate limits, failures, or interruptions.</p>
+            <p class="text-[0.6875rem] text-dimmed">
+              No waiting runs, rate limits, failures or interruptions.
+            </p>
           {:else}
-            <div class="flex flex-col gap-1.5">
+            <div class="flex flex-col">
               {#each runIssues as issue (issue.id)}
                 <button
                   type="button"
-                  class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                  class="flex items-start gap-2 border-t border-border py-2 text-left transition-colors first:border-t-0 hover:bg-elevated"
                   title="Open {issue.task.title}"
                   aria-label="Open {issue.task.title}"
                   onclick={() => onOpenTask(issue.task)}
                 >
                   <span class="mt-0.5 shrink-0" style="color: var(--color-warning)">
                     {#if issue.kind === 'Rate limited'}
-                      <Gauge size={13} strokeWidth={1.8} />
+                      <CioActions size={13} strokeWidth={1.8} />
                     {:else if issue.kind === 'Interrupted'}
-                      <Ban size={13} strokeWidth={1.8} />
+                      <CioBan size={13} strokeWidth={1.8} />
                     {:else}
-                      <AlertTriangle size={13} strokeWidth={1.8} />
+                      <CioAttention size={13} strokeWidth={1.8} />
                     {/if}
                   </span>
                   <span class="min-w-0 flex-1">
@@ -1249,20 +1509,20 @@
               {/each}
             </div>
           {/if}
-        </section>
+        </div>
 
-        <section aria-label="Unattended run history">
-          <h2 class="mb-1.5 text-[0.6875rem] font-medium text-muted">Run history</h2>
+        <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+          <h2 class="text-[0.875rem] font-semibold text-foreground">Run history</h2>
           {#if backgroundRuns.length === 0}
             <p class="text-[0.6875rem] text-dimmed">No unattended runs recorded yet.</p>
           {:else}
-            <div class="flex flex-col gap-1.5">
+            <div class="flex flex-col">
               {#each previewRuns(backgroundRuns, showAllBackgroundRuns) as run (run.runThreadId)}
                 {@const thread = runThreadFor(run)}
                 {#if thread}
                   <button
                     type="button"
-                    class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                    class="flex items-start gap-2 border-t border-border py-2 text-left transition-colors first:border-t-0 hover:bg-elevated"
                     title="Open this run"
                     aria-label="Open unattended run for {runTaskTitle(run)}"
                     onclick={() => onOpenTask(thread)}
@@ -1271,7 +1531,7 @@
                   </button>
                 {:else}
                   <div
-                    class="flex items-start gap-2 rounded-lg border border-border px-2.5 py-2"
+                    class="flex items-start gap-2 border-t border-border py-2 first:border-t-0"
                     title="The run's thread was deleted; this record is the evidence it ran"
                   >
                     {@render backgroundRunRowBody(run, null)}
@@ -1281,7 +1541,7 @@
               {#if backgroundRuns.length > TASK_RUN_PREVIEW}
                 <button
                   type="button"
-                  class="self-start rounded-md px-2 py-1 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  class="self-start border-t border-border px-2 py-1 text-[0.6875rem] text-muted transition-colors first:border-t-0 hover:bg-elevated hover:text-foreground"
                   title={showAllBackgroundRuns ? 'Show fewer runs' : 'Show every recorded run'}
                   aria-label={showAllBackgroundRuns
                     ? 'Show fewer runs'
@@ -1293,39 +1553,40 @@
               {/if}
             </div>
           {/if}
-        </section>
+        </div>
       </div>
     {/if}
   </div>
 {/snippet}
 
-{#snippet howToThreadAction()}
-  {#if routine && howToThread}
-    <!-- The how-to thread is pinned for life and has exactly two states. Hide
+{#snippet knowledgeThreadAction()}
+  {#if assistant && knowledgeThread}
+    <!-- The knowledge thread is pinned for life and has exactly two states. Hide
          puts it away for the session, Show brings it back and opens it, so the
-         panel is always the way back to the routine's authoring thread. -->
+         panel is always the way back to the assistant's authoring thread. -->
     <button
       type="button"
       class="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      title={howToThreadHidden
-        ? 'Show the routine’s how-to thread again'
-        : 'Hide the routine’s how-to thread from the sidebar'}
-      disabled={howToThreadBusy}
-      onclick={() => void toggleHowToThread()}
+      title={knowledgeThreadHidden
+        ? 'Show the assistant’s knowledge thread again'
+        : 'Hide the assistant’s knowledge thread from the sidebar'}
+      disabled={knowledgeThreadBusy}
+      onclick={() => void toggleKnowledgeThread()}
     >
-      <Hammer size={12} strokeWidth={1.8} class="shrink-0" />
+      <AssistantIcon mark="knowledge" size={14} class="shrink-0" />
       <span class="truncate">
-        {howToThreadHidden ? 'Show how-to thread' : 'Hide how-to thread'}
+        {knowledgeThreadHidden ? 'Show knowledge thread' : 'Hide knowledge thread'}
       </span>
     </button>
   {/if}
 {/snippet}
 
 {#if !fullscreen}
-  <div class="flex h-full min-h-0 flex-col" aria-label="Assistant routine panel">
+  <div class="flex h-full min-h-0 flex-col" aria-label="Assistant panel">
+    {@render panelHead()}
     {@render panelHeader()}
     {@render panelContent()}
-    {@render howToThreadAction()}
+    {@render knowledgeThreadAction()}
   </div>
 {/if}
 
@@ -1345,23 +1606,26 @@
     onMinimize={() => (fullscreen = false)}
   >
     <div class="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+      {@render panelHead()}
       {@render panelContent()}
     </div>
-    {@render howToThreadAction()}
+    {@render knowledgeThreadAction()}
   </FullscreenPanelDialog>
 {/if}
 
 {#if connectionSetupOpen}
   <!--
     The same Add capability modal the Utilities page uses, opened from a
-    connection that still needs setup. The agent-assisted step is prefilled
-    with the prompt the authoring agent recorded, and the connection library is
-    reloaded afterwards so an install flips the row to ready in place.
+    connection that still needs setup. Its assisted path is seeded with the
+    prompt the authoring agent recorded and opens a setup thread of this
+    assistant; the library is reloaded afterwards, so a capability installed
+    through the editor flips the row to ready in place.
   -->
   <UtilityEditorModal
     open
     target={connectionSetupTarget}
-    agentRequestSeed={connectionSetupSeed}
+    setupRequestSeed={connectionSetupRequest}
+    onOpenSetupThread={setupConnectionInThread}
     onClose={() => (connectionSetupOpen = false)}
     onChanged={() => void loadConnectionLibrary()}
     onSaved={() => void loadConnectionLibrary()}
@@ -1377,7 +1641,7 @@
   onConfirm={confirmRemoveConnection}
 >
   <p>
-    Remove <strong class="text-foreground">{connectionRemoveTarget?.label ?? ''}</strong> from this routine?
-    The agent will no longer use it when this routine runs.
+    Remove <strong class="text-foreground">{connectionRemoveTarget?.label ?? ''}</strong> from this assistant?
+    The agent will no longer use it when this assistant runs.
   </p>
 </ConfirmDialog>

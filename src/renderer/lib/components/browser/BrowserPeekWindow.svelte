@@ -1,8 +1,11 @@
 <script lang="ts">
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
   import { Portal } from 'bits-ui'
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Copy, Maximize2, X } from '@lucide/svelte'
+
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -328,27 +331,27 @@
     <span class="min-w-0 flex-1 truncate text-xs text-text-muted" title={tab?.url}>{tab?.url}</span>
     <button
       type="button"
-      class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
+      class="p-2 text-text-muted hover:bg-hover hover:text-text"
       title="Copy current Peek address"
       aria-label="Copy current Peek address"
       disabled={!tab?.url}
-      onclick={() => void copyAddress()}><Copy size={16} /></button
+      onclick={() => void copyAddress()}><CioCopy size={16} /></button
     >
 
     <button
       type="button"
-      class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
+      class="p-2 text-text-muted hover:bg-hover hover:text-text"
       title="Expand this Peek into a dedicated tab"
       aria-label="Expand this Peek into a dedicated tab"
       data-modal-primary
-      onclick={() => void globalBrowser.expandPeek()}><Maximize2 size={16} /></button
+      onclick={() => void globalBrowser.expandPeek()}><CioMaximize size={16} /></button
     >
     <button
       type="button"
-      class="rounded-md p-2 text-text-muted hover:bg-hover hover:text-text"
+      class="p-2 text-text-muted hover:bg-hover hover:text-text"
       title="Close this Peek"
       aria-label="Close this Peek"
-      onclick={() => globalBrowser.closePeek()}><X size={16} /></button
+      onclick={() => globalBrowser.closePeek()}><CioClose size={16} /></button
     >
   </div>
 {/snippet}
@@ -397,7 +400,7 @@
         {@attach attachShell}
         inert
         aria-hidden="true"
-        class="pointer-events-none fixed z-70 flex flex-col origin-top-left overflow-hidden rounded-2xl border bg-app shadow-xl will-change-transform"
+        class="pointer-events-none fixed z-70 flex flex-col origin-top-left overflow-hidden border bg-app shadow-xl will-change-transform"
         style={shellStyle}
       >
         {@render peekControls()}

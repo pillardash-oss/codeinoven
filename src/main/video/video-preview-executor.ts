@@ -1,11 +1,13 @@
 import { requireLocalProject } from '../../lib/project-artifacts'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
+import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
 import type { Database } from '../database/database'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
 import type { VideoCapabilityExecutor } from '../utilities/utility-orchestration-service'
-import { currentWorkRoot } from '../design/work-roots-state'
+import { currentWorkRoot, projectWorkRootPaths } from '../design/work-roots-state'
 import { openVideoPreview } from './video-preview-session'
+import { DesignRepo } from '../database/repositories/design-repo'
 
 /**
  * What the video capability's `preview` operation needs from the app.
@@ -15,6 +17,7 @@ import { openVideoPreview } from './video-preview-session'
  * one, so a missing browser degrades to a URL rather than a failure.
  */
 export interface VideoPreviewExecutorOptions {
+  studio?: VideoCapabilityExecutor
   previews: DirectoryPreviewService
   database: Database
   checkpoint: (
@@ -52,6 +55,8 @@ export function createVideoPreviewExecutor(
   options: VideoPreviewExecutorOptions
 ): VideoCapabilityExecutor {
   return async (operation, input, context) => {
+    if (operation !== 'preview' && operation !== 'checkpoint' && options.studio)
+      return options.studio(operation, input, context)
     if (operation === 'checkpoint')
       return options.checkpoint(context.projectId, context.threadId, input)
     if (operation !== 'preview') {
@@ -67,9 +72,15 @@ export function createVideoPreviewExecutor(
         projectPath: project.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory: input['directory'],
+        directory:
+          typeof input['directory'] === 'string'
+            ? new DesignRepo(options.database).resolveDirectory(
+                context.projectId,
+                input['directory']
+              )
+            : input['directory'],
         entry: input['entry'],
-        defaultRoot: currentWorkRoot('video'),
+        defaultRoot: currentWorkRoot('video', context.projectId),
         attention,
         reveal: false
       }
@@ -82,6 +93,15 @@ export function createVideoPreviewExecutor(
       kind: 'video'
     })
 
+    const folderNote = workFolderNote(
+      'video',
+      result.directory,
+      projectWorkRootPaths(context.projectId, 'video'),
+      currentWorkRoot('video', context.projectId)
+    )
+    const tabNote = result.tab
+      ? 'The tab keeps itself current: it refreshes shortly after a file changes, so you do not re-preview after every edit. Use the `capture` operation to freeze an exact frame and look at it.'
+      : 'No browser tab was opened, so this URL is for the user to open while the app is running.'
     return {
       url: result.url,
       directory: result.directory,
@@ -89,9 +109,7 @@ export function createVideoPreviewExecutor(
       served: result.served,
       attention,
       tab: result.tab,
-      note: result.tab
-        ? 'The tab keeps itself current: it refreshes shortly after a file changes, so you do not re-preview after every edit. Use the `capture` operation to freeze an exact frame and look at it.'
-        : 'No browser tab was opened, so this URL is for the user to open while the app is running.'
+      note: [folderNote, tabNote].filter(Boolean).join(' ')
     }
   }
 }

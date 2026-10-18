@@ -1,11 +1,8 @@
 <script lang="ts">
-  import {
-    GitFork,
-    MessageCircleDashed,
-    MessageCirclePlus,
-    MessageSquareDashed
-  } from '@lucide/svelte'
-
+  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
+  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   interface Props {
     text: string
     x: number
@@ -44,7 +41,7 @@
 ></button>
 
 <div
-  class="fixed z-50 flex max-w-[calc(100vw-24px)] items-center gap-1 rounded-xl border border-border bg-surface p-1 shadow-lg"
+  class="fixed z-50 flex max-w-[calc(100vw-24px)] items-center gap-1 border border-border bg-surface p-1 shadow-lg"
   style:left={`${x}px`}
   style:top={`${y}px`}
   role="toolbar"
@@ -52,43 +49,43 @@
 >
   <button
     type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+    class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
     title="Reference this selection in your next message"
     onclick={onAdd}
   >
-    <MessageCirclePlus size={13} />
+    <CioMessagePlus size={ICON_SIZE.inline} />
     Comment
   </button>
   {#if onElaborate}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
       title="Explain this selection in a temporary read-only chat"
       onclick={onElaborate}
     >
-      <MessageCircleDashed size={13} />
+      <CioTemporaryChat size={13} />
       Explain
     </button>
   {/if}
   {#if onQuickChat}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
       title="Start a temporary read-only chat with this selection"
       onclick={onQuickChat}
     >
-      <MessageSquareDashed size={13} />
+      <CioTemporaryChat size={13} />
       Quick chat
     </button>
   {/if}
   {#if onNewThread}
     <button
       type="button"
-      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      class="flex h-8 items-center gap-1.5 px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
       title="Start a new thread with this selection already in the composer"
       onclick={onNewThread}
     >
-      <GitFork size={13} />
+      <CioFork size={13} />
       New thread
     </button>
   {/if}

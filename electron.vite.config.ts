@@ -168,6 +168,17 @@ function standaloneOvenService(): Plugin {
         mode,
         logLevel: 'warn',
         ssr: { noExternal: true },
+        // Root operations run in a disposable remote Node process, never the
+        // Electron main process. Keep its one-file bundle free of Vite's
+        // desktop-only worker factory while reusing the same index logic.
+        resolve: {
+          alias: [
+            {
+              find: /^.*\/project-file-index-service(?:\.ts)?$/u,
+              replacement: resolve(__dirname, 'src/main/editor/project-file-index-core.ts')
+            }
+          ]
+        },
         build: {
           ssr: resolve(__dirname, 'src/main/ovens/remote/oven-service-entry.ts'),
           write: false,
@@ -237,7 +248,35 @@ export default defineConfig(({ mode }) => {
           // live in devDependencies: it's a pure-JS control-protocol client
           // with no native bindings, so inlining it avoids shipping the whole
           // package inside node_modules in the packaged app.
-          external: ['electron', 'node-pty', 'better-sqlite3', 'electron-updater'],
+          // The video studio's inference stack is external for two reasons. It
+          // loads native binaries (onnxruntime-node's NAPI binding, sharp) whose
+          // `require('../bin/<platform>/<arch>/...node')` only resolves from the
+          // package's own directory, never from a bundled chunk under out/main;
+          // and mediabunny keeps a module-level decoder registry, so a bundled
+          // copy would be a second instance and the NodeAV decoders that
+          // registerMediabunnyServer() installs would never reach the copy
+          // @remotion/video-matting decodes with (background removal then fails
+          // with `The primary video track cannot be decoded.`). Resolving them at
+          // runtime also keeps one copy of each of these six.
+          //
+          // They are devDependencies, not runtime ones: the installer no longer
+          // carries them, and the matting operation installs them on demand into
+          // the app config folder (see src/main/video/video-packages.ts). They
+          // stay listed here because the matting utility process still imports
+          // them by name, from wherever they are installed, so the build must
+          // leave those imports alone.
+          external: [
+            'electron',
+            'node-pty',
+            'better-sqlite3',
+            'electron-updater',
+            '@huggingface/transformers',
+            '@mediabunny/server',
+            '@remotion/video-matting',
+            'mediabunny',
+            'onnxruntime-node',
+            'sharp'
+          ],
           input: {
             index: resolve(__dirname, 'src/main/entry.ts')
           },
@@ -335,6 +374,11 @@ export default defineConfig(({ mode }) => {
             // stylesheet and nothing else of the app, so a second renderer stays
             // cheap.
             'browser-overlay': resolve(__dirname, 'src/renderer/browser-overlay.html'),
+            // The launch screen: the first Electron window, shown before the app
+            // bundle has loaded anything. It is its own entry because it wears the
+            // brand face, and its stylesheet is one @import of the family rather
+            // than app.css.
+            splash: resolve(__dirname, 'src/renderer/splash.html'),
             // The browser permission prompt: one card, floating over the in-app
             // browser's page in a transparent window of its own. It is an entry
             // of its own because it draws the card with the app's stylesheet,

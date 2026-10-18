@@ -1,6 +1,9 @@
 <script lang="ts">
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioFind from '@pillardash-oss/cio-icon/CioFind.svelte'
+  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
+  import CioThreads from '@pillardash-oss/cio-icon/CioThreads.svelte'
   import { onMount } from 'svelte'
-  import { FileSearch, FolderKanban, Globe, Timeline } from '@lucide/svelte'
   import type {
     CommandPaletteProps,
     PaletteFooterFilter
@@ -26,6 +29,7 @@
   import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
+  import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
   import { startAppControlResponder } from '$lib/app-control/app-control-responder'
   import { registerShellNavigationActions } from '$lib/app-control/app-control-actions'
   import {
@@ -81,14 +85,15 @@
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { COMPOSER_DRAFT_SELECTOR } from '$lib/components/chats/chat-composer-draft-surface'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { getRoutineIcon } from '$lib/routine-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import { getAssistantIcon } from '$lib/assistant-icons'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
@@ -120,9 +125,10 @@
     type AppConfigPatch,
     type InstanceRole,
     type Project,
-    type Routine,
+    type Assistant,
     type ThemePreference,
-    type Thread
+    type Thread,
+    type ThreadSearchResult
   } from '$shared/types'
   import type { CloseConfirmationPayload, CloseConfirmationProject } from '$shared/ipc-contract'
   import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
@@ -141,10 +147,9 @@
   import { ProjectSwitchPaletteController } from './app-project-switch.svelte'
   import { handleOpenedPaths, type OsHandoffDeps } from './app-os-handoff'
   import { installAppIpcSubscriptions } from './app-ipc-subscriptions'
-  import {
-    workspaceTourViewFor,
-    type WorkspaceTourView
-  } from '$lib/components/onboarding/onboarding-tour-steps'
+  import { warmIntentSearch } from './app-search-warm'
+  import { workspaceTourViewFor, type GuideActionKind } from '$lib/guide/guide-stops'
+  import { guideState } from '$lib/guide/guide-state.svelte'
 
   type View = MainView
 
@@ -156,7 +161,7 @@
   let commandPaletteOpen = $state(false)
   let closeConfirmation = $state<CloseConfirmationPayload | null>(null)
   let instanceRole = $state<InstanceRole | null>(null)
-  /** The one-time start-at-login offer, raised once after the first routine how-to. */
+  /** The one-time start-at-login offer, raised once after the first assistant knowledge. */
   let startAtLoginOfferOpen = $state(false)
   const fileSearch = new FileSearchPaletteController()
   const threadSearch = new ThreadSearchPaletteController(
@@ -170,7 +175,7 @@
   const assistantSearch = new ThreadSearchPaletteController(
     {
       openThread: (thread) => void openThreadFromSearch(thread),
-      openRoutine: (routine) => void openRoutineFromSearch(routine)
+      openAssistant: (assistant) => void openAssistantFromSearch(assistant)
     },
     'assistant'
   )
@@ -187,13 +192,8 @@
   }
 
   let newProjectSpotlightOpen = $state(false)
-  let onboardingOpen = $state(false)
-  let onboardingStep = $state(0)
-  /** A content view's own tour, running on its own step counter. */
-  let viewTourView = $state<WorkspaceTourView | null>(null)
-  let viewTourStep = $state(0)
-  let onboardingInitialized = false
-  let onboardingProjectPickerActive = false
+  /** Set once the first run has been checked, so the guide is offered exactly once. */
+  let firstRunChecked = false
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   let paletteContextActions = $derived(
@@ -249,7 +249,7 @@
   let spotlightScreenId = $derived(resolveSpotlightScreen())
 
   /** The footer filter for a project-scoped search: the local projects, driving
-   *  the same multi-select picker the routine and browser-group screens use. */
+   *  the same multi-select picker the assistant and browser-group screens use. */
   function projectFooterFilter(
     selectedIds: readonly string[],
     onChange: (ids: string[]) => void
@@ -270,24 +270,24 @@
     }
   }
 
-  /** The footer filter for assistant search: one row per routine. */
-  function routineFooterFilter(
+  /** The footer filter for assistant search: one row per assistant. */
+  function assistantFooterFilter(
     selectedIds: readonly string[],
     onChange: (ids: string[]) => void
   ): PaletteFooterFilter {
     return {
-      options: assistantRoutines.routines.map((routine) => ({
-        id: routine.id,
-        label: routine.name,
-        ...(routine.color ? { color: routine.color } : {}),
-        iconUrl: getRoutineIcon(routine, assistantRoutines.iconUrls.get(routine.id) ?? null)
+      options: assistants.assistants.map((assistant) => ({
+        id: assistant.id,
+        label: assistant.name,
+        ...(assistant.color ? { color: assistant.color } : {}),
+        iconUrl: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null)
       })),
       selectedIds,
       onChange,
-      allLabel: 'All Routines',
-      ariaLabel: 'Scope search to routines',
-      searchPlaceholder: 'Search routines…',
-      emptyMessage: 'No matching routines'
+      allLabel: 'All Assistants',
+      ariaLabel: 'Scope search to assistants',
+      searchPlaceholder: 'Search assistants…',
+      emptyMessage: 'No matching assistants'
     }
   }
 
@@ -339,7 +339,7 @@
           title: 'Search files across projects',
           placeholder: 'Type at least two characters…',
           emptyLabel: fileSearch.loading ? 'Searching project files…' : 'No matching files',
-          headerIcon: FileSearch,
+          headerIcon: CioFind,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,
@@ -358,7 +358,9 @@
           emptyLabel: threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
-          headerIcon: Timeline,
+          // The Threads view's own mark, so the screen wears the glyph the rail,
+          // the overview and the palette home row already use for this family.
+          headerIcon: CioThreads,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-info/25 bg-info/10 text-info',
           serverFiltered: true,
@@ -391,15 +393,15 @@
           ...shell,
           actions: assistantSearch.actions,
           title: 'Search assistant tasks',
-          placeholder: 'Search routines, tasks, and messages…',
+          placeholder: 'Search assistants, tasks, and messages…',
           emptyLabel: assistantSearch.loading
             ? 'Searching assistant tasks…'
-            : 'Type at least two characters to search assistant tasks and routines',
+            : 'Type at least two characters to search assistant tasks and assistants',
           headerIcon: CONTENT_FAMILY_ICONS.assistant,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-warning/25 bg-warning/10 text-warning',
           serverFiltered: true,
-          filter: routineFooterFilter(assistantSearch.scopeIds, (ids) =>
+          filter: assistantFooterFilter(assistantSearch.scopeIds, (ids) =>
             assistantSearch.setScope(ids)
           ),
           onBack: backToSpotlightHome,
@@ -414,7 +416,7 @@
           title: 'Search browser tabs',
           placeholder: 'Search open tabs by title, address, or group…',
           emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
-          headerIcon: Globe,
+          headerIcon: CioBrowser,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-primary/25 bg-primary/10 text-primary',
           serverFiltered: true,
@@ -433,7 +435,7 @@
           title: 'Switch project',
           placeholder: 'Search projects…',
           emptyLabel: 'No matching projects',
-          headerIcon: FolderKanban,
+          headerIcon: CioProjects,
           headerIconBadge: true,
           headerIconBadgeClass: 'border-success/25 bg-success/10 text-success',
           onBack: backToSpotlightHome,
@@ -492,20 +494,128 @@
     )
   )
 
-  /** Welcome screen (and other surfaces) can request the getting-started tour. */
-  $effect(() => {
-    if (workspaceState.consumeOnboardingRequest()) {
-      onboardingStep = 0
-      onboardingOpen = true
-    }
-  })
-
-  /** A view's empty state, or the palette, can request that view's own tour. */
+  /** A view's empty state, or the palette, can request that view's own guide. */
   $effect(() => {
     const view = workspaceState.consumeViewTourRequest()
     if (!view) return
-    viewTourView = view
-    viewTourStep = 0
+    guideState.start(view)
+  })
+
+  /**
+   * Walking the Projects guide to its end is what finishes the first run. There
+   * is no separate setup tour: the guide is the sequence, so a user who closes
+   * it half way is offered it again on the next launch, and one who walks it
+   * through is done for good.
+   */
+  $effect(() => {
+    if (!config.onboardingCompleted && guideState.hasSeen('projects')) {
+      void updateConfig({ onboardingCompleted: true })
+    }
+  })
+
+  /**
+   * A guide only says what the next step is. The app performs it, because the
+   * app is the only thing that knows how to add a project, connect an agent,
+   * open a settings page, or put the caret in the composer.
+   *
+   * Reports whether the step is actually done. A step that has to hand the user
+   * somewhere to finish (an installer for an agent that is not on this machine)
+   * answers false, and the guide stays on it rather than walking on as if the
+   * agent were connected.
+   */
+  async function runGuideAction(run: GuideActionKind): Promise<boolean> {
+    if (run.kind === 'add-project') {
+      openNewProjectSpotlight()
+      return true
+    }
+    if (run.kind === 'focus-composer') {
+      focusVisibleComposer()
+      return true
+    }
+    if (run.kind === 'open-harness') {
+      const harness = providerStore.providers.find((entry) => entry.id === run.harnessId)
+      // Pi ships inside the app, so it can take credentials whether or not this
+      // machine has a copy of its own: every other harness has to be installed
+      // and driven before its provider list means anything.
+      const usable =
+        harness !== undefined && (run.harnessId === 'pi' || providerStore.canAddProvider(harness))
+      if (usable) {
+        // Installed and driven: the account it answers with is managed right
+        // here, over the view, by the same flow the settings page opens. Its
+        // accounts are re-read on connect, because the badge that says how many
+        // this harness has, and the gate below, both hang off that number.
+        providerConnectFlow.open(run.harnessId, {
+          onConnected: () => {
+            void providerStore.checkOne(run.harnessId)
+            void harnessAccountCache.list(run.harnessId, true).catch(() => [])
+          }
+        })
+        return true
+      }
+      // Not on this machine yet: its own page in settings installs it. The guide
+      // holds its place while the user is away and comes back on this step, so
+      // the Next they were waiting for is still there when they return.
+      guideState.holdForUser()
+      navigate(settingsViewForSection('harnesses'))
+      return false
+    }
+    if (run.kind === 'restart-guide') {
+      const view = guideState.view
+      if (view) guideState.start(view)
+      return false
+    }
+    if (run.kind === 'open-view-guide') {
+      // The hand-off is the whole reason the stop that offers it exists: this
+      // guide is finished with the user, and the view they picked walks them
+      // through itself instead.
+      guideState.close()
+      navigate(run.view)
+      workspaceState.requestViewTour(run.view)
+      return false
+    }
+    if (run.kind === 'connect-github') {
+      githubSignIn.start()
+      return false
+    }
+    return false
+  }
+
+  /** The dock's own button asks for the step the stop is about. */
+  $effect(() => {
+    const request = guideState.consumeActionRequest()
+    if (!request) return
+    void runGuideAction(request.run).then((done) => {
+      // A control inside a stop does its work where the user already is, so it
+      // never moves the guide on: only the stop's own step button advances.
+      if (done && request.advance) guideState.completeAction()
+    })
+  })
+
+  /**
+   * The agent step's gate: the guide walks on once this machine has an agent it
+   * can actually run, or once the user has an account connected to one. Both
+   * halves come from state the guide cannot fake: the harness probe the settings
+   * page reads, and the account registry the model picker reads. A harness that
+   * finishes installing, or an account connected mid-step, therefore opens the
+   * gate by itself, and a user who arrives with either is never held.
+   */
+  $effect(() => {
+    const installed = providerStore.providers.some(
+      (provider) => provider.status === 'available' && provider.integration === 'ready'
+    )
+    const connected = providerStore.providers.some(
+      (provider) => (harnessAccountCache.cached(provider.id)?.length ?? 0) > 0
+    )
+    guideState.setStepReady(installed || connected)
+  })
+
+  /**
+   * A guide explains one view's own app, so it may only run while that view is
+   * the one on screen. Leaving the view ends it right here, which is what keeps
+   * a tip from ever pointing at something the user is no longer looking at.
+   */
+  $effect(() => {
+    guideState.syncView(activeView)
   })
 
   async function loadConfig(): Promise<void> {
@@ -514,15 +624,17 @@
       appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
-      if (!onboardingInitialized) {
-        onboardingOpen = !config.onboardingCompleted
-        onboardingInitialized = true
+      // The guide owns the first run: a user who has never walked the Projects
+      // guide gets it as soon as there is a config to read.
+      if (!firstRunChecked) {
+        firstRunChecked = true
+        if (!config.onboardingCompleted) workspaceState.requestViewTour('projects')
       }
     } catch {
       settingsError = 'Settings could not be loaded. Defaults are being used.'
-      if (!onboardingInitialized) {
-        onboardingOpen = true
-        onboardingInitialized = true
+      if (!firstRunChecked) {
+        firstRunChecked = true
+        workspaceState.requestViewTour('projects')
       }
     } finally {
       settingsReady = true
@@ -556,7 +668,7 @@
   /**
    * Answer the one-time start-at-login offer. The choice and the flag that keeps
    * the question from ever being raised again are saved together, so no later
-   * routine setup asks a second time however this one is answered.
+   * assistant setup asks a second time however this one is answered.
    */
   function answerStartAtLoginOffer(startAtLogin: boolean): void {
     startAtLoginOfferOpen = false
@@ -855,10 +967,6 @@
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
-      case 'app:getting-started':
-        onboardingStep = 0
-        onboardingOpen = true
-        return
       case 'app:tour-view': {
         const view = workspaceTourViewFor(activeView)
         if (view) workspaceState.requestViewTour(view)
@@ -885,7 +993,7 @@
         ) {
           contextSidebarState.hide()
         } else {
-          contextSidebarState.openMemory(thread.projectId, thread.id, undefined, thread.routineId)
+          contextSidebarState.openMemory(thread.projectId, thread.id, undefined, thread.assistantId)
         }
         return
       }
@@ -962,6 +1070,10 @@
     }
     capturePaletteFocus()
     commandPaletteOpen = true
+    // The spotlight is where the semantic ranking lives; its thread search is
+    // one hop away. Start the embedding model boot behind the keystroke (main
+    // no-ops it unless intent search is enabled).
+    warmIntentSearch()
   }
 
   /** Close the whole spotlight, whichever screen is on top. */
@@ -991,16 +1103,37 @@
   }
 
   /**
-   * Focus a routine picked in assistant search: land on the Assistant view, open
-   * the routine's seed thread so its context becomes the active one, then dock
-   * that routine's how-to panel on it.
+   * Focus an assistant picked in assistant search: land on the Assistant view, open
+   * the assistant's seed thread so its context becomes the active one, then dock
+   * that assistant's knowledge panel on it.
    */
-  async function openRoutineFromSearch(routine: Routine): Promise<void> {
+  async function openAssistantFromSearch(assistant: Assistant): Promise<void> {
     navigate('assistant')
-    const anchor = await assistantRoutines.howToThread(routine.id).catch(() => null)
+    const anchor = await assistants.knowledgeThread(assistant.id).catch(() => null)
     if (!anchor) return
     await openThreadFromNotification(anchor, null)
-    contextSidebarState.openAssistantHowTo(ASSISTANT_SPACE_ID, anchor.id, routine.id, routine.name)
+    contextSidebarState.openAssistantKnowledge(
+      ASSISTANT_SPACE_ID,
+      anchor.id,
+      assistant.id,
+      assistant.name
+    )
+  }
+
+  /**
+   * Hand the semantic half of a spotlight thread search to the screen that asked.
+   *
+   * Only one spotlight screen is on top at a time, so the open one owns the
+   * payload; its controller drops a request or query the user has moved past.
+   */
+  function applyThreadSearchIntent(payload: {
+    query: string
+    requestId: number
+    results: ThreadSearchResult[]
+  }): void {
+    if (threadSearch.paletteOpen) threadSearch.applyIntentResults(payload)
+    else if (chatSearch.paletteOpen) chatSearch.applyIntentResults(payload)
+    else if (assistantSearch.paletteOpen) assistantSearch.applyIntentResults(payload)
   }
 
   /** Focus a tab picked in browser search: land on the Browser view and switch
@@ -1078,11 +1211,6 @@
     newProjectSpotlightOpen = false
     navigate('projects')
     await handleProjectCreated(project)
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingStep = 7
-      onboardingOpen = true
-    }
   }
 
   /** Spotlight flow: a picked folder already exists as a project   focus it. */
@@ -1097,11 +1225,6 @@
     } else {
       workspaceState.clearThread()
       workspaceState.activeProject = project
-    }
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingStep = 7
-      onboardingOpen = true
     }
   }
 
@@ -1167,37 +1290,8 @@
     }
   }
 
-  function updateOnboardingStep(step: number): void {
-    // The first-run tour stays in Projects: the composer spotlight falls back
-    // to a centered callout there (its anchor only exists in Chats), and the
-    // Chats view owns its own tour when the user opens it for the first time.
-    // Adding a project therefore never yanks the user into the Chats view.
-    onboardingStep = step
-  }
-
-  function chooseOnboardingProject(): void {
-    onboardingOpen = false
-    onboardingProjectPickerActive = true
-    newProjectSpotlightOpen = true
-  }
-
   function closeNewProjectSpotlight(): void {
     newProjectSpotlightOpen = false
-    if (onboardingProjectPickerActive) {
-      onboardingProjectPickerActive = false
-      onboardingOpen = true
-    }
-  }
-
-  function finishOnboarding(): void {
-    onboardingOpen = false
-    onboardingProjectPickerActive = false
-    void updateConfig({ onboardingCompleted: true })
-  }
-
-  function browseHarnessesFromOnboarding(): void {
-    finishOnboarding()
-    navigate('settings-harnesses')
   }
 
   /**
@@ -1677,14 +1771,14 @@
     }
     if (
       keymapState.matches('nav-new-project', e) ||
-      keymapState.matches('assistant-new-routine', e)
+      keymapState.matches('assistant-new-assistant', e)
     ) {
       e.preventDefault()
       if (e.repeat) return
-      // The Assistant view owns Cmd/Ctrl+Shift+N for a new routine.
+      // The Assistant view owns Cmd/Ctrl+Shift+N for a new assistant.
       if (activeView === 'assistant') {
         if (spotlightScreenId) closeSpotlight()
-        workspaceState.requestAssistantRoutine()
+        workspaceState.requestAssistant()
         return
       }
       // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
@@ -1702,8 +1796,8 @@
       const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
 
-      // The Assistant view owns Cmd/Ctrl+N for a new task: inside the routine
-      // the user is currently in when there is one, routine-less otherwise.
+      // The Assistant view owns Cmd/Ctrl+N for a new task: inside the assistant
+      // the user is currently in when there is one, assistant-less otherwise.
       if (activeView === 'assistant') {
         workspaceState.requestAssistantTask()
         return
@@ -1800,7 +1894,8 @@
       handleNewTerminalShortcut,
       goBack: () => handleMouseHistoryNavigation('back'),
       goForward: () => handleMouseHistoryNavigation('forward'),
-      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps)
+      handleOpenedPaths: (paths) => handleOpenedPaths(paths, osHandoffDeps),
+      applyThreadSearchIntent
     })
     // Hydrate the instance role: the push fires before this renderer mounts, so
     // this read is what shows the "running in another instance" notice on load.
@@ -1918,7 +2013,6 @@
           mode={lastContentView}
           active={showsContentView}
           scopeViewActive={activeView === 'scope'}
-          setupTourOpen={onboardingOpen}
           {navigate}
           lastProjectViewLanding={() => navigation.projectFamilyLanding()}
           {config}
@@ -1990,7 +2084,23 @@
         {/await}
       {/if}
     </main>
+
+    <!-- A guide's words, in a column beside the app rather than over it: the app
+         reflows beside the dock, so nothing a guide explains is ever covered. -->
+    {#if guideState.visible}
+      {#await import('$lib/components/guide/GuideDock.svelte') then { default: GuideDock }}
+        <GuideDock />
+      {/await}
+    {/if}
   </div>
+
+  <!-- The marker a guide draws inside the app: one element, a rule to the dock,
+       and the notch where it lands. Fixed to the window, and never in the way. -->
+  {#if guideState.visible}
+    {#await import('$lib/components/guide/GuideMarks.svelte') then { default: GuideMarks }}
+      <GuideMarks />
+    {/await}
+  {/if}
 
   <!-- The instance-role notice sits at the very bottom as a status bar: it is a
        standing condition, so it reads as chrome rather than as content above
@@ -2020,39 +2130,11 @@
       />
     {/await}
   {/if}
-  {#if viewTourView}
-    <!-- A view's own tour: the same spotlight presentation as the setup tour,
-         over that view's steps. Remounted per step so each target is measured
-         once it is on screen. -->
-    {#key viewTourStep}
-      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
-        <OnboardingTour
-          tour={viewTourView}
-          step={viewTourStep}
-          onStepChange={(step) => (viewTourStep = step)}
-          onFinish={() => (viewTourView = null)}
-        />
-      {/await}
-    {/key}
-  {/if}
-  {#if onboardingOpen}
-    {#key onboardingStep}
-      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
-        <OnboardingTour
-          step={onboardingStep}
-          onStepChange={updateOnboardingStep}
-          onChooseProject={chooseOnboardingProject}
-          onBrowseHarnesses={browseHarnessesFromOnboarding}
-          onFinish={finishOnboarding}
-        />
-      {/await}
-    {/key}
-  {/if}
   {#if startAtLoginOfferOpen}
-    <!-- The one-time start-at-login offer. Raised right after a routine is given
-         its first how-to, so the question is about the runs the user has just
+    <!-- The one-time start-at-login offer. Raised right after an assistant is given
+         its first knowledge, so the question is about the runs the user has just
          set up, and floated above every view because that save happens in the
-         thread the routine belongs to. -->
+         thread the assistant belongs to. -->
     {#await import('$lib/components/layout/StartAtLoginPrompt.svelte') then { default: StartAtLoginPrompt }}
       <StartAtLoginPrompt open onChoose={answerStartAtLoginOffer} />
     {/await}

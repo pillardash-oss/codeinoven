@@ -1,5 +1,9 @@
 <script lang="ts">
-  import { ChevronRight, Film, ListTodo, Palette, Wrench } from '@lucide/svelte'
+  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioListTodo from '@pillardash-oss/cio-icon/CioListTodo.svelte'
+  import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
+  import CioWrench from '@pillardash-oss/cio-icon/CioWrench.svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
@@ -44,7 +48,7 @@
 
 <div
   bind:this={listboxElement}
-  class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col rounded-lg border border-border bg-surface p-1 shadow-lg"
+  class="absolute bottom-full left-3 right-3 z-40 mb-1 flex max-h-56 flex-col border border-border-strong bg-surface p-1 shadow-lg"
   role="listbox"
   aria-label="Composer references"
 >
@@ -87,8 +91,10 @@
         <button
           type="button"
           class={[
-            'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none',
-            index === activeIndex ? 'bg-elevated text-foreground' : 'text-muted hover:bg-elevated',
+            'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs outline-none',
+            index === activeIndex
+              ? 'bg-overlay text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground',
             mention.type === 'project' && mention.entry.ignored === true ? 'opacity-45' : ''
           ]}
           role="option"
@@ -103,14 +109,14 @@
         >
           {#if mention.type === 'utility'}
             {#if mention.entry.id === 'cio-design'}
-              <Palette size={13} class="shrink-0 text-primary" />
+              <CioPalette size={13} class="shrink-0 text-primary" />
             {:else if mention.entry.id === 'cio-video'}
-              <Film size={13} class="shrink-0 text-primary" />
+              <CioClapper size={13} class="shrink-0 text-primary" />
             {:else}
-              <Wrench size={13} class="shrink-0 text-primary" />
+              <CioWrench size={13} class="shrink-0 text-primary" />
             {/if}
           {:else if mention.type === 'task'}
-            <ListTodo size={13} class="shrink-0 text-info" />
+            <CioListTodo size={13} class="shrink-0 text-info" />
           {:else if mention.entry.kind === 'directory'}
             <FolderTypeIcon name={mention.entry.name} size={13} />
           {:else}
@@ -135,7 +141,7 @@
             {/if}
           </span>
           {#if mention.type === 'project' && mention.entry.kind === 'directory'}
-            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+            <CioForward size={12} class="shrink-0 text-dimmed" />
           {/if}
         </button>
       {/each}

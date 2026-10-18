@@ -146,7 +146,7 @@
                 <ul class="space-y-0.5 border-l border-border pl-3">
                   {#each group.files as file (`${file.projectId}:${file.path}`)}
                     <li class="flex items-center gap-1.5 text-xs text-muted">
-                      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
+                      <span class="h-1.5 w-1.5 shrink-0 bg-accent"></span>
                       <span class="min-w-0 truncate font-mono" title={file.path}>{file.path}</span>
                     </li>
                   {/each}
@@ -202,7 +202,7 @@
   {#snippet footer()}
     <button
       type="button"
-      class="shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="shrink-0 whitespace-nowrap px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
       title="Keep the app open"
       onclick={onDismiss}
     >
@@ -211,7 +211,7 @@
     {#if onConfirmSave && hasFiles}
       <button
         type="button"
-        class="shrink-0 whitespace-nowrap rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        class="shrink-0 whitespace-nowrap bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
         title="Save all unsaved files and close the application"
         onclick={() => void onConfirmSave()}
       >
@@ -220,7 +220,7 @@
     {/if}
     <button
       type="button"
-      class="shrink-0 whitespace-nowrap rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
+      class="shrink-0 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90"
       title="Close the application and interrupt working threads"
       onclick={() => void onConfirm()}
     >

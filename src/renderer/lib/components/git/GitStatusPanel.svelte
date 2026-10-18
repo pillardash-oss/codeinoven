@@ -1,4 +1,44 @@
 <script lang="ts">
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
+  import CioBellOff from '@pillardash-oss/cio-icon/CioBellOff.svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioBookmarkCheck from '@pillardash-oss/cio-icon/CioBookmarkCheck.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioCheckCheck from '@pillardash-oss/cio-icon/CioCheckCheck.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
+  import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioFileMinus from '@pillardash-oss/cio-icon/CioFileMinus.svelte'
+  import CioFolderGit from '@pillardash-oss/cio-icon/CioFolderGit.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioGitGraph from '@pillardash-oss/cio-icon/CioGitGraph.svelte'
+  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
+  import CioMerge from '@pillardash-oss/cio-icon/CioMerge.svelte'
+  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
+  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioRocket from '@pillardash-oss/cio-icon/CioRocket.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSkipForward from '@pillardash-oss/cio-icon/CioSkipForward.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioTabSettings from '@pillardash-oss/cio-icon/CioTabSettings.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
@@ -47,51 +87,6 @@
     GitStashEntry,
     ThreadStatus
   } from '$shared/types'
-  import {
-    Archive,
-    ArchiveRestore,
-    ArrowDownToLine,
-    ArrowLeft,
-    ArrowUpFromLine,
-    Bell,
-    BellOff,
-    Bookmark,
-    BookmarkCheck,
-    Bot,
-    Check,
-    CheckCheck,
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-    CircleCheck,
-    CircleDot,
-    Download,
-    ExternalLink,
-    FileDiff,
-    FileMinus,
-    FolderGit2,
-    GitBranch,
-    GitCommit,
-    GitCommitHorizontal,
-    GitGraph,
-    GitMerge,
-    GitPullRequest,
-    Info,
-    Loader2,
-    Maximize2,
-    MoreHorizontal,
-    NetworkIcon,
-    Play,
-    Plus,
-    RefreshCw,
-    Rocket,
-    RotateCcwClock,
-    Search,
-    Settings,
-    SkipForward,
-    Trash2,
-    TriangleAlert
-  } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -1859,7 +1854,7 @@
   const notificationBusy = $derived(githubNotifications.busyThreadId !== null)
   /** The notification action style, shared by the header group's controls. */
   const notificationActionClass =
-    'flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
+    'flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40'
 
   function prDetailViewsFor(
     bundle: PullRequestBundle | undefined,
@@ -2296,7 +2291,7 @@
     originReplaceConfirm = false
   }
 
-  /** First step of the save button: replace routes through a destructive
+  /** First step of the save button: Replace routes through a destructive
    *  confirmation first; add commits immediately. */
   function requestSetOrigin(): void {
     if (!originUrl.trim() || originBusy) return
@@ -2550,6 +2545,13 @@
     await projectFilesWorkspace.openFile(projectId, path)
   }
 
+  async function openDirectory(path: string): Promise<void> {
+    contextSidebarState.openFiles(projectId, threadId)
+    await projectFilesWorkspace.ensureState(projectId)
+    await projectFilesWorkspace.loadDirectory(projectId, '')
+    await projectFilesWorkspace.revealDirectory(projectId, path)
+  }
+
   async function stashChanges(): Promise<void> {
     await gitState.stash(projectId, stashMessage.trim() || undefined, stashPaths ?? undefined)
     if (!gitState.error) {
@@ -2723,25 +2725,25 @@
   const tabs: Array<{
     id: GitPanelTabId
     label: string
-    icon: typeof GitBranch
+    icon: typeof CioTabGit
     count: number | null
   }> = $derived.by(() => {
     const list: Array<{
       id: GitPanelTabId
       label: string
-      icon: typeof GitBranch
+      icon: typeof CioTabGit
       count: number | null
     }> = [
       {
         id: 'changes',
         label: 'Changes',
-        icon: FileDiff,
+        icon: CioDiff,
         count: changes.length > 0 ? changes.length : null
       },
-      { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
-      { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
-      { id: 'pulls', label: 'PRs', icon: GitPullRequest, count: null },
-      { id: 'issues', label: 'Issues', icon: CircleDot, count: null }
+      { id: 'history', label: 'History', icon: CioUndo, count: null },
+      { id: 'branches', label: 'Branches', icon: CioNetwork, count: null },
+      { id: 'pulls', label: 'PRs', icon: CioPullRequest, count: null },
+      { id: 'issues', label: 'Issues', icon: CioDot, count: null }
     ]
     // Notifications are account-wide, so the view earns a place only once a
     // GitHub account is signed in. Its badge is the unread count of what the
@@ -2750,7 +2752,7 @@
       list.push({
         id: 'notifications',
         label: 'Notifications',
-        icon: Bell,
+        icon: CioNotifications,
         count: githubNotifications.counts.inbox > 0 ? githubNotifications.counts.inbox : null
       })
     }
@@ -2759,7 +2761,7 @@
       list.push({
         id: 'stashes',
         label: 'Stashes',
-        icon: Archive,
+        icon: CioArchive,
         count: gitState.stashes.length
       })
     }
@@ -2768,7 +2770,7 @@
     // While the panel is *on* that view the entry stays, so a cold cache cannot
     // leave the trigger naming a view the row is no longer showing.
     if (hasDeployments === true || activeTab === 'deployments') {
-      list.push({ id: 'deployments', label: 'Deploys', icon: Rocket, count: null })
+      list.push({ id: 'deployments', label: 'Deploys', icon: CioRocket, count: null })
     }
     return list
   })
@@ -2806,7 +2808,7 @@
    * sits in, which is tighter than the shared `StatusPill`.
    */
   const dirtyBadgeClass =
-    'shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
+    'shrink-0 bg-warning/10 px-1 py-0.5 text-[0.5rem] font-semibold uppercase tracking-wide text-warning'
 
   /**
    * What a state badge says once the trigger renders it as a control. The state
@@ -2847,7 +2849,7 @@
   {@const copy = statusActionCopy[state]}
   <span
     class={[
-      '-m-1 flex shrink-0 cursor-pointer items-center rounded p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+      '-m-1 flex shrink-0 cursor-pointer items-center p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary',
       copy.hoverClass
     ]}
     role="button"
@@ -2859,7 +2861,7 @@
     onkeydown={activateWorkingChangesFromKeyboard}
   >
     {#if state === 'conflicted'}
-      <TriangleAlert size={12} class="shrink-0 text-danger" aria-hidden="true" />
+      <CioAttention size={12} class="shrink-0 text-danger" aria-hidden="true" />
     {:else}
       <span class={dirtyBadgeClass}>dirty</span>
     {/if}
@@ -2870,7 +2872,7 @@
   {#if interactive && worktreeState !== null && worktreeState !== 'clean'}
     {@render worktreeStatusAction(worktreeState)}
   {:else if worktreeState === 'conflicted'}
-    <TriangleAlert
+    <CioAttention
       size={12}
       class="shrink-0 text-danger"
       role="img"
@@ -2885,7 +2887,7 @@
     -->
     <span class={dirtyBadgeClass} title="Uncommitted changes in this branch">dirty</span>
   {:else}
-    <CircleCheck
+    <CioCheckCircle
       size={12}
       class="shrink-0 text-success"
       role="img"
@@ -2902,13 +2904,13 @@
   -->
   <button
     type="button"
-    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+    class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
     aria-label="Refresh the git status and the current view"
     title="Refresh the git status and the current view"
     disabled={busy}
     onclick={() => void refreshPanel()}
   >
-    <RefreshCw
+    <CioRefresh
       size={12}
       class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments']) ||
       githubNotifications.loading
@@ -2930,79 +2932,79 @@
     {#if selectedCommit && isHeadCommit}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title="Amend the latest commit message"
         aria-label="Amend the latest commit message"
         disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
         onclick={startAmend}
       >
-        <GitGraph size={12} aria-hidden="true" />
+        <CioGitGraph size={12} aria-hidden="true" />
         <span class="view-action-label">Amend</span>
       </button>
     {/if}
   {:else if activeTab === 'branches'}
     <button
       type="button"
-      class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Create a branch from the current one"
       aria-label="Create a branch from the current one"
       onclick={() => (creatingBranch = true)}
     >
-      <Plus size={12} aria-hidden="true" />
+      <CioPlus size={12} aria-hidden="true" />
       <span class="view-action-label">New branch</span>
     </button>
   {:else if activeTab === 'pulls'}
     {#if selectedPullRequest}
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open this pull request in the full screen reader"
         aria-label="Open this pull request in the full screen reader"
         onclick={() => openPullRequestFullscreen(selectedPullRequest)}
       >
-        <Maximize2 size={12} aria-hidden="true" />
+        <CioMaximize size={12} aria-hidden="true" />
       </button>
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open this pull request on GitHub"
         aria-label="Open this pull request on GitHub"
         data-external-url={selectedPullRequest?.url ?? ''}
         onclick={() => void openInBrowser(selectedPullRequest?.url ?? '')}
       >
-        <ExternalLink size={12} aria-hidden="true" />
+        <CioExternalLink size={12} aria-hidden="true" />
       </button>
     {:else}
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open the pull request list in the full screen reader"
         aria-label="Open the pull request list in the full screen reader"
         onclick={() => openPullRequestFullscreen(null)}
       >
-        <Maximize2 size={12} aria-hidden="true" />
+        <CioMaximize size={12} aria-hidden="true" />
       </button>
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Create a pull request"
         aria-label="Create a pull request"
         onclick={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
       >
-        <GitPullRequest size={12} aria-hidden="true" />
+        <CioPullRequest size={12} aria-hidden="true" />
         <span class="view-action-label">New PR</span>
       </button>
     {/if}
   {:else if activeTab === 'deployments' && deploymentsExternal}
     <button
       type="button"
-      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title={deploymentsExternal.title}
       aria-label={deploymentsExternal.title}
       data-external-url={deploymentsExternal.url}
       onclick={() => void openInBrowser(deploymentsExternal.url)}
     >
-      <ExternalLink size={12} aria-hidden="true" />
+      <CioExternalLink size={12} aria-hidden="true" />
     </button>
   {:else if activeTab === 'notifications'}
     {#if openNotification}
@@ -3024,9 +3026,9 @@
           void githubNotifications.setDone(openNotification.id, !openNotification?.done)}
       >
         {#if openNotification.done}
-          <ArchiveRestore size={12} aria-hidden="true" />
+          <CioArchive size={12} aria-hidden="true" />
         {:else}
-          <Archive size={12} aria-hidden="true" />
+          <CioArchive size={12} aria-hidden="true" />
         {/if}
       </button>
       <button
@@ -3037,7 +3039,7 @@
         disabled={notificationBusy}
         onclick={() => void githubNotifications.unsubscribe(openNotification.id)}
       >
-        <BellOff size={12} aria-hidden="true" />
+        <CioBellOff size={12} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -3049,9 +3051,9 @@
           void githubNotifications.setSaved(openNotification.id, !openNotification?.saved)}
       >
         {#if openNotification.saved}
-          <BookmarkCheck size={12} class="text-primary" aria-hidden="true" />
+          <CioBookmarkCheck size={12} class="text-primary" aria-hidden="true" />
         {:else}
-          <Bookmark size={12} aria-hidden="true" />
+          <CioBookmark size={12} aria-hidden="true" />
         {/if}
       </button>
       <button
@@ -3062,12 +3064,12 @@
         data-external-url={openNotification.url ?? ''}
         onclick={() => void openInBrowser(openNotification?.url ?? '')}
       >
-        <ExternalLink size={12} aria-hidden="true" />
+        <CioExternalLink size={12} aria-hidden="true" />
       </button>
     {:else}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         title="Mark all notifications as read"
         aria-label="Mark all notifications as read"
         disabled={!githubConnected ||
@@ -3075,18 +3077,18 @@
           githubNotifications.busyThreadId !== null}
         onclick={() => void githubNotifications.markAllRead()}
       >
-        <CheckCheck size={12} aria-hidden="true" />
+        <CioCheckCheck size={12} aria-hidden="true" />
         <span class="view-action-label">Mark all read</span>
       </button>
       <button
         type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Open GitHub notification settings"
         aria-label="Open GitHub notification settings"
         data-external-url={githubNotificationSettingsUrl()}
         onclick={() => void openInBrowser(githubNotificationSettingsUrl())}
       >
-        <Settings size={12} aria-hidden="true" />
+        <CioTabSettings size={12} aria-hidden="true" />
       </button>
     {/if}
   {/if}
@@ -3100,14 +3102,14 @@
 -->
 {#snippet changesViewToggle()}
   <div
-    class="flex shrink-0 items-center gap-0.5 rounded-md border border-border bg-elevated p-0.5"
+    class="flex shrink-0 items-center gap-0.5 border border-border bg-elevated p-0.5"
     role="tablist"
     aria-label="Changed files layout"
   >
     <button
       type="button"
       class={[
-        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        'flex h-5 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium transition-colors',
         changesView === 'list'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'
@@ -3118,13 +3120,13 @@
       aria-label="Show the changed files as a flat list"
       onclick={() => (changesView = 'list')}
     >
-      <GitCommitHorizontal size={12} aria-hidden="true" />
+      <CioCommit size={12} aria-hidden="true" />
       <span class="view-action-label">List</span>
     </button>
     <button
       type="button"
       class={[
-        'flex h-5 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors',
+        'flex h-5 shrink-0 items-center gap-1 px-1.5 text-[0.625rem] font-medium transition-colors',
         changesView === 'tree'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'
@@ -3135,7 +3137,7 @@
       aria-label="Show the changed files as a folder tree"
       onclick={() => (changesView = 'tree')}
     >
-      <FolderGit2 size={12} aria-hidden="true" />
+      <CioFolderGit size={12} aria-hidden="true" />
       <span class="view-action-label">Tree</span>
     </button>
   </div>
@@ -3153,16 +3155,16 @@
     type="button"
     class={[
       'flex shrink-0 cursor-pointer items-center gap-1.5 border border-danger/40 font-medium text-[0.625rem] text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40',
-      compact ? 'h-6 rounded-xs px-2' : 'h-7 rounded-md px-2.5'
+      compact ? 'h-6 px-2' : 'h-7 px-2.5'
     ]}
     disabled={integrateBusy || conflictState === 'none'}
     title={`Discard the whole ${conflictState === 'merge' ? 'merge' : 'rebase'} and restore the working tree`}
     onclick={requestAbortConflict}
   >
     {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-      <Loader2 size={11} class="animate-spin" />
+      <CioSpinner size={11} class="animate-spin" />
     {:else}
-      <Trash2 size={11} />
+      <CioTrash size={11} />
     {/if}
     {#if compact}
       Abort
@@ -3192,7 +3194,7 @@
       type="button"
       data-modal-primary
       {@attach focusSyncModalAction}
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
       title={conflicted.length > 0
         ? `Resolve and stage the ${String(conflicted.length)} remaining conflict${conflicted.length === 1 ? '' : 's'} before continuing`
         : 'Replay the rest of your commits on top of the new base'}
@@ -3200,9 +3202,9 @@
       onclick={() => void runRebaseAction('continue')}
     >
       {#if rebaseActionRunning === 'continue'}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <Play size={11} />
+        <CioPlay size={11} />
       {/if}
       Continue rebase
     </button>
@@ -3210,15 +3212,15 @@
       type="button"
       data-modal-primary
       {@attach focusSyncModalAction}
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 border border-border px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
       title="Drop the commit git stopped on and replay the rest"
       disabled={integrateBusy}
       onclick={() => void runRebaseAction('skip')}
     >
       {#if rebaseActionRunning === 'skip'}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <SkipForward size={11} />
+        <CioSkipForward size={11} />
       {/if}
       Skip this commit
     </button>
@@ -3227,15 +3229,15 @@
       type="button"
       data-modal-primary
       {@attach focusSyncModalAction}
-      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+      class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 bg-foreground px-2.5 text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
       title="Commit the resolved files to complete the merge"
       disabled={completeMergeBusy}
       onclick={openCompleteMerge}
     >
       {#if completeMergeBusy}
-        <Loader2 size={11} class="animate-spin" />
+        <CioSpinner size={11} class="animate-spin" />
       {:else}
-        <GitMerge size={11} />
+        <CioMerge size={11} />
       {/if}
       Complete merge
     </button>
@@ -3263,22 +3265,22 @@
       -->
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-warning/40 px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1.5 border border-warning/40 px-2 text-[0.625rem] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
         disabled={integrateBusy}
         title="Open the merge editor on the conflicted files, starting with the first"
         onclick={() => routeConflictResolution()}
       >
-        <GitMerge size={11} />
+        <CioMerge size={11} />
         Resolve all
       </button>
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center gap-1.5 rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center gap-1.5 border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         disabled={integrateBusy}
         title="Hand every conflicted file to an agent to resolve"
         onclick={() => void resolveConflictsWithAgent()}
       >
-        <Bot size={11} />
+        <CioSubagent size={11} />
         Resolve with agent
       </button>
       <!--
@@ -3289,13 +3291,13 @@
         a third word. Both sides are destructive to the other, so both confirm.
       -->
       <div
-        class="flex h-6 shrink-0 items-center gap-0.5 rounded-xs border border-border bg-elevated p-0.5"
+        class="flex h-6 shrink-0 items-center gap-0.5 border border-border bg-elevated p-0.5"
         role="group"
         aria-label="Accept one side of every conflicted file"
       >
         <button
           type="button"
-          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
+          class="h-5 shrink-0 px-1 text-[0.5625rem] font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-default disabled:opacity-40"
           disabled={integrateBusy}
           title="Accept all incoming: replace every conflicted file with its incoming version"
           onclick={() => requestAcceptAllConflicts('incoming')}
@@ -3304,7 +3306,7 @@
         </button>
         <button
           type="button"
-          class="h-5 shrink-0 rounded-sm px-1 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
+          class="h-5 shrink-0 px-1 text-[0.5625rem] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-40"
           disabled={integrateBusy}
           title="Accept all current: replace every conflicted file with its current version"
           onclick={() => requestAcceptAllConflicts('current')}
@@ -3315,7 +3317,7 @@
     {:else if unstaged.length + untracked.length > 0}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center rounded-xs border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
         disabled={gitState.isBusy('stage')}
         onclick={() => void stageAll()}
       >
@@ -3324,7 +3326,7 @@
     {:else if staged.length > 0}
       <button
         type="button"
-        class="flex h-6 shrink-0 items-center rounded-xs border border-danger/30 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+        class="flex h-6 shrink-0 items-center border border-danger/30 px-2 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
         disabled={gitState.isBusy('unstage')}
         onclick={() => void unstageAll()}
       >
@@ -3337,31 +3339,31 @@
       </span>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={batchBusy}
           aria-label="Selected actions"
           title="Selected actions"
         >
-          <ChevronDown size={12} />
+          <CioChevronDown size={12} />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
-            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
             side="bottom"
             align="start"
             sideOffset={4}
             collisionPadding={8}
           >
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => void stageSelectedAction(false)}
             >
-              <Check size={12} class="text-success" />
+              <CioCheck size={12} class="text-success" />
               Stage
             </DropdownMenu.Item>
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => void stageSelectedAction(true)}
             >
@@ -3370,23 +3372,23 @@
             </DropdownMenu.Item>
             <DropdownMenu.Separator class="my-1 h-px bg-border" />
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={requestCommitSelected}
             >
-              <GitCommit size={12} class="text-dimmed" />
+              <CioCommit size={12} class="text-dimmed" />
               Commit…
             </DropdownMenu.Item>
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => requestStashFor(selectedPathList)}
             >
-              <Archive size={12} class="text-dimmed" />
+              <CioArchive size={12} class="text-dimmed" />
               Stash…
             </DropdownMenu.Item>
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => void ignoreSelectedAction()}
             >
@@ -3395,11 +3397,11 @@
             </DropdownMenu.Item>
             <DropdownMenu.Separator class="my-1 h-px bg-border" />
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => requestDiscard(selectedPathList)}
             >
-              <Trash2 size={12} />
+              <CioTrash size={12} />
               Discard changes
             </DropdownMenu.Item>
           </DropdownMenu.Content>
@@ -3410,7 +3412,7 @@
     {@const commit = selectedCommit}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to history"
       aria-label="Back to history"
       onclick={() => {
@@ -3418,28 +3420,28 @@
         activeTab = 'history'
       }}
     >
-      <ArrowLeft size={12} />
+      <CioArrowLeft size={12} />
     </button>
     <div class="flex shrink-0 items-center gap-0.5">
       <button
         type="button"
-        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
         title="Newer commit"
         aria-label="Newer commit"
         disabled={!canGoNewer}
         onclick={() => navigateCommit(-1)}
       >
-        <ChevronLeft size={12} />
+        <CioBack size={12} />
       </button>
       <button
         type="button"
-        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+        class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
         title="Older commit"
         aria-label="Older commit"
         disabled={!canGoOlder}
         onclick={() => navigateCommit(1)}
       >
-        <ChevronRight size={12} />
+        <CioForward size={12} />
       </button>
     </div>
     <div class="min-w-0 grow-2 basis-0">
@@ -3466,27 +3468,27 @@
       </span>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger
-          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           disabled={batchBusy}
           aria-label={`Actions for the ${selectedPathList.length} selected files`}
           title={`Actions for the ${selectedPathList.length} selected files`}
         >
-          <ChevronDown size={12} />
+          <CioChevronDown size={12} />
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content
-            class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+            class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
             side="bottom"
             align="start"
             sideOffset={4}
             collisionPadding={8}
           >
             <DropdownMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+              class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
               disabled={batchBusy}
               onSelect={() => requestRemoveCommitChanges(selectedPathList)}
             >
-              <FileMinus size={12} class="shrink-0" />
+              <CioFileMinus size={12} class="shrink-0" />
               Remove from commit…
             </DropdownMenu.Item>
           </DropdownMenu.Content>
@@ -3497,12 +3499,12 @@
     {@const stash = selectedStash}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to stash list"
       aria-label="Back to stash list"
       onclick={clearSelectedStash}
     >
-      <ArrowLeft size={12} />
+      <CioArrowLeft size={12} />
     </button>
     <div class="min-w-0 grow-2 basis-0">
       <p class="truncate text-[0.6875rem] font-medium text-foreground" title={stash.message}>
@@ -3528,15 +3530,15 @@
     {@const NotificationIcon = subjectIcon(openNotification.subjectType)}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to notifications"
       aria-label="Back to notifications"
       onclick={() => githubNotifications.closeNotification()}
     >
-      <ArrowLeft size={12} />
+      <CioArrowLeft size={12} />
     </button>
     <span
-      class="flex size-5 shrink-0 items-center justify-center rounded {openNotification.unread
+      class="flex size-5 shrink-0 items-center justify-center {openNotification.unread
         ? 'text-primary'
         : 'text-dimmed'}"
       role="img"
@@ -3606,12 +3608,12 @@
     {@const DeploymentGlyph = stateGlyph(openDeploymentState)}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to deployment activity"
       aria-label="Back to deployment activity"
       onclick={() => (selectedDeployment = null)}
     >
-      <ArrowLeft size={12} />
+      <CioArrowLeft size={12} />
     </button>
     <div class="min-w-0 grow-2 basis-0">
       <p
@@ -3643,12 +3645,12 @@
     {@const RunGlyph = stateGlyph(openRunState)}
     <button
       type="button"
-      class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+      class="shrink-0 p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       title="Back to deployment activity"
       aria-label="Back to deployment activity"
       onclick={() => (selectedRun = null)}
     >
-      <ArrowLeft size={12} />
+      <CioArrowLeft size={12} />
     </button>
     <div class="min-w-0 grow-2 basis-0">
       <p
@@ -3785,7 +3787,7 @@
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
-          <GitBranch size={12} class="shrink-0 text-muted" />
+          <CioTabGit size={12} class="shrink-0 text-muted" />
           <span class="font-mono text-[0.6875rem] font-medium text-foreground">
             {status?.branch ?? (repoState === 'git' ? 'detached' : 'Repository')}
           </span>
@@ -3821,7 +3823,7 @@
           <button
             type="button"
             class={[
-              'flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors',
+              'flex h-6 w-6 shrink-0 items-center justify-center transition-colors',
               findNavState.gitFindOpen
                 ? 'bg-elevated text-foreground'
                 : 'text-dimmed hover:bg-elevated hover:text-foreground'
@@ -3831,7 +3833,7 @@
             aria-pressed={findNavState.gitFindOpen}
             onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
           >
-            <Search size={12} aria-hidden="true" />
+            <CioSearch size={12} aria-hidden="true" />
           </button>
           {@render refreshStatusButton()}
           {#if activeTab === 'changes' && selectedCommit}
@@ -3843,15 +3845,15 @@
             -->
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
                 aria-label={`Actions for commit ${selectedCommit.shortHash}`}
                 title={`Actions for commit ${selectedCommit.shortHash}`}
               >
-                <Info size={13} />
+                <CioTabInfo size={13} />
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                  class="z-50 min-w-48 overflow-hidden border border-border bg-surface p-1 shadow-xl"
                   side="bottom"
                   align="end"
                   sideOffset={4}
@@ -3864,14 +3866,14 @@
           {:else}
             <DropdownMenu.Root>
               <DropdownMenu.Trigger
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
                 aria-label="Git actions"
                 title="Git actions"
               >
                 {#if gitState.isBusy('fetch')}
-                  <Loader2 size={12} class="animate-spin" />
+                  <CioSpinner size={12} class="animate-spin" />
                 {:else}
-                  <MoreHorizontal size={13} />
+                  <CioEllipsis size={13} />
                 {/if}
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -3880,7 +3882,7 @@
                   align="end"
                   sideOffset={4}
                   collisionPadding={8}
-                  class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+                  class="z-50 w-56 overflow-hidden border border-border bg-surface py-1 shadow-xl"
                 >
                   <!--
                   Fetch is the one remote action with no control of its own: it
@@ -3898,7 +3900,7 @@
                         disabled={branchSyncBusy}
                         onSelect={() => void pullAction()}
                       >
-                        <ArrowDownToLine size={12} class="shrink-0 text-dimmed" />
+                        <CioDownload size={12} class="shrink-0 text-dimmed" />
                         Pull {commitsBehind}
                       </DropdownMenu.Item>
                     {/if}
@@ -3908,7 +3910,7 @@
                         disabled={pushBlocked}
                         onSelect={() => void pushAction()}
                       >
-                        <ArrowUpFromLine size={12} class="shrink-0 text-dimmed" />
+                        <CioUpload size={12} class="shrink-0 text-dimmed" />
                         Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
                       </DropdownMenu.Item>
                     {/if}
@@ -3917,7 +3919,7 @@
                     class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
                     onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
                   >
-                    <GitPullRequest size={12} class="shrink-0 text-dimmed" />
+                    <CioPullRequest size={12} class="shrink-0 text-dimmed" />
                     Create pull request…
                   </DropdownMenu.Item>
                   <DropdownMenu.Item
@@ -3925,7 +3927,7 @@
                     disabled={localBranches.length < 2}
                     onSelect={() => (showIntegrateModal = true)}
                   >
-                    <GitMerge size={12} class="shrink-0 text-dimmed" />
+                    <CioMerge size={12} class="shrink-0 text-dimmed" />
                     Merge or rebase…
                   </DropdownMenu.Item>
                   <DropdownMenu.Separator class="my-1 h-px bg-border" />
@@ -3934,7 +3936,7 @@
                     disabled={remotes.length === 0 || fetching}
                     onSelect={() => void gitState.fetch(projectId)}
                   >
-                    <Download size={12} class="shrink-0 text-dimmed" />
+                    <CioDownload size={12} class="shrink-0 text-dimmed" />
                     Fetch
                   </DropdownMenu.Item>
                   <DropdownMenu.Separator class="my-1 h-px bg-border" />
@@ -3943,7 +3945,7 @@
                     disabled={status?.clean ?? true}
                     onSelect={() => (showStashModal = true)}
                   >
-                    <Archive size={12} class="shrink-0 text-dimmed" />
+                    <CioArchive size={12} class="shrink-0 text-dimmed" />
                     Stash changes…
                   </DropdownMenu.Item>
                 </DropdownMenu.Content>
@@ -3968,21 +3970,23 @@
         stretch. While conflicts are open they stand aside entirely (see
         `conflictsOpen`) so the row can hold the controls that end them.
       -->
-      <div class="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
+      <div
+        class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-2"
+      >
         {@render viewContext()}
         {#if showsRemoteActions}
           {#if showsPull}
             <button
               type="button"
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
               title={`Pull ${String(commitsBehind)} commit(s) from the remote`}
               disabled={branchSyncBusy}
               onclick={() => void pullAction()}
             >
               {#if gitState.isBusy('pull')}
-                <Loader2 size={11} class="animate-spin" />
+                <CioSpinner size={11} class="animate-spin" />
               {:else}
-                <ArrowDownToLine size={11} />
+                <CioDownload size={11} />
               {/if}
               <span class="min-w-0 truncate">Pull {commitsBehind}</span>
             </button>
@@ -3990,15 +3994,15 @@
           {#if showsPush}
             <button
               type="button"
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-sm bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
+              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1 bg-elevated px-1.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-raised disabled:cursor-default disabled:opacity-40"
               title={pushTitle}
               disabled={pushBlocked}
               onclick={() => void pushAction()}
             >
               {#if gitState.isBusy('push')}
-                <Loader2 size={11} class="animate-spin" />
+                <CioSpinner size={11} class="animate-spin" />
               {:else}
-                <ArrowUpFromLine size={11} />
+                <CioUpload size={11} />
               {/if}
               <span class="min-w-0 truncate">
                 Push{commitsAhead > 0 ? ` ${String(commitsAhead)}` : ''}
@@ -4041,19 +4045,19 @@
         />
 
         {#if identityNeeded}
-          <div class="mx-2 mt-2 rounded-lg border border-border bg-surface px-3 py-2">
+          <div class="mx-2 mt-2 border border-border bg-surface px-3 py-2">
             <p class="text-[0.625rem] font-medium text-foreground">
               Commit identity not configured
             </p>
             {#if showIdentityForm}
               <div class="mt-2 space-y-1.5">
                 <input
-                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  class="h-7 w-full border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
                   placeholder="Name"
                   bind:value={identityName}
                 />
                 <input
-                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  class="h-7 w-full border border-border bg-elevated px-2 font-mono text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
                   placeholder="Email"
                   type="email"
                   bind:value={identityEmail}
@@ -4061,14 +4065,14 @@
                 <div class="flex items-center justify-end gap-1.5">
                   <button
                     type="button"
-                    class="rounded-md px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
+                    class="px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated"
                     onclick={() => (showIdentityForm = false)}
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    class="rounded-md bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                    class="bg-primary px-2.5 py-1 text-[0.625rem] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
                     disabled={!identityName.trim() || !identityEmail.trim()}
                     onclick={() => void saveIdentity()}
                   >
@@ -4079,7 +4083,7 @@
             {:else}
               <button
                 type="button"
-                class="mt-1.5 rounded-md border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                class="mt-1.5 border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground"
                 onclick={() => {
                   identityName = gitState.identity?.name ?? ''
                   identityEmail = gitState.identity?.email ?? ''
@@ -4122,6 +4126,7 @@
             {stagePathsAction}
             {requestStashFor}
             {openInEditor}
+            {openDirectory}
             {ignorePathsAction}
             {requestDiscard}
             {routeConflictResolution}
@@ -4245,7 +4250,7 @@
                 {#snippet action()}
                   <button
                     type="button"
-                    class="cursor-pointer rounded-md bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
+                    class="cursor-pointer bg-primary px-3 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:opacity-90"
                     data-external-url={openNotification.url ?? ''}
                     onclick={() => void openInBrowser(openNotification?.url ?? '')}
                   >
@@ -4467,7 +4472,7 @@
     onMinimize={() => (fullscreenPullRequestId = null)}
   >
     {#snippet icon()}
-      <GitPullRequest size={12} class="shrink-0" aria-hidden="true" />
+      <CioPullRequest size={12} class="shrink-0" aria-hidden="true" />
     {/snippet}
     <div class="flex min-h-0 flex-1 flex-col">
       {#if fullscreenActivePullRequest && githubIdentity}

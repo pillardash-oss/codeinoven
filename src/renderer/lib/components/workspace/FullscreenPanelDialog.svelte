@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Minimize2 } from '@lucide/svelte'
+  import CioMinimize from '@pillardash-oss/cio-icon/CioMinimize.svelte'
   import type { Snippet } from 'svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import PanelTabStrip from './PanelTabStrip.svelte'
@@ -116,7 +116,7 @@
 
   The strip is not fixed to open instances. A surface whose tabs are sections of
   one panel omits `onNew`, `onCloseTab` and `icon`, and the strip then reads as a
-  section switcher instead of a tab bar: the assistant routine panel is exactly
+  section switcher instead of a tab bar: the assistant panel is exactly
   that case.
 -->
 <Modal
@@ -154,7 +154,7 @@
     titlebar
   >
     {#snippet trailingIcon()}
-      <Minimize2 size={14} />
+      <CioMinimize size={14} />
     {/snippet}
   </PanelTabStrip>
   {@render children()}

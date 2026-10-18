@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Puzzle } from '@lucide/svelte'
+  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import type { BrowserExtension } from '$shared/ipc-contract'
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
@@ -155,17 +155,17 @@
           <img
             src={icon}
             alt=""
-            class="h-4 w-4 rounded-sm object-contain"
+            class="h-4 w-4 object-contain"
             onerror={() => actionIcon !== null && undrawableIcons.add(actionIcon)}
           />
         {:else}
-          <Puzzle size={15} />
+          <CioTabExtensions size={15} />
         {/if}
         {#if activity?.badgeText}
           <!-- The extension's own badge, in its own colour: the one part of a
                toolbar this browser does not draw, drawn on the pin instead. -->
           <span
-            class="pointer-events-none absolute -right-0.5 -bottom-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-[0.625rem] leading-none font-medium text-white"
+            class="pointer-events-none absolute -right-0.5 -bottom-0.5 flex h-3.5 min-w-3.5 items-center justify-center px-0.5 text-[0.625rem] leading-none font-medium tabular-nums text-white"
             style="background-color: {activity.badgeColor ?? '#d93025'}"
           >
             {badgeLabel(activity.badgeText)}

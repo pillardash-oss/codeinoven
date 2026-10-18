@@ -1,6 +1,7 @@
 <script lang="ts">
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { toast } from 'svelte-sonner'
-  import { AppWindow, Loader2 } from '@lucide/svelte'
+
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
@@ -9,8 +10,12 @@
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import { assistantRoutines } from '$lib/stores/assistant-routines.svelte'
-  import { RoutineDefaultIcon, getRoutineIcon, routineAccentColor } from '$lib/routine-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import {
+    AssistantDefaultIcon,
+    getAssistantIcon,
+    assistantAccentColor
+  } from '$lib/assistant-icons'
   import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -68,22 +73,19 @@
   )
 
   /**
-   * The routine an assistant thread belongs to, so the header can wear the same
-   * routine icon the sidebar row does. A run inherits its task's `routineId`, so
-   * this resolves for a task and each of its runs alike; a routine-less task has
-   * no routine and the header falls back to the routine default mark.
+   * The assistant an assistant thread belongs to, so the header can wear the same
+   * assistant icon the sidebar row does. A run inherits its task's `assistantId`, so
+   * this resolves for a task and each of its runs alike; an assistant-less task has
+   * no assistant and the header falls back to the assistant default mark.
    */
-  let headerAssistantRoutine = $derived(
+  let headerAssistant = $derived(
     workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
-      ? assistantRoutines.routineForTask(workspaceState.selectedThread)
+      ? assistants.assistantForTask(workspaceState.selectedThread)
       : null
   )
   let headerAssistantIcon = $derived(
-    headerAssistantRoutine
-      ? getRoutineIcon(
-          headerAssistantRoutine,
-          assistantRoutines.iconUrls.get(headerAssistantRoutine.id) ?? null
-        )
+    headerAssistant
+      ? getAssistantIcon(headerAssistant, assistants.iconUrls.get(headerAssistant.id) ?? null)
       : null
   )
 </script>
@@ -113,21 +115,20 @@
       class="titlebar-no-drag relative flex min-w-0 max-w-[var(--app-header-center-max-width)] items-center gap-2"
     >
       {#if thread.projectId === ASSISTANT_SPACE_ID}
-        <!-- An assistant thread wears its routine's icon, exactly as its sidebar
-             row does, so the header names the routine at a glance. A
-             routine-less task falls back to the routine default mark. -->
+        <!-- An assistant thread wears its assistant's icon, exactly as its sidebar
+             row does, so the header names the assistant at a glance. A
+             assistant-less task falls back to the assistant default mark. -->
         <span
           class="pointer-events-none flex h-4 w-4 shrink-0 items-center justify-center"
-          title={headerAssistantRoutine?.name ?? 'Assistant'}
+          title={headerAssistant?.name ?? 'Assistant'}
         >
           {#if headerAssistantIcon}
             <img src={headerAssistantIcon} alt="" class="h-4 w-4 object-contain" />
           {:else}
-            <RoutineDefaultIcon
+            <AssistantDefaultIcon
               size={14}
-              strokeWidth={1.8}
-              style="color: {headerAssistantRoutine
-                ? routineAccentColor(headerAssistantRoutine)
+              style="color: {headerAssistant
+                ? assistantAccentColor(headerAssistant)
                 : 'var(--color-muted)'}"
             />
           {/if}
@@ -174,14 +175,12 @@
         <ThreadDropdown items={threadActionsMenu.items} onOpen={() => {}} />
         {#if isWorking}
           <span
-            class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
+            class="flex shrink-0 items-center gap-1 px-1.5 py-0.5 text-[0.625rem] {isRetryPaused
               ? 'bg-warning/10 text-warning'
               : 'bg-info/10 text-info'}"
           >
             {#if isForeignRun}
-              <AppWindow size={10} />
-            {:else}
-              <Loader2 size={10} class="animate-spin" />
+              <CioWindow size={10} />
             {/if}
             <span class="header-status-label">
               {workspaceState.specStudioFormulating

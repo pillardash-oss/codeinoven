@@ -1,4 +1,6 @@
 import type { ThinkingLevel } from './types'
+import type { BaseUrlProviderUsageFormat } from './types/base-url-provider'
+import { isBaseUrlProviderUsageFormat } from './provider-usage-format'
 
 /** Versioned clipboard envelopes for copying custom base-URL models/providers. */
 
@@ -26,8 +28,10 @@ export interface BaseUrlProviderClipboardData {
   baseURL: string
   apiKey: string
   headers: string
-  /** Account status/usage route carried through copy/paste. Empty when none. */
+  /** Usage route carried through copy/paste. Empty when none. */
   usagePath?: string
+  /** Usage response format carried through copy/paste. Empty means auto. */
+  usageFormat?: BaseUrlProviderUsageFormat | ''
   /** Model-list route carried through copy/paste. Empty when default. */
   modelsPath?: string
   models: BaseUrlProviderModelClipboardData[]
@@ -132,6 +136,9 @@ function parseProvider(raw: unknown): BaseUrlProviderClipboardData {
     apiKey: optionalString(provider['apiKey']),
     headers: optionalString(provider['headers']),
     usagePath: optionalString(provider['usagePath']),
+    usageFormat: isBaseUrlProviderUsageFormat(provider['usageFormat'])
+      ? provider['usageFormat']
+      : '',
     modelsPath: optionalString(provider['modelsPath']),
     models: provider['models'].map(parseModel),
     enabled: provider['enabled'] !== false
