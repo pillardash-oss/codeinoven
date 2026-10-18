@@ -374,6 +374,11 @@ export default defineConfig(({ mode }) => {
             // stylesheet and nothing else of the app, so a second renderer stays
             // cheap.
             'browser-overlay': resolve(__dirname, 'src/renderer/browser-overlay.html'),
+            // The launch screen: the first Electron window, shown before the app
+            // bundle has loaded anything. It is its own entry because it wears the
+            // brand face, and its stylesheet is one @import of the family rather
+            // than app.css.
+            splash: resolve(__dirname, 'src/renderer/splash.html'),
             // The browser permission prompt: one card, floating over the in-app
             // browser's page in a transparent window of its own. It is an entry
             // of its own because it draws the card with the app's stylesheet,

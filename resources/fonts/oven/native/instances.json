@@ -9,12 +9,12 @@
     {
       "file": "OvenBox-Regular.ttf",
       "weight": 400,
-      "sha256": "640df9395bc61b6c64520503ea546d78f1137a85af235fd5ddfe1c444408a612"
+      "sha256": "7743f4d351dc24ee51611a49ea563655e9da40ee1858813b6ff5296b89fc4110"
     },
     {
       "file": "OvenBox-ExtraBold.ttf",
       "weight": 800,
-      "sha256": "7e5631daea290818abe51c350e902359b8331d6f6a016e060771d9a951f811a1"
+      "sha256": "5c4ff24e893115aed4ca12cbd2241786df44817afe1817364222a15c349e40fc"
     }
   ]
 }

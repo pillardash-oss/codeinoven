@@ -61,6 +61,12 @@ def cut(weight: int, subfamily: str) -> Path:
     subsetter.populate(unicodes=CODEPOINTS)
     subsetter.subset(font)
 
+    # fontTools restamps `head.modified` on every save, so the same build wrote
+    # different bytes each run and the manifest below pinned a timestamp instead of
+    # a face. Held still, a re-cut of an unchanged Oven Box is a no-op and a face
+    # that really did change is the only thing the digest ever reports.
+    font.recalcTimestamp = False
+
     target = OUTPUT / f"OvenBox-{subfamily.replace(' ', '')}.ttf"
     font.save(target)
     return target

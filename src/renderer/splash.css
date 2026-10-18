@@ -1,0 +1,8 @@
+/* The launch screen's whole stylesheet.
+ *
+ * It is deliberately not app.css: this window paints before the app bundle exists, so
+ * it loads the family and nothing else. The declaration comes from the canonical face
+ * file rather than being repeated here, so the splash can never drift from the axis the
+ * app ships, and the build emits one copy of each face for both documents. The browser
+ * fetches only the family the page asks for, which is Oven Box. */
+@import '../../resources/fonts/oven/fonts.css';

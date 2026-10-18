@@ -4,9 +4,13 @@
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self';"
     />
     <title>CodeInOven</title>
+    <!-- The brand face and nothing else: this window paints before the app bundle
+         exists, so it must not pull in app.css, and its one line of type is the
+         same Oven Box the native splash and the app itself are set in. -->
+    <link rel="stylesheet" href="./splash.css" />
     <style>
       * {
         margin: 0;
@@ -26,7 +30,7 @@
         background: #000000;
         color: #f7f6f2;
         font-family:
-          'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
+          'Oven Box', 'JetBrainsMono Nerd Font Mono', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
           'Cascadia Code', monospace;
         overflow: hidden;
         user-select: none;
