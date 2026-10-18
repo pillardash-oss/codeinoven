@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioEllipsis from 'cio-icon/CioEllipsis.svelte'
-  import CioEllipsisVertical from 'cio-icon/CioEllipsisVertical.svelte'
+  import CioEllipsis from '@pillardash-oss/cio-icon/CioEllipsis.svelte'
+  import CioEllipsisVertical from '@pillardash-oss/cio-icon/CioEllipsisVertical.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
 

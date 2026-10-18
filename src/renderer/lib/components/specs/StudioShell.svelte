@@ -25,7 +25,7 @@
   lang="ts"
   generics="SectionId extends string, Annotation extends { id: string; quote?: string; body: string }"
 >
-  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import { tick } from 'svelte'
 
   import type { Snippet } from 'svelte'

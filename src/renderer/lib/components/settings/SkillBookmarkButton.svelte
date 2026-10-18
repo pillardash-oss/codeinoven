@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioBookmark from 'cio-icon/CioBookmark.svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
   import { skillBookmarkState } from '$lib/stores/skill-bookmarks.svelte'
   import type { SkillMarketEntry } from '$shared/types'
 

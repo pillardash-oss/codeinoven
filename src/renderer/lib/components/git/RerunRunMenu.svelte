@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
-  import CioRefresh from 'cio-icon/CioRefresh.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
-  import CioUndo from 'cio-icon/CioUndo.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import { showToastError } from '$lib/stores/app-errors.svelte'

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from 'cio-icon/CioCheck.svelte'
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioPencil from 'cio-icon/CioPencil.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
   import type { Snippet } from 'svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'

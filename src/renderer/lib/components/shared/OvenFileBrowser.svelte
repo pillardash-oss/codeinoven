@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioFolderPlus from 'cio-icon/CioFolderPlus.svelte'
-  import CioForward from 'cio-icon/CioForward.svelte'
-  import CioHome from 'cio-icon/CioHome.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
-  import CioFolder from 'cio-icon/CioFolder.svelte'
+  import CioFolderPlus from '@pillardash-oss/cio-icon/CioFolderPlus.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
+  import CioHome from '@pillardash-oss/cio-icon/CioHome.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { OvenFile } from '$shared/ovens'
 

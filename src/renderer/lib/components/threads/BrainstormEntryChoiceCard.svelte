@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioFileText from 'cio-icon/CioFileText.svelte'
-  import CioLightbulb from 'cio-icon/CioLightbulb.svelte'
-  import CioSparkles from 'cio-icon/CioSparkles.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioLightbulb from '@pillardash-oss/cio-icon/CioLightbulb.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

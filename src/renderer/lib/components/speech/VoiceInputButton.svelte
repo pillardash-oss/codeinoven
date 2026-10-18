@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioAttention from 'cio-icon/CioAttention.svelte'
-  import CioMic from 'cio-icon/CioMic.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
   import { onMount, onDestroy } from 'svelte'
 
   import { toast } from 'svelte-sonner'

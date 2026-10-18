@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTools from 'cio-icon/CioTools.svelte'
+  import CioTools from '@pillardash-oss/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { roomAbove } from '$lib/popover-room'

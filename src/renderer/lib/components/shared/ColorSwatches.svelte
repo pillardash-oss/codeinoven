@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from 'cio-icon/CioCheck.svelte'
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioPalette from 'cio-icon/CioPalette.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import Modal from '../ui/Modal.svelte'
   import ColorPicker from './ColorPicker.svelte'

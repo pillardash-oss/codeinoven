@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioBugOff from 'cio-icon/CioBugOff.svelte'
-  import CioDebugger from 'cio-icon/CioDebugger.svelte'
-  import CioEraser from 'cio-icon/CioEraser.svelte'
+  import CioBugOff from '@pillardash-oss/cio-icon/CioBugOff.svelte'
+  import CioDebugger from '@pillardash-oss/cio-icon/CioDebugger.svelte'
+  import CioEraser from '@pillardash-oss/cio-icon/CioEraser.svelte'
   import { agentDebug } from '$lib/stores/agent-debug.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ExchangeCard from './ExchangeCard.svelte'

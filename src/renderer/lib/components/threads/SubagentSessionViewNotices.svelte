@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
-  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'

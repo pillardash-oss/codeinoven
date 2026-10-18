@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from 'cio-icon/CioCheck.svelte'
-  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
-  import CioCopy from 'cio-icon/CioCopy.svelte'
-  import CioSparkles from 'cio-icon/CioSparkles.svelte'
+  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
   /**
    * Copy control for one recording-history attempt.
    *

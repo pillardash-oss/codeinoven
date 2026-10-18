@@ -1,6 +1,6 @@
 <script lang="ts">
   import { isMacPlatform } from '$lib/shortcut-display'
-  import CioUndo from 'cio-icon/CioUndo.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import {
     DEFAULT_VOICE_RECORDING_SHORTCUT,
     MODIFIER_KEY_CODES,

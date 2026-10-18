@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from 'cio-icon/CioAttention.svelte'
-  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
-  import CioCrossCircle from 'cio-icon/CioCrossCircle.svelte'
-  import CioTabInfo from 'cio-icon/CioTabInfo.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
   import { Toaster as Sonner } from 'svelte-sonner'
 
   /**

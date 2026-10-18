@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { ProviderSignInController } from './provider-sign-in.svelte'
 
   /**

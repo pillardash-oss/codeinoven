@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioCommit from 'cio-icon/CioCommit.svelte'
-  import CioCopy from 'cio-icon/CioCopy.svelte'
-  import CioMessage from 'cio-icon/CioMessage.svelte'
-  import CioTabInfo from 'cio-icon/CioTabInfo.svelte'
-  import CioTrash from 'cio-icon/CioTrash.svelte'
-  import CioUndo from 'cio-icon/CioUndo.svelte'
+  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
+  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
+  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitResetMode } from '$shared/types'
 

@@ -5,7 +5,7 @@ service, starts it in the background, and prints the registration code you paste
 into CodeInOven.
 
 ```sh
-npx cio-oven start
+npx @pillardash-oss/cio-oven start
 ```
 
 Works on Linux, macOS, and native Windows. Node.js 22 or later must already be
@@ -15,20 +15,20 @@ installed, since the Oven service runs on it.
 
 | Command                    | What it does                                                                            |
 | -------------------------- | --------------------------------------------------------------------------------------- |
-| `npx cio-oven start`   | Install and start the Oven service in the background, then print the registration code. |
-| `npx cio-oven stop`    | Stop the Oven service.                                                                  |
-| `npx cio-oven status`  | Show whether the service is installed and running.                                      |
-| `npx cio-oven restart` | Replace the running service with this release, keeping registration.                    |
-| `npx cio-oven help`    | Show usage.                                                                             |
+| `npx @pillardash-oss/cio-oven start`   | Install and start the Oven service in the background, then print the registration code. |
+| `npx @pillardash-oss/cio-oven stop`    | Stop the Oven service.                                                                  |
+| `npx @pillardash-oss/cio-oven status`  | Show whether the service is installed and running.                                      |
+| `npx @pillardash-oss/cio-oven restart` | Replace the running service with this release, keeping registration.                    |
+| `npx @pillardash-oss/cio-oven help`    | Show usage.                                                                             |
 
 `start` prompts for the Oven name, the SSH port the app should connect on, and
 whether to provision a dedicated SSH key. Every answer has a default, and every
 question has a flag, so it can also run unattended:
 
 ```sh
-npx cio-oven start --yes
-npx cio-oven start --yes --name "build-box" --port 2222
-npx cio-oven start --yes --no-identity
+npx @pillardash-oss/cio-oven start --yes
+npx @pillardash-oss/cio-oven start --yes --name "build-box" --port 2222
+npx @pillardash-oss/cio-oven start --yes --no-identity
 ```
 
 ## Options
@@ -64,7 +64,7 @@ Windows, when the account is an administrator, OpenSSH reads the machine-wide
 when that file needs an elevated shell, the command prints the exact line to add.
 
 The service keeps running after the command exits, after you log out, and after
-CodeInOven closes. `npx cio-oven stop` is what stops it.
+CodeInOven closes. `npx @pillardash-oss/cio-oven stop` is what stops it.
 
 ## Registration
 

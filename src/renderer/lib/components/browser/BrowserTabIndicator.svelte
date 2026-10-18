@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioEye from 'cio-icon/CioEye.svelte'
-  import CioMic from 'cio-icon/CioMic.svelte'
-  import CioVolume from 'cio-icon/CioVolume.svelte'
-  import CioVolumeX from 'cio-icon/CioVolumeX.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
+  import CioVolume from '@pillardash-oss/cio-icon/CioVolume.svelte'
+  import CioVolumeX from '@pillardash-oss/cio-icon/CioVolumeX.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import {

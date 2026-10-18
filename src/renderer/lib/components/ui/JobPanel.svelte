@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from 'cio-icon/CioAttention.svelte'
-  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
-  import CioCircle from 'cio-icon/CioCircle.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioCircle from '@pillardash-oss/cio-icon/CioCircle.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   /**
    * One background job as a dockable panel: what it is doing, the steps it goes
    * through, and what it left behind.

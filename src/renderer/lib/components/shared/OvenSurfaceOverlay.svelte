@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from 'cio-icon/CioAttention.svelte'
-  import CioRefresh from 'cio-icon/CioRefresh.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
 
   /**

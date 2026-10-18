@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
-  import CioStop from 'cio-icon/CioStop.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioStop from '@pillardash-oss/cio-icon/CioStop.svelte'
   import { toast } from 'svelte-sonner'
   import { showToastError } from '$lib/stores/app-errors.svelte'
   import { gitState } from '$lib/stores/git.svelte'

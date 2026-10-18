@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioSearch from 'cio-icon/CioSearch.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import type { Snippet } from 'svelte'
 
   let {

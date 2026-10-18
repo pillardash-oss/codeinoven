@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioArchive from 'cio-icon/CioArchive.svelte'
-  import CioGitMergeConflict from 'cio-icon/CioGitMergeConflict.svelte'
-  import CioPullRequest from 'cio-icon/CioPullRequest.svelte'
-  import CioTabGit from 'cio-icon/CioTabGit.svelte'
+  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
+  import CioGitMergeConflict from '@pillardash-oss/cio-icon/CioGitMergeConflict.svelte'
+  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { preloadGitPanelChunk } from '$lib/sidebar-panel-preload'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioKey from 'cio-icon/CioKey.svelte'
-  import CioPlus from 'cio-icon/CioPlus.svelte'
-  import CioTrash from 'cio-icon/CioTrash.svelte'
+  import CioKey from '@pillardash-oss/cio-icon/CioKey.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import type { UtilityDefinition, UtilityCredentialMetadata } from '$shared/types'
   import type { UtilityDraft } from './utility-editor-modal-helpers'
 

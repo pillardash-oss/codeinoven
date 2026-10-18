@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCursor from 'cio-icon/CioCursor.svelte'
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioWindow from 'cio-icon/CioWindow.svelte'
+  import CioCursor from '@pillardash-oss/cio-icon/CioCursor.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioWindow from '@pillardash-oss/cio-icon/CioWindow.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'

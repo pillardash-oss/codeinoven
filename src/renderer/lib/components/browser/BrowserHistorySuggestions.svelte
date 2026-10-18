@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioClock from 'cio-icon/CioClock.svelte'
+  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
   import { browserLibraryHost, type BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { formatCompactAge } from '$shared/date-time-format'
 

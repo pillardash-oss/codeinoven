@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioFiles from 'cio-icon/CioFiles.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
   /**
    * The scope chooser panel shared by the composer shoe and the Assignment
    * worker scope picker, so both surfaces offer the exact same menu. This

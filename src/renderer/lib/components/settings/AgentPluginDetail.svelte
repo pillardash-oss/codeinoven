@@ -1,15 +1,15 @@
 <script lang="ts">
-  import CioArrowLeft from 'cio-icon/CioArrowLeft.svelte'
-  import CioAttention from 'cio-icon/CioAttention.svelte'
-  import CioBook from 'cio-icon/CioBook.svelte'
-  import CioBookmark from 'cio-icon/CioBookmark.svelte'
-  import CioDownload from 'cio-icon/CioDownload.svelte'
-  import CioExternalLink from 'cio-icon/CioExternalLink.svelte'
-  import CioRefresh from 'cio-icon/CioRefresh.svelte'
-  import CioServer from 'cio-icon/CioServer.svelte'
-  import CioSparkles from 'cio-icon/CioSparkles.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
-  import CioTrash from 'cio-icon/CioTrash.svelte'
+  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
+  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import {
     invalidateAgentPluginMarket,
     loadAgentPluginDetail,

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioSearch from 'cio-icon/CioSearch.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import { Popover } from 'bits-ui'
   import type { Attachment } from 'svelte/attachments'
   import { NativeFloatingPanel } from '$lib/native-floating-panel.svelte'

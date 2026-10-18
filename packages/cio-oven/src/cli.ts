@@ -32,11 +32,11 @@ Options
   --help, -h           Show this message
 
 Examples
-  npx cio-oven start
-  npx cio-oven start --port 2222
-  npx cio-oven start --yes
-  npx cio-oven status
-  npx cio-oven stop
+  npx @pillardash-oss/cio-oven start
+  npx @pillardash-oss/cio-oven start --port 2222
+  npx @pillardash-oss/cio-oven start --yes
+  npx @pillardash-oss/cio-oven status
+  npx @pillardash-oss/cio-oven stop
 `
 
 function packageVersion(): string {

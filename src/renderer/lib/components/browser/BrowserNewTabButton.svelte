@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioPlus from 'cio-icon/CioPlus.svelte'
+  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'

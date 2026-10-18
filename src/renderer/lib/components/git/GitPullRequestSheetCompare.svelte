@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioArrowRight from 'cio-icon/CioArrowRight.svelte'
-  import CioAttention from 'cio-icon/CioAttention.svelte'
-  import CioBan from 'cio-icon/CioBan.svelte'
-  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
-  import CioEye from 'cio-icon/CioEye.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
+  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
+  import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import type { PullRequestCompare, PullRequestSummary } from '$shared/types'
 
   interface Props {

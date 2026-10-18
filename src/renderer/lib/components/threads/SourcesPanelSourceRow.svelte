@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBrowser from 'cio-icon/CioBrowser.svelte'
-  import CioFileText from 'cio-icon/CioFileText.svelte'
-  import CioImage from 'cio-icon/CioImage.svelte'
-  import CioTag from 'cio-icon/CioTag.svelte'
+  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
+  import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
+  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import type {
     AgentSource,

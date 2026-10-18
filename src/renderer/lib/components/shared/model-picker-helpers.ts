@@ -1,5 +1,5 @@
-import CioClock from 'cio-icon/CioClock.svelte'
-import CioStar from 'cio-icon/CioStar.svelte'
+import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
 import { getAgentIcon } from '$lib/agent-icons/registry'
 import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'

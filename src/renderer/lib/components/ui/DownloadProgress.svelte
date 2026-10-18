@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioPause from 'cio-icon/CioPause.svelte'
-  import CioPlay from 'cio-icon/CioPlay.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioPause from '@pillardash-oss/cio-icon/CioPause.svelte'
+  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   interface Props {
     /** 0-100 when determinate, undefined for indeterminate installing */
     percent?: number

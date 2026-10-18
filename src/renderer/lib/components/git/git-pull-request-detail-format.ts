@@ -1,7 +1,7 @@
-import CioBan from 'cio-icon/CioBan.svelte'
-import CioCheck from 'cio-icon/CioCheck.svelte'
-import CioClose from 'cio-icon/CioClose.svelte'
-import CioDot from 'cio-icon/CioDot.svelte'
+import CioBan from '@pillardash-oss/cio-icon/CioBan.svelte'
+import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
+import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
 import type {
   PrAuthorAssociation,
   PrCommentKind,

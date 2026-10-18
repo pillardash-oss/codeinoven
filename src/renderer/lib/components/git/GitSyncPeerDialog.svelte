@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSearch from 'cio-icon/CioSearch.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   /**
    * The sync chooser: which end to trade commits with, which way, and how.
    *

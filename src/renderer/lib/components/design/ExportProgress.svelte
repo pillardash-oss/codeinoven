@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioDownload from 'cio-icon/CioDownload.svelte'
-  import CioFiles from 'cio-icon/CioFiles.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
   import DockableModal from '$lib/components/ui/DockableModal.svelte'
   import DockRow from '$lib/components/ui/DockRow.svelte'
   import { exportProgressState as state } from '$lib/stores/export-progress.svelte'

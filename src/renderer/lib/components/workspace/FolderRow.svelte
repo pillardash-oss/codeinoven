@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioFolder from 'cio-icon/CioFolder.svelte'
-  import CioForward from 'cio-icon/CioForward.svelte'
+  import CioFolder from '@pillardash-oss/cio-icon/CioFolder.svelte'
+  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
   import type { Snippet } from 'svelte'
   import type { Project } from '$shared/types'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'

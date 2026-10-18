@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
-  import CioDownload from 'cio-icon/CioDownload.svelte'
-  import CioTabGit from 'cio-icon/CioTabGit.svelte'
-  import CioTrash from 'cio-icon/CioTrash.svelte'
+  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
+  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   interface Props {

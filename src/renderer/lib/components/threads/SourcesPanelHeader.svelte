@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioImage from 'cio-icon/CioImage.svelte'
-  import CioMemory from 'cio-icon/CioMemory.svelte'
-  import CioRefresh from 'cio-icon/CioRefresh.svelte'
-  import CioSearch from 'cio-icon/CioSearch.svelte'
-  import CioSpinner from 'cio-icon/CioSpinner.svelte'
-  import CioTerminal from 'cio-icon/CioTerminal.svelte'
+  import CioImage from '@pillardash-oss/cio-icon/CioImage.svelte'
+  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
   import type {
     ContextSection,
     OriginFilter,

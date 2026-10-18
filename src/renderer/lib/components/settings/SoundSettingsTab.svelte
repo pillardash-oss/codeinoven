@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from 'cio-icon/CioClose.svelte'
-  import CioRefresh from 'cio-icon/CioRefresh.svelte'
-  import CioSearch from 'cio-icon/CioSearch.svelte'
+  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
   import { onMount } from 'svelte'
 
   import type { AppConfigPatch } from '$shared/types'
