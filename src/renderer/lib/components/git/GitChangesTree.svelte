@@ -25,6 +25,7 @@
     onStagePaths: (paths: string[], staged: boolean) => void
     onStashPaths: (paths: string[]) => void
     onOpenInEditor: (path: string) => void
+    onOpenDirectory: (path: string) => void
     onIgnorePaths: (paths: string[]) => void
     onDiscardPaths: (paths: string[]) => void
     /** Opens the dedicated conflict-resolution panel for a conflicted file. */
@@ -44,6 +45,7 @@
     onStagePaths,
     onStashPaths,
     onOpenInEditor,
+    onOpenDirectory,
     onIgnorePaths,
     onDiscardPaths,
     onResolveConflict
@@ -171,6 +173,14 @@
 </script>
 
 {#snippet dirActions(node: TreeNode)}
+  <ContextMenu.Item
+    class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+    onSelect={() => onOpenDirectory(node.path)}
+  >
+    <CioFolder size={12} class="text-warning" />
+    Open directory
+  </ContextMenu.Item>
+  <ContextMenu.Separator class="my-1 h-px bg-border" />
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
     onSelect={() => onStagePaths(allPathsFor(node), false)}

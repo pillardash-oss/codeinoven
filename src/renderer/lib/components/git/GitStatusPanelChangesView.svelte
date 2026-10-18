@@ -268,6 +268,7 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
                 onResolveConflict={(path) => routeConflictResolution(path)}
@@ -319,6 +320,7 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />
@@ -397,6 +399,7 @@
                 onStagePaths={(paths, staged) => stagePathsAction(paths, staged)}
                 onStashPaths={(paths) => requestStashFor(paths)}
                 onOpenInEditor={(path) => openInEditor(path)}
+                onOpenDirectory={(path) => openDirectory(path)}
                 onIgnorePaths={(paths) => ignorePathsAction(paths)}
                 onDiscardPaths={(paths) => requestDiscard(paths)}
               />

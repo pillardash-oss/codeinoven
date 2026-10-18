@@ -2545,6 +2545,13 @@
     await projectFilesWorkspace.openFile(projectId, path)
   }
 
+  async function openDirectory(path: string): Promise<void> {
+    contextSidebarState.openFiles(projectId, threadId)
+    await projectFilesWorkspace.ensureState(projectId)
+    await projectFilesWorkspace.loadDirectory(projectId, '')
+    await projectFilesWorkspace.revealDirectory(projectId, path)
+  }
+
   async function stashChanges(): Promise<void> {
     await gitState.stash(projectId, stashMessage.trim() || undefined, stashPaths ?? undefined)
     if (!gitState.error) {
@@ -4119,6 +4126,7 @@
             {stagePathsAction}
             {requestStashFor}
             {openInEditor}
+            {openDirectory}
             {ignorePathsAction}
             {requestDiscard}
             {routeConflictResolution}
