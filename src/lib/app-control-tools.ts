@@ -86,6 +86,11 @@ const CALL_INPUT_SCHEMA: Record<string, unknown> = {
       type: 'boolean',
       description:
         'Set true only after the user has agreed to a destructive operation. A destructive channel or action is refused without it.'
+    },
+    capture: {
+      type: 'boolean',
+      description:
+        'Capture the live app window and return it as an image, so you can see the real interface. Use this to verify UI you changed: the app runs inside Electron, so the in-app browser cannot render it. Takes no other argument.'
     }
   },
   additionalProperties: false
@@ -104,7 +109,7 @@ export const APP_CONTROL_TOOLS: GatewayToolDefinition[] = [
   {
     name: APP_CONTROL_CALL_TOOL_NAME,
     description:
-      'Do something in the CodeInOven app exactly as the user would: invoke one app IPC channel with `channel` (+ positional `args`), or run one renderer UI action with `action` (+ named `params`). This covers every rail and panel: read git status and history, watch deployments, commit and branch, open a panel or a settings section, open the global browser to a URL, open a project or thread, read or update config. It is the escape hatch that means the agent never needs screen control to operate the app. Use only names read from cio_app_catalog. A destructive operation is refused unless you first ask the user and then pass destructiveConfirmed: true.',
+      'Do something in the CodeInOven app exactly as the user would: invoke one app IPC channel with `channel` (+ positional `args`), or run one renderer UI action with `action` (+ named `params`), or pass `capture: true` to see the live app window as an image. This covers every rail and panel: read git status and history, watch deployments, commit and branch, open a panel or a settings section, open the global browser to a URL, open a project or thread, read or update config. It is the escape hatch that means the agent never needs screen control to operate the app, and `capture` is the same escape hatch for looking at it. Use only names read from cio_app_catalog. A destructive operation is refused unless you first ask the user and then pass destructiveConfirmed: true.',
     inputSchema: CALL_INPUT_SCHEMA,
     outputSchema: APP_CONTROL_RESULT_SCHEMA,
     route: '/app-call',

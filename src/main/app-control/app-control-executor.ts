@@ -1,7 +1,7 @@
 import { IPC_INVOKE_CONTRACT } from '../../lib/ipc-contract'
 import type { AppControlActionSummary, AppControlTarget } from '../../lib/app-control'
 import type { PermissionLevel } from '../../lib/types'
-import { requestAppControl } from './app-control-bridge'
+import { captureAppWindow, requestAppControl } from './app-control-bridge'
 
 /**
  * The plan behind the app-control tools.
@@ -193,6 +193,8 @@ export function createAppControlExecutor(
       context,
       controlPolicy:
         'Try background IPC/data operations first. UI-only navigation and panel actions remain available as foreground fallback. browser.open defaults to a thread-owned background tab; params.attention="focus" explicitly reveals it.',
+      windowCapture:
+        'The interface only exists inside Electron, so the in-app browser cannot render it. Pass capture: true to this tool to see the live app window as an image and verify what you changed.',
       destructiveChannels: CHANNEL_NAMES.filter((channel) => isDestructiveAppControl(channel)),
       domains,
       channelArgs,
@@ -206,8 +208,14 @@ export function createAppControlExecutor(
   ): Promise<unknown> => {
     const channel = readString(input, 'channel')
     const action = readString(input, 'action')
+    // Seeing the app is neither a channel nor a UI action: the interface only
+    // exists inside Electron, so the capture is the one way an agent can look at
+    // what it just changed instead of concluding the app is unverifiable.
+    if (input['capture'] === true) {
+      return { ok: true, result: await captureAppWindow() }
+    }
     if (channel === null && action === null) {
-      throw new Error('Provide either a `channel` or an `action` from cio_app_catalog.')
+      throw new Error('Provide either a `channel`, an `action`, or `capture: true`.')
     }
     const confirmed = input['destructiveConfirmed'] === true
 
@@ -251,7 +259,7 @@ export function createAppControlExecutor(
       }
       target = { kind: 'action', action, params }
     } else {
-      throw new Error('Provide either a `channel` or an `action` from cio_app_catalog.')
+      throw new Error('Provide either a `channel`, an `action`, or `capture: true`.')
     }
 
     const result = await requestAppControl(target)

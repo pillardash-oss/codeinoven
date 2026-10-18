@@ -61,7 +61,7 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_app_catalog:
     'Read exact app IPC channels, argument order, UI actions and current context before cio_app_call. Filter by domain.',
   cio_app_call:
-    'Invoke one catalog-listed IPC channel or UI action. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
+    'Invoke one catalog-listed IPC channel or UI action, or pass capture:true to see the live app window as an image. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
   cio_create_brainstorm:
     'Create a durable Brainstorm draft from this conversation and optional constraints for review.',
   cio_create_prd: 'Create a PRD draft from the finalized Brainstorm or conversation for review.',

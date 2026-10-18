@@ -705,7 +705,8 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       args: Type.Optional(Type.Array(Type.Unknown(), { description: 'Positional channel arguments.' })),
       action: Type.Optional(Type.String({ description: 'Renderer UI action id to run.' })),
       params: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: 'Named UI action parameters.' })),
-      destructiveConfirmed: Type.Optional(Type.Boolean({ description: 'True only after the user agreed to a destructive operation.' }))
+      destructiveConfirmed: Type.Optional(Type.Boolean({ description: 'True only after the user agreed to a destructive operation.' })),
+      capture: Type.Optional(Type.Boolean({ description: 'Capture the live app window as an image, to see the real interface.' }))
     }),
     async execute(_toolCallId, params) {
       const result = await callGateway(${JSON.stringify(appCallTool.route)}, {
@@ -713,7 +714,8 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
         ...(params.args !== undefined ? { args: params.args } : {}),
         ...(params.action !== undefined ? { action: params.action } : {}),
         ...(params.params !== undefined ? { params: params.params } : {}),
-        ...(params.destructiveConfirmed !== undefined ? { destructiveConfirmed: params.destructiveConfirmed } : {})
+        ...(params.destructiveConfirmed !== undefined ? { destructiveConfirmed: params.destructiveConfirmed } : {}),
+        ...(params.capture !== undefined ? { capture: params.capture } : {})
       })
       return textResult(result)
     }
