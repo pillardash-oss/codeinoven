@@ -1006,6 +1006,16 @@
     }
     return null
   })
+  /** The figure the shoe carries: the live reading when its window supports one,
+   *  the last figure measured when it does not, and the settled message's own rate
+   *  once the turn ends. A reading is only replaced by a newer one. */
+  const composerGenerationRate = $derived.by(() => {
+    if (!busy) {
+      const settled = lastCompletedGeneration?.rate
+      if (settled != null) return settled
+    }
+    return liveTokenRate.displayRate()
+  })
   const composerGenerationDetails = $derived.by(() => {
     const id = busy ? liveTokenRate.messageId : lastCompletedGeneration?.message.id
     const message = busy
@@ -14789,9 +14799,7 @@
                       onSlashCommand={executeHarnessCommand}
                       usageCreditsCommandId={usageCreditsCommand?.id}
                       contextUsage={contextUsageDisplay}
-                      generationRate={busy
-                        ? liveTokenRate.rate()
-                        : (lastCompletedGeneration?.rate ?? null)}
+                      generationRate={composerGenerationRate}
                       generationDetails={composerGenerationDetails}
                       efficiencyKpis={storedEfficiencyKpis}
                       onRevealUsage={revealContextUsage}

@@ -31,6 +31,13 @@ export class LiveGenerationRate {
   #timer: ReturnType<typeof setInterval> | null = null
   #turnStartedAt: number | null = null
   #firstOutputAt: number | null = null
+  /**
+   * The newest figure this session measured. A reading is only ever replaced by
+   * a newer one: between requests, while a tool runs, or before the next message
+   * has streamed enough to measure, the shoe keeps showing this instead of
+   * falling back to a placeholder that says nothing.
+   */
+  #lastRate = $state<number | null>(null)
 
   /** Local dispatch time, not the provider's request or inference start. */
   startTurn(at: number): void {
@@ -81,6 +88,7 @@ export class LiveGenerationRate {
       partId,
       chars
     )
+    this.#remember()
     this.#startTicker()
   }
 
@@ -95,6 +103,7 @@ export class LiveGenerationRate {
       partId,
       chars
     )
+    this.#remember()
     this.#startTicker()
   }
 
@@ -110,6 +119,7 @@ export class LiveGenerationRate {
       Date.now(),
       scope
     )
+    this.#remember()
     this.#startTicker()
   }
 
@@ -118,11 +128,13 @@ export class LiveGenerationRate {
   completeRequest(messageId: string): void {
     if (!messageId) return
     this.#clock.completeRequest(GenerationClock.key(this.#sessionId, messageId), Date.now())
+    this.#remember()
   }
 
   /** The session went idle: close every open window. */
   settle(): void {
     this.#clock.settleSession(this.#sessionId, Date.now())
+    this.#remember()
   }
 
   /** Current rate for a message: the reported count when the harness gave one,
@@ -139,17 +151,38 @@ export class LiveGenerationRate {
     return this.#messageId ? this.rateFor(this.#messageId) : null
   }
 
+  /**
+   * The figure the shoe carries: the live reading while its window supports
+   * one, and the last figure measured when it does not. A reading is replaced
+   * only by a newer one, so nothing in the row has to blank back to a
+   * placeholder and re-grow.
+   */
+  displayRate(): number | null {
+    return this.rate() ?? this.#lastRate
+  }
+
+  /** Keep the newest readable figure for the display to fall back on. */
+  #remember(): void {
+    const live = this.rate()
+    if (live !== null) this.#lastRate = live
+  }
+
   /** Final rate for the observed message, or `null` when nothing was observed.
    *  A live estimate is only ever replaced by a real reported count. The
-   *  calibration learned from this model's completed messages is kept. */
+   *  calibration learned from this model's completed messages is kept, and so
+   *  does the figure the shoe shows: a settled turn hands over to the next
+   *  message with the last reading still on screen. */
   finalize(): number | null {
     const rate = this.rate()
+    if (rate !== null) this.#lastRate = rate
     this.#resetWindow()
     return rate
   }
 
+  /** Forget the session: its accounting and the figure measured in it. */
   clear(): void {
     this.#resetWindow()
+    this.#lastRate = null
   }
 
   #resetWindow(): void {
