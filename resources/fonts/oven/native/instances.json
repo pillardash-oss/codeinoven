@@ -1,0 +1,20 @@
+{
+  "generator": "scripts/build-native-splash-fonts.py",
+  "source": {
+    "file": "oven-box.woff2",
+    "sha256": "d1d7ef6546bbe7351cc732408d4cd10e3cd63824d1da0c92fbc33d3d8c30a671"
+  },
+  "codepoints": "U+0020-U+007E, U+00A1-U+00FF",
+  "faces": [
+    {
+      "file": "OvenBox-Regular.ttf",
+      "weight": 400,
+      "sha256": "e7dd82a676e6e31eb7b5e105f21eb04b6a6d7d395e7479a07b625aee43a296b7"
+    },
+    {
+      "file": "OvenBox-ExtraBold.ttf",
+      "weight": 800,
+      "sha256": "4fd15a25a93428ef00055cfb9ee9717e0182b57dd3bd2a88e77b0d9b592bc80d"
+    }
+  ]
+}
