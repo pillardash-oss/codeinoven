@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Oven Mono · two cuts</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .cut-scope {
+        font-family: 'Oven Mono', ui-monospace, monospace;
+        font-weight: 400;
+      }
+
+      .stage {
+        padding: 2.25rem 1.5rem 1.75rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+      }
+
+      .stage .word {
+        display: block;
+        font-size: clamp(2.5rem, 9vw, 5rem);
+        line-height: 0.95;
+        letter-spacing: -0.045em;
+      }
+
+      .stage .para {
+        margin: 1.5rem 0 0;
+        max-width: 34rem;
+        font-size: 0.8125rem;
+        line-height: 1.7;
+        color: var(--color-muted);
+      }
+
+      .stage .code {
+        margin: 1.25rem 0 0;
+        padding: 0.875rem 1rem;
+        border: 1px solid var(--color-border);
+        background: var(--color-elevated, #131317);
+        font-size: 0.8125rem;
+        line-height: 1.6;
+        white-space: pre;
+        overflow-x: auto;
+        color: var(--color-foreground);
+      }
+
+      .stage .meta {
+        display: flex;
+        gap: 1.5rem;
+        flex-wrap: wrap;
+        margin-top: 1.25rem;
+        padding-top: 0.875rem;
+        border-top: 1px solid var(--color-border);
+        font-size: 0.6875rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+      }
+
+      .board {
+        display: grid;
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .board-row {
+        display: grid;
+        grid-template-columns: 6rem repeat(3, minmax(0, 1fr));
+        gap: 1rem;
+        align-items: center;
+        padding: 0.875rem 1rem;
+        background: var(--color-surface);
+      }
+
+      .board-row.head {
+        font-size: 0.625rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+      }
+
+      .board-row .who {
+        font-size: 0.625rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+      }
+
+      .board-row .glyphs {
+        font-size: 1.5rem;
+        line-height: 1;
+        white-space: nowrap;
+        min-width: 0;
+        overflow-x: auto;
+      }
+
+      .box-cut {
+        font-family: 'Oven Box', ui-monospace, monospace;
+      }
+
+      .mono-cut {
+        font-family: 'Oven Mono', ui-monospace, monospace;
+      }
+
+      .ref-cut {
+        font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+        font-weight: 200;
+      }
+
+      .rules {
+        display: grid;
+        gap: 1px;
+        background: var(--color-border);
+        border: 1px solid var(--color-border);
+      }
+
+      .rule {
+        display: grid;
+        grid-template-columns: 11rem minmax(0, 1fr) 9rem;
+        gap: 1rem;
+        align-items: baseline;
+        padding: 0.875rem 1rem;
+        background: var(--color-surface);
+      }
+
+      .rule .name {
+        font-size: 0.6875rem;
+        color: var(--color-foreground);
+      }
+
+      .rule p {
+        margin: 0;
+        font-size: 0.75rem;
+        line-height: 1.6;
+        color: var(--color-muted);
+      }
+
+      .rule .glyphs {
+        font-size: 1.375rem;
+        line-height: 1;
+        text-align: right;
+        white-space: nowrap;
+        min-width: 0;
+        overflow-x: auto;
+      }
+
+      .numbers {
+        border: 1px solid var(--color-border);
+        background: var(--color-surface);
+        overflow-x: auto;
+      }
+
+      table.ink {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.75rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      table.ink th,
+      table.ink td {
+        padding: 0.625rem 1rem;
+        text-align: right;
+        border-bottom: 1px solid var(--color-border);
+        white-space: nowrap;
+      }
+
+      table.ink th:first-child,
+      table.ink td:first-child {
+        text-align: left;
+      }
+
+      table.ink thead th {
+        font-size: 0.625rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--color-caption);
+        font-weight: 400;
+      }
+
+      table.ink tr:last-child td {
+        border-bottom: 0;
+      }
+
+      table.ink .dim {
+        color: var(--color-caption);
+      }
+
+      @media (max-width: 52rem) {
+        .board-row,
+        .rule {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 0.5rem;
+        }
+
+        .rule .glyphs {
+          text-align: left;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="study-bar" id="bar"></header>
+
+    <main class="shell">
+      <section class="masthead">
+        <div class="kicker"><span class="dot"></span>CodeInOven typeface · two cuts of one family</div>
+        <h1 class="study-title">Oven Mono and Oven Box</h1>
+        <p class="study-note">
+          One binary skeleton, drawn twice. <strong>Oven Mono</strong> squares the dots and the
+          quote marks and leaves every letterform as comfortable as JetBrains Mono drew it.
+          <strong>Oven Box</strong> takes the same face and turns out every corner the alphabet
+          draws, so a bowl is a rectangle, a shoulder is a right angle, and the only round shape
+          left in the cut is the parenthesis. Both land on the same 600 unit advance, so anything
+          set in either occupies the same box.
+        </p>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">01</span>
+          <h2>Sample both cuts, at your own weight</h2>
+          <p>
+            Pick a cut and drag the weight. The plate below is set in whatever you choose, so the
+            same sentence can be read in Oven Mono, Oven Box, and the family the app ships today.
+          </p>
+        </header>
+        <div class="body">
+          <div class="controls">
+            <div class="field">
+              Cut
+              <div class="swatches" id="cuts">
+                <button type="button" data-cut="mono" aria-pressed="true">Oven Mono</button>
+                <button type="button" data-cut="box" aria-pressed="false">Oven Box</button>
+                <button type="button" data-cut="ref" aria-pressed="false">JetBrains Mono</button>
+              </div>
+            </div>
+            <label class="field" for="weight">
+              Weight
+              <input id="weight" type="range" min="200" max="800" step="50" value="400" />
+            </label>
+            <div class="field">
+              <span id="weight-out">400 regular</span>
+            </div>
+          </div>
+          <div class="stage cut-scope" id="stage">
+            <span class="word">CodeInOven</span>
+            <p class="para">
+              The agent writes the code. You read it, at nine in the morning, for four hours,
+              which is why the skeleton is the one you already know and only the finish is ours.
+            </p>
+            <div class="code">const rows = await db.selectFrom('threads').orderBy('updated_at', 'desc')</div>
+            <div class="meta"><span id="stage-name">Oven Mono</span><span id="stage-weight">400</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">02</span>
+          <h2>Where the two cuts part</h2>
+          <p>
+            Every glyph is the same outline in both cuts; the difference is the corner. A bowl, a
+            shoulder and the top of an eight come out of the box cut as right angles, and a
+            diagonal keeps a straight vertex instead of a rounded one.
+          </p>
+        </header>
+        <div class="body">
+          <div class="board">
+            <div class="board-row head">
+              <span>Cut</span><span>Bowls</span><span>Shoulders</span><span>Angled and figures</span>
+            </div>
+            <div class="board-row">
+              <span class="who">Oven Box</span>
+              <span class="glyphs box-cut">o O e a g b d p q</span>
+              <span class="glyphs box-cut">n u h m r J S s</span>
+              <span class="glyphs box-cut">M W X 0 8 2 5 . , :</span>
+            </div>
+            <div class="board-row">
+              <span class="who">Oven Mono</span>
+              <span class="glyphs mono-cut">o O e a g b d p q</span>
+              <span class="glyphs mono-cut">n u h m r J S s</span>
+              <span class="glyphs mono-cut">M W X 0 8 2 5 . , :</span>
+            </div>
+            <div class="board-row">
+              <span class="who">JetBrains Mono</span>
+              <span class="glyphs ref-cut">o O e a g b d p q</span>
+              <span class="glyphs ref-cut">n u h m r J S s</span>
+              <span class="glyphs ref-cut">M W X 0 8 2 5 . , :</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">03</span>
+          <h2>The corner rule, and its one exception</h2>
+          <p>
+            A rounded corner in a TrueType outline is a quadratic whose control point already sits
+            where that corner's two tangents cross. Turning the corner out to its mitre is
+            therefore not a redraw: the control point becomes an on-curve point. A segment that
+            turns less than twenty degrees was never a corner, so it is straightened instead,
+            which is what takes the last bulge out of a bowl's side.
+          </p>
+        </header>
+        <div class="body">
+          <div class="rules">
+            <div class="rule">
+              <span class="name">A drawn corner</span>
+              <p>The control point of a corner quadratic becomes the corner itself. Mitred, not bevelled.</p>
+              <span class="glyphs box-cut">o O e a G D B</span>
+            </div>
+            <div class="rule">
+              <span class="name">A gentle bend</span>
+              <p>A stroke that turns less than twenty degrees is drawn to its own chord, so a bowl's side becomes a straight wall.</p>
+              <span class="glyphs box-cut">S s n m u</span>
+            </div>
+            <div class="rule">
+              <span class="name">A parenthesis, kept round</span>
+              <p>A parenthesis drawn square is a bracket, and a reader scanning code needs to tell one from the other. The pair stays round in every cut.</p>
+              <span class="glyphs box-cut">( ) <span class="mono-cut">[ ]</span></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">04</span>
+          <h2>The weight, measured against JetBrains Mono</h2>
+          <p>
+            The weight was not raised for the box cut. Both cuts instance JetBrains Mono rather
+            than redraw it, so a stroke is the same outline at the same coordinate, and
+            <code>verify-family.py</code> asserts that point for point on every glyph with no
+            corner at all. What does move is the total ink, because a squared counter is a
+            rectangle where the round one was a bowl. Ink is the filled area of a fixed 44 glyph
+            sample, in em units of 1000, per <code>measure-weight.py</code>.
+          </p>
+        </header>
+        <div class="body">
+          <div class="numbers">
+            <table class="ink">
+              <caption class="tag" style="padding: 0.75rem 1rem 0">
+                ink of the same sample, one row per weight
+              </caption>
+              <thead>
+                <tr>
+                  <th>Weight</th>
+                  <th>JetBrains Mono</th>
+                  <th>Oven Mono</th>
+                  <th>Oven Box</th>
+                  <th>Box against JetBrains</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>200 extra light</td>
+                  <td>83,253</td>
+                  <td class="dim">not carried</td>
+                  <td>83,705</td>
+                  <td>+0.5%</td>
+                </tr>
+                <tr>
+                  <td>300 light</td>
+                  <td>98,372</td>
+                  <td>95,190</td>
+                  <td>97,038</td>
+                  <td>-1.4%</td>
+                </tr>
+                <tr>
+                  <td>400 regular</td>
+                  <td>110,214</td>
+                  <td>106,762</td>
+                  <td>107,513</td>
+                  <td>-2.5%</td>
+                </tr>
+                <tr>
+                  <td>600 semibold</td>
+                  <td>129,483</td>
+                  <td>125,518</td>
+                  <td>124,463</td>
+                  <td>-3.9%</td>
+                </tr>
+                <tr>
+                  <td>700 bold</td>
+                  <td>147,357</td>
+                  <td>146,965</td>
+                  <td>143,865</td>
+                  <td>-2.4%</td>
+                </tr>
+                <tr>
+                  <td>800 extra bold</td>
+                  <td>172,622</td>
+                  <td>167,742</td>
+                  <td>162,668</td>
+                  <td>-5.8%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="footer-note">
+            Oven Mono carries 300 to 800 and its light end is raised on purpose: weight 200 is a
+            hairline on a dark plate, and the squared dots read better with a little more ink under
+            them. Oven Box carries 200 to 800, matching JetBrains Mono to its own light end, since
+            a squared corner spends a little more ink than a round one at the same stroke. If the
+            two cuts should share one range, the honest fix is to take Oven Mono back to 200 as
+            well, not to hold the box cut heavier than the reference.
+          </p>
+        </div>
+      </section>
+
+      <section class="section">
+        <header>
+          <span class="index">05</span>
+          <h2>What is identical by construction</h2>
+          <p>Checked by <code>verify-family.py</code>, which fails the build rather than trusting it.</p>
+        </header>
+        <div class="body">
+          <div class="rules">
+            <div class="rule">
+              <span class="name">Advance and em</span>
+              <p>600 units for every one of the 1,743 glyphs at every weight, on a 1000 unit em.</p>
+              <span class="glyphs box-cut">600 · 1000</span>
+            </div>
+            <div class="rule">
+              <span class="name">Vertical metrics</span>
+              <p>x-height 550, cap 730, and line metrics untouched, so no line of the app reflows.</p>
+              <span class="glyphs box-cut">550 · 730</span>
+            </div>
+            <div class="rule">
+              <span class="name">Coverage and shaping</span>
+              <p>Every glyph the source has is kept, and the ligatures still fire with the same advances.</p>
+              <span class="glyphs box-cut">-&gt; =&gt; != ===</span>
+            </div>
+            <div class="rule">
+              <span class="name">Counters</span>
+              <p>Squaring may not swallow a counter: the contour count of every bowl is unchanged.</p>
+              <span class="glyphs box-cut">o O e a g 0 8</span>
+            </div>
+          </div>
+          <p class="footer-note">
+            Rebuild either cut with
+            <code>.cio/tmp/typeface/venv/bin/python docs/designs/brand-typeface/tools/build-family.py --variant box</code>
+            then <code>verify-family.py --variant box</code>. The fourth cut is one row in the
+            variant table.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <script src="./_shell.js"></script>
+    <script>
+      const CUTS = {
+        mono: { name: 'Oven Mono', family: "'Oven Mono', ui-monospace, monospace", min: 300 },
+        box: { name: 'Oven Box', family: "'Oven Box', ui-monospace, monospace", min: 200 },
+        ref: { name: 'JetBrains Mono', family: "'JetBrains Mono Variable', ui-monospace, monospace", min: 100 }
+      }
+      const LABELS = {
+        200: 'extra light',
+        250: 'extra light',
+        300: 'light',
+        350: 'light',
+        400: 'regular',
+        450: 'regular',
+        500: 'medium',
+        550: 'medium',
+        600: 'semibold',
+        650: 'semibold',
+        700: 'bold',
+        750: 'bold',
+        800: 'extra bold'
+      }
+      const buttons = Array.from(document.querySelectorAll('#cuts button'))
+      const stage = document.getElementById('stage')
+      const weight = document.getElementById('weight')
+      let cut = 'mono'
+
+      function apply() {
+        const chosen = CUTS[cut]
+        const w = Number(weight.value)
+        stage.style.fontFamily = chosen.family
+        stage.style.fontWeight = String(Math.max(w, chosen.min))
+        document.getElementById('weight-out').textContent = `${w} ${LABELS[w] || ''}`
+        document.getElementById('stage-name').textContent = chosen.name
+        document.getElementById('stage-weight').textContent =
+          w < chosen.min ? `${w} clamped to ${chosen.min}` : String(w)
+        for (const button of buttons) {
+          button.setAttribute('aria-pressed', String(button.dataset.cut === cut))
+        }
+      }
+
+      for (const button of buttons) {
+        button.addEventListener('click', () => {
+          cut = button.dataset.cut
+          apply()
+        })
+      }
+      weight.addEventListener('input', apply)
+      window.CIOShell.render('variants.html')
+      apply()
+    </script>
+  </body>
+</html>

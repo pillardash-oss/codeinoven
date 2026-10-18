@@ -1,6 +1,6 @@
 """
-Build Oven Mono: a real variable font for CodeInOven, derived from JetBrains Mono
-(SIL OFL 1.1) and finished with the brand mark's construction.
+Build Oven Mono and its cuts: real variable fonts for CodeInOven, derived from JetBrains
+Mono (SIL OFL 1.1) and finished with the brand mark's construction.
 
 Prerequisites, none of which are project dependencies:
   python3 -m venv .cio/tmp/typeface/venv
@@ -14,25 +14,42 @@ dot. The mark is a squared vessel with a gold knob: square corners, one circle f
 knob, and a bar cut flat. JetBrains Mono's dots are circles, so the whole dot system
 becomes a square cut, and every other letterform stays exactly as comfortable as it is.
 
-Nothing here redraws a letter. The build instances JetBrains Mono at four weights,
-replaces the dot glyphs, and assembles a wght axis from those masters, so the family is
-a real font a terminal, an editor and a browser can all install.
+Two cuts come out of that brief, and they are the same family drawn twice:
+
+  mono  Oven Mono. The base cut. Dots squared, the ASCII quote marks cut flat, and every
+        letterform otherwise exactly JetBrains Mono's, so a page set in it is a page a
+        reader has read all day. Masters 300 to 800: the light end is raised on purpose,
+        because weight 200 is a hairline on a dark plate and the squared dots read better
+        with a little more ink under them.
+  box   Oven Box. The squared cut. The same dots and the same quotes, and then every
+        rounded corner in the alphabet is turned out to its own mitre: a corner drawn as a
+        quadratic keeps its control point as the corner, which is where the two tangents of
+        that corner already cross. A run of corners that belongs to one bend is merged back
+        into the single corner its outer tangents meet at, so a bowl comes out a rectangle
+        rather than an octagon. Weights 200 to 800, matching JetBrains Mono at every shared
+        coordinate, because a squared corner spends more ink than a round one at the same
+        stroke.
+
+Nothing here redraws a letter. The build instances JetBrains Mono at the masters, applies
+the cut's own treatment, and assembles a wght axis from those masters, so the family is a
+real font a terminal, an editor and a browser can all install.
 
 Run, from the project root:
-  .cio/tmp/typeface/venv/bin/python docs/designs/brand-typeface/tools/build-family.py
-  .cio/tmp/typeface/venv/bin/python docs/designs/brand-typeface/tools/verify-family.py
-then copy the two written files from .cio/tmp/typeface/out into fonts/.
+  .cio/tmp/typeface/venv/bin/python docs/designs/brand-typeface/tools/build-family.py --variant box
+  .cio/tmp/typeface/venv/bin/python docs/designs/brand-typeface/tools/verify-family.py --variant box
+  .cio/tmp/typeface/venv/bin/python docs/designs/brand-typeface/tools/measure-weight.py
+
+then copy the written files from .cio/tmp/typeface/out into fonts/.
 """
 
 from __future__ import annotations
 
+import argparse
 import math
-import shutil
 from pathlib import Path
 
 from fontTools.designspaceLib import AxisDescriptor, DesignSpaceDocument, SourceDescriptor
-from fontTools.fontBuilder import FontBuilder
-from fontTools.pens.boundsPen import BoundsPen
+from fontTools.pens.basePen import BasePen
 from fontTools.pens.recordingPen import RecordingPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.subset import Options, Subsetter
@@ -43,8 +60,6 @@ from fontTools.varLib.instancer import instantiateVariableFont
 PROJECT = Path(__file__).resolve().parents[4]
 SOURCE = PROJECT / ".cio" / "tmp" / "typeface" / "source" / "jbm" / "fonts" / "variable" / "JetBrainsMono[wght].ttf"
 OUT = PROJECT / ".cio" / "tmp" / "typeface" / "out"
-
-MASTERS = [300, 400, 600, 800]
 
 # The dot is the mark's knob, the bar is the mark's shelf. Every glyph below carries at
 # least one dot, and the list beside it says which of its contours are dots, so the
@@ -70,12 +85,32 @@ BAR_GLYPHS = ["quotesingle", "quotesinglbase"]
 ZERO_DOT = "zero"
 ZERO_DOT_CONTOUR = 2
 
-# A square reads heavier than a circle of equal area, so the side is a little under the
-# circle's diameter: 0.86 puts the two on the same optical mass at text size. A dot that
-# is not round to begin with is squared on its own mean dimension.
+# The mark's own device, squared: a dot is the knob, a quote mark is the shelf.
 SQUARE_RATIO = 0.86
 
-FAMILY = "Oven Mono"
+# ── The cuts ───────────────────────────────────────────────────────────────
+# One family, drawn twice. A cut says which weights it carries and whether the alphabet's
+# rounded corners are turned out to their mitres, and nothing else: everything a cut
+# shares is inherited from JetBrains Mono, so a third cut is one row here.
+VARIANTS = {
+    "mono": {
+        "family": "Oven Mono",
+        "slug": "oven-mono",
+        "file": "OvenMono[wght].ttf",
+        "masters": [300, 400, 600, 800],
+        "axis": (300, 400, 800),
+        "square": False,
+    },
+    "box": {
+        "family": "Oven Box",
+        "slug": "oven-box",
+        "file": "OvenBox[wght].ttf",
+        "masters": [200, 300, 400, 600, 800],
+        "axis": (200, 400, 800),
+        "square": True,
+    },
+}
+
 VERSION = "1.000"
 COPYRIGHT = (
     "Copyright 2026 CodeInOven. Derived from JetBrains Mono, "
@@ -253,11 +288,10 @@ def square_zero_dot(font: TTFont):
     glyf[ZERO_DOT] = pen.glyph()
 
 
-def rename(font: TTFont, weight: int, is_variable: bool):
+def rename(font: TTFont, weight: int, is_variable: bool, family: str):
     name = font["name"]
-    style = {300: "Light", 400: "Regular", 600: "SemiBold", 800: "ExtraBold"}
+    style = {200: "ExtraLight", 300: "Light", 400: "Regular", 600: "SemiBold", 800: "ExtraBold"}
     sub = "Variable" if is_variable else style[weight]
-    family = FAMILY
     full = f"{family} {sub}" if is_variable else f"{family} {style[weight]}"
 
     records = {
@@ -334,31 +368,165 @@ def plan_dots() -> dict[str, list[int]]:
     return plan
 
 
-def build():
+# ── The squared cut ────────────────────────────────────────────────────────
+# A rounded corner in a TrueType outline is a quadratic whose control point is where that
+# corner's two tangents already cross. Turning the corner out to its own mitre is therefore
+# not a redraw: the control point becomes an on-curve point, and the rounded corner becomes
+# the corner it was drawn around.
+#
+# TURN_MIN is the one rule that keeps that honest. A segment that turns less than this was
+# never a corner; it is a stroke with a gentle bend in it, and it is straightened to its own
+# chord instead, which is what takes the last of the bulge out of a bowl's side.
+#
+# Promoting corners is not merged back afterwards. A join of two promoted corners already is
+# the corner, and collapsing a longer run into the one corner its outer tangents meet at
+# reads well on a bowl but swallows the counters of a tight spiral: the capital S, whose
+# whole side is one run, came out solid. The cut keeps the corners the alphabet actually has.
+TURN_MIN = 20.0
+
+# Keep it a text face. A parenthesis drawn square is a bracket, and a reader scanning a line
+# of code needs to tell one from the other, so the pair stays round in every cut.
+SQUARE_EXCLUDE = {"parenleft", "parenright", "uni2018", "uni2019", "uni201C", "uni201D"}
+
+
+def _angle(p, c, n) -> float:
+    """How far the path turns at c, between the incoming and the outgoing direction."""
+    ax, ay = c[0] - p[0], c[1] - p[1]
+    bx, by = n[0] - c[0], n[1] - c[1]
+    la, lb = math.hypot(ax, ay), math.hypot(bx, by)
+    if not la or not lb:
+        return 0.0
+    cos = max(-1.0, min(1.0, (ax * bx + ay * by) / (la * lb)))
+    return math.degrees(math.acos(cos))
+
+
+def _cross(a, b, c, d):
+    """Where the line a-b meets the line c-d, or None when they are parallel."""
+    r = (b[0] - a[0], b[1] - a[1])
+    s = (d[0] - c[0], d[1] - c[1])
+    den = r[0] * s[1] - r[1] * s[0]
+    if abs(den) < 1e-9:
+        return None
+    t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den
+    return (a[0] + t * r[0], a[1] + t * r[1])
+
+
+class MitrePen(BasePen):
+    """Emits the outline with every drawn corner turned out to its mitre.
+
+    Points are tagged as they are emitted, because a corner and a straight run cannot be
+    told apart once both are polylines, and the merge pass needs to know which vertices a
+    bend contributed.
+    """
+
+    def __init__(self, out, variety: int):
+        super().__init__(None)
+        self.out = out
+        self.variety = variety
+        self.cur = None
+        self.tagged: list[tuple[tuple[float, float], bool]] = []
+        self.contours: list[list[tuple[tuple[float, float], bool]]] = []
+
+    def _emit(self, pt, from_curve: bool):
+        self.tagged.append((pt, from_curve))
+        self.cur = pt
+
+    def _moveTo(self, pt):
+        if self.tagged:
+            self.contours.append(self.tagged)
+        self.tagged = []
+        self._emit(pt, False)
+
+    def _lineTo(self, pt):
+        self._emit(pt, False)
+
+    def _qCurveToOne(self, pt1, pt2):
+        if _angle(self.cur, pt1, pt2) >= TURN_MIN:
+            self._emit(pt1, True)
+            self._emit(pt2, True)
+        else:
+            self._emit(pt2, False)
+
+    def _curveToOne(self, p1, p2, p3):
+        corner = _cross(self.cur, p1, p2, p3)
+        if corner is not None and _angle(self.cur, corner, p3) >= TURN_MIN:
+            self._emit(corner, True)
+            self._emit(p3, True)
+        else:
+            self._emit(p3, False)
+
+    def _closePath(self):
+        if self.tagged:
+            self.contours.append(self.tagged)
+        self.tagged = []
+        self.cur = None
+
+    def _endPath(self):
+        self._closePath()
+
+    def done(self):
+        """Every contour the pen walked, with its promoted corners already tagged."""
+        if self.tagged:
+            self.contours.append(self.tagged)
+            self.tagged = []
+        walked = self.contours
+        self.contours = []
+        return walked
+
+
+def square_outlines(font: TTFont) -> dict[str, int]:
+    """Turn every drawn corner of the alphabet out to its mitre."""
+    glyf = font["glyf"]
+    changed = {}
+    for name in font.getGlyphOrder():
+        if name in SQUARE_EXCLUDE or glyf[name].isComposite():
+            continue
+        out = TTGlyphPen(glyf)
+        pen = MitrePen(out, 1)
+        font.getGlyphSet()[name].draw(pen)
+        contours = pen.done()
+        if not contours:
+            continue
+        for contour in contours:
+            out.moveTo(contour[0][0])
+            for pt, _ in contour[1:]:
+                out.lineTo(pt)
+            out.closePath()
+        glyf[name] = out.glyph()
+        changed[name] = sum(len(c) for c in contours)
+    return changed
+
+
+def build(variant: str):
+    spec = VARIANTS[variant]
+    family = spec["family"]
+    masters_at = spec["masters"]
+    axis_min, axis_default, axis_max = spec["axis"]
     OUT.mkdir(parents=True, exist_ok=True)
     plan = plan_dots()
     print("dot plan:", plan)
     masters = []
-    for w in MASTERS:
+    for w in masters_at:
         f = TTFont(SOURCE)
         inst = instantiateVariableFont(f, {"wght": w}, inplace=True, updateFontNames=False)
         changed = redraw_dots(inst, w, plan)
         square_zero_dot(inst)
         bars = flat_bars(inst)
-        rename(inst, w, is_variable=False)
+        cuts = square_outlines(inst) if spec["square"] else {}
+        rename(inst, w, is_variable=False, family=family)
         path = OUT / f"master-{w}.ttf"
         inst.save(path)
         masters.append((w, path))
-        print(f"master {w}: dots {changed} bars {bars}")
+        print(f"master {w}: dots {changed} bars {bars} corners {len(cuts)}")
 
     ds = DesignSpaceDocument()
     axis = AxisDescriptor()
     axis.name = "Weight"
     axis.tag = "wght"
-    axis.minimum = MASTERS[0]
-    axis.default = 400
-    axis.maximum = MASTERS[-1]
-    axis.map = [(w, w) for w in MASTERS]
+    axis.minimum = axis_min
+    axis.default = axis_default
+    axis.maximum = axis_max
+    axis.map = [(w, w) for w in masters_at]
     ds.addAxis(axis)
 
     for w, path in masters:
@@ -366,30 +534,39 @@ def build():
         src.path = str(path)
         src.name = f"master-{w}"
         src.location = {"Weight": w}
-        if w == 400:
+        if w == axis_default:
             src.copyInfo = True
             src.copyLib = True
             src.copyFeatures = True
         ds.addSource(src)
 
-    for w in (300, 400, 500, 600, 700, 800):
-        inst = DesignSpaceDocument.InstanceDescriptor() if hasattr(DesignSpaceDocument, "InstanceDescriptor") else None
-        from fontTools.designspaceLib import InstanceDescriptor
+    from fontTools.designspaceLib import InstanceDescriptor
 
+    for w in sorted(set([axis_min, 300, 400, 500, 600, 700, axis_max])):
+        if w < axis_min or w > axis_max:
+            continue
         inst = InstanceDescriptor()
-        inst.familyName = FAMILY
-        inst.styleName = {300: "Light", 400: "Regular", 500: "Medium", 600: "SemiBold", 700: "Bold", 800: "ExtraBold"}[w]
+        inst.familyName = family
+        inst.styleName = {
+            200: "ExtraLight",
+            300: "Light",
+            400: "Regular",
+            500: "Medium",
+            600: "SemiBold",
+            700: "Bold",
+            800: "ExtraBold",
+        }[w]
         inst.name = f"instance-{w}"
         inst.location = {"Weight": w}
         ds.addInstance(inst)
 
-    ds_path = OUT / "OvenMono.designspace"
+    ds_path = OUT / f"{spec['slug']}.designspace"
     ds.write(ds_path)
 
     vf, _, _ = build_variable(str(ds_path))
-    rename(vf, 400, is_variable=True)
+    rename(vf, axis_default, is_variable=True, family=family)
     vf["OS/2"].usWeightClass = 400
-    vf_path = OUT / "OvenMono[wght].ttf"
+    vf_path = OUT / spec["file"]
     vf.save(vf_path)
     print("variable:", vf_path, vf_path.stat().st_size)
 
@@ -404,7 +581,7 @@ def build():
     latin.populate(unicodes=set(range(0x20, 0x7F)) | set(LATIN_EXTRA) | {0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2026, 0x2192, 0x2190, 0x2713, 0x25CF, 0x00B7})
     web = TTFont(vf_path)
     latin.subset(web)
-    woff_path = OUT / "oven-mono-latin.woff2"
+    woff_path = OUT / f"{spec['slug']}-latin.woff2"
     web.flavor = "woff2"
     web.save(woff_path)
     print("web:", woff_path, woff_path.stat().st_size)
@@ -414,4 +591,6 @@ def build():
 
 
 if __name__ == "__main__":
-    build()
+    parser = argparse.ArgumentParser(description="Build one cut of the Oven family.")
+    parser.add_argument("--variant", choices=sorted(VARIANTS), default="mono")
+    build(parser.parse_args().variant)

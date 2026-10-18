@@ -5,6 +5,7 @@
 window.CIOShell = (() => {
   const PAGES = [
     ['index.html', 'The family'],
+    ['variants.html', 'Two cuts'],
     ['alphabet.html', 'Alphabet'],
     ['surfaces.html', 'In the app'],
   ]

@@ -22,6 +22,24 @@
   src: url('./fonts/oven-mono-variable.ttf') format('truetype-variations');
 }
 
+/* Oven Box, the squared cut of the same family: the same binary, with every drawn corner
+   turned out to its own mitre. It carries JetBrains Mono's own light end, weight 200. */
+@font-face {
+  font-family: 'Oven Box';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('./fonts/oven-box-latin.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Oven Box Full';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('./fonts/oven-box-variable.ttf') format('truetype-variations');
+}
+
 /* What ships today, for the honest comparison. */
 @font-face {
   font-family: 'JetBrains Mono Variable';

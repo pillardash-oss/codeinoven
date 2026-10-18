@@ -120,6 +120,38 @@ h3 {
   background: var(--color-elevated);
 }
 
+/* A phone has no room for the brand, four page names and the theme toggle on one line, so the
+   page list takes a row of its own instead of running off the edge of the bar. */
+@media (max-width: 48rem) {
+  .study-bar {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+    padding-inline: 1rem;
+  }
+
+  .study-bar nav {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    padding-bottom: 0.1875rem;
+  }
+
+  .shell {
+    padding-inline: 1rem;
+  }
+
+  /* The kicker's dot belongs to the words it marks, so it wraps with them. */
+  .kicker {
+    display: block;
+  }
+
+  .kicker .dot {
+    display: inline-block;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+  }
+}
+
 /* ── Masthead ───────────────────────────────────────────────────────────── */
 .masthead {
   padding: 3.5rem 0 2rem;

@@ -251,7 +251,9 @@
           A real font file, not a drawing. It is built on the skeleton everyone already reads all
           day, <strong>JetBrains Mono</strong>, and then finished the way the mark is built: every
           dot becomes a square cut, every ASCII quote becomes a flat bar, and the light end stops
-          being a hairline. Nothing else moves, so no line of the app reflows when it lands.
+          being a hairline. Nothing else moves, so no line of the app reflows when it lands. This
+          is the base cut; <a href="./variants.html">Oven Box</a> is the same family with every
+          drawn corner turned out to its mitre.
         </p>
       </section>
 
@@ -323,7 +325,9 @@
           <p>
             The app ships at weight 200 today, which is a hairline on a dark plate and the first
             thing that strains the eye in a long session. The family starts at 300 and gives the
-            interface a slightly heavier default, with 800 at the top for headings.
+            interface a slightly heavier default, with 800 at the top for headings. The squared cut
+            carries 200 to 800 instead, because a corner turned out to its mitre spends a little
+            more ink than a round one: <a href="./variants.html">two cuts, sampled</a>.
           </p>
         </header>
         <div class="body">
@@ -485,13 +489,15 @@
       </section>
 
       <p class="footer-note">
-        Built by <code>.cio/tmp/typeface/build/oven_mono.py</code> from JetBrains Mono v2.304 under
-        the SIL Open Font License 1.1, which permits modification and redistribution provided the
-        reserved name is not used; this family is therefore named Oven Mono and carries the original
-        copyright alongside its own. Files:
-        <code>docs/designs/brand-typeface/fonts/oven-mono-variable.ttf</code> (installable) and
-        <code>oven-mono-latin.woff2</code> (bundled). Read the
-        <a href="./alphabet.html">full alphabet</a> or see it
+        Built by <code>docs/designs/brand-typeface/tools/build-family.py</code> from JetBrains Mono
+        v2.304 under the SIL Open Font License 1.1, which permits modification and redistribution
+        provided the reserved name is not used; this family is therefore named Oven Mono and carries
+        the original copyright alongside its own. Files:
+        <code>docs/designs/brand-typeface/fonts/oven-mono-variable.ttf</code> (installable),
+        <code>oven-mono-latin.woff2</code> (bundled), and for the squared cut
+        <code>oven-box-variable.ttf</code> and <code>oven-box-latin.woff2</code>. Read the
+        <a href="./alphabet.html">full alphabet</a>, compare the
+        <a href="./variants.html">two cuts</a>, or see it
         <a href="./surfaces.html">in the app's own surfaces</a>.
       </p>
     </main>
