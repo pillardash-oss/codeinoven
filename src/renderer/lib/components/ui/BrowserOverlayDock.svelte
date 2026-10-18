@@ -289,10 +289,26 @@
     )
       return false
     if (event.ctrlKey || event.metaKey) return true
-    // The key itself is forwarded to the source by the window that owns the
-    // keyboard. This only decides the native document's own default: a
-    // single-line field submits on Enter instead of inserting a newline, and a
-    // field may claim keys through `data-native-dock-keys`.
+    // Enter must carry the field that received it, rather than the main
+    // process's asynchronously reported focus. Native input and key reports
+    // share this ordered route, so submission also sees the latest typed value.
+    if (dock.modal && event.key === 'Enter') {
+      report({
+        id: dock.id,
+        kind: 'fieldKey',
+        field: field.dataset.nativeDockField,
+        type: event.type === 'keydown' ? 'keydown' : 'keyup',
+        key: event.key,
+        code: event.code,
+        control: event.ctrlKey,
+        shift: event.shiftKey,
+        meta: event.metaKey,
+        alt: event.altKey,
+        isAutoRepeat: event.repeat
+      })
+    }
+    // Keep native defaults for typing, but let the source submit single-line
+    // fields and handle explicitly claimed keys.
     if (
       event.type === 'keydown' &&
       ((event.key === 'Enter' && field instanceof HTMLInputElement) ||
