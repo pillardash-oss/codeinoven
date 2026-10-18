@@ -1275,7 +1275,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
           ]
         : []),
       ...(hasDesignCapability
