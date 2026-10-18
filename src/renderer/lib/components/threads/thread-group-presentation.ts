@@ -1,5 +1,6 @@
 import type { Component } from 'svelte'
 import type { ThreadGroup } from '$lib/stores/thread-grouping.svelte'
+import CioHammer from '$lib/components/icons/cio/CioHammer.svelte'
 import { THREAD_GROUP_MARK } from './thread-state-marks'
 
 /**
@@ -15,7 +16,7 @@ export const THREAD_GROUP_ICONS: Record<ThreadGroup, Component> = {
   Unread: THREAD_GROUP_MARK.Unread.icon,
   Errors: THREAD_GROUP_MARK.Errors.icon,
   Spec: THREAD_GROUP_MARK.Spec.icon,
-  Working: THREAD_GROUP_MARK.Working.icon,
+  Working: CioHammer,
   Done: THREAD_GROUP_MARK.Done.icon
 }
 
