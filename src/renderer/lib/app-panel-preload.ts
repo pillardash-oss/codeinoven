@@ -1,3 +1,5 @@
+import { loadPanelModule, PANEL_KEYS } from './lazy-panel'
+
 /**
  * Global app-panel chunk warmers.
  *
@@ -16,40 +18,33 @@
  * warms each chunk once, after the first paint and while the renderer is idle,
  * instead of leaving the first open to fetch its module on the click.
  *
+ * A warm goes through `loadPanelModule`, where the rendering `{#await}` reaches
+ * the same memoized promise by the same key, so a panel the warm already fetched
+ * renders instantly and a fetch that failed is retried here rather than
+ * surfacing blank from the panel.
+ *
  * Only chunks are warmed here. A panel's data is the panel's own business: the
  * notification panel still builds its entries from the stores it reads when it
  * mounts, because a warm-up must never be able to show the user stale content.
  */
 
-let notificationPanelPromise: Promise<unknown> | null = null
-let stickyNotesPanelPromise: Promise<unknown> | null = null
-
 /** Warm the notification panel's module chunk so its first open is instant. */
 export function preloadNotificationPanelChunk(): Promise<unknown> {
-  notificationPanelPromise ??= import('$lib/components/notifications/NotificationPanel.svelte').catch(
-    (error: unknown) => {
-      // Reset so a transient failure can be retried on the next reach.
-      notificationPanelPromise = null
-      throw error
-    }
+  return loadPanelModule(PANEL_KEYS.notifications, () =>
+    import('$lib/components/notifications/NotificationPanel.svelte')
   )
-  return notificationPanelPromise
 }
 
 /** Warm the sticky-notes panel's module chunk so its first open is instant. */
 export function preloadStickyNotesPanelChunk(): Promise<unknown> {
-  stickyNotesPanelPromise ??= import('$lib/components/notes/StickyNotesPanel.svelte').catch(
-    (error: unknown) => {
-      stickyNotesPanelPromise = null
-      throw error
-    }
+  return loadPanelModule(PANEL_KEYS.stickyNotes, () =>
+    import('$lib/components/notes/StickyNotesPanel.svelte')
   )
-  return stickyNotesPanelPromise
 }
 
 /**
- * Warm every global app panel. Idempotent: every warmer memoizes its import, so
- * a second call costs nothing and a chunk that failed to load once is retried on
+ * Warm every global app panel. Idempotent: every warmer memoizes its load, so a
+ * second call costs nothing and a chunk that failed to load once is retried on
  * the next call.
  *
  * Failures are swallowed here: a warm-up is an optimisation, and a chunk that
