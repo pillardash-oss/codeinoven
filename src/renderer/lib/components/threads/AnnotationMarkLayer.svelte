@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
-  import CioPalette from '@codeio/icon/CioPalette.svelte'
-  import CioPencil from '@codeio/icon/CioPencil.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
+  import CioPalette from 'cio-icon/CioPalette.svelte'
+  import CioPencil from 'cio-icon/CioPencil.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'

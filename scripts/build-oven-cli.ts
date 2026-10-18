@@ -7,7 +7,7 @@ import { normalizeServiceBundle } from '../src/main/ovens/oven-service-bundle'
  *
  * Three things have to agree or the CLI is useless: the bundle it installs, the
  * revision it reports to the app, and the version it publishes under. This script
- * derives all three from one app build, so `npx @codeio/oven` can never hand an Oven
+ * derives all three from one app build, so `npx cio-oven` can never hand an Oven
  * a service the app considers stale.
  */
 const repoRoot = join(import.meta.dirname, '..')

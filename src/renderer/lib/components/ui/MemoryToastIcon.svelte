@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMemory from '@codeio/icon/CioMemory.svelte'
+  import CioMemory from 'cio-icon/CioMemory.svelte'
   /**
    * The memory proposal's card icon, as svelte-sonner draws it.
    *

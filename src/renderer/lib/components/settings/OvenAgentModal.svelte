@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioCable from '@codeio/icon/CioCable.svelte'
-  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-  import CioCopy from '@codeio/icon/CioCopy.svelte'
-  import CioShieldCheck from '@codeio/icon/CioShieldCheck.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioCable from 'cio-icon/CioCable.svelte'
+  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+  import CioCopy from 'cio-icon/CioCopy.svelte'
+  import CioShieldCheck from 'cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { toast } from 'svelte-sonner'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -21,7 +21,7 @@
   let { open, onClose, onRegistered }: Props = $props()
 
   /** The one command that prepares a machine; the pasted code carries the rest. */
-  const START_COMMAND = 'npx @codeio/oven start'
+  const START_COMMAND = 'npx cio-oven start'
 
   let code = $state('')
   let preview = $state<OvenAgentPreview | null>(null)

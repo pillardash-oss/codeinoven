@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioWindow from '@codeio/icon/CioWindow.svelte'
+  import CioWindow from 'cio-icon/CioWindow.svelte'
   import { toast } from 'svelte-sonner'
 
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'

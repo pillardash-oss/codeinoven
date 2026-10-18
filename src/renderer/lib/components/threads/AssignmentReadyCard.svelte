@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
-  import CioMaximize from '@codeio/icon/CioMaximize.svelte'
-  import CioNetwork from '@codeio/icon/CioNetwork.svelte'
-  import CioSave from '@codeio/icon/CioSave.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
+  import CioMaximize from 'cio-icon/CioMaximize.svelte'
+  import CioNetwork from 'cio-icon/CioNetwork.svelte'
+  import CioSave from 'cio-icon/CioSave.svelte'
   import { slide } from 'svelte/transition'
   import AssignmentReviewContent from '../specs/AssignmentReviewContent.svelte'
   import CardButton from '../shared/CardButton.svelte'

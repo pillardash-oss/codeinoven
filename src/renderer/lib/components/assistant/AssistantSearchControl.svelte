@@ -1,8 +1,8 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioSearch from '@codeio/icon/CioSearch.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioSearch from 'cio-icon/CioSearch.svelte'
   import { Popover } from 'bits-ui'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'

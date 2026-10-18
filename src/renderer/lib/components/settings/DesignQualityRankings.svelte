@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioRefresh from 'cio-icon/CioRefresh.svelte'
   import { onMount } from 'svelte'
 
   import { invoke } from '$lib/ipc.svelte'

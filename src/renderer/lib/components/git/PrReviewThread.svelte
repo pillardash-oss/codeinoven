@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
-  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
-  import CioMessage from '@codeio/icon/CioMessage.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
-  import CioUndo from '@codeio/icon/CioUndo.svelte'
+  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
+  import CioExternalLink from 'cio-icon/CioExternalLink.svelte'
+  import CioMessage from 'cio-icon/CioMessage.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioUndo from 'cio-icon/CioUndo.svelte'
   /**
    * One inline review thread: the file it is about, the code the comment was
    * written against, the comments in the thread, and the box that answers them.

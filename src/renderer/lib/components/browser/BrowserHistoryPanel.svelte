@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioStar from '@codeio/icon/CioStar.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioStar from 'cio-icon/CioStar.svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
 

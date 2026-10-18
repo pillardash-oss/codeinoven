@@ -1,15 +1,15 @@
 <script lang="ts">
-  import CioArrowLeft from '@codeio/icon/CioArrowLeft.svelte'
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioBook from '@codeio/icon/CioBook.svelte'
-  import CioBookmark from '@codeio/icon/CioBookmark.svelte'
-  import CioDownload from '@codeio/icon/CioDownload.svelte'
-  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
-  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
-  import CioServer from '@codeio/icon/CioServer.svelte'
-  import CioSparkles from '@codeio/icon/CioSparkles.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
-  import CioTrash from '@codeio/icon/CioTrash.svelte'
+  import CioArrowLeft from 'cio-icon/CioArrowLeft.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioBook from 'cio-icon/CioBook.svelte'
+  import CioBookmark from 'cio-icon/CioBookmark.svelte'
+  import CioDownload from 'cio-icon/CioDownload.svelte'
+  import CioExternalLink from 'cio-icon/CioExternalLink.svelte'
+  import CioRefresh from 'cio-icon/CioRefresh.svelte'
+  import CioServer from 'cio-icon/CioServer.svelte'
+  import CioSparkles from 'cio-icon/CioSparkles.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioTrash from 'cio-icon/CioTrash.svelte'
   import {
     invalidateAgentPluginMarket,
     loadAgentPluginDetail,

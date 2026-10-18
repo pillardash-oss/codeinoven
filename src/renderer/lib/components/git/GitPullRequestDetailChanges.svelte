@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCommit from '@codeio/icon/CioCommit.svelte'
-  import CioDiff from '@codeio/icon/CioDiff.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioCommit from 'cio-icon/CioCommit.svelte'
+  import CioDiff from 'cio-icon/CioDiff.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import type { PullRequestCommit, PullRequestFile } from '$shared/types'
   import PrDiffHunk from './PrDiffHunk.svelte'

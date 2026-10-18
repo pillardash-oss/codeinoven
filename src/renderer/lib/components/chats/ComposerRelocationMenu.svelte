@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCopy from '@codeio/icon/CioCopy.svelte'
-  import CioForward from '@codeio/icon/CioForward.svelte'
+  import CioCopy from 'cio-icon/CioCopy.svelte'
+  import CioForward from 'cio-icon/CioForward.svelte'
   import { ContextMenu } from 'bits-ui'
 
   import type { Snippet } from 'svelte'

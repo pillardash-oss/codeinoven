@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTemporaryChat from '@codeio/icon/CioTemporaryChat.svelte'
+  import CioTemporaryChat from 'cio-icon/CioTemporaryChat.svelte'
   interface Props {
     onExplain: () => void
     onQuickChat: () => void

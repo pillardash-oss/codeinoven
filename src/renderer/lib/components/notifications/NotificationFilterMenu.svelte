@@ -1,6 +1,6 @@
 <script lang="ts" generics="Value extends string">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
-  import CioFilter from '@codeio/icon/CioFilter.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
+  import CioFilter from 'cio-icon/CioFilter.svelte'
   import { DropdownMenu } from 'bits-ui'
 
   /**

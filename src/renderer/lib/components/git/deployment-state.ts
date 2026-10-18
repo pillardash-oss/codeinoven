@@ -1,7 +1,7 @@
-import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-import CioCrossCircle from '@codeio/icon/CioCrossCircle.svelte'
-import CioDot from '@codeio/icon/CioDot.svelte'
-import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+import CioCrossCircle from 'cio-icon/CioCrossCircle.svelte'
+import CioDot from 'cio-icon/CioDot.svelte'
+import CioRefresh from 'cio-icon/CioRefresh.svelte'
 /**
  * How a deployment or workflow run state reads at a glance.
  *

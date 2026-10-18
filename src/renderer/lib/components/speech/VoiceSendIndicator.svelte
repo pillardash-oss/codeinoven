@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioAudioLines from '@codeio/icon/CioAudioLines.svelte'
-  import CioTimerOff from '@codeio/icon/CioTimerOff.svelte'
+  import CioAudioLines from 'cio-icon/CioAudioLines.svelte'
+  import CioTimerOff from 'cio-icon/CioTimerOff.svelte'
   import type { VoiceSendStage } from '$lib/speech/speech-controller.svelte'
 
   interface Props {

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBan from '@codeio/icon/CioBan.svelte'
-  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-  import CioClock from '@codeio/icon/CioClock.svelte'
-  import CioCrossCircle from '@codeio/icon/CioCrossCircle.svelte'
+  import CioBan from 'cio-icon/CioBan.svelte'
+  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+  import CioClock from 'cio-icon/CioClock.svelte'
+  import CioCrossCircle from 'cio-icon/CioCrossCircle.svelte'
   import type { AgentToolStatus } from '$shared/types'
   import { SUBAGENT_STATUS_TONE, subagentStatusLabel } from '$lib/subagent-presentation'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'

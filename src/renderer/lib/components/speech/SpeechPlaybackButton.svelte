@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioAlertCircle from '@codeio/icon/CioAlertCircle.svelte'
-  import CioPause from '@codeio/icon/CioPause.svelte'
-  import CioPlay from '@codeio/icon/CioPlay.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
-  import CioVolume from '@codeio/icon/CioVolume.svelte'
+  import CioAlertCircle from 'cio-icon/CioAlertCircle.svelte'
+  import CioPause from 'cio-icon/CioPause.svelte'
+  import CioPlay from 'cio-icon/CioPlay.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioVolume from 'cio-icon/CioVolume.svelte'
   import { onMount } from 'svelte'
 
   import { slide } from 'svelte/transition'

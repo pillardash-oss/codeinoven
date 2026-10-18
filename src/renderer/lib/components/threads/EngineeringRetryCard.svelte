@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioRefresh from 'cio-icon/CioRefresh.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

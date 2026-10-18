@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
-  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
-  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
-  import CioShieldCheck from '@codeio/icon/CioShieldCheck.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
+  import CioExternalLink from 'cio-icon/CioExternalLink.svelte'
+  import CioRefresh from 'cio-icon/CioRefresh.svelte'
+  import CioShieldCheck from 'cio-icon/CioShieldCheck.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

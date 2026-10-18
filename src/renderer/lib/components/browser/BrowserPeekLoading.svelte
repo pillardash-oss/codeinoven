@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { browserTabTitleForUrl } from '$lib/stores/global-browser-types'
 
   /**

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioFolderOpen from '@codeio/icon/CioFolderOpen.svelte'
+  import CioFolderOpen from 'cio-icon/CioFolderOpen.svelte'
   import type { AgentArtifact } from '$shared/types'
   import type { FileBlobUrlManager } from '$lib/media-urls.svelte'
 

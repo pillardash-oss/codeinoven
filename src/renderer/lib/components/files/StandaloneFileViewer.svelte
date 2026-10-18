@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioMinimize from '@codeio/icon/CioMinimize.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioMinimize from 'cio-icon/CioMinimize.svelte'
   import Modal from '../ui/Modal.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'

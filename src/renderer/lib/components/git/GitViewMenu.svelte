@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
-  import CioTabGit from '@codeio/icon/CioTabGit.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
+  import CioTabGit from 'cio-icon/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 

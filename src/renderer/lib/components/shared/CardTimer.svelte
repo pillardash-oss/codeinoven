@@ -23,7 +23,7 @@
 </script>
 
 <script lang="ts">
-  import CioClock from '@codeio/icon/CioClock.svelte'
+  import CioClock from 'cio-icon/CioClock.svelte'
   type Props = CardChipData
 
   let { text, tone = 'default', title, label }: Props = $props()

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioLock from '@codeio/icon/CioLock.svelte'
-  import CioLockOpen from '@codeio/icon/CioLockOpen.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioLock from 'cio-icon/CioLock.svelte'
+  import CioLockOpen from 'cio-icon/CioLockOpen.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import type { Attachment } from 'svelte/attachments'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { BrowserHistoryEntry } from '$shared/browser/browser-library'

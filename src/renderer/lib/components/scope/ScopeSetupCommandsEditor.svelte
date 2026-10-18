@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
-  import CioChevronUp from '@codeio/icon/CioChevronUp.svelte'
-  import CioPlus from '@codeio/icon/CioPlus.svelte'
-  import CioTrash from '@codeio/icon/CioTrash.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from 'cio-icon/CioChevronUp.svelte'
+  import CioPlus from 'cio-icon/CioPlus.svelte'
+  import CioTrash from 'cio-icon/CioTrash.svelte'
   import type { ScopeSetupCommandSpec } from '$shared/types'
   import Modal from '../ui/Modal.svelte'
 

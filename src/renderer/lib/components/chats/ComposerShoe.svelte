@@ -75,13 +75,13 @@
 </script>
 
 <script lang="ts">
-  import CioActions from '@codeio/icon/CioActions.svelte'
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
-  import CioClipboardCheck from '@codeio/icon/CioClipboardCheck.svelte'
-  import CioClipboardX from '@codeio/icon/CioClipboardX.svelte'
-  import CioFiles from '@codeio/icon/CioFiles.svelte'
-  import CioForward from '@codeio/icon/CioForward.svelte'
-  import CioTabGit from '@codeio/icon/CioTabGit.svelte'
+  import CioActions from 'cio-icon/CioActions.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
+  import CioClipboardCheck from 'cio-icon/CioClipboardCheck.svelte'
+  import CioClipboardX from 'cio-icon/CioClipboardX.svelte'
+  import CioFiles from 'cio-icon/CioFiles.svelte'
+  import CioForward from 'cio-icon/CioForward.svelte'
+  import CioTabGit from 'cio-icon/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'

@@ -1,9 +1,9 @@
 import type { Component } from 'svelte'
-import CioNote from '@codeio/icon/CioNote.svelte'
-import CioNotes from '@codeio/icon/CioNotes.svelte'
-import CioTabSettings from '@codeio/icon/CioTabSettings.svelte'
-import CioTabTasks from '@codeio/icon/CioTabTasks.svelte'
-import CioPackage from '@codeio/icon/CioPackage.svelte'
+import CioNote from 'cio-icon/CioNote.svelte'
+import CioNotes from 'cio-icon/CioNotes.svelte'
+import CioTabSettings from 'cio-icon/CioTabSettings.svelte'
+import CioTabTasks from 'cio-icon/CioTabTasks.svelte'
+import CioPackage from 'cio-icon/CioPackage.svelte'
 
 /**
  * Every feature's canonical name and mark live here, once.

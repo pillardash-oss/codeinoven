@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBrowser from '@codeio/icon/CioBrowser.svelte'
-  import CioFind from '@codeio/icon/CioFind.svelte'
-  import CioProjects from '@codeio/icon/CioProjects.svelte'
-  import CioThreads from '@codeio/icon/CioThreads.svelte'
+  import CioBrowser from 'cio-icon/CioBrowser.svelte'
+  import CioFind from 'cio-icon/CioFind.svelte'
+  import CioProjects from 'cio-icon/CioProjects.svelte'
+  import CioThreads from 'cio-icon/CioThreads.svelte'
   import { onMount } from 'svelte'
   import type {
     CommandPaletteProps,

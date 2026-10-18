@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioPause from '@codeio/icon/CioPause.svelte'
-  import CioPlay from '@codeio/icon/CioPlay.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioPause from 'cio-icon/CioPause.svelte'
+  import CioPlay from 'cio-icon/CioPlay.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   interface Props {
     /** 0-100 when determinate, undefined for indeterminate installing */
     percent?: number

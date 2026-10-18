@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMemory from '@codeio/icon/CioMemory.svelte'
+  import CioMemory from 'cio-icon/CioMemory.svelte'
   import { openMemoryProposal } from '$lib/stores/memory-proposal-open'
   interface Props {
     message: string

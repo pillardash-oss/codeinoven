@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-  import CioCloud from '@codeio/icon/CioCloud.svelte'
-  import CioPlus from '@codeio/icon/CioPlus.svelte'
-  import CioSearch from '@codeio/icon/CioSearch.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+  import CioCloud from 'cio-icon/CioCloud.svelte'
+  import CioPlus from 'cio-icon/CioPlus.svelte'
+  import CioSearch from 'cio-icon/CioSearch.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { SvelteSet } from 'svelte/reactivity'
 
   import { toast } from 'svelte-sonner'

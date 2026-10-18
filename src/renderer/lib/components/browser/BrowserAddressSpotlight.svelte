@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioBrowser from '@codeio/icon/CioBrowser.svelte'
-  import CioLock from '@codeio/icon/CioLock.svelte'
-  import CioLockOpen from '@codeio/icon/CioLockOpen.svelte'
+  import CioBrowser from 'cio-icon/CioBrowser.svelte'
+  import CioLock from 'cio-icon/CioLock.svelte'
+  import CioLockOpen from 'cio-icon/CioLockOpen.svelte'
   import type { Attachment } from 'svelte/attachments'
 
   import Modal from '$lib/components/ui/Modal.svelte'

@@ -1,4 +1,4 @@
-import CioBrowser from '@codeio/icon/CioBrowser.svelte'
+import CioBrowser from 'cio-icon/CioBrowser.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 
 import type { ActionDefinition, ActionSelection } from '$lib/actions'

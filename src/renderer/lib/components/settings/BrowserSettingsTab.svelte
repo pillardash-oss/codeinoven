@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioPlus from '@codeio/icon/CioPlus.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioPlus from 'cio-icon/CioPlus.svelte'
   import { onMount } from 'svelte'
 
   import { toast } from 'svelte-sonner'

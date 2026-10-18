@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioFiles from '@codeio/icon/CioFiles.svelte'
-  import CioMessagePlus from '@codeio/icon/CioMessagePlus.svelte'
-  import CioTabInfo from '@codeio/icon/CioTabInfo.svelte'
+  import CioFiles from 'cio-icon/CioFiles.svelte'
+  import CioMessagePlus from 'cio-icon/CioMessagePlus.svelte'
+  import CioTabInfo from 'cio-icon/CioTabInfo.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import WorkerScopePicker from '../shared/WorkerScopePicker.svelte'

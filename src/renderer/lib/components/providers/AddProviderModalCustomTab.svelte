@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioPencil from '@codeio/icon/CioPencil.svelte'
-  import CioServer from '@codeio/icon/CioServer.svelte'
+  import CioPencil from 'cio-icon/CioPencil.svelte'
+  import CioServer from 'cio-icon/CioServer.svelte'
   import type { BaseUrlProvider, ProviderConnectionInfo } from '$shared/types'
 
   interface Props {

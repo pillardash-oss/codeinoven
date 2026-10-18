@@ -36,8 +36,8 @@
 </script>
 
 <script lang="ts" generics="Row, SortKey extends string">
-  import CioArrowDown from '@codeio/icon/CioArrowDown.svelte'
-  import CioArrowUp from '@codeio/icon/CioArrowUp.svelte'
+  import CioArrowDown from 'cio-icon/CioArrowDown.svelte'
+  import CioArrowUp from 'cio-icon/CioArrowUp.svelte'
   import type { Snippet } from 'svelte'
   interface Props {
     rows: Row[]

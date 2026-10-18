@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
   import type { Snippet } from 'svelte'
 
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'

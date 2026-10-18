@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
-  import CioPlus from '@codeio/icon/CioPlus.svelte'
-  import CioServer from '@codeio/icon/CioServer.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
+  import CioPlus from 'cio-icon/CioPlus.svelte'
+  import CioServer from 'cio-icon/CioServer.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { invoke } from '$lib/ipc.svelte'
   import { ovenMarkUrl } from '$lib/stores/ovens.svelte'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioPlus from '@codeio/icon/CioPlus.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioPlus from 'cio-icon/CioPlus.svelte'
   import type { Snippet } from 'svelte'
   import { browserTabIndicatorSlotClass } from '$lib/stores/browser-tab-status'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'

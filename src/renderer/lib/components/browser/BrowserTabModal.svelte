@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import AppearancePicker from '$lib/components/shared/AppearancePicker.svelte'

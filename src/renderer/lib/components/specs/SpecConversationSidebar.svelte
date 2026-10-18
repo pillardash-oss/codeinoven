@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMessage from '@codeio/icon/CioMessage.svelte'
+  import CioMessage from 'cio-icon/CioMessage.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'

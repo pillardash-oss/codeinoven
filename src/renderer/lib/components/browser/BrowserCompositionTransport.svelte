@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioBack from '@codeio/icon/CioBack.svelte'
-  import CioForward from '@codeio/icon/CioForward.svelte'
-  import CioPause from '@codeio/icon/CioPause.svelte'
-  import CioPlay from '@codeio/icon/CioPlay.svelte'
-  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
-  import CioSquare from '@codeio/icon/CioSquare.svelte'
+  import CioBack from 'cio-icon/CioBack.svelte'
+  import CioForward from 'cio-icon/CioForward.svelte'
+  import CioPause from 'cio-icon/CioPause.svelte'
+  import CioPlay from 'cio-icon/CioPlay.svelte'
+  import CioRefresh from 'cio-icon/CioRefresh.svelte'
+  import CioSquare from 'cio-icon/CioSquare.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     BrowserCompositionPlayback,

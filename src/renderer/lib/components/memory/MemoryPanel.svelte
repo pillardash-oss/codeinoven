@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioPlus from '@codeio/icon/CioPlus.svelte'
-  import CioSave from '@codeio/icon/CioSave.svelte'
-  import CioSearch from '@codeio/icon/CioSearch.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioPlus from 'cio-icon/CioPlus.svelte'
+  import CioSave from 'cio-icon/CioSave.svelte'
+  import CioSearch from 'cio-icon/CioSearch.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     ASSISTANT_SPACE_ID,

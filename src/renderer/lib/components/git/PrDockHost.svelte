@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-  import CioPullRequest from '@codeio/icon/CioPullRequest.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+  import CioPullRequest from 'cio-icon/CioPullRequest.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'

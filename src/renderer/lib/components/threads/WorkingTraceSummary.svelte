@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioArchive from '@codeio/icon/CioArchive.svelte'
-  import CioTools from '@codeio/icon/CioTools.svelte'
+  import CioArchive from 'cio-icon/CioArchive.svelte'
+  import CioTools from 'cio-icon/CioTools.svelte'
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import { formatDurationMs } from '$lib/format/duration'
   import type { SubagentPart } from '$lib/working-trace-parts'

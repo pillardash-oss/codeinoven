@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMessagePlus from '@codeio/icon/CioMessagePlus.svelte'
+  import CioMessagePlus from 'cio-icon/CioMessagePlus.svelte'
   import type {
     CapturableSpecContextType,
     EngineeringSpec,

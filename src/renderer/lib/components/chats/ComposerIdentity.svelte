@@ -56,9 +56,9 @@
 
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import CioBrowser from '@codeio/icon/CioBrowser.svelte'
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
-  import CioFolder from '@codeio/icon/CioFolder.svelte'
+  import CioBrowser from 'cio-icon/CioBrowser.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
+  import CioFolder from 'cio-icon/CioFolder.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
   import {
     ASSISTANT_ICON_FALLBACK_COLOR,

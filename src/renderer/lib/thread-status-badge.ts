@@ -1,4 +1,4 @@
-import CioClock from '@codeio/icon/CioClock.svelte'
+import CioClock from 'cio-icon/CioClock.svelte'
 import {
   isThreadAwaitingUser,
   isThreadRetryPaused,

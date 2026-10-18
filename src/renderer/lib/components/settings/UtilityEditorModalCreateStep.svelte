@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBook from '@codeio/icon/CioBook.svelte'
-  import CioServer from '@codeio/icon/CioServer.svelte'
-  import CioSparkles from '@codeio/icon/CioSparkles.svelte'
-  import CioTabBoxes from '@codeio/icon/CioTabBoxes.svelte'
+  import CioBook from 'cio-icon/CioBook.svelte'
+  import CioServer from 'cio-icon/CioServer.svelte'
+  import CioSparkles from 'cio-icon/CioSparkles.svelte'
+  import CioTabBoxes from 'cio-icon/CioTabBoxes.svelte'
   interface Props {
     onChooseCreate: (id: 'skill' | 'mcp' | 'plugin') => void
     onStartSetupThread: () => void

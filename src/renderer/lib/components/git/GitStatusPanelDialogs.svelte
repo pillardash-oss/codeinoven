@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioMerge from '@codeio/icon/CioMerge.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioMerge from 'cio-icon/CioMerge.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type {

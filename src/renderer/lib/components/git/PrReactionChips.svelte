@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   /**
    * The reactions on one comment, as the chips a reader clicks.
    *

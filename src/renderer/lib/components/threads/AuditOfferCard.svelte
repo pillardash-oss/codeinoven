@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioPlay from '@codeio/icon/CioPlay.svelte'
-  import CioShieldCheck from '@codeio/icon/CioShieldCheck.svelte'
+  import CioPlay from 'cio-icon/CioPlay.svelte'
+  import CioShieldCheck from 'cio-icon/CioShieldCheck.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

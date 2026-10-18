@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioThreadBrowser from '@codeio/icon/CioThreadBrowser.svelte'
+  import CioThreadBrowser from 'cio-icon/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'

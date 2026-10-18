@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTerminal from '@codeio/icon/CioTerminal.svelte'
+  import CioTerminal from 'cio-icon/CioTerminal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import TerminalPanel from '$lib/components/terminal/TerminalPanel.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'

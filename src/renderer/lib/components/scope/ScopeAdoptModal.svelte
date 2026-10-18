@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioFolderInput from '@codeio/icon/CioFolderInput.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioFolderInput from 'cio-icon/CioFolderInput.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import { invoke } from '$lib/ipc.svelte'

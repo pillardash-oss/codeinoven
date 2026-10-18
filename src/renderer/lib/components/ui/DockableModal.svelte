@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioGrip from '@codeio/icon/CioGrip.svelte'
-  import CioMinus from '@codeio/icon/CioMinus.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioGrip from 'cio-icon/CioGrip.svelte'
+  import CioMinus from 'cio-icon/CioMinus.svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { Snippet } from 'svelte'
   import { BitsConfig } from 'bits-ui'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioRedo from '@codeio/icon/CioRedo.svelte'
-  import CioUndo from '@codeio/icon/CioUndo.svelte'
+  import CioRedo from 'cio-icon/CioRedo.svelte'
+  import CioUndo from 'cio-icon/CioUndo.svelte'
   interface Props {
     canUndo: boolean
     canRedo: boolean

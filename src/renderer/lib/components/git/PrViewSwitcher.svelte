@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCheck from '@codeio/icon/CioCheck.svelte'
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
+  import CioCheck from 'cio-icon/CioCheck.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { PrDetailTabId } from './pr-view'
 

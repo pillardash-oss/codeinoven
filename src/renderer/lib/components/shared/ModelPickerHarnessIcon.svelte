@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTerminal from '@codeio/icon/CioTerminal.svelte'
+  import CioTerminal from 'cio-icon/CioTerminal.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
 
   interface Props {

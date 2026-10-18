@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioUndo from '@codeio/icon/CioUndo.svelte'
+  import CioUndo from 'cio-icon/CioUndo.svelte'
   import {
     DEFAULT_VOICE_RECORDING_SHORTCUT,
     MODIFIER_KEY_CODES,

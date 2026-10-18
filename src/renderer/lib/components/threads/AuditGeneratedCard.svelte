@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAlertCircle from '@codeio/icon/CioAlertCircle.svelte'
-  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
-  import CioEye from '@codeio/icon/CioEye.svelte'
-  import CioFileCheck from '@codeio/icon/CioFileCheck.svelte'
+  import CioAlertCircle from 'cio-icon/CioAlertCircle.svelte'
+  import CioExternalLink from 'cio-icon/CioExternalLink.svelte'
+  import CioEye from 'cio-icon/CioEye.svelte'
+  import CioFileCheck from 'cio-icon/CioFileCheck.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

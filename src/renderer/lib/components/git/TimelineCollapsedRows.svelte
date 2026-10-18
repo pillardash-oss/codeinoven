@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioChevronDown from '@codeio/icon/CioChevronDown.svelte'
+  import CioChevronDown from 'cio-icon/CioChevronDown.svelte'
   import TimelineRailItem from './TimelineRailItem.svelte'
 
   /**

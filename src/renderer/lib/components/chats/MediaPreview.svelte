@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioDownload from '@codeio/icon/CioDownload.svelte'
-  import CioFolderOpen from '@codeio/icon/CioFolderOpen.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioDownload from 'cio-icon/CioDownload.svelte'
+  import CioFolderOpen from 'cio-icon/CioFolderOpen.svelte'
   import type { Snippet } from 'svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'

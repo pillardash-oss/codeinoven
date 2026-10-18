@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioCrossCircle from '@codeio/icon/CioCrossCircle.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioCrossCircle from 'cio-icon/CioCrossCircle.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { type Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
   import DockableModal from '../ui/DockableModal.svelte'

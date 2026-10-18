@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioUpload from '@codeio/icon/CioUpload.svelte'
+  import CioUpload from 'cio-icon/CioUpload.svelte'
   interface Props {
     editorError: string
     pluginManifest: string

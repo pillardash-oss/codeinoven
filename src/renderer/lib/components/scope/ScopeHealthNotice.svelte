@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
-  import CioWrench from '@codeio/icon/CioWrench.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioRefresh from 'cio-icon/CioRefresh.svelte'
+  import CioWrench from 'cio-icon/CioWrench.svelte'
   import { onMount } from 'svelte'
 
   import { toast } from 'svelte-sonner'

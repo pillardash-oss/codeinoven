@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioArrowRight from '@codeio/icon/CioArrowRight.svelte'
-  import CioBrowser from '@codeio/icon/CioBrowser.svelte'
-  import CioTabBoxes from '@codeio/icon/CioTabBoxes.svelte'
+  import CioArrowRight from 'cio-icon/CioArrowRight.svelte'
+  import CioBrowser from 'cio-icon/CioBrowser.svelte'
+  import CioTabBoxes from 'cio-icon/CioTabBoxes.svelte'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
   import type { BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { publicAssetUrl } from '$lib/static-assets'

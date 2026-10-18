@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioCheckCircle from '@codeio/icon/CioCheckCircle.svelte'
-  import CioExternalLink from '@codeio/icon/CioExternalLink.svelte'
-  import CioKey from '@codeio/icon/CioKey.svelte'
-  import CioRefresh from '@codeio/icon/CioRefresh.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioCheckCircle from 'cio-icon/CioCheckCircle.svelte'
+  import CioExternalLink from 'cio-icon/CioExternalLink.svelte'
+  import CioKey from 'cio-icon/CioKey.svelte'
+  import CioRefresh from 'cio-icon/CioRefresh.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
 

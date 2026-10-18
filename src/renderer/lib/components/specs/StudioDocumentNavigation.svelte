@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioArrowLeft from '@codeio/icon/CioArrowLeft.svelte'
-  import CioMessage from '@codeio/icon/CioMessage.svelte'
-  import CioPanelLeft from '@codeio/icon/CioPanelLeft.svelte'
+  import CioArrowLeft from 'cio-icon/CioArrowLeft.svelte'
+  import CioMessage from 'cio-icon/CioMessage.svelte'
+  import CioPanelLeft from 'cio-icon/CioPanelLeft.svelte'
   type StudioDocument = 'brainstorm' | 'prd' | 'spec' | 'assignment' | 'audit'
 
   interface Props {

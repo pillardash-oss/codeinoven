@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import Modal, { type ModalSize } from './Modal.svelte'
 

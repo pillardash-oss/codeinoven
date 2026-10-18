@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioHistory from '@codeio/icon/CioHistory.svelte'
-  import CioSpinner from '@codeio/icon/CioSpinner.svelte'
-  import CioTabGit from '@codeio/icon/CioTabGit.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioHistory from 'cio-icon/CioHistory.svelte'
+  import CioSpinner from 'cio-icon/CioSpinner.svelte'
+  import CioTabGit from 'cio-icon/CioTabGit.svelte'
   import DesignHistoryActions from './DesignHistoryActions.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'

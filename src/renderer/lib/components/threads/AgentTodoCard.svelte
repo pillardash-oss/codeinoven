@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@codeio/icon/CioAttention.svelte'
-  import CioClose from '@codeio/icon/CioClose.svelte'
-  import CioListChecks from '@codeio/icon/CioListChecks.svelte'
+  import CioAttention from 'cio-icon/CioAttention.svelte'
+  import CioClose from 'cio-icon/CioClose.svelte'
+  import CioListChecks from 'cio-icon/CioListChecks.svelte'
   import { fly } from 'svelte/transition'
   import CardStack from '../shared/CardStack.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
