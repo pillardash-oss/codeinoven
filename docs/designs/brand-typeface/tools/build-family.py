@@ -417,73 +417,130 @@ class MitrePen(BasePen):
     Points are tagged as they are emitted, because a corner and a straight run cannot be
     told apart once both are polylines, and the merge pass needs to know which vertices a
     bend contributed.
+
+    The decision itself is only measured when no plan is handed in. A build hands one in,
+    because whether a corner is a corner is a drawing decision and not a weight decision:
+    measured again on every master it can cross TURN_MIN on one and not on another, which
+    gives that glyph a different point count per master, and masters that disagree cannot
+    interpolate. varLib then drops the glyph's deltas and the letter keeps the default
+    master's shape at every other weight, which is what "incompatible masters; skipping"
+    in the build log means. So the plan is taken once, on the default master, and replayed
+    here segment for segment.
     """
 
-    def __init__(self, out, variety: int):
+    def __init__(self, plan: list[list[bool]] | None = None):
         super().__init__(None)
-        self.out = out
-        self.variety = variety
+        self.plan = plan
         self.cur = None
+        self.contour = -1
+        self.segment = 0
         self.tagged: list[tuple[tuple[float, float], bool]] = []
         self.contours: list[list[tuple[tuple[float, float], bool]]] = []
+        self.decisions: list[bool] = []
+        self.walked: list[list[bool]] = []
 
     def _emit(self, pt, from_curve: bool):
         self.tagged.append((pt, from_curve))
         self.cur = pt
 
-    def _moveTo(self, pt):
-        if self.tagged:
-            self.contours.append(self.tagged)
+    def _keep_contour(self):
+        if not self.tagged:
+            return
+        self.contours.append(self.tagged)
+        self.walked.append(self.decisions)
         self.tagged = []
+        self.decisions = []
+        self.cur = None
+
+    def _decide(self, measured: bool) -> bool:
+        """One entry per drawn segment: the plan's answer, or the measured one while planning."""
+        if self.plan is None:
+            decision = measured
+            self.decisions.append(decision)
+        else:
+            try:
+                decision = self.plan[self.contour][self.segment]
+            except IndexError as error:
+                raise RuntimeError(
+                    f"mitre plan is missing contour {self.contour} segment {self.segment}: "
+                    "a master disagrees with the default about its own outline"
+                ) from error
+        self.segment += 1
+        return decision
+
+    def _moveTo(self, pt):
+        self._keep_contour()
+        self.contour += 1
+        self.segment = 0
         self._emit(pt, False)
 
     def _lineTo(self, pt):
+        self._decide(False)
         self._emit(pt, False)
 
     def _qCurveToOne(self, pt1, pt2):
-        if _angle(self.cur, pt1, pt2) >= TURN_MIN:
+        if self._decide(_angle(self.cur, pt1, pt2) >= TURN_MIN):
             self._emit(pt1, True)
             self._emit(pt2, True)
         else:
             self._emit(pt2, False)
 
     def _curveToOne(self, p1, p2, p3):
-        corner = _cross(self.cur, p1, p2, p3)
-        if corner is not None and _angle(self.cur, corner, p3) >= TURN_MIN:
-            self._emit(corner, True)
+        mitre = _cross(self.cur, p1, p2, p3)
+        promoted = mitre is not None and _angle(self.cur, mitre, p3) >= TURN_MIN
+        if self._decide(promoted):
+            if mitre is None:
+                raise RuntimeError("a planned mitre has no corner to draw on this master")
+            self._emit(mitre, True)
             self._emit(p3, True)
         else:
             self._emit(p3, False)
 
     def _closePath(self):
-        if self.tagged:
-            self.contours.append(self.tagged)
-        self.tagged = []
-        self.cur = None
+        self._keep_contour()
 
     def _endPath(self):
         self._closePath()
 
     def done(self):
         """Every contour the pen walked, with its promoted corners already tagged."""
-        if self.tagged:
-            self.contours.append(self.tagged)
-            self.tagged = []
+        self._keep_contour()
         walked = self.contours
         self.contours = []
         return walked
 
 
-def square_outlines(font: TTFont) -> dict[str, int]:
-    """Turn every drawn corner of the alphabet out to its mitre."""
+def plan_mitres(font: TTFont) -> dict[str, list[list[bool]]]:
+    """The corners each glyph turns out to its mitre, decided once on the default master.
+
+    Measured after the dots and the bars are drawn, because those passes change the
+    contours the pen walks. square_outlines then replays the answer onto every other
+    master, which is what keeps the masters of one glyph compatible and its weight alive.
+    """
     glyf = font["glyf"]
-    changed = {}
+    glyph_set = font.getGlyphSet()
+    plan = {}
     for name in font.getGlyphOrder():
         if name in SQUARE_EXCLUDE or glyf[name].isComposite():
             continue
+        pen = MitrePen()
+        glyph_set[name].draw(pen)
+        pen.done()
+        plan[name] = pen.walked
+    return plan
+
+
+def square_outlines(font: TTFont, plan: dict[str, list[list[bool]]]) -> dict[str, int]:
+    """Turn every drawn corner of the alphabet out to its mitre, from the shared plan."""
+    glyf = font["glyf"]
+    glyph_set = font.getGlyphSet()
+    changed = {}
+    for name, corners in plan.items():
+        if glyf[name].isComposite():
+            continue
         out = TTGlyphPen(glyf)
-        pen = MitrePen(out, 1)
-        font.getGlyphSet()[name].draw(pen)
+        pen = MitrePen(corners)
+        glyph_set[name].draw(pen)
         contours = pen.done()
         if not contours:
             continue
@@ -505,14 +562,22 @@ def build(variant: str):
     OUT.mkdir(parents=True, exist_ok=True)
     plan = plan_dots()
     print("dot plan:", plan)
+    # A squared cut is planned from one master and replayed onto the rest, so the default
+    # master is built first and hands its mitre plan down to the others.
+    ordered = [w for w in masters_at if w == axis_default] + [w for w in masters_at if w != axis_default]
     masters = []
-    for w in masters_at:
+    mitres = None
+    for w in ordered:
         f = TTFont(SOURCE)
         inst = instantiateVariableFont(f, {"wght": w}, inplace=True, updateFontNames=False)
         changed = redraw_dots(inst, w, plan)
         square_zero_dot(inst)
         bars = flat_bars(inst)
-        cuts = square_outlines(inst) if spec["square"] else {}
+        cuts = {}
+        if spec["square"]:
+            if mitres is None:
+                mitres = plan_mitres(inst)
+            cuts = square_outlines(inst, mitres)
         rename(inst, w, is_variable=False, family=family)
         path = OUT / f"master-{w}.ttf"
         inst.save(path)

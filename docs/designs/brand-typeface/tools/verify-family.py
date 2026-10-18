@@ -5,18 +5,19 @@ Run from the project root, after build-family.py:
 
 Every check below fails the run with a non-zero exit code, so a bad build cannot be
 committed quietly. It verifies what the app depends on: one advance per glyph at every
-weight, unchanged vertical metrics, kept glyph coverage, ligatures that still shape, and
-then the cut's own decision, that a box cut has no drawn corner left round and has lost no
-counter to the squaring.
+weight, unchanged vertical metrics, kept glyph coverage, ligatures that still shape, a
+weight axis every glyph still answers, and then the cut's own decision, that a box cut has
+no drawn corner left round and has lost no counter to the squaring.
 """
 import argparse
+import math
 import sys
 from pathlib import Path
 
 import uharfbuzz as hb
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.areaPen import AreaPen
-from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.recordingPen import DecomposingRecordingPen, RecordingPen
 from fontTools.ttLib import TTFont
 from fontTools.varLib.instancer import instantiateVariableFont
 
@@ -192,6 +193,57 @@ if spec_of_cut['square']:
         if points_of(sgs, g) != points_of(gs, g):
             drifted.append(g)
     check('straight glyphs identical to JetBrains Mono', not drifted, drifted)
+
+def weight_points(font_path, weight):
+    """Every glyph's outline at one weight, components decomposed, for a point by point compare."""
+    inst = instantiateVariableFont(TTFont(font_path), {'wght': weight}, inplace=True)
+    glyph_set = inst.getGlyphSet()
+    shapes = {}
+    for name in inst.getGlyphOrder():
+        pen = DecomposingRecordingPen(glyph_set)
+        glyph_set[name].draw(pen)
+        shapes[name] = [a for _, args in pen.value for a in args if isinstance(a, tuple)]
+    return shapes
+
+
+def travel(points, other):
+    """How far an outline moves between two weights, or None when the point counts differ."""
+    if len(points) != len(other):
+        return None
+    return max((math.dist(a, b) for a, b in zip(points, other)), default=0.0)
+
+
+# A cut must not freeze a letter. Squaring is a redraw of the corners, never a decision about
+# weight, so a glyph that moves with the axis in JetBrains Mono has to move with it here too.
+# A glyph stops moving when its masters disagree about where a corner is: varLib then drops
+# that glyph's deltas and it keeps the default master's shape at every other weight, which
+# reads as some letters staying light inside a bold word, or heavy inside a light one.
+# Squaring redraws a glyph, so the two cuts need not travel equally far; the rule is that a
+# cut may not travel less than the source by more than the rounding slack of one unit, which
+# is what a mitre meeting a near-parallel pair of tangents is worth.
+# A glyph JetBrains Mono itself barely moves is not evidence about a weight axis: the APL quads
+# hold their size at every weight, so the rule only asks about glyphs the source moves visibly.
+VISIBLE_TRAVEL = 5.0
+# A redrawn glyph may travel a little less than the round one: the quote marks are re-cut as
+# constant width bars from their own bounding box, and rounding costs the lightest glyph a unit.
+# A glyph that has lost its deltas travels by nothing at all, which is a ratio of zero.
+KEPT_TRAVEL = 0.8
+src_points = (weight_points(SRC, weight_min), weight_points(SRC, weight_max))
+cut_points = (weight_points(VF, weight_min), weight_points(VF, weight_max))
+frozen = []
+for name, points in cut_points[0].items():
+    if name not in src_points[0]:
+        continue
+    source_travel = travel(src_points[0][name], src_points[1][name])
+    cut_travel = travel(points, cut_points[1][name])
+    if source_travel is None or cut_travel is None or source_travel < VISIBLE_TRAVEL:
+        continue
+    if cut_travel < source_travel * KEPT_TRAVEL:
+        frozen.append((cut_travel / source_travel, name, source_travel, cut_travel))
+frozen.sort()
+check('no glyph frozen against the weight axis', not frozen,
+      f'{len(frozen)} glyphs kept under {KEPT_TRAVEL:.0%} of their travel, worst: '
+      + ' '.join(f'{n} {s:.0f}->{c:.0f}' for _, n, s, c in frozen[:12]))
 
 print()
 print('FAILURES:', fails if fails else 'none')
