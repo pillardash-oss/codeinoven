@@ -19,12 +19,11 @@ export const APP_SLUG = 'codeinoven'
 export const ORG_SLUG = 'pillardash'
 
 /**
- * Keep the standard Chrome/Safari sequence and advertise the actual Chromium
- * version, followed by the pinned app version. Electron's runtime token and
- * existing product tokens are removed so branding stays stable across calls.
+ * Advertise the actual Chromium version using the standard Chrome/Safari
+ * sequence. Extra Electron or app product tokens make sites such as WhatsApp
+ * reject an otherwise supported browser, so omit them from remote requests.
  */
-export function brandUserAgent(userAgent: string, version: string, chromeVersion: string): string {
-  const productToken = `${APP_NAME}/${version}`
+export function brandUserAgent(userAgent: string, chromeVersion: string): string {
   const tokens = userAgent
     .split(' ')
     .filter(
@@ -36,7 +35,6 @@ export function brandUserAgent(userAgent: string, version: string, chromeVersion
     )
   const safariIndex = tokens.findIndex((token) => token.startsWith('Safari/'))
   tokens.splice(safariIndex === -1 ? tokens.length : safariIndex, 0, `Chrome/${chromeVersion}`)
-  tokens.push(productToken)
   return tokens.join(' ')
 }
 

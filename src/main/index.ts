@@ -71,14 +71,10 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
 app.setName(APP_NAME)
-// Naming the app is not enough on its own: Chromium still advertises
-// `Electron/<version>` to every site, so the fallback every web contents
-// inherits is rewritten here, before the first window exists.
-app.userAgentFallback = brandUserAgent(
-  app.userAgentFallback,
-  __CODEINOVEN_APP_VERSION__,
-  process.versions.chrome
-)
+// Use a standard Chrome user agent: app/runtime product tokens cause browser
+// compatibility checks to reject supported Chromium versions. Set the fallback
+// before the first window exists so every web contents inherits it.
+app.userAgentFallback = brandUserAgent(app.userAgentFallback, process.versions.chrome)
 
 configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
