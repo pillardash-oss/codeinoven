@@ -106,6 +106,7 @@
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import ComposerIdentity from './ComposerIdentity.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
+  import ShoePopover from './ShoePopover.svelte'
   import { uniqueScopeName } from '$shared/scope-naming'
 
   interface Props {
@@ -413,13 +414,37 @@
   {/if}
 
   {#if project?.branch}
-    <span
-      class="flex h-6 min-w-0 shrink items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted"
-      title={branchTitle}
+    <!-- The branch is the one reading the row never gives up: it stays, truncated, and
+         a tap states the whole name, because a branch that is hidden is a branch the
+         user cannot check what the work will land on. -->
+    <ShoePopover
+      label="Branch"
+      openOnHover={false}
+      panelClass="p-2.5"
+      class="flex h-6 min-w-0 shrink items-center"
     >
-      <CioTabGit size={11} class="shrink-0 text-dimmed" />
-      <span class="shoe-branch-label truncate">{project.branch}</span>
-    </span>
+      {#snippet trigger({ open, toggle })}
+        <button
+          type="button"
+          class="flex h-6 min-w-0 cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title={branchTitle}
+          aria-expanded={open}
+          aria-label={`Branch ${project.branch}. Open to read the full name`}
+          onclick={toggle}
+        >
+          <CioTabGit size={11} class="shrink-0 text-dimmed" />
+          <span class="shoe-branch-label truncate">{project.branch}</span>
+        </button>
+      {/snippet}
+
+      <div class="flex items-start gap-1.5">
+        <CioTabGit size={11} class="mt-0.5 shrink-0 text-dimmed" />
+        <span class="min-w-0 font-medium break-all text-foreground">{project.branch}</span>
+      </div>
+      {#if remoteOriginUrl}
+        <p class="mt-1.5 break-all text-[0.625rem] text-dimmed">{remoteOriginUrl}</p>
+      {/if}
+    </ShoePopover>
   {/if}
 
   <!-- Worker reporting: green while the worker hands its finished task back to
@@ -505,9 +530,9 @@
 
   <!-- What the context holds, before the keys: the composer's own reading, in the
        row the composer already owns, so the toolbar above keeps its room. It is
-       never hidden: a thread with no reading yet still shows the gauge, which is
-       what the user hovers to check usage before sending. Its popover opens over
-       the composer it belongs to. -->
+       never hidden: a thread with no reading yet still shows the meter, which is
+       what the user hovers or taps to check usage before sending. Its popover opens
+       over the composer it belongs to. -->
   <ContextUsageIndicator
     usage={usage.usage}
     previewContextWindow={usage.previewContextWindow}
@@ -532,12 +557,12 @@
     </div>
   {/snippet}
 
-  <!-- The generation speed: the reading beside the battery, and the facts behind
-       it on hover. The panel is opened by hover alone, without a popover
-       primitive, so nothing delays it and nothing lingers: it appears with the
-       pointer and leaves with it. Its upward offset is the wrapper's own bottom
-       padding, part of the hover target, so the gap the user aims across is not
-       a dead band that closes the panel under their hand. -->
+  <!-- The generation speed: the rate beside the context meter, and the facts behind
+       it on hover or on a tap. The panel opens with the pointer and leaves with it,
+       with no delay and nothing lingering, and a tap holds it open for a finger that
+       has no hover to keep it there. Its upward offset is the shared shell's own
+       bottom padding, part of the target, so the gap the user aims across is not a
+       dead band that closes the panel under their hand. -->
   {#if isWorking || usage.generationRate != null}
     {@const details = usage.generationDetails}
     {@const attribution = details?.attribution}
@@ -551,128 +576,118 @@
     {@const vendorMarkShown =
       providerName !== undefined &&
       (attribution?.harnessId === undefined || !vendorMatches(attribution.harnessId, providerName))}
-    <div
-      class="group relative flex h-6 min-w-0 shrink items-center"
-      role="group"
-      aria-label="Generation speed"
-    >
-      <button
-        type="button"
-        class="flex h-6 min-w-0 shrink items-center gap-1 px-2 text-[0.625rem] text-muted tabular-nums transition-colors hover:bg-elevated hover:text-foreground"
-        title="Generation speed details"
-        aria-label="Generation speed details"
-      >
-        <CioActions size={12} class="shrink-0" />
-        <!-- The rate keeps a column of its own: a fixed width, so a reading that
-             grows never widens the shoe or shifts what sits after it, and it can
-             still give room back when the row itself runs out. The exact figure
-             is the panel's own header. -->
-        <span class="w-[4.5rem] min-w-0 shrink truncate">
-          {usage.generationRate != null ? `~${formatTokenRate(usage.generationRate)}` : '… tok/s'}
-        </span>
-      </button>
-
-      <div
-        class="invisible absolute bottom-full right-0 z-40 w-72 pb-1.5 opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
-        role="dialog"
-        aria-label="Generation speed details"
-      >
-        <div
-          class="max-h-[min(26rem,60vh)] overflow-y-auto border border-border bg-surface p-3 shadow-lg"
+    <ShoePopover label="Generation speed details" class="flex h-6 min-w-0 shrink items-center">
+      {#snippet trigger({ open, toggle })}
+        <button
+          type="button"
+          class="flex h-6 min-w-0 shrink items-center gap-1 px-2 text-[0.625rem] text-muted tabular-nums transition-colors hover:bg-elevated hover:text-foreground"
+          aria-expanded={open}
+          title="Generation speed details"
+          aria-label="Generation speed details"
+          onclick={toggle}
         >
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-sm font-medium text-foreground tabular-nums">
-              {usage.generationRate != null
-                ? `~${formatTokenRateExact(usage.generationRate)}`
-                : 'Measuring'}
-            </span>
-            <span class="flex shrink-0 items-center gap-1.5">
-              {#if attribution?.harnessId}
-                <AgentIcon
-                  agentId={attribution.harnessId}
-                  size={14}
-                  label={`Harness: ${attribution.harnessName ?? attribution.harnessId}`}
-                />
-              {/if}
-              {#if vendorMarkShown && providerName}
-                <span
-                  class="flex shrink-0 items-center"
-                  role="img"
-                  title={`Provider: ${providerName}`}
-                  aria-label={`Provider: ${providerName}`}
-                >
-                  <VendorIcon name={providerName} id={attribution?.providerId} size={12} />
-                </span>
-              {/if}
-            </span>
-          </div>
-          <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.625rem]">
-            {#if modelLabel}
-              <span class="min-w-0 truncate text-muted" title={modelLabel}>{modelLabel}</span>
-              <span class="shrink-0 text-dimmed" aria-hidden="true">&middot;</span>
-            {/if}
-            <span class="shrink-0 text-dimmed">{isWorking ? 'streaming now' : 'last message'}</span>
-          </p>
+          <CioActions size={12} class="shrink-0" />
+          <!-- The rate keeps a column of its own: a fixed width, so a reading that
+               grows never widens the shoe or shifts what sits after it. When the row
+               runs out it goes before the branch does   the mark stays, and a tap or
+               a hover states the figure. The exact figure is the panel's header. -->
+          <span class="shoe-generation-label w-[4.5rem] min-w-0 shrink truncate">
+            {usage.generationRate != null ? `~${formatTokenRate(usage.generationRate)}` : '… tok/s'}
+          </span>
+        </button>
+      {/snippet}
 
-          <dl class="mt-2.5">
-            {#each details?.facts ?? [] as fact (fact.label)}
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm font-medium text-foreground tabular-nums">
+          {usage.generationRate != null
+            ? `~${formatTokenRateExact(usage.generationRate)}`
+            : 'Measuring'}
+        </span>
+        <span class="flex shrink-0 items-center gap-1.5">
+          {#if attribution?.harnessId}
+            <AgentIcon
+              agentId={attribution.harnessId}
+              size={14}
+              label={`Harness: ${attribution.harnessName ?? attribution.harnessId}`}
+            />
+          {/if}
+          {#if vendorMarkShown && providerName}
+            <span
+              class="flex shrink-0 items-center"
+              role="img"
+              title={`Provider: ${providerName}`}
+              aria-label={`Provider: ${providerName}`}
+            >
+              <VendorIcon name={providerName} id={attribution?.providerId} size={12} />
+            </span>
+          {/if}
+        </span>
+      </div>
+      <p class="mt-0.5 flex min-w-0 items-center gap-1 text-[0.625rem]">
+        {#if modelLabel}
+          <span class="min-w-0 truncate text-muted" title={modelLabel}>{modelLabel}</span>
+          <span class="shrink-0 text-dimmed" aria-hidden="true">&middot;</span>
+        {/if}
+        <span class="shrink-0 text-dimmed">{isWorking ? 'streaming now' : 'last message'}</span>
+      </p>
+
+      <dl class="mt-2.5">
+        {#each details?.facts ?? [] as fact (fact.label)}
+          {@render generationFactRow(fact)}
+        {/each}
+      </dl>
+
+      {#if details?.measurement.length}
+        <button
+          type="button"
+          class="mt-1.5 flex h-6 w-full items-center gap-1 text-[0.625rem] text-dimmed transition-colors hover:text-foreground"
+          aria-expanded={measurementOpen}
+          title="How the app timed the generation window"
+          onclick={() => (measurementOpen = !measurementOpen)}
+        >
+          {#if measurementOpen}
+            <CioChevronDown size={11} />
+          {:else}
+            <CioForward size={11} />
+          {/if}
+          Measurement
+        </button>
+        {#if measurementOpen}
+          <dl>
+            {#each details.measurement as fact (fact.label)}
               {@render generationFactRow(fact)}
             {/each}
           </dl>
+        {/if}
+      {/if}
 
-          {#if details?.measurement.length}
-            <button
-              type="button"
-              class="mt-1.5 flex h-6 w-full items-center gap-1 text-[0.625rem] text-dimmed transition-colors hover:text-foreground"
-              aria-expanded={measurementOpen}
-              title="How the app timed the generation window"
-              onclick={() => (measurementOpen = !measurementOpen)}
-            >
-              {#if measurementOpen}
-                <CioChevronDown size={11} />
-              {:else}
-                <CioForward size={11} />
-              {/if}
-              Measurement
-            </button>
-            {#if measurementOpen}
-              <dl>
-                {#each details.measurement as fact (fact.label)}
-                  {@render generationFactRow(fact)}
-                {/each}
-              </dl>
-            {/if}
+      {#if details?.raw.length}
+        <button
+          type="button"
+          class="flex h-6 w-full items-center gap-1 text-[0.625rem] text-dimmed transition-colors hover:text-foreground"
+          aria-expanded={rawReportOpen}
+          title="Numeric fields the harness reported for this message"
+          onclick={() => (rawReportOpen = !rawReportOpen)}
+        >
+          {#if rawReportOpen}
+            <CioChevronDown size={11} />
+          {:else}
+            <CioForward size={11} />
           {/if}
-
-          {#if details?.raw.length}
-            <button
-              type="button"
-              class="flex h-6 w-full items-center gap-1 text-[0.625rem] text-dimmed transition-colors hover:text-foreground"
-              aria-expanded={rawReportOpen}
-              title="Numeric fields the harness reported for this message"
-              onclick={() => (rawReportOpen = !rawReportOpen)}
-            >
-              {#if rawReportOpen}
-                <CioChevronDown size={11} />
-              {:else}
-                <CioForward size={11} />
-              {/if}
-              Harness report
-            </button>
-            {#if rawReportOpen}
-              <dl>
-                {#each details.raw as fact (fact.label)}
-                  <div class="flex items-baseline justify-between gap-3 text-[0.625rem] leading-5">
-                    <dt class="min-w-0 truncate text-dimmed" title={fact.label}>{fact.label}</dt>
-                    <dd class="shrink-0 text-foreground tabular-nums">{fact.value}</dd>
-                  </div>
-                {/each}
-              </dl>
-            {/if}
-          {/if}
-        </div>
-      </div>
-    </div>
+          Harness report
+        </button>
+        {#if rawReportOpen}
+          <dl>
+            {#each details.raw as fact (fact.label)}
+              <div class="flex items-baseline justify-between gap-3 text-[0.625rem] leading-5">
+                <dt class="min-w-0 truncate text-dimmed" title={fact.label}>{fact.label}</dt>
+                <dd class="shrink-0 text-foreground tabular-nums">{fact.value}</dd>
+              </div>
+            {/each}
+          </dl>
+        {/if}
+      {/if}
+    </ShoePopover>
   {/if}
 
   <!-- The tips: the keys that end a message, there only to be read. Nothing here
@@ -721,13 +736,16 @@
      `@container` class), so every threshold below is a width of the room the
      composer leaves that wrapper: the composer, less the wrapper's own inline
      padding. As the composer tightens, give the truncating stages room in
-     order   the tips first (they are read once), then the branch and the worker
-     label, then the scope and Oven names, and the identity is what holds out
-     longest.
+     order   the tips first (they are read once), then the rate and the percent,
+     which a tap or a hover restores from the panel behind each mark, then the
+     worker label and the location, then the scope and Oven names. The branch
+     keeps a name of some length all the way down, and the identity is what holds
+     out longest.
 
-     The scope badge and the Oven's label are drawn by child components, so only
-     `:global(...)` reaches them from here. `shoe-branch-label`, `shoe-report-label`
-     and `shoe-tips` are this component's own markup and stay scoped. */
+     The scope badge, the Oven's label and the context percent are drawn by child
+     components, so only `:global(...)` reaches them from here. `shoe-branch-label`,
+     `shoe-report-label`, `shoe-generation-label` and `shoe-tips` are this
+     component's own markup and stay scoped. */
 
   /* The reporting pill reserves the width of its widest label so flipping the
      switch never shifts the row, and truncates once the shoe runs out of room. */
@@ -752,10 +770,17 @@
       min-width: 0;
       max-width: 4.5rem;
     }
+
+    /* The rate and the percent are readings a tap or a hover restores from the
+       panels behind them, so they are the first to go   down to their own mark,
+       which keeps saying what they are and what they would state. */
+    .shoe-generation-label,
+    :global(.context-usage-label) {
+      display: none;
+    }
   }
 
   @container (max-width: 610px) {
-    .shoe-branch-label,
     .shoe-report-label {
       display: none;
     }
@@ -778,6 +803,11 @@
     :global(.scope-badge-label),
     :global(.oven-segment-label) {
       display: none;
+    }
+
+    /* The branch is still here at its narrowest: a shorter name beat none. */
+    .shoe-branch-label {
+      max-width: 4rem;
     }
   }
 </style>

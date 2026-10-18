@@ -18,6 +18,7 @@
     UsageEfficiencyKpis
   } from '$shared/types'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
+  import ShoePopover from './ShoePopover.svelte'
   import { compactCount, creditsLabel, formatExpiry, formatMoney } from '$lib/format/usage'
 
   interface Props {
@@ -441,47 +442,36 @@
   </div>
 {/snippet}
 
-<div
-  class="group relative"
-  role="group"
-  aria-label="Context and provider usage"
-  onmouseleave={onHide}
->
-  <!-- Console usage control: a four-cell column and its number, the reading the
-       shoe carries. The cells keep the app's severity colours, so a nearly full
-       context still reads amber then red at a glance. -->
-  <button
-    type="button"
-    class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-    onmouseenter={onReveal}
-    aria-label={boundedPercent === undefined
-      ? 'Context usage unavailable'
-      : `Context ${Math.round(boundedPercent)}% used`}
-    title="Context and usage"
-  >
-    <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
-      {#each METER_CELLS as cell (cell)}
-        <span class="h-0.5 w-3 {cell < filledCells ? fillClass : 'bg-overlay'}"></span>
-      {/each}
-    </span>
-    <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
-  </button>
+<!-- The panel opens above the control, and its room is whatever the trigger has
+     above and beside it: a fixed-width panel was clipped by the conversation pane
+     whenever the shoe was narrow or the base font size was raised. The shell also
+     takes a tap as well as a hover, so a touch reaches the same reading. -->
+<ShoePopover label="Context and provider usage" {onReveal} {onHide}>
+  {#snippet trigger({ open, toggle })}
+    <!-- Console usage control: a four-cell column and its number, the reading the
+         shoe carries. The cells keep the app's severity colours, so a nearly full
+         context still reads amber then red at a glance. -->
+    <button
+      type="button"
+      class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      aria-expanded={open}
+      aria-label={boundedPercent === undefined
+        ? 'Context usage unavailable'
+        : `Context ${Math.round(boundedPercent)}% used`}
+      title="Context and usage"
+      onclick={toggle}
+    >
+      <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
+        {#each METER_CELLS as cell (cell)}
+          <span class="h-0.5 w-3 {cell < filledCells ? fillClass : 'bg-overlay'}"></span>
+        {/each}
+      </span>
+      <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
+    </button>
+  {/snippet}
 
-  <!-- The panel opens above the control with a gap, and that gap belongs to the
-       hover target: it is this box's own bottom padding, never a margin. A margin
-       there is a dead band the pointer crosses on its way up, and the panel closed
-       under the user's hand the moment they reached for it. Padding keeps the
-       visible offset and leaves nothing to cross outside the target. -->
-  <div
-    class="invisible absolute bottom-full right-0 z-40 w-72 pb-1.5 opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
-    role="dialog"
-    aria-label="Context and provider usage"
-  >
-    <div class="border border-border bg-surface p-3 shadow-lg">
-      {@render usageDetail()}
-    </div>
-  </div>
-</div>
+  {@render usageDetail()}
+</ShoePopover>
 
 <style>
   .usage-loading-bar {
