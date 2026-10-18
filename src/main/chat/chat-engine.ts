@@ -2238,6 +2238,27 @@ export class ChatEngine {
         return this.listProviders(projectId, force)
       }
     )
+    ipcMain.handle(
+      'agent:refreshModelContext',
+      async (
+        _,
+        projectId: string,
+        harnessId: string,
+        providerId: string,
+        modelId: string,
+        accountId?: string
+      ) => {
+        projectId = validateEntityId(projectId, 'Project ID')
+        harnessId = this.requireHarnessId(harnessId)
+        providerId = validateBoundedString(providerId, 'Provider ID', 1, 128)
+        modelId = validateBoundedString(modelId, 'Model ID', 1, 256)
+        if (accountId !== undefined) accountId = validateEntityId(accountId, 'Account ID')
+        if (harnessId !== 'codex' || providerId !== 'openai') return null
+        const driver = await this.driverForAccount(harnessId, accountId)
+        if (!driver.modelContext) return null
+        return driver.modelContext(await this.discoveryWorkingDirectory(projectId), modelId)
+      }
+    )
     ipcMain.handle('agent:refreshAccountUsage', (_, overrides?: AgentAccountUsageOverrides) =>
       this.refreshAccountUsage(overrides)
     )

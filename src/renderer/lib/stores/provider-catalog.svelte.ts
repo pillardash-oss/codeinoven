@@ -103,6 +103,13 @@ class ProviderCatalogStore {
   /** Consecutive failed attempts per project, for exponential backoff. */
   private retryAttempts = new Map<string, number>()
   private inflight = new Map<string, Promise<ProviderCatalog[]>>()
+  private contextReads = new Map<string, Promise<void>>()
+  private contextReadAt = new Map<string, number>()
+  private contextMetadata = new SvelteMap<
+    string,
+    Pick<ProviderCatalog['models'][number], 'contextWindow' | 'contextWindows'>
+  >()
+
   /** Projects with a driver probe currently in flight, for picker spinners. */
   private refreshingProjects = new SvelteSet<string>()
   /** Projects whose in-flight probe already includes the upstream catalog
@@ -226,6 +233,71 @@ class ProviderCatalogStore {
   cached(projectId: string): ProviderCatalog[] | undefined {
     const catalogs = this.cache.get(projectId)
     return catalogs ? this.applyCustomOverrides(catalogs) : undefined
+  }
+
+  modelContext(
+    projectId: string,
+    harnessId: string,
+    providerId: string,
+    modelId: string,
+    accountId?: string
+  ): Pick<ProviderCatalog['models'][number], 'contextWindow' | 'contextWindows'> | undefined {
+    return this.contextMetadata.get(
+      JSON.stringify([projectId, harnessId, providerId, modelId, accountId])
+    )
+  }
+
+  /** Refresh only the selected model, retaining its options while the read runs. */
+  refreshModelContext(
+    projectId: string,
+    harnessId: string,
+    providerId: string,
+    modelId: string,
+    accountId?: string
+  ): Promise<void> {
+    if (harnessId !== 'codex' || providerId !== 'openai' || !modelId) return Promise.resolve()
+    const key = JSON.stringify([projectId, harnessId, providerId, modelId, accountId])
+    const pending = this.contextReads.get(key)
+    if (pending) return pending
+    const readAt = this.contextReadAt.get(key)
+    if (readAt !== undefined && Date.now() - readAt < RETRY_MIN_INTERVAL_MS)
+      return Promise.resolve()
+    const request = invoke(
+      'agent:refreshModelContext',
+      projectId,
+      harnessId,
+      providerId,
+      modelId,
+      accountId
+    )
+      .then((metadata) => {
+        if (!metadata) return
+        this.contextMetadata.set(key, metadata)
+        this.contextReadAt.set(key, Date.now())
+        const catalogs = this.cache.get(projectId)
+        if (catalogs) {
+          this.cache.set(
+            projectId,
+            catalogs.map((catalog) =>
+              catalog.harnessId === harnessId && catalog.id === providerId
+                ? {
+                    ...catalog,
+                    models: catalog.models.map((model) =>
+                      model.id === modelId ? { ...model, ...metadata } : model
+                    )
+                  }
+                : catalog
+            )
+          )
+          this.persistMirror()
+        }
+      })
+      .catch(() => {
+        // Keep the last known options; retry on the next user interaction.
+      })
+      .finally(() => this.contextReads.delete(key))
+    this.contextReads.set(key, request)
+    return request
   }
 
   /** True while a driver probe for the project is in flight (spinner state). */

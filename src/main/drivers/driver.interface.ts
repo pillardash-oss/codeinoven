@@ -705,6 +705,12 @@ export interface HarnessDriver {
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 
+  /** Read the selected model's context metadata without full model discovery. */
+  modelContext?(
+    projectPath: string,
+    modelId: string
+  ): Promise<Pick<ProviderCatalog['models'][number], 'contextWindow' | 'contextWindows'> | null>
+
   /**
    * Cheap, spawn-free staleness fingerprint of the driver's provider-catalog
    * inputs (connected providers, auth state, configured model lists). The chat

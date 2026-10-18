@@ -251,6 +251,17 @@ export class CodexDriver extends PersistentCliDriver {
     return catalogs
   }
 
+  async modelContext(
+    projectPath: string,
+    modelId: string
+  ): Promise<Pick<ProviderModel, 'contextWindow' | 'contextWindows'> | null> {
+    const windows = await this.codexWindowCatalog(projectPath, true)
+    const window = windows.get(modelId)
+    return window
+      ? { contextWindow: window.defaultWindow, contextWindows: codexContextWindowOptions(window) }
+      : null
+  }
+
   override async listCommands(projectPath: string): Promise<HarnessCommand[]> {
     const commands: HarnessCommand[] = [
       {
@@ -1286,10 +1297,14 @@ export class CodexDriver extends PersistentCliDriver {
    * runs with. A failed read yields an empty catalog rather than a guessed
    * figure: a model with no stated window shows no window options at all.
    */
-  private async codexWindowCatalog(projectPath: string): Promise<CodexWindowCatalog> {
+  private async codexWindowCatalog(
+    projectPath: string,
+    force = false
+  ): Promise<CodexWindowCatalog> {
     const home = this.codexHomeKey()
     const cached = this.codexWindowsByHome.get(home)
-    if (cached && Date.now() - cached.readAt < CODEX_WINDOW_CATALOG_TTL_MS) return cached.catalog
+    if (!force && cached && Date.now() - cached.readAt < CODEX_WINDOW_CATALOG_TTL_MS)
+      return cached.catalog
     const pending = this.codexWindowReads.get(home)
     if (pending) return pending
     const read = this.readCodexWindowCatalog(projectPath)
