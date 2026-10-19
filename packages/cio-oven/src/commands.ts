@@ -250,6 +250,11 @@ async function publish(
   field('Node', descriptor.nodeVersion)
   field('Protocol', String(protocolVersion))
   field('Identity', identity ? `${identity.fingerprint} (${identity.keyPath})` : 'SSH agent')
+  if (identity) {
+    field('SSH account', identity.account === 'administrator' ? 'administrator' : 'standard user')
+    field('Keys read from', identity.requiredFile)
+    field('Key authorized', identity.verified ? 'verified' : 'needs the step below')
+  }
   section('Register it in CodeInOven')
   note('Open Settings, then Ovens, then Add via agent, and paste this code:')
   copyBlock(registrationCode(descriptor))
@@ -295,12 +300,14 @@ export async function start(options: StartOptions): Promise<void> {
         warn(
           'The running Oven service was installed by a different release. Run start with --force to replace it.'
         )
+      const existing = inputs.identity ? await readIdentity(identityKeyPath()) : null
+      for (const message of existing?.warnings ?? []) warn(message)
       await publish(
         layout,
         inputs,
         revision,
         before.probe?.protocolVersion ?? OVEN_PROTOCOL_VERSION,
-        inputs.identity ? await readIdentity(identityKeyPath()) : null
+        existing
       )
       return
     }
@@ -315,7 +322,13 @@ export async function start(options: StartOptions): Promise<void> {
         ? `Created a dedicated SSH key at ${identity.keyPath}.`
         : `Reusing the dedicated SSH key at ${identity.keyPath}.`
     )
-    if (identity.warning) warn(identity.warning)
+    step(
+      process.platform === 'win32'
+        ? `This Windows account is ${identity.account === 'administrator' ? 'an administrator' : 'a standard user'}, so sshd reads keys from ${identity.requiredFile}.`
+        : `sshd reads this account's keys from ${identity.requiredFile}.`
+    )
+    if (identity.verified) step(`The key is authorized there: ${identity.authorized.join(', ')}.`)
+    for (const message of identity.warnings) warn(message)
   } else step('No dedicated key: the app will connect with your existing SSH identity.')
 
   step('Installing the Oven service bundle.')

@@ -271,27 +271,82 @@ if (-not (Test-Path $identityKey)) {
     throw 'OpenSSH (ssh-keygen) is required to provision the agent identity.'
   }
   & ssh-keygen -t ed25519 -N '""' -C 'codeinoven-oven-agent' -f $identityKey | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'ssh-keygen could not create the dedicated Oven key.' }
 }
 $identityPublic = (Get-Content "$identityKey.pub" -Raw).Trim()
-$authorizedKeys = Join-Path $sshDirectory 'authorized_keys'
-if (-not (Test-Path $authorizedKeys)) { New-Item -ItemType File -Path $authorizedKeys | Out-Null }
-if (-not (Select-String -Path $authorizedKeys -SimpleMatch $identityPublic -Quiet -ErrorAction SilentlyContinue)) {
-  Add-Content -Path $authorizedKeys -Value $identityPublic
+# Membership decides which file sshd reads, not whether this shell happens to be
+# elevated. An administrator who opened an ordinary PowerShell is still covered
+# by the machine-wide file, and sshd skips the per-user file for that account, so
+# asking IsInRole would authorize the wrong file and every connection afterwards
+# would fail with 'Permission denied'.
+$isAdminAccount = $false
+if (Get-Command whoami -ErrorAction SilentlyContinue) {
+  $isAdminAccount = [bool](@(& whoami /groups) -match 'S-1-5-32-544')
 }
-# OpenSSH on Windows ignores the per-user file for administrator accounts, which
-# use the machine-wide file instead. Authorize the key there too, and say so
-# plainly when that file cannot be written without an elevated shell.
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($isAdmin) {
-  $adminKeys = Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'
+$perUserKeys = Join-Path $sshDirectory 'authorized_keys'
+$adminKeys = Join-Path $env:ProgramData 'ssh\\administrators_authorized_keys'
+if ($isAdminAccount) {
+  $accountKind = 'administrator'
+  $readFile = $adminKeys
+  $keyFiles = @($adminKeys, $perUserKeys)
+} else {
+  $accountKind = 'standard user'
+  $readFile = $perUserKeys
+  $keyFiles = @($perUserKeys)
+}
+$userSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+$authorized = @()
+$problems = @()
+foreach ($keyFile in $keyFiles) {
   try {
-    New-Item -ItemType Directory -Force -Path (Split-Path $adminKeys) | Out-Null
-    if (-not (Test-Path $adminKeys)) { New-Item -ItemType File -Path $adminKeys | Out-Null }
-    if (-not (Select-String -Path $adminKeys -SimpleMatch $identityPublic -Quiet -ErrorAction SilentlyContinue)) {
-      Add-Content -Path $adminKeys -Value $identityPublic
+    New-Item -ItemType Directory -Force -Path (Split-Path $keyFile) | Out-Null
+    if (-not (Test-Path $keyFile)) { New-Item -ItemType File -Path $keyFile | Out-Null }
+    if (-not (Select-String -Path $keyFile -SimpleMatch $identityPublic -Quiet -ErrorAction SilentlyContinue)) {
+      Add-Content -Path $keyFile -Value $identityPublic
+    }
+    # sshd skips a key it finds in a file any other account can read.
+    $grant = @('*' + $userSid + ':F', '*S-1-5-18:F', '*S-1-5-32-544:F')
+    if ($keyFile -eq $adminKeys) { $grant = @('*S-1-5-18:F', '*S-1-5-32-544:F') }
+    & icacls $keyFile /inheritance:r '/grant:r' @grant | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      $problems += "Could not restrict access to $keyFile, and sshd ignores a key other accounts can read."
+      $problems += "icacls '$keyFile' /inheritance:r /grant:r " + ($grant -join ' ')
+    }
+    if (Select-String -Path $keyFile -SimpleMatch $identityPublic -Quiet -ErrorAction SilentlyContinue) {
+      $authorized += $keyFile
+    } else {
+      $problems += "The key could not be read back from $keyFile after writing it."
     }
   } catch {
-    Write-Warning "Could not authorize the key for the administrators group. As Administrator, add this line to $adminKeys : $identityPublic"
+    $problems += "Could not authorize the key in $keyFile. As Administrator, add this line there: $identityPublic"
+  }
+}
+Write-Host "SSH account: $env:USERNAME ($accountKind)"
+Write-Host "OpenSSH reads this account's keys from: $readFile"
+if ($authorized -contains $readFile) {
+  Write-Host "Registered key authorized and verified in: $($authorized -join ', ')"
+} else {
+  Write-Warning "CodeInOven will be refused with 'Permission denied' until the key is in $readFile. Run this in an elevated PowerShell:"
+  Write-Warning "Add-Content -Path '$readFile' -Value '$identityPublic'"
+  Write-Warning "icacls '$readFile' /inheritance:r /grant:r *S-1-5-18:F *S-1-5-32-544:F"
+  foreach ($problem in $problems) { Write-Warning $problem }
+}
+# Best effort, bounded: the machine's own sshd is the only proof the key works.
+$sshd = Get-Service sshd -ErrorAction SilentlyContinue
+if (($authorized -contains $readFile) -and $sshd -and ($sshd.Status -eq 'Running') -and (Get-Command ssh -ErrorAction SilentlyContinue)) {
+  $previousErrorAction = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $probe = (& ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=NUL -o ConnectTimeout=8 -o PreferredAuthentications=publickey -o IdentitiesOnly=yes -i $identityKey "$env:USERNAME@127.0.0.1" exit 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host 'Self-check: this machine accepted the key over SSH.'
+    } else {
+      Write-Warning "Self-check: the local sshd did not accept the key. $probe"
+    }
+  } catch {
+    Write-Warning 'Self-check: the local SSH test could not run.'
+  } finally {
+    $ErrorActionPreference = $previousErrorAction
   }
 }`
     : `Write-Host 'No dedicated identity was requested; register the Oven with the account you already use.'`
