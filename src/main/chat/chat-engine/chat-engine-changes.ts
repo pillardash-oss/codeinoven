@@ -231,7 +231,7 @@ function scriptWritePaths(command: string): string[] {
     'gmu'
   )
   const pythonPathWriter = new RegExp(
-    String.raw`\bPath\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:touch|write_bytes|write_text)\s*\(`,
+    String.raw`\bPath\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)\s*\.\s*(?:touch|unlink|write_bytes|write_text)\s*\(`,
     'gmu'
   )
   for (const pattern of [firstArgumentWriters, pythonOpenMode, pythonOpenWrite, pythonPathWriter]) {
@@ -249,7 +249,7 @@ function scriptWritePaths(command: string): string[] {
     'gmu'
   )
   const pythonVariableWriter = new RegExp(
-    String.raw`\b([A-Za-z_][A-Za-z_0-9]*)\s*\.\s*(?:touch|write_bytes|write_text)\s*\(`,
+    String.raw`\b([A-Za-z_][A-Za-z_0-9]*)\s*\.\s*(?:touch|unlink|write_bytes|write_text)\s*\(`,
     'gmu'
   )
   // Read assignments and writers in source order: one script commonly reuses
