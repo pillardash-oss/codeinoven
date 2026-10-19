@@ -6,6 +6,7 @@
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
 
+  import { getAnnotationToolbarHost, hasAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import Modal from '../ui/Modal.svelte'
   import ColorSwatches from '../shared/ColorSwatches.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
@@ -114,6 +115,14 @@
     activeSeconds = null,
     onFocusMark
   }: Props = $props()
+
+  const toolbarHost = hasAnnotationToolbarHost() ? getAnnotationToolbarHost() : undefined
+  const toolbarAttachment: Attachment<HTMLDivElement> = (node) => {
+    const target = toolbarHost?.target()
+    if (!target) return
+    target.appendChild(node)
+    return () => node.remove()
+  }
 
   /** The stroke being drawn, in normalized coordinates. */
   let draftPoints = $state<MarkPoint[]>([])
@@ -404,10 +413,13 @@
   ></div>
 {/if}
 
-<div class="absolute top-1.5 right-1.5 z-40 flex items-center gap-1">
+<div
+  class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute top-1.5 right-1.5 z-40']}
+  {@attach toolbarAttachment}
+>
   {#if armed}
     <span
-      class="bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white"
+      class="hidden bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white sm:inline"
       aria-live="polite"
     >
       {hint}
