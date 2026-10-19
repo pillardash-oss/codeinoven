@@ -6,7 +6,7 @@
  * bounded (see concludesCapabilityUnavailable).
  */
 
-import { UTILITY_SEARCH_TOOL_NAME } from "$shared/gateway-tools"
+import { UTILITY_SEARCH_TOOL_NAME } from '$shared/gateway-tools'
 
 /** Capability markers that can identify an app-managed tool call. */
 const TOOL_CAPABILITY =
@@ -14,7 +14,7 @@ const TOOL_CAPABILITY =
 
 /** Provider/harness wording that indicates the requested tool could not be used. */
 const UNAVAILABLE_TOOL_FAILURE =
-  /(?:not found|unavailable|not available|does(?:n'?t| not) exist|not installed|cannot be found|could not be found|unknown (?:mcp|skill|utility|plugin|extension|tool))/iu
+  /(?:not found|unavailable|not available|does(?:n['’]?t| not) exist|not installed|cannot be found|could not be found|unknown (?:mcp|skill|utility|plugin|extension|tool))/iu
 
 export interface CapabilityUnavailableClaim {
   /** The exact availability failure wording reported by the tool call. */
@@ -61,7 +61,7 @@ export function detectUnavailableToolCall(
 
 /** Tool-shaped capability nouns that appear in harness availability claims. */
 const CAPABILITY_NOUN =
-  /\b(?:mcp(?:\s+servers?)?|skills?|tools?|utilit(?:y|ies)|plugins?|extensions?|computer[\s_-]?use)\b/giu
+  /\b(?:mcp(?:\s+servers?)?|skills?|tools?|utilit(?:y|ies)|plugins?|extensions?|computer[\s_-]?use|browsers?|capabilit(?:y|ies))\b/giu
 
 /** The claim must be about this session/harness, not about app features. */
 const SESSION_CONTEXT =
@@ -72,16 +72,17 @@ const SESSION_CONTEXT =
  * a bare "unavailable" near the noun.
  */
 const AVAILABILITY_DENIAL =
-  /\b(?:are|is|was|were)\s*(?:n'?t|not)\s+(?:currently\s+|directly\s+)?(?:available|accessible|installed|supported|exposed|provided|present|enabled|offered|configured|usable)\b|\bunavailable\b/giu
+  /\b(?:are|is|was|were)\s*(?:n['’]?t|not)\s+(?:currently\s+|directly\s+)?(?:available|accessible|installed|supported|exposed|provided|present|enabled|offered|configured|usable)\b|\bunavailable\b/giu
 
 /**
  * Possession denial: a strictly first-person "I/we don't have" anchor. The
  * pronoun keeps ordinary descriptive prose ("the app doesn't have X") out.
  */
-const POSSESSION_DENIAL = /\b(?:I|we)\s+(?:don'?t|do\s+not)\s+have\b/iu
+const POSSESSION_DENIAL = /\b(?:I|we)\s+(?:don['’]?t|do\s+not)\s+have\b/iu
 
 /** Absence denial: "no <noun>" (optionally with a filler qualifier). */
-const ABSENCE_DENIAL = /\bno\s+(?:currently\s+|directly\s+|such\s+)?(?:mcp(?:\s+servers?)?|skills?|tools?|utilit(?:y|ies)|plugins?|extensions?|computer[\s_-]?use)\b/giu
+const ABSENCE_DENIAL =
+  /\bno\s+(?:currently\s+|directly\s+|such\s+)?(?:mcp(?:\s+servers?)?|skills?|tools?|utilit(?:y|ies)|plugins?|extensions?|computer[\s_-]?use|browsers?|capabilit(?:y|ies))\b/giu
 
 /**
  * Nouns that mark the sentence as describing a project artifact rather than a

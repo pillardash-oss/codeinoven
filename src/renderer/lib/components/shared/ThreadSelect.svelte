@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'

@@ -121,8 +121,89 @@ export interface TranscriptIndex {
   finalTextId: string[]
   /** The checkpoint behind the assistant message at this index, or null. */
   checkpoint: (TurnCheckpointSummary | null)[]
+  /**
+   * Whether the checkpoint's file-changes card renders at this index   the
+   * turn's final assistant, resolved by identity rather than by clock.
+   */
+  checkpointCard: boolean[]
   /** Whether the turn that opens at this index has completed. */
   turnCompleted: boolean[]
+}
+
+/**
+ * The checkpoint that owns each assistant index, and the single index where
+ * that checkpoint's file-changes card may render.
+ *
+ * A checkpoint records `sourceMessageId`, the prompt that opened its turn, so
+ * the turn is anchored by identity instead of by clock. The turn runs until the
+ * next checkpoint's own prompt, which keeps a turn that stops on a mid-turn
+ * question   and resumes behind the reader's answer   as one turn. That also
+ * survives the harness flushing its final assistant message after the
+ * checkpoint was completed: the completion timestamp used to cut the window
+ * short, so the turn end the card attaches to fell outside it and the card
+ * silently disappeared.
+ *
+ * Checkpoints that predate `sourceMessageId`, or whose prompt is not in the
+ * loaded transcript, keep the timestamp-window match as a fallback and only
+ * claim indices no anchored turn already owns.
+ */
+function resolveCheckpointOwners(
+  messages: readonly AgentMessage[],
+  checkpoints: readonly TurnCheckpointSummary[]
+): { owners: (TurnCheckpointSummary | null)[]; card: boolean[] } {
+  const owners: (TurnCheckpointSummary | null)[] = new Array(messages.length).fill(null)
+  const card: boolean[] = new Array(messages.length).fill(false)
+
+  const indexByMessageId = new Map<string, number>()
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]
+    if (message) indexByMessageId.set(message.id, index)
+  }
+
+  // Two checkpoints for one prompt (a resumed or retried turn) share a slot;
+  // the newest one owns the turn.
+  const anchors = new Map<number, TurnCheckpointSummary>()
+  for (const checkpoint of checkpoints) {
+    if (!isCompleted(checkpoint)) continue
+    const startId = checkpoint.sourceMessageId
+    const start = startId === undefined ? undefined : indexByMessageId.get(startId)
+    if (start === undefined) continue
+    const prompt = messages[start]
+    if (!prompt || prompt.role !== 'user' || !isTurnStartIndex(messages, start)) continue
+    const current = anchors.get(start)
+    if (!current || current.createdAt <= checkpoint.createdAt) anchors.set(start, checkpoint)
+  }
+
+  const starts = [...anchors.keys()].sort((a, b) => a - b)
+  for (let i = 0; i < starts.length; i++) {
+    const start = starts[i]!
+    const checkpoint = anchors.get(start)!
+    const limit = starts[i + 1] ?? messages.length
+    let cardIndex = -1
+    for (let index = start; index < limit; index++) {
+      const message = messages[index]
+      if (!message || message.role !== 'assistant' || message.inlineArtifact) continue
+      owners[index] = checkpoint
+      cardIndex = index
+    }
+    if (cardIndex >= 0) card[cardIndex] = true
+  }
+
+  const fallbackLast = new Map<string, number>()
+  for (let index = 0; index < messages.length; index++) {
+    if (owners[index]) continue
+    const owner = checkpointForTurn(messages, checkpoints, index)
+    owners[index] = owner
+    if (owner) fallbackLast.set(owner.id, index)
+  }
+  for (const index of fallbackLast.values()) card[index] = true
+
+  return { owners, card }
+}
+
+/** Whether a checkpoint has finished its turn and may show a changes card. */
+function isCompleted(checkpoint: TurnCheckpointSummary): boolean {
+  return checkpoint.status !== 'active'
 }
 
 /** Duration of a completed assistant message's turn, or null while unfinished. */
@@ -157,6 +238,7 @@ export function buildTranscriptIndex(
   const duration: (number | null)[] = new Array(count)
   const finalTextId: string[] = new Array(count)
   const checkpoint: (TurnCheckpointSummary | null)[] = new Array(count)
+  const checkpointCard: boolean[] = new Array(count)
   const turnCompleted: boolean[] = new Array(count)
 
   for (let index = 0; index < count; index++) {
@@ -167,6 +249,7 @@ export function buildTranscriptIndex(
     }
   }
 
+  const { owners, card } = resolveCheckpointOwners(messages, checkpoints)
   for (let index = 0; index < count; index++) {
     const opens = isTurnStartIndex(messages, index)
     const closes = isTurnEndIndex(messages, index)
@@ -175,7 +258,8 @@ export function buildTranscriptIndex(
     turnEnd[index] = turnSpanEndIndex(messages, index)
     duration[index] = turnDurationAt(messages, index)
     finalTextId[index] = closes ? (getTurnFinalText(messages, index)?.id ?? '') : ''
-    checkpoint[index] = checkpointForTurn(messages, checkpoints, index)
+    checkpoint[index] = owners[index] ?? null
+    checkpointCard[index] = card[index] ?? false
     turnCompleted[index] = opens ? isTurnCompleted(messages, index) : false
   }
 
@@ -187,6 +271,7 @@ export function buildTranscriptIndex(
     duration,
     finalTextId,
     checkpoint,
+    checkpointCard,
     turnCompleted
   }
 }

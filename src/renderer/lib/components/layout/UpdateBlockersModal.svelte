@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import WorkingThreadList from '$lib/components/shared/WorkingThreadList.svelte'
   import { updateBlockers } from '$lib/stores/update-blockers.svelte'

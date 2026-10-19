@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
+  import CioChat from '@pdslng/cio-icon/CioChat.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   /**
    * The pull request conversation, as GitHub organises it.
    *

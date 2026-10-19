@@ -1,13 +1,14 @@
 <script lang="ts">
-  import CioArchive from '@pillardash-oss/cio-icon/CioArchive.svelte'
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioDot from '@pillardash-oss/cio-icon/CioDot.svelte'
-  import CioHistory from '@pillardash-oss/cio-icon/CioHistory.svelte'
-  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
-  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
-  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+  import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
   import { DropdownMenu } from 'bits-ui'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
@@ -141,7 +142,7 @@
   <button
     class="flex items-center gap-1 border border-border bg-elevated px-2 py-1 text-[0.6875rem] font-medium hover:bg-overlay disabled:opacity-50"
     disabled={busy || savePending}
-    title="Save changes (Cmd/Ctrl+S)"
+    title={`Save changes (${keymapState.labelFor('studio-save')})`}
     onclick={onSave}
   >
     <CioSave size={11} />

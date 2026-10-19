@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
-  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
   import { fly, slide } from 'svelte/transition'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { jarIdForBox, type GlobalBrowserBox } from '$lib/stores/global-browser-types'

@@ -1,3 +1,5 @@
+import { decodeShortcutTokens } from '$lib/keymap/keymap'
+
 export type TooltipSide = 'top' | 'bottom' | 'left' | 'right'
 
 export const TOOLTIP_SHOW_DELAY_MS = 1500
@@ -76,16 +78,11 @@ let dismissedTitleElement: HTMLElement | null = null
 
 /**
  * Reads an element's optional shortcut declaration for the tooltip chip. The
- * `data-shortcut` attribute holds comma-separated symbolic key tokens from the
- * keymap registry, e.g. `data-shortcut="mod,shift,n"`.
+ * `data-shortcut` attribute holds symbolic key tokens from the keymap registry,
+ * written with `encodeShortcutTokens`, e.g. `data-shortcut="mod,shift,n"`.
  */
 function shortcutKeysFor(el: HTMLElement): readonly string[] {
-  const raw = el.getAttribute('data-shortcut')
-  if (!raw) return []
-  return raw
-    .split(',')
-    .map((token) => token.trim())
-    .filter(Boolean)
+  return decodeShortcutTokens(el.getAttribute('data-shortcut'))
 }
 
 function resolveTitleElement(target: EventTarget | null): HTMLElement | null {

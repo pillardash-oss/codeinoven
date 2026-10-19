@@ -18,29 +18,29 @@
 
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioCloud from '@pillardash-oss/cio-icon/CioCloud.svelte'
-  import CioDebugger from '@pillardash-oss/cio-icon/CioDebugger.svelte'
-  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
-  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
-  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
-  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
-  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
-  import CioPanelBottom from '@pillardash-oss/cio-icon/CioPanelBottom.svelte'
-  import CioPanelRight from '@pillardash-oss/cio-icon/CioPanelRight.svelte'
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
-  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
-  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
-  import CioTabExtensions from '@pillardash-oss/cio-icon/CioTabExtensions.svelte'
-  import CioTabFiles from '@pillardash-oss/cio-icon/CioTabFiles.svelte'
-  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
-  import CioTabInfo from '@pillardash-oss/cio-icon/CioTabInfo.svelte'
-  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
-  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
-  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
+  import CioActions from '@pdslng/cio-icon/CioActions.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
+  import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
+  import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioPanelBottom from '@pdslng/cio-icon/CioPanelBottom.svelte'
+  import CioPanelRight from '@pdslng/cio-icon/CioPanelRight.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
+  import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
+  import CioTabFiles from '@pdslng/cio-icon/CioTabFiles.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
+  import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
@@ -460,8 +460,14 @@
       <CioTabInfo size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'subagent'}
       <!-- The sub-agent mark is the one a sub-agent wears on every surface; a
-           hue would make it a second class of tab rather than one more tab. -->
-      <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
+           hue would make it a second class of tab rather than one more tab. A
+           pawn agent wears the assistant mark instead, so the rail tells the two
+           apart at a glance while the tab body stays the same. -->
+      {#if tab.activity.pawn}
+        <AssistantIcon mark="agent" size={ICON_SIZE.row} class="shrink-0" />
+      {:else}
+        <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'temporary-chat'}
       <!-- The dashed bubble is the whole signal: a side chat carries the same
            neutral mark as every other tab, never an indicator colour. -->

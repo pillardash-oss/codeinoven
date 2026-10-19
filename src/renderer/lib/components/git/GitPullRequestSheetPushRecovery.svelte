@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   interface Props {
     head: string
     headIsCurrent: boolean

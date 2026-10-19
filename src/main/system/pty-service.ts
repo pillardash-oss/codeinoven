@@ -2,9 +2,10 @@ import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { existsSync, realpathSync, statSync } from 'fs'
 import { homedir } from 'os'
-import { basename, isAbsolute, relative, resolve } from 'path'
+import { basename, isAbsolute, join, relative, resolve } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
+import { ensureWindowsGitRuntime } from '../drivers/windows-git-runtime'
 import type { UpdateBlockerTerminal } from '../../lib/ipc-contract'
 import { Logger } from './logger'
 import { dailyLogRelativePath, PTY_EVENTS_LOG_FILE } from './log-paths'
@@ -175,8 +176,18 @@ function resolveStartingDirectory(baseCwd: string, directory: string): string {
   return real
 }
 
-/** Resolve the user's preferred shell: $SHELL → zsh → bash. */
+/** Prefer Git Bash on Windows, with native shells available offline. */
 function resolveShell(): string {
+  if (process.platform === 'win32') {
+    const bash = buildProcessEnvironment()['CLAUDE_CODE_GIT_BASH_PATH']
+    if (bash && existsSync(bash)) return bash
+    const systemRoot = process.env['SystemRoot'] || 'C:\\Windows'
+    const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    if (existsSync(powershell)) return powershell
+    return (
+      process.env['ComSpec'] || process.env['COMSPEC'] || join(systemRoot, 'System32', 'cmd.exe')
+    )
+  }
   const preferred = process.env['SHELL']
   if (preferred && existsSync(preferred)) return preferred
   if (existsSync('/bin/zsh')) return '/bin/zsh'
@@ -187,6 +198,13 @@ function resolveShell(): string {
 /** Match the login-shell behavior users expect from a desktop terminal. */
 function resolveShellArgs(shell: string): string[] {
   switch (basename(shell)) {
+    case 'bash.exe':
+      return ['-l']
+    case 'powershell.exe':
+    case 'pwsh.exe':
+      return ['-NoLogo', '-NoProfile']
+    case 'cmd.exe':
+      return ['/d']
     case 'bash':
     case 'dash':
     case 'fish':
@@ -197,6 +215,18 @@ function resolveShellArgs(shell: string): string[] {
     default:
       return []
   }
+}
+
+function resolveShellCommandArgs(shell: string, script: string): string[] {
+  if (process.platform !== 'win32' || basename(shell).toLowerCase() === 'bash.exe')
+    return ['-lc', script]
+  if (basename(shell).toLowerCase() === 'cmd.exe') return ['/d', '/s', '/c', script]
+  return [
+    ...resolveShellArgs(shell),
+    '-NonInteractive',
+    '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')
+  ]
 }
 
 /**
@@ -225,6 +255,15 @@ export class PtyService {
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
+  }
+
+  private async prepareWindowsShell(): Promise<void> {
+    if (process.platform !== 'win32') return
+    try {
+      await ensureWindowsGitRuntime()
+    } catch (error) {
+      Logger.info('Windows Git setup unavailable; continuing with a native terminal', error)
+    }
   }
 
   attach(sender: WebContents): void {
@@ -352,6 +391,7 @@ export class PtyService {
     }
     const cwd = directory === undefined ? baseCwd : resolveStartingDirectory(baseCwd, directory)
 
+    await this.prepareWindowsShell()
     const shell = resolveShell()
     const createdAt = Date.now()
 
@@ -716,9 +756,10 @@ export class PtyService {
       throw new Error(`Project directory is unavailable`)
     }
 
+    await this.prepareWindowsShell()
     const shell = resolveShell()
     const createdAt = Date.now()
-    const proc = pty.spawn(shell, ['-lc', script], {
+    const proc = pty.spawn(shell, resolveShellCommandArgs(shell, script), {
       name: 'xterm-256color',
       cols,
       rows,

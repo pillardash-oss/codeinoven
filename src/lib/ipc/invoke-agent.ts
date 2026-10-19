@@ -257,6 +257,10 @@ export const invokeAgentContract = {
     PermissionRequest[]
   >,
   'agent:listProviders': {} as Contract<[projectId: string], ProviderCatalog[]>,
+  'agent:refreshModelContext': {} as Contract<
+    [projectId: string, harnessId: string, providerId: string, modelId: string, accountId?: string],
+    Pick<ProviderCatalog['models'][number], 'contextWindow' | 'contextWindows'> | null
+  >,
   'agent:listProviderSnapshot': {} as Contract<[projectId: string], ProviderCatalog[]>,
   'agent:refreshProviderCatalog': {} as Contract<
     [projectId: string, options?: ProviderCatalogRefreshOptions],

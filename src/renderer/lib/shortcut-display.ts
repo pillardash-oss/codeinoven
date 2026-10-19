@@ -22,12 +22,16 @@ export function isMacPlatform(): boolean {
 
 /** Render a single shortcut key for the current platform, e.g. "Ctrl" → "⌘". */
 export function displayShortcutKey(key: string): string {
-  if (!isMacPlatform()) return key
-  return MAC_KEY_SYMBOLS[key] ?? key
+  const mac = isMacPlatform()
+  if (key === 'Cmd' || key === 'Command' || key === '⌘') return mac ? '⌘' : 'Ctrl'
+  if (key === 'Meta' && !mac) return 'Super'
+  return mac ? (MAC_KEY_SYMBOLS[key] ?? key) : key
 }
 
 /** Render a whitespace-separated shortcut label, e.g. "Ctrl K" → "⌘ K". */
 export function displayShortcutLabel(label: string): string {
-  if (!isMacPlatform()) return label
-  return label.replace(/\bCtrl\b/g, MAC_KEY_SYMBOLS['Ctrl'])
+  return label.replace(
+    /Cmd\/Ctrl|Ctrl\/Cmd|\b(?:Command|Cmd|Ctrl)\b|⌘/g,
+    isMacPlatform() ? '⌘' : 'Ctrl'
+  )
 }

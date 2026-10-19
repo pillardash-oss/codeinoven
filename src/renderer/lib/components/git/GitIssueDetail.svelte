@@ -1,17 +1,18 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
-  import CioHammer from '@pillardash-oss/cio-icon/CioHammer.svelte'
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
-  import CioMilestone from '@pillardash-oss/cio-icon/CioMilestone.svelte'
-  import CioPersonPlus from '@pillardash-oss/cio-icon/CioPersonPlus.svelte'
-  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
-  import CioSend from '@pillardash-oss/cio-icon/CioSend.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTag from '@pillardash-oss/cio-icon/CioTag.svelte'
-  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioHammer from '@pdslng/cio-icon/CioHammer.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioMilestone from '@pdslng/cio-icon/CioMilestone.svelte'
+  import CioPersonPlus from '@pdslng/cio-icon/CioPersonPlus.svelte'
+  import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
+  import CioSend from '@pdslng/cio-icon/CioSend.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTag from '@pdslng/cio-icon/CioTag.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { githubDisplayLogin } from '$lib/format/github-login'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -352,7 +353,7 @@
   }
 
   function onComposerKeydown(event: KeyboardEvent): void {
-    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    if (keymapState.matches('ui-modal-primary-action', event)) {
       event.preventDefault()
       void submitComment()
     }
@@ -712,7 +713,9 @@
         bind:value={draft}
         onkeydown={onComposerKeydown}></textarea>
       <div class="mt-1.5 flex items-center justify-end gap-2">
-        <span class="text-[0.5625rem] text-dimmed">⌘/Ctrl+Enter to post</span>
+        <span class="text-[0.5625rem] text-dimmed"
+          >{keymapState.labelFor('ui-modal-primary-action')} to post</span
+        >
         <button
           type="button"
           class="flex h-7 cursor-pointer items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"

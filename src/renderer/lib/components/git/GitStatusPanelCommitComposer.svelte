@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { GitCommitInfo, GitStatus } from '$shared/types'
   import type { GitPanelTabId } from '$lib/stores/git-panel-view.svelte'
 

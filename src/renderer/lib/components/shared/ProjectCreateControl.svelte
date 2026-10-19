@@ -1,17 +1,18 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioDocuments from '@pillardash-oss/cio-icon/CioDocuments.svelte'
-  import CioFolderInput from '@pillardash-oss/cio-icon/CioFolderInput.svelte'
-  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
-  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioDocuments from '@pdslng/cio-icon/CioDocuments.svelte'
+  import CioFolderInput from '@pdslng/cio-icon/CioFolderInput.svelte'
+  import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
   import GitCloneModal from './GitCloneModal.svelte'
   import OvenProjectModal from './OvenProjectModal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
   import { folderBaseName } from '$lib/project-location'
@@ -162,7 +163,7 @@
       class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
-      data-shortcut={keymapState.keysFor('nav-new-project').join(',')}
+      data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-project'))}
     >
       <CioProjects size={15} strokeWidth={1.8} />
     </DropdownMenu.Trigger>

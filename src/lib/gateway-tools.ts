@@ -2,6 +2,7 @@ import { UTILITY_KIND_VALUES } from './types'
 import { ORCHESTRATION_TOOLS } from './orchestration-tools'
 import { APP_CONTROL_TOOLS } from './app-control-tools'
 import { ENGINEERING_TOOLS } from './engineering-tools'
+import { PAWN_TOOLS } from './pawn-tools'
 
 /** Stable app-owned gateway tool names. */
 export const UTILITY_SEARCH_TOOL_NAME = 'cio_util_find'
@@ -61,7 +62,7 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_app_catalog:
     'Read exact app IPC channels, argument order, UI actions and current context before cio_app_call. Filter by domain.',
   cio_app_call:
-    'Invoke one catalog-listed IPC channel or UI action. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
+    'Invoke one catalog-listed IPC channel or UI action, or pass capture:true to see the live app window as an image. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
   cio_create_brainstorm:
     'Create a durable Brainstorm draft from this conversation and optional constraints for review.',
   cio_create_prd: 'Create a PRD draft from the finalized Brainstorm or conversation for review.',
@@ -196,6 +197,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   ...ORCHESTRATION_TOOLS,
   ...APP_CONTROL_TOOLS,
   ...ENGINEERING_TOOLS,
+  ...PAWN_TOOLS,
   {
     name: UTILITY_SEARCH_TOOL_NAME,
     description:

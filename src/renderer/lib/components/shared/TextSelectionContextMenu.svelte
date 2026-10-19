@@ -1,13 +1,13 @@
 <script lang="ts">
-  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
-  import CioClipboardPaste from '@pillardash-oss/cio-icon/CioClipboardPaste.svelte'
-  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
-  import CioEraser from '@pillardash-oss/cio-icon/CioEraser.svelte'
-  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
-  import CioLink from '@pillardash-oss/cio-icon/CioLink.svelte'
-  import CioScissors from '@pillardash-oss/cio-icon/CioScissors.svelte'
-  import CioSelectAll from '@pillardash-oss/cio-icon/CioSelectAll.svelte'
-  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioEraser from '@pdslng/cio-icon/CioEraser.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioLink from '@pdslng/cio-icon/CioLink.svelte'
+  import CioScissors from '@pdslng/cio-icon/CioScissors.svelte'
+  import CioSelectAll from '@pdslng/cio-icon/CioSelectAll.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { SUPPORT_EMAIL } from '$shared/brand'
   import { onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
@@ -24,6 +24,7 @@
   import { buildPasteData } from '$lib/terminal/input-compat'
   import { selectWordAt } from '$lib/terminal/word-select'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { claimSelectionAnnotationMenu } from '$lib/selection-menu'
 
   type MenuKind = 'text' | 'editable' | 'terminal'
 
@@ -222,6 +223,12 @@
   }
 
   function handleContextMenu(event: MouseEvent): void {
+    // An annotatable surface owns the menu for the text it annotates: a
+    // selection in an assistant response or in a rendered document opens the
+    // same action menu a highlight opens, which is where its annotation is
+    // written and where the plain copy item now lives. Asked first because this
+    // listener runs in the capture phase, ahead of any element handler.
+    if (claimSelectionAnnotationMenu(event)) return
     const resolved = resolveTarget(event)
     if (!resolved) return
     event.preventDefault()

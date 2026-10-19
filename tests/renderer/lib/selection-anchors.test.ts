@@ -2,7 +2,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import {
   anchorTextMatches,
+  annotationAtPoint,
   applyAnnotationHighlights,
+  placeSelectionMenu,
   rangeForAnnotation,
   releaseAnnotationHighlights
 } from '$lib/selection-anchors'
@@ -143,5 +145,82 @@ describe('annotation highlights', () => {
 
     releaseAnnotationHighlights(sidebar, name)
     expect(publishedRanges()).toHaveLength(0)
+  })
+})
+
+/** A published range as the hit test reads it: only its client rects matter. */
+function highlightBoxes(
+  ...rects: Array<{ left: number; top: number; right: number; bottom: number }>
+): {
+  getClientRects: () => ArrayLike<{ left: number; top: number; right: number; bottom: number }>
+} {
+  return { getClientRects: () => rects }
+}
+
+describe('annotationAtPoint', () => {
+  it('finds the highlight under the point', () => {
+    const ranges = new Map([
+      ['first', highlightBoxes({ left: 10, top: 10, right: 60, bottom: 24 })],
+      ['second', highlightBoxes({ left: 10, top: 40, right: 60, bottom: 54 })]
+    ])
+    expect(annotationAtPoint(ranges, 30, 47)).toBe('second')
+    expect(annotationAtPoint(ranges, 30, 16)).toBe('first')
+  })
+
+  it('gives a highlight the slack of its line box', () => {
+    const ranges = new Map([['only', highlightBoxes({ left: 10, top: 10, right: 60, bottom: 24 })]])
+    // Just past the last glyph, on the same line: still that highlight.
+    expect(annotationAtPoint(ranges, 63, 20)).toBe('only')
+    // Far to the right of the passage is the document's own margin.
+    expect(annotationAtPoint(ranges, 90, 20)).toBeNull()
+    // A click above or below the line belongs to the neighbouring line, not here.
+    expect(annotationAtPoint(ranges, 30, 33)).toBeNull()
+  })
+
+  it('spans every line of a wrapped passage', () => {
+    const ranges = new Map([
+      [
+        'wrapped',
+        highlightBoxes(
+          { left: 10, top: 10, right: 200, bottom: 24 },
+          { left: 10, top: 30, right: 90, bottom: 44 }
+        )
+      ]
+    ])
+    expect(annotationAtPoint(ranges, 120, 18)).toBe('wrapped')
+    expect(annotationAtPoint(ranges, 50, 38)).toBe('wrapped')
+    expect(annotationAtPoint(ranges, 120, 38)).toBeNull()
+  })
+
+  it('reports no annotation when nothing is highlighted', () => {
+    expect(annotationAtPoint(new Map(), 30, 20)).toBeNull()
+  })
+})
+
+describe('placeSelectionMenu', () => {
+  const viewport = { width: 1000, height: 800 }
+  const size = { width: 200, height: 150 }
+
+  it('opens above the selection it acts on', () => {
+    const placement = placeSelectionMenu({ x: 120, y: 400, selectionTop: 340 }, size, viewport)
+    expect(placement).toEqual({ left: 120, top: 184 })
+  })
+
+  it('falls below the selection when the top of the screen is too close', () => {
+    const placement = placeSelectionMenu({ x: 120, y: 100, selectionTop: 40 }, size, viewport)
+    expect(placement.top).toBe(100)
+  })
+
+  it('keeps the menu fully on screen at either edge', () => {
+    expect(placeSelectionMenu({ x: 980, y: 780 }, size, viewport)).toEqual({
+      left: 792,
+      top: 642
+    })
+    expect(placeSelectionMenu({ x: -20, y: -10 }, size, viewport)).toEqual({ left: 8, top: 8 })
+  })
+
+  it('places a right-click at the cursor, with no preference for sitting above', () => {
+    const placement = placeSelectionMenu({ x: 300, y: 260 }, size, viewport)
+    expect(placement).toEqual({ left: 300, top: 260 })
   })
 })

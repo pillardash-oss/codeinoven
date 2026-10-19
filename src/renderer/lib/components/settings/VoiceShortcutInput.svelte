@@ -1,5 +1,6 @@
 <script lang="ts">
-  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import { isMacPlatform } from '$lib/shortcut-display'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import {
     DEFAULT_VOICE_RECORDING_SHORTCUT,
     MODIFIER_KEY_CODES,
@@ -107,7 +108,11 @@
     onclick={startListening}
   >
     {#if listening}
-      {rejected ? 'Use Ctrl/Alt/Cmd with a key, or a function key…' : 'Press keys…'}
+      {rejected
+        ? isMacPlatform()
+          ? 'Use Command/Option/Control with a key, or a function key…'
+          : 'Use Ctrl/Alt/Super with a key, or a function key…'
+        : 'Press keys…'}
     {:else}
       {describeVoiceRecordingShortcut(binding)}
     {/if}

@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioClipboardPaste from '@pillardash-oss/cio-icon/CioClipboardPaste.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
-  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
-  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { listRowMove } from '$lib/motion'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
@@ -192,7 +192,7 @@
         : 'bg-elevated text-muted border-border hover:text-foreground'}"
       onclick={() => (runtimeFilter = 'all')}>All</button
     >
-    {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
+    {#each runtimesForSubTab(activeModelSubTab).filter( (runtime) => catalogArtifacts.some((artifact) => artifact.runtime === runtime) ) as rt (rt)}
       <button
         type="button"
         class="border px-2.5 py-1 text-[0.6875rem] font-medium {runtimeFilter === rt

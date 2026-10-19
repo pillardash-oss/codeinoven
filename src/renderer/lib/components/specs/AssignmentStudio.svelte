@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
-  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -20,7 +20,11 @@
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
   import { offsetsForQuote, offsetsForRange } from '$lib/selection-anchors'
-  import { StudioAnnotationOverlay, clampPendingPosition } from './studio-annotation-overlay.svelte'
+  import {
+    StudioAnnotationOverlay,
+    clampPendingPosition,
+    type PendingOverlayAnchor
+  } from './studio-annotation-overlay.svelte'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {
     AssignmentAnnotation,
@@ -360,10 +364,17 @@
     })
   }
 
-  function captureDocumentSelection(): void {
-    if ((readOnly || !onAddAnnotation) && (!onExplainSelection || !onQuickChatSelection)) return
+  /**
+   * The passage a selection in the document names, as a pending annotation.
+   *
+   * Kept apart from `captureDocumentSelection` because it is also what follows
+   * the selection afterwards: the overlay re-runs it while the popover is open,
+   * so a selection extended with shift and the arrow keys keeps its quote, its
+   * offsets and its position in step with the highlighted text.
+   */
+  function pendingAnchorFromSelection(): PendingOverlayAnchor | null {
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
     const range = selection.getRangeAt(0)
     const commonNode =
       range.commonAncestorContainer instanceof Element
@@ -372,15 +383,22 @@
     const sectionElement = commonNode?.closest<HTMLElement>('[data-assignment-section]')
     const section = sectionElement?.dataset.assignmentSection
     const quote = selection.toString().trim()
-    if (!sectionElement || !section || !quote) return
+    if (!sectionElement || !section || !quote) return null
     const rect = range.getBoundingClientRect()
-    overlay.beginPending({
+    return {
       section,
       quote,
       ...offsetsForRange(sectionElement, range),
       ...clampPendingPosition(rect),
       sectionLevel: false
-    })
+    }
+  }
+
+  function captureDocumentSelection(): void {
+    if ((readOnly || !onAddAnnotation) && (!onExplainSelection || !onQuickChatSelection)) return
+    const anchor = pendingAnchorFromSelection()
+    if (!anchor) return
+    overlay.beginPending(anchor, pendingAnchorFromSelection)
     annotationBody = ''
   }
 

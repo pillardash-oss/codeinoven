@@ -77,6 +77,7 @@ import { piCoreToolsHeaderSource } from './pi/tools/core-tools-header'
 import { piCoreToolsInteractiveSource } from './pi/tools/core-tools-interactive'
 import { piCoreToolsSubagentSource } from './pi/tools/core-tools-subagents'
 import { piCoreToolsEventsSource } from './pi/tools/core-tools-events'
+import { piCoreToolsWindowsShellSource } from './pi/tools/core-tools-windows-shell'
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
 export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
 export const CIO_QUESTION_MARKER = 'cio-question:'
@@ -90,6 +91,7 @@ export const CIO_QUESTION_MARKER = 'cio-question:'
 export function piCoreToolsExtension(options: { questionCap: number }): string {
   return [
     piCoreToolsHeaderSource(),
+    piCoreToolsWindowsShellSource(),
     piCoreToolsInteractiveSource(options.questionCap),
     piCoreToolsSubagentSource(),
     piCoreToolsEventsSource()

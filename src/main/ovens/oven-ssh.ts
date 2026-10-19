@@ -4,6 +4,7 @@ import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { ensureWindowsGitRuntime } from '../drivers/windows-git-runtime'
 import {
   isWindowsShell,
   powershellLiteral,
@@ -466,8 +467,27 @@ export class OvenSsh {
     const oven = await this.registry.require(id)
     const connection = oven.connection
     if (!connection) throw new Error('This Oven has no SSH connection.')
-    const env = buildProcessEnvironment()
-    const executable = resolveExecutablePath('ssh', env)
+    if (connection.authentication === 'password' && !oven.passwordRef)
+      throw new Error('Save the SSH account password for this Oven.')
+    const needsAskpass =
+      connection.authentication === 'password' ||
+      (connection.authentication === 'vault' && Boolean(oven.passphraseRef))
+    // MSYS OpenSSH can execute our shell askpass helper. Native Windows OpenSSH cannot.
+    let env = buildProcessEnvironment()
+    const nativeAgentSsh =
+      process.platform === 'win32' && !needsAskpass && !env['SSH_AUTH_SOCK']
+        ? resolveExecutablePath(
+            join(env['SystemRoot'] || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe'),
+            env
+          )
+        : undefined
+    const existingSsh = nativeAgentSsh ?? resolveExecutablePath('ssh', env)
+    const windowsGit =
+      process.platform === 'win32' && (needsAskpass || !existingSsh)
+        ? await ensureWindowsGitRuntime(env)
+        : null
+    if (windowsGit) env = buildProcessEnvironment()
+    const executable = windowsGit?.ssh ?? existingSsh
     if (!executable) throw new Error('Install OpenSSH on this computer to connect to Ovens.')
     const args = [
       tty ? '-tt' : '-T',
@@ -510,10 +530,6 @@ export class OvenSsh {
     if (connection.user) args.push('-l', connection.user)
     let scratch: string | undefined
     const configureAskpass = async (directory: string, reference: string): Promise<void> => {
-      if (process.platform === 'win32')
-        throw new Error(
-          'Password and encrypted-key connections require an SSH askpass helper on Windows. Use SSH agent authentication on this device.'
-        )
       const helper = join(directory, 'askpass')
       await writeFile(helper, '#!/bin/sh\nprintf \'%s\\n\' "$CIO_OVEN_KEY_PASSPHRASE"\n', {
         mode: 0o700,

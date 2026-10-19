@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioMic from '@pillardash-oss/cio-icon/CioMic.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioMic from '@pdslng/cio-icon/CioMic.svelte'
   import { onMount, onDestroy } from 'svelte'
 
   import { toast } from 'svelte-sonner'
@@ -153,7 +153,7 @@
   /** Armed delivery stage of the transcription in flight, if the user armed it. */
   const voiceSendStage = $derived(speechController.voiceSendStageForTarget(targetId))
   const canAutoSendVoice = $derived(speechController.canAutoSendVoice(targetId))
-  const sendChord = isMacPlatform() ? '⌘⇧Enter' : 'Ctrl+⇧Enter'
+  const sendChord = isMacPlatform() ? '⌘⇧Enter' : 'Ctrl+Shift+Enter'
   const activeRecordingScope = $derived(speechController.recordingScope)
   const recordingHere = $derived(
     activeRecordingScope !== null &&

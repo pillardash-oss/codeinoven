@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
-  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     ASSISTANT_SPACE_ID,

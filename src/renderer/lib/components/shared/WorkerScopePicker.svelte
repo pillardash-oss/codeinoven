@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
+  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   /**
    * Assignment review: the trigger and bubble a worker task uses to choose the
    * Git scope it will run in, mirroring the model picker's popover mechanism so

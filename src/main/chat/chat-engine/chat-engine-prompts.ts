@@ -305,7 +305,7 @@ export const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
  * tests, lints) but never modify the repository. The list therefore carries
  * only built-in tool names that exist in every harness: `read` for source
  * inspection, and `bash` for running verification commands, plus pi's
- * Windows-only `powershell` built-in (a harmless unused name elsewhere) so a
+ * Windows `powershell` and `cmd` tools (harmless unused names elsewhere) so a
  * Windows auditor is never gated behind permission cards when Git Bash is
  * absent. File-mutating tools (edit/write) are deliberately omitted. The app
  * utility gateway tools
@@ -313,7 +313,7 @@ export const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
  * tool gate never restricts, and other harnesses receive them through the
  * prepared gateway runtime, so they stay reachable without being listed.
  */
-export const AUDIT_ALLOWED_TOOLS = ['read', 'bash', 'powershell']
+export const AUDIT_ALLOWED_TOOLS = ['read', 'bash', 'powershell', 'cmd']
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 export const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']

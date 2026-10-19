@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
-  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+  import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import type { PullRequestCommit, PullRequestFile } from '$shared/types'
   import PrDiffHunk from './PrDiffHunk.svelte'

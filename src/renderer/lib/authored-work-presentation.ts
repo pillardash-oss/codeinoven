@@ -1,5 +1,5 @@
-import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
-import CioPalette from '@pillardash-oss/cio-icon/CioPalette.svelte'
+import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
 import type { Component } from 'svelte'
 import type { AuthoredWorkKind } from '$shared/ipc-contract'
 

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioMaximize from '@pillardash-oss/cio-icon/CioMaximize.svelte'
-  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
-  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
   import { slide } from 'svelte/transition'
   import AssignmentReviewContent from '../specs/AssignmentReviewContent.svelte'
   import CardButton from '../shared/CardButton.svelte'

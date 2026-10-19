@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioFilter from '@pillardash-oss/cio-icon/CioFilter.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioFilter from '@pdslng/cio-icon/CioFilter.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import type { MultiSelectOption } from './multi-select-option'

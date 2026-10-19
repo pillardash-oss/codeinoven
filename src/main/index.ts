@@ -46,6 +46,7 @@ import {
 } from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
 import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
+import { isShippedBuild } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
@@ -71,10 +72,18 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
 app.setName(APP_NAME)
-// Naming the app is not enough on its own: Chromium still advertises
-// `Electron/<version>` to every site, so the fallback every web contents
-// inherits is rewritten here, before the first window exists.
-app.userAgentFallback = brandUserAgent(app.userAgentFallback, __CODEINOVEN_APP_VERSION__)
+// The name above is also the OS keyring identity: `safeStorage` keeps its key under
+// `<app name> Safe Storage`, and every launch shares one config root and therefore
+// one credential vault (`getConfigRoot` in `src/lib/utils.ts`). Naming a development
+// launch `Electron` gave it a second key, so whichever build wrote a vault record the
+// other could not decrypt it, and a credential written by the installed app read as
+// signed out in `bun dev` (and the reverse). Development and packaged Chromium data
+// are already kept apart by `configureElectronDataRoot`, so the name no longer has to
+// differ for that; the brand name is what keeps the vault readable by every launch.
+// Use a standard Chrome user agent: app/runtime product tokens cause browser
+// compatibility checks to reject supported Chromium versions. Set the fallback
+// before the first window exists so every web contents inherits it.
+app.userAgentFallback = brandUserAgent(app.userAgentFallback, process.versions.chrome)
 
 configureElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
@@ -92,7 +101,7 @@ registerFilePreviewScheme()
 if (process.platform === 'win32' && !isWindowsStorePackage()) {
   app.setAppUserModelId(APP_ID)
 }
-if (app.isPackaged) {
+if (isShippedBuild()) {
   process.env['NODE_ENV'] = 'production'
 }
 
@@ -211,7 +220,7 @@ function markWorkspaceReadyIfInteractive(): void {
 }
 
 async function completeStartupIfReady(): Promise<void> {
-  const output = app.isPackaged ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
+  const output = isShippedBuild() ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
   if (
     !startupTelemetry.hasMarked('workspace:ready') ||
     !startupTelemetry.hasMarked('renderer:documentLoaded') ||
@@ -277,7 +286,7 @@ ipcMain.handle('app:rendererReady', async () => {
   await completeStartupIfReady()
 })
 
-const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+const isProduction = isShippedBuild() || process.env['NODE_ENV'] === 'production'
 
 /**
  * Window/session boundary validator. It guards external window creation,
@@ -464,7 +473,10 @@ function createWindow(): BrowserWindow {
     backgroundColor: getStartupBackground(),
     title: APP_NAME,
     icon: getAppIconPath(),
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
+    ...(process.platform === 'win32'
+      ? { titleBarOverlay: { color: getStartupBackground(), height: 48 } }
+      : {}),
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',

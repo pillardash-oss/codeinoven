@@ -3,6 +3,7 @@ import { join, resolve, sep } from 'path'
 import { APP_NAME } from '../../lib/brand'
 import { generateId } from '../../lib/utils'
 import type {
+  FileChangeSource,
   TurnCheckpointChangeSummary,
   TurnCheckpointFileDiff,
   TurnCheckpointStatus,
@@ -60,6 +61,11 @@ export interface TurnCheckpoint {
   before: ProjectCheckpoint
   after?: ProjectCheckpoint
   changes: CheckpointChange[]
+  toolSources?: Record<string, FileChangeSource>
+  changeSourceRefs?: Record<
+    string,
+    Pick<FileChangeSource, 'toolPartId' | 'verification' | 'window'>[]
+  >
   /** Whether completion deliberately restricted the snapshot diff to reported tool paths. */
   changeFilterApplied?: boolean
   lineStats?: Record<string, CheckpointLineStats>
@@ -80,6 +86,7 @@ export interface TurnCheckpoint {
  * file tool.
  */
 export interface TurnCompletionOptions {
+  changeSources?: ReadonlyMap<string, FileChangeSource[]>
   /** Paths this thread's precise file tools touched during the turn. */
   precisePaths?: ReadonlySet<string>
   /** Paths other active sessions' precise file tools touched, path → claimed ms. */
@@ -286,6 +293,29 @@ export class CheckpointManager {
         status,
         after,
         changes,
+        ...(options.changeSources
+          ? {
+              // Store each command once, even when it changed thousands of files.
+              toolSources: Object.fromEntries(
+                changes.flatMap((change) =>
+                  (options.changeSources?.get(change.path) ?? []).map((source) => [
+                    source.toolPartId,
+                    source
+                  ])
+                )
+              ),
+              changeSourceRefs: Object.fromEntries(
+                changes.map((change) => [
+                  change.path,
+                  (options.changeSources?.get(change.path) ?? []).map((source) => ({
+                    toolPartId: source.toolPartId,
+                    verification: source.verification,
+                    window: source.window
+                  }))
+                ])
+              )
+            }
+          : {}),
         changeFilterApplied: changedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
@@ -765,6 +795,14 @@ export class CheckpointManager {
       status: checkpoint.status,
       changes: checkpoint.changes.map((change): TurnCheckpointChangeSummary => ({
         path: change.path,
+        sources: checkpoint.changeSourceRefs?.[change.path]?.flatMap((reference) => {
+          const source = checkpoint.toolSources?.[reference.toolPartId]
+          return source
+            ? [{ ...source, verification: reference.verification, window: reference.window }]
+            : []
+        }),
+        beforeHash: change.before?.hash,
+        afterHash: change.after?.hash,
         kind: change.kind,
         binary: change.after?.binary ?? change.before?.binary ?? false,
         ...(change.before ? { beforeSize: change.before.size } : {}),

@@ -61,6 +61,7 @@ import {
   type TrayCountScale
 } from '../../lib/tray-count-art'
 import { getConfigRoot, isBackgroundRegistrationDisabled } from '../../lib/utils'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import { APP_ID, APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
 import { forceRestartMenuItem } from './force-restart'
@@ -802,7 +803,7 @@ export class BackgroundLifecycleService {
     if (process.platform !== 'darwin' && process.platform !== 'win32') return
     // Never register a development launch as a login item: the dev Electron
     // binary is not the app, and a stray entry would start it at every login.
-    if (!app.isPackaged) return
+    if (!isShippedBuild()) return
     const openAtLogin = config.backgroundMode !== 'off' && config.launchAtLogin
     try {
       app.setLoginItemSettings({ openAtLogin })

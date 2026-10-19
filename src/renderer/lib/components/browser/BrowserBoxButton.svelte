@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioTabBoxes from '@pillardash-oss/cio-icon/CioTabBoxes.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'

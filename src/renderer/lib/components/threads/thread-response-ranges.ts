@@ -2,7 +2,7 @@ import {
   isResponseSelection,
   type ResponseReferenceAnchor
 } from '$lib/stores/response-references.svelte'
-import { anchorTextMatches } from '$lib/selection-anchors'
+import { anchorTextMatches, type SelectionMenuAnchor } from '$lib/selection-anchors'
 
 /**
  * DOM geometry for quoted response annotations.
@@ -16,10 +16,9 @@ import { anchorTextMatches } from '$lib/selection-anchors'
  */
 
 export const RESPONSE_HIGHLIGHT_NAME = 'response-annotation'
-/** Widest the selection action bubble may be before the viewport clamps it. */
-const SELECTION_BUBBLE_WIDTH = 430
-const SELECTION_BUBBLE_HEIGHT = 48
-const VIEWPORT_MARGIN = 12
+
+/** Space between the selection and the menu that sits below it. */
+const SELECTION_MENU_GAP = 6
 
 export interface ResponseSelectionCandidate {
   text: string
@@ -27,8 +26,16 @@ export interface ResponseSelectionCandidate {
   range: Range
   startOffset: number
   endOffset: number
-  x: number
-  y: number
+  /** Where the selection menu is asked to open, before it is placed on screen. */
+  anchor: SelectionMenuAnchor
+  /**
+   * The annotation this selection already belongs to.
+   *
+   * A right-click lands on a passage the user has already commented on, and the
+   * menu that opens then edits that comment instead of attaching a second one
+   * to the same words.
+   */
+  referenceId?: string
 }
 
 /** The assistant response element that owns a DOM node, if any. */
@@ -96,9 +103,8 @@ export function responseRangeFor(
 /**
  * Turn the current document selection into an anchor candidate. Returns null
  * when the selection is empty, spans more than one response, or cannot be
- * measured. The bubble is anchored above the selection so the native
- * right-click menu (which appears at the cursor, usually below the selection)
- * opens beneath it without colliding, falling back below when there is no room.
+ * measured. The menu is anchored to the selection itself: its left edge, and
+ * the top edge it sits above whenever there is room there.
  */
 export function captureResponseSelection(): ResponseSelectionCandidate | null {
   const selection = document.getSelection()
@@ -114,18 +120,14 @@ export function captureResponseSelection(): ResponseSelectionCandidate | null {
   const endOffset = textOffsetWithin(anchorResponse, range.endContainer, range.endOffset)
   if (startOffset === null || endOffset === null) return null
   const rect = range.getBoundingClientRect()
-  const x = Math.max(
-    VIEWPORT_MARGIN,
-    Math.min(rect.left, window.innerWidth - SELECTION_BUBBLE_WIDTH - VIEWPORT_MARGIN)
-  )
-  const y =
-    rect.top - SELECTION_BUBBLE_HEIGHT >= VIEWPORT_MARGIN
-      ? rect.top - SELECTION_BUBBLE_HEIGHT
-      : Math.max(
-          VIEWPORT_MARGIN,
-          Math.min(rect.bottom + 8, window.innerHeight - SELECTION_BUBBLE_HEIGHT - 8)
-        )
-  return { text, messageId, range, startOffset, endOffset, x, y }
+  return {
+    text,
+    messageId,
+    range,
+    startOffset,
+    endOffset,
+    anchor: { x: rect.left, y: rect.bottom + SELECTION_MENU_GAP, selectionTop: rect.top }
+  }
 }
 
 /**

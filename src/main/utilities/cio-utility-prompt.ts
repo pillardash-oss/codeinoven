@@ -159,7 +159,8 @@ names the exact field and shape to send, so fix that field rather than trying a 
 Every definition contains:
 - kind: "skill" or "mcp" (a plugin is a bundle with multiple definitions)
 - name, description, enabled
-- activation: "on_demand" for every MCP server, "on_demand" or "always" for a skill
+- activation: "on_demand" for every MCP server and every skill. A skill is knowledge the agent
+  loads when its description matches the task, so it is never permanently resident.
 - scope: {"level":"global"} (the default), {"level":"project","projectId":"..."}, or
   {"level":"thread","projectId":"...","threadId":"..."}
 - credentials: []

@@ -57,8 +57,7 @@ import type {
   PullRequestComment,
   PullRequestDetail,
   PullRequestReview,
-  PullRequestReviewComment,
-  UtilityActivation
+  PullRequestReviewComment
 } from '../../../lib/types'
 import type { PullRequestComposeContext } from '../../git/git-service'
 import { harnessFailureIssue } from '../../chat/chat-engine/chat-engine-errors'
@@ -1884,12 +1883,8 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
     if (scopeKind !== 'global' && scopeKind !== 'projects' && scopeKind !== 'harnesses') {
       throw new TypeError('Select global, project, or harness installation')
     }
-    const rawActivation = rawRequest['activation']
-    if (manager === 'cio' && rawActivation !== 'always' && rawActivation !== 'on_demand') {
-      throw new TypeError('Select always available or on-demand activation')
-    }
-    const activation: UtilityActivation | undefined =
-      rawActivation === 'always' || rawActivation === 'on_demand' ? rawActivation : undefined
+    // Who owns the copy and where it goes is the whole request: a skill is
+    // never standing context, so it has no activation to choose.
     // One install assistant serves the card and the background updater, so both
     // put the skill in exactly the destination the card advertises.
     return installMarketSkill(skillInstallContext(), {
@@ -1898,8 +1893,7 @@ export function registerCloudHandlers(ctx: IpcHandlerContext): void {
       manager,
       scope: scopeKind,
       projectIds: scopeKind === 'projects' ? selectedIds(scope['projectIds'], 'Project IDs') : [],
-      harnessIds: scopeKind === 'harnesses' ? selectedIds(scope['harnessIds'], 'Harness IDs') : [],
-      ...(activation ? { activation } : {})
+      harnessIds: scopeKind === 'harnesses' ? selectedIds(scope['harnessIds'], 'Harness IDs') : []
     })
   })
 

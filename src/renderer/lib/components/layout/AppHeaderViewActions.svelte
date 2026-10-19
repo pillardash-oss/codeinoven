@@ -2,6 +2,7 @@
   import { fade } from 'svelte/transition'
   import { viewActions } from '$lib/stores/view-actions.svelte'
   import { motionDuration } from '$lib/motion'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
 </script>
 
 <!--
@@ -34,7 +35,7 @@
       class="actions-arriving flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
       aria-label={item.ariaLabel ?? item.title ?? 'Action'}
       title={item.title}
-      data-shortcut={item.shortcut ? item.shortcut.join(',') : undefined}
+      data-shortcut={encodeShortcutTokens(item.shortcut ?? [])}
       onclick={() => item.run?.()}
     >
       <ActionIcon size={15} strokeWidth={1.8} />

@@ -12,8 +12,15 @@
  * `COMPACT_WINDOW_SHARE` in the Pi compaction extension: the checkpoint fires
  * once the request reaches this much of what the provider actually accepts
  * (the model window minus the reserved completion budget).
+ *
+ * The app owns this number for every harness whose trigger it can set, and all
+ * of them read it from here so a change lands everywhere at once: the Pi
+ * compaction extension checkpoints at this share of the usable input, the Codex
+ * driver sends it as `model_auto_compact_token_limit`, and the Muse driver sends
+ * it as its context-compaction hard threshold. A harness that owns its own
+ * trigger is unaffected and is not passed this value.
  */
-export const COMPACT_LINE_SHARE = 0.85
+export const COMPACT_LINE_SHARE = 0.825
 
 /**
  * Maximum share of the checkpoint line the restored history recap may take.
@@ -103,11 +110,24 @@ export function estimateTextTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
-/** Truncate text to a token budget using the ~4 chars/token estimate. */
-export function truncateToTokenBudget(text: string, maxTokens: number): string {
+/**
+ * Truncate text to a token budget using the ~4 chars/token estimate.
+ *
+ * `keep` decides which end survives. `'head'` (the default) suits generated or
+ * injected content whose opening carries the meaning. A conversation
+ * transcript must always pass `'tail'`: the newest turns are the ones the model
+ * continues from, so dropping the oldest turns is recoverable while dropping
+ * the newest is not.
+ */
+export function truncateToTokenBudget(
+  text: string,
+  maxTokens: number,
+  keep: 'head' | 'tail' = 'head'
+): string {
   if (maxTokens <= 0) return ''
   const maxCharacters = maxTokens * 4
-  return text.length > maxCharacters ? text.slice(0, maxCharacters) : text
+  if (text.length <= maxCharacters) return text
+  return keep === 'tail' ? text.slice(-maxCharacters) : text.slice(0, maxCharacters)
 }
 
 /** Input for budgeting one utility/tool result before it re-enters the context. */
@@ -282,7 +302,10 @@ export function composeBudgetedSend(
     input.availableInputTokens
   )
   const hiddenText = truncateToTokenBudget(input.hiddenText, layers.hiddenTokens)
-  const recapText = truncateToTokenBudget(input.recapText, layers.recapTokens)
+  // The recap is a transcript of a live conversation, so it keeps its newest
+  // end: the resumed session must continue from the most recent turn, and an
+  // older opening is the part it can afford to lose.
+  const recapText = truncateToTokenBudget(input.recapText, layers.recapTokens, 'tail')
   const driverText = hiddenText
     ? `${hiddenText}\n\nUser message:\n${input.userText}`
     : input.userText

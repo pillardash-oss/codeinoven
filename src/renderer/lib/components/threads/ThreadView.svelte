@@ -1,23 +1,24 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioAudioLines from '@pillardash-oss/cio-icon/CioAudioLines.svelte'
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioClapper from '@pillardash-oss/cio-icon/CioClapper.svelte'
-  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
-  import CioFileText from '@pillardash-oss/cio-icon/CioFileText.svelte'
-  import CioFolderInput from '@pillardash-oss/cio-icon/CioFolderInput.svelte'
-  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
-  import CioNetwork from '@pillardash-oss/cio-icon/CioNetwork.svelte'
-  import CioPencil from '@pillardash-oss/cio-icon/CioPencil.svelte'
-  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
-  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
-  import CioZap from '@pillardash-oss/cio-icon/CioZap.svelte'
+  import { isMacPlatform } from '$lib/shortcut-display'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
+  import CioFolderInput from '@pdslng/cio-icon/CioFolderInput.svelte'
+  import CioFork from '@pdslng/cio-icon/CioFork.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
+  import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import {
     latestWorkingTraceParts,
@@ -54,7 +55,7 @@
     type ComposerRelocationItem,
     type ComposerRelocationMode
   } from '../chats/composer-relocation'
-  import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
+  import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
@@ -348,7 +349,6 @@
   } from '$lib/generation-details'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
-  import * as CheckpointMatching from '../../threads/checkpoint-matching'
   import {
     auditReportForTurn,
     buildTranscriptIndex,
@@ -368,6 +368,7 @@
     type TranscriptIndex
   } from './thread-turn-parts'
   import {
+    annotationAtPoint,
     annotationFallbackAnchor,
     applyAnnotationHighlights,
     measureAnnotationBubbles,
@@ -377,7 +378,13 @@
     type AnnotationBubblePosition
   } from '$lib/selection-anchors'
   import {
+    registerSelectionAnnotationClaim,
+    isEditingTarget,
+    trackLiveSelection
+  } from '$lib/selection-menu'
+  import {
     captureResponseSelection,
+    responseElementFor,
     responseRangeFor,
     responseRangeIsCurrent,
     RESPONSE_HIGHLIGHT_NAME,
@@ -2716,6 +2723,11 @@
   } | null>(null)
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
+  /** Whether the selection menu is on screen. Read as a flag rather than as the
+   *  candidate itself: the menu follows the text the user keeps highlighting, and
+   *  a tracker keyed on the candidate would re-register on every keystroke of
+   *  the selection instead of once while the menu is open. */
+  const selectionMenuOpen = $derived(Boolean(responseSelection))
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
   /** How many frames a range rebuild is retried for while its anchor has not
    *  mounted yet, before the annotation settles for the fallback anchor. */
@@ -2752,6 +2764,106 @@
   function handleResponsePointerUp(): void {
     responseSelection = captureResponseSelection()
   }
+
+  /**
+   * The candidate a right-click opens for an annotation already on the chat.
+   *
+   * Right-clicking a highlighted passage is a request to work on that passage
+   * again, so the candidate is rebuilt from the annotation rather than from the
+   * document selection, which is collapsed when the user right-clicks without
+   * selecting first.
+   */
+  function referenceSelectionCandidate(
+    referenceId: string,
+    x: number,
+    y: number
+  ): ResponseSelectionCandidate | null {
+    const reference = responseReferences.find((candidate) => candidate.id === referenceId)
+    const range = responseReferenceRanges.get(referenceId)
+    if (!reference || !range) return null
+    if (
+      reference.messageId === undefined ||
+      reference.startOffset === undefined ||
+      reference.endOffset === undefined
+    )
+      return null
+    return {
+      text: reference.text,
+      messageId: reference.messageId,
+      range,
+      startOffset: reference.startOffset,
+      endOffset: reference.endOffset,
+      anchor: { x, y },
+      referenceId
+    }
+  }
+
+  /**
+   * Take a right-click that landed in a response.
+   *
+   * The menu is the same one a highlight opens, at the cursor instead of beside
+   * the selection, so the two ways of reaching a passage's actions are one
+   * control. When the click landed on a passage the user has already commented
+   * on, that comment's bubble opens with the menu, which is how a comment is
+   * found again from the words it was written about.
+   */
+  function claimResponseSelectionMenu(event: MouseEvent): boolean {
+    const target = event.target
+    if (!(target instanceof Element)) return false
+    if (!target.closest('[data-assistant-response]')) return false
+    if (isEditingTarget(target)) return false
+    // A link and an external-address control answer for themselves, so their
+    // menu keeps the items that open them.
+    if (target.closest('a, [data-external-url]')) return false
+    const annotatedId = annotationAtPoint(responseReferenceRanges, event.clientX, event.clientY)
+    const live = annotatedId
+      ? referenceSelectionCandidate(annotatedId, event.clientX, event.clientY)
+      : captureResponseSelection()
+    if (!live) return false
+    event.preventDefault()
+    event.stopPropagation()
+    if (annotatedId) commentEditorReferenceId = annotatedId
+    responseSelection = live
+    return true
+  }
+
+  /**
+   * Whether an emptied selection happened inside the responses.
+   *
+   * A caret that has moved into a field is not the user clearing this highlight:
+   * the comment editor takes focus the moment the menu opens a comment, and a
+   * menu that closed on that would take the actions away from the comment being
+   * written. A selection that emptied inside a response is the highlight being
+   * cleared, and closes the menu.
+   */
+  function selectionTouchesResponses(): boolean {
+    const selection = document.getSelection()
+    if (!selection) return true
+    return (
+      responseElementFor(selection.anchorNode) !== null ||
+      responseElementFor(selection.focusNode) !== null
+    )
+  }
+
+  /**
+   * Follow the selection while the menu is open.
+   *
+   * Shift and an arrow key extend or trim a selection without any pointer event,
+   * and the menu has to describe the text highlighted now rather than the text
+   * that was highlighted when the pointer came up. A selection that emptied
+   * inside a response closes the menu; one that has only left the responses,
+   * like a caret the comment editor took, leaves the menu where it is.
+   */
+  $effect(() => {
+    if (!selectionMenuOpen) return
+    return trackLiveSelection(captureResponseSelection, (candidate) => {
+      if (!candidate && !selectionTouchesResponses()) return
+      responseSelection = candidate
+    })
+  })
+
+  /** Own the right-click menu inside the responses while this view is mounted. */
+  $effect(() => registerSelectionAnnotationClaim(claimResponseSelectionMenu))
 
   /** Republish the live annotation ranges to the CSS Custom Highlight registry. */
   function refreshResponseHighlights(): void {
@@ -2884,6 +2996,22 @@
   function closeResponseSelection(): void {
     responseSelection = null
     document.getSelection()?.removeAllRanges()
+  }
+
+  /**
+   * What the menu's comment item does: write a comment on a fresh selection, or
+   * reopen the one a passage already carries.
+   */
+  function commentOnResponseSelection(): void {
+    const selection = responseSelection
+    if (!selection) return
+    const referenceId = selection.referenceId
+    if (referenceId) {
+      closeResponseSelection()
+      commentEditorReferenceId = referenceId
+      return
+    }
+    addResponseReference()
   }
 
   function addResponseReference(): void {
@@ -4990,6 +5118,12 @@
     if (msgIndex === 0) return null
     const lastAssistant = messages[msgIndex - 1]
     if (lastAssistant?.role !== 'assistant') return null
+    // A run that is still going and whose last assistant row is a mid-turn step
+    // (tool calls, no answer) has not completed: the message below only steers
+    // the live turn. Claiming "Previous turn completed" there told the reader
+    // the agent had answered and finished, which is what made a steered prompt
+    // read as unanswered.
+    if (busy && messageText(lastAssistant).trim().length === 0) return null
     let turnStartIndex = msgIndex - 2
     while (turnStartIndex >= 0 && messages[turnStartIndex]?.role === 'assistant') {
       turnStartIndex--
@@ -6733,8 +6867,7 @@
   // ─── Message queue & steer  ───────────────────────────────────────────────
 
   /** Shortcut label for the steer combo   macOS shows ⌘⇧, others Ctrl+Shift+. */
-  const steerModifierLabel =
-    navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘⇧' : 'Ctrl+Shift+'
+  const steerModifierLabel = isMacPlatform() ? '⌘⇧' : 'Ctrl+Shift+'
 
   let queuedMessage = $state('')
   let queuedAttachments = $state<PromptAttachment[]>([])
@@ -8049,14 +8182,6 @@
       return
     }
     pendingPermissions = pendingPermissions.filter((request) => request.id !== requestId)
-  }
-
-  /** True when `messageIndex` is the final assistant message of `checkpoint`'s
-   *  turn   the single place its file card should render. Keeps a card from
-   *  being drawn multiple times when mid-turn question-answer user messages
-   *  split the visual turn into several `isTurnEnd` boundaries. */
-  function isCheckpointTurnEnd(messageIndex: number, checkpoint: TurnCheckpointSummary): boolean {
-    return CheckpointMatching.isCheckpointTurnEnd(messages, checkpoint, messageIndex)
   }
 
   async function openCheckpointFile(checkpointId: string, path: string): Promise<void> {
@@ -12752,11 +12877,11 @@
 {/if}
 
 {#if responseSelection}
-  <ResponseSelectionPopover
+  <SelectionActionMenu
     text={responseSelection.text}
-    x={responseSelection.x}
-    y={responseSelection.y}
-    onAdd={addResponseReference}
+    anchor={responseSelection.anchor}
+    annotated={Boolean(responseSelection.referenceId)}
+    onComment={commentOnResponseSelection}
     onElaborate={hasController ? undefined : () => openTemporarySelectionChat('elaborate')}
     onQuickChat={hasController ? undefined : () => openTemporarySelectionChat('quick')}
     onNewThread={openSelectionInNewThread}
@@ -13765,7 +13890,7 @@
                         </div>
                       {/if}
 
-                      {#if !chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(absIndex, turnCheckpoint)}
+                      {#if !chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && (transcriptIndex.checkpointCard[absIndex] ?? false)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}

@@ -1,11 +1,11 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
-  import CioFileQuestion from '@pillardash-oss/cio-icon/CioFileQuestion.svelte'
-  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
-  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioWrapText from '@pillardash-oss/cio-icon/CioWrapText.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioFileQuestion from '@pdslng/cio-icon/CioFileQuestion.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -230,7 +230,7 @@
         type="button"
         class="titlebar-no-drag flex h-7 items-center gap-1 bg-primary px-2 text-[0.625rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
         disabled={!dirty || saving}
-        title="Save attachment (Cmd/Ctrl+S)"
+        title={`Save attachment (${keymapState.labelFor('files-save')})`}
         onclick={() => void saveText()}
       >
         {#if saving}

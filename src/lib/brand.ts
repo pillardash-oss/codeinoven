@@ -19,27 +19,22 @@ export const APP_SLUG = 'codeinoven'
 export const ORG_SLUG = 'pillardash'
 
 /**
- * Present the product, and not the runtime it is built on, to every remote
- * server the app and its embedded browser talk to.
- *
- * Chromium's user agent carries the product token Electron derives from
- * `app.setName()` and then appends its own `Electron/<version>` token after the
- * `Chrome/` token. That trailing token is what makes sites report Electron, so
- * it is dropped here and the product token is kept (with the pinned build
- * version inserted when the runtime did not add one at all).
+ * Advertise the actual Chromium version using the standard Chrome/Safari
+ * sequence. Extra Electron or app product tokens make sites such as WhatsApp
+ * reject an otherwise supported browser, so omit them from remote requests.
  */
-export function brandUserAgent(userAgent: string, version: string): string {
-  const productToken = `${APP_NAME}/${version}`
+export function brandUserAgent(userAgent: string, chromeVersion: string): string {
   const tokens = userAgent
     .split(' ')
-    .filter((token) => token.length > 0 && !token.startsWith('Electron/'))
-    // The runtime stamps the product name with whatever version it resolved for
-    // itself, so every product token is pinned to the version the caller owns
-    // (the build version, which a nightly prerelease changes).
-    .map((token) => (token.startsWith(`${APP_NAME}/`) ? productToken : token))
-  if (tokens.includes(productToken)) return tokens.join(' ')
-  const chromeIndex = tokens.findIndex((token) => token.startsWith('Chrome/'))
-  tokens.splice(chromeIndex === -1 ? tokens.length : chromeIndex, 0, productToken)
+    .filter(
+      (token) =>
+        token.length > 0 &&
+        !token.startsWith('Electron/') &&
+        !token.startsWith(`${APP_NAME}/`) &&
+        !token.startsWith('Chrome/')
+    )
+  const safariIndex = tokens.findIndex((token) => token.startsWith('Safari/'))
+  tokens.splice(safariIndex === -1 ? tokens.length : safariIndex, 0, `Chrome/${chromeVersion}`)
   return tokens.join(' ')
 }
 

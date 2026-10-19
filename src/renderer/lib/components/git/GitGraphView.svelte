@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import type { GitCommitInfo, GitRemoteUpdate } from '$shared/types'

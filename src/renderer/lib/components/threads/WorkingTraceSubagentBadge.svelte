@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { formatDurationSeconds } from '$lib/format/duration'
   import {

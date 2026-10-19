@@ -77,6 +77,19 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     expect(systemBase).not.toContain(composition.recapText)
   })
 
+  it('keeps the newest end of the recap when the budget forces a cut', () => {
+    const composition = composeBudgetedSend({
+      availableInputTokens: modelBudget(),
+      userText: 'Continue with the next step.',
+      systemPrompt: implementSystemBase(),
+      hiddenText: 'orchestration',
+      recapText: `OLDEST_TURN_MARKER${'o'.repeat(120_000)}NEWEST_TURN_MARKER`
+    })
+    expect(composition.recapText.length).toBeLessThan(120_000)
+    expect(composition.recapText.endsWith('NEWEST_TURN_MARKER')).toBe(true)
+    expect(composition.recapText).not.toContain('OLDEST_TURN_MARKER')
+  })
+
   it('caps the hidden orchestration context first when headroom is tight', () => {
     const available = modelBudget()
     const systemBase = implementSystemBase()

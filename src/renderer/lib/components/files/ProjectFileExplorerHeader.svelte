@@ -1,10 +1,11 @@
 <script lang="ts">
-  import CioChevronsDown from '@pillardash-oss/cio-icon/CioChevronsDown.svelte'
-  import CioChevronsUp from '@pillardash-oss/cio-icon/CioChevronsUp.svelte'
-  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioTarget from '@pillardash-oss/cio-icon/CioTarget.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import CioChevronsDown from '@pdslng/cio-icon/CioChevronsDown.svelte'
+  import CioChevronsUp from '@pdslng/cio-icon/CioChevronsUp.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
 
   interface Props {
@@ -140,7 +141,7 @@
       filterOpen ? 'bg-elevated text-foreground' : ''
     ]}
     aria-label="Search project files"
-    title="Search project files (Cmd/Ctrl+F)"
+    title={`Search project files (${keymapState.labelFor('nav-find')})`}
     aria-pressed={filterOpen}
     onclick={onToggleFilter}
   >

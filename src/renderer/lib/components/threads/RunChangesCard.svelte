@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
-  import CioEye from '@pillardash-oss/cio-icon/CioEye.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
+  import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { fly, slide } from 'svelte/transition'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import HoverDiffPopover from '../files/HoverDiffPopover.svelte'
@@ -42,8 +42,6 @@
   let showAll = $state(false)
   let undoing = $state(false)
   let redoing = $state(false)
-  /** The card's own box, watched so a fold never slides the transcript. */
-  let cardRoot = $state<HTMLElement | undefined>(undefined)
 
   const additionsTotal = $derived(
     checkpoint.changes.reduce((total, change) => total + (change.additions ?? 0), 0)
@@ -69,7 +67,7 @@
   /** The state the card is honestly in, not a duration it does not track. */
   const chip = $derived(rolledBack ? { text: 'Undone', tone: 'paused' as const } : undefined)
   const title = $derived(
-    `Edited ${checkpoint.changes.length} ${checkpoint.changes.length === 1 ? 'file' : 'files'}`
+    `${checkpoint.changes.every((change) => change.sources?.length) ? 'Edited' : 'Detected'} ${checkpoint.changes.length} ${checkpoint.changes.length === 1 ? 'file' : 'files'}`
   )
 
   function statusLabel(kind: TurnCheckpointChangeSummary['kind']): string {
@@ -125,8 +123,7 @@
    * view must not move the page at all, so the offset is only corrected when the
    * card has been scrolled past the top edge.
    */
-  function holdReadingPosition(delta: number): void {
-    const card = cardRoot
+  function holdReadingPosition(card: HTMLElement, delta: number): void {
     const scroller = card?.closest<HTMLElement>('.conversation-scroll')
     if (!card || !scroller || delta === 0) return
     if (card.getBoundingClientRect().top >= scroller.getBoundingClientRect().top) return
@@ -135,25 +132,23 @@
 
   // Height changes run through the fold transition, one frame at a time, so the
   // correction follows the animation instead of landing after it.
-  $effect(() => {
-    const card = cardRoot
-    if (!card) return
+  function preserveReadingPosition(card: HTMLElement): () => void {
     let lastHeight = card.offsetHeight
     const observer = new ResizeObserver(() => {
       const height = card.offsetHeight
-      holdReadingPosition(height - lastHeight)
+      holdReadingPosition(card, height - lastHeight)
       lastHeight = height
     })
     observer.observe(card)
     return () => observer.disconnect()
-  })
+  }
 </script>
 
 <!-- The turn's checkpoint: what the turn touched, what it cost in lines, and the
 two things a reader does with it. Square, in the same head/body/foot language as
 the composer cards, with both actions quiet in the head: undoing is the frequent
 one and reviewing is optional, so neither is dressed as the card's main call. -->
-<div bind:this={cardRoot} class="min-w-0">
+<div {@attach preserveReadingPosition} class="min-w-0">
   <CardFrame placement="top" label="Edited files">
     <CardHead {title} icon={CioDiff} {chip} foldLabel="changed files" bind:folded>
       {#snippet meta()}

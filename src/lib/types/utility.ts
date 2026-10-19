@@ -295,8 +295,6 @@ export interface SkillInstallRecord {
   projectId?: string
   /** Harness scope only: the harnesses this copy was installed for. */
   harnessIds?: string[]
-  /** CodeInOven-managed copies only: how the skill is exposed to a turn. */
-  activation?: UtilityActivation
   /**
    * Upstream identity of the skill as it was installed: the git tree sha of its
    * folder for a GitHub source, the index digest for a well-known source. The
@@ -438,8 +436,6 @@ export interface InstalledSkillLocation {
   label: string
   /** Filesystem location for native copies; empty for registry-managed copies. */
   path: string
-  /** Activation of a registry-managed copy. */
-  activation?: UtilityActivation
   /**
    * Marketplace source the copy was installed from (`owner/repo`, or a domain
    * for a well-known index). Absent for hand-placed copies, which no install
@@ -494,7 +490,6 @@ export interface SkillMarketInstallRequest {
     | { kind: 'global' }
     | { kind: 'projects'; projectIds: string[] }
     | { kind: 'harnesses'; harnessIds: string[] }
-  activation?: UtilityActivation
 }
 
 /** Agent plugins surfaced in the shared Codex and Claude Code marketplace. */

@@ -1,11 +1,12 @@
 <script lang="ts">
-  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
-  import CioClipboardPaste from '@pillardash-oss/cio-icon/CioClipboardPaste.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
-  import CioUpload from '@pillardash-oss/cio-icon/CioUpload.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioClipboardPaste from '@pdslng/cio-icon/CioClipboardPaste.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { onDestroy, onMount } from 'svelte'
 
   import { invoke } from '$lib/ipc.svelte'
@@ -125,9 +126,9 @@
     <div class="min-w-0">
       <h1 class="text-xl font-bold tracking-tight">Search by intent</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Ranks the Cmd+K thread search with meaning-based matches as well as keywords. Title matches
-        stay first, semantic matches follow, keyword-only finds come last. The search buttons on the
-        panels stay keyword-only.
+        Ranks the {keymapState.labelFor('nav-command-palette')} thread search with meaning-based matches
+        as well as keywords. Title matches stay first, semantic matches follow, keyword-only finds come
+        last. The search buttons on the panels stay keyword-only.
       </p>
       {#if !canEnable}
         <p class="mt-1.5 text-xs text-dimmed">

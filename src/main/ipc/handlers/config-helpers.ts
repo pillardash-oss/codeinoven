@@ -235,6 +235,7 @@ const AGENT_DEFAULT_FIELDS = new Set([
   'seniorEngineer',
   'worker',
   'auditor',
+  'pawn',
   'imageDescriptor',
   'imageDescriptorFallback',
   'syncFromThreadChanges'
@@ -302,6 +303,9 @@ function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
     ...(value.auditor === undefined
       ? {}
       : { auditor: validateAgentModelSelection(value.auditor, 'Auditor default') }),
+    ...(value.pawn === undefined
+      ? {}
+      : { pawn: validateAgentModelSelection(value.pawn, 'Pawn default') }),
     ...(value.imageDescriptor === undefined
       ? {}
       : {

@@ -187,7 +187,7 @@ export class SpeechService {
       disposeRuntime: (runtime) => this.disposeRuntime(runtime)
     })
     this.downloader = new SpeechArtifactDownloader(this.storage, {
-      catalog: () => this.requireCatalog(),
+      catalog: () => this.catalogSnapshot(),
       emitDownload: (artifact, download) => this.emitDownload(artifact, download),
       recordInstalled: (artifact, installedAt) => this.recordInstalled(artifact, installedAt)
     })
@@ -241,23 +241,29 @@ export class SpeechService {
   async capabilities(): Promise<SpeechCapabilitySnapshot> {
     const target = this.platformTarget()
     const runtimes: SpeechRuntimeAvailability[] = await Promise.all(
-      [...this.backends.entries()].map(async ([runtime, backend]) => {
-        const capabilities = await backend.capabilities().catch(() => [])
-        return {
-          runtime,
-          available: capabilities.length > 0,
-          ...(capabilities.length === 0
-            ? {
-                reason:
-                  runtime === 'mlx'
-                    ? 'The packaged MLX worker is unavailable.'
-                    : runtime === 'coreml'
-                      ? 'The packaged Core ML worker or audio decoder is unavailable.'
-                      : 'Runtime unavailable.'
-              }
-            : {})
-        }
-      })
+      [...this.backends.entries()]
+        .filter(
+          ([runtime]) =>
+            (runtime !== 'mlx' && runtime !== 'coreml') ||
+            (target.platform === 'darwin' && target.architecture === 'arm64')
+        )
+        .map(async ([runtime, backend]) => {
+          const capabilities = await backend.capabilities().catch(() => [])
+          return {
+            runtime,
+            available: capabilities.length > 0,
+            ...(capabilities.length === 0
+              ? {
+                  reason:
+                    runtime === 'mlx'
+                      ? 'The packaged MLX worker is unavailable.'
+                      : runtime === 'coreml'
+                        ? 'The packaged Core ML worker or audio decoder is unavailable.'
+                        : 'Runtime unavailable.'
+                }
+              : {})
+          }
+        })
     )
     const runtimeAvailability = new Map(runtimes.map((runtime) => [runtime.runtime, runtime]))
     const selected = resolveSpeechRuntime(target, runtimes)
@@ -267,37 +273,48 @@ export class SpeechService {
       recommendedRuntime: recommendedSpeechRuntime(target),
       ...(selected.ok ? { selectedRuntime: selected.value.runtime } : {}),
       installedArtifacts: await Promise.all(
-        this.installed.artifacts.map(async (artifact) => {
-          const runtime = runtimeAvailability.get(artifact.runtime)
-          if (
-            artifact.source === 'import' &&
-            artifact.importPath &&
-            !(await access(artifact.importPath).then(
-              () => true,
-              () => false
-            ))
-          ) {
-            return structuredClone({
-              ...artifact,
-              available: false,
-              unavailableReason: 'The imported model path no longer exists on disk.'
-            })
-          }
-          if (artifact.available && runtime && !runtime.available) {
-            return structuredClone({
-              ...artifact,
-              available: false,
-              unavailableReason: runtime.reason ?? 'Runtime unavailable.'
-            })
-          }
-          return structuredClone(artifact)
-        })
+        this.installed.artifacts
+          .filter((artifact) => runtimeAvailability.has(artifact.runtime))
+          .map(async (artifact) => {
+            const runtime = runtimeAvailability.get(artifact.runtime)
+            if (
+              artifact.source === 'import' &&
+              artifact.importPath &&
+              !(await access(artifact.importPath).then(
+                () => true,
+                () => false
+              ))
+            ) {
+              return structuredClone({
+                ...artifact,
+                available: false,
+                unavailableReason: 'The imported model path no longer exists on disk.'
+              })
+            }
+            if (artifact.available && runtime && !runtime.available) {
+              return structuredClone({
+                ...artifact,
+                available: false,
+                unavailableReason: runtime.reason ?? 'Runtime unavailable.'
+              })
+            }
+            return structuredClone(artifact)
+          })
       )
     }
   }
 
   catalogSnapshot(): SpeechModelCatalog {
-    return structuredClone(this.requireCatalog())
+    const target = this.platformTarget()
+    const catalog = this.requireCatalog()
+    return structuredClone({
+      ...catalog,
+      artifacts: catalog.artifacts.filter(
+        (artifact) =>
+          artifact.platforms.includes(target.platform) &&
+          artifact.architectures.includes(target.architecture)
+      )
+    })
   }
 
   async beginCapture(scope: SpeechScope, mimeType: string): Promise<SpeechCaptureSessionInfo> {

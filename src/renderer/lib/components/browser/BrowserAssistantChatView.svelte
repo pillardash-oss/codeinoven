@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
   import { BrowserAssistantChatController } from './BrowserAssistantChatController.svelte'
   import { threadReveal } from '$lib/components/layout/page-reveal'

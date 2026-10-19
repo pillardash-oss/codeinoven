@@ -1,4 +1,6 @@
 /** Page checkpoints and request-size recovery, executed together in Pi's subprocess. */
+import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
+
 export const PI_COMPACTION_EXTENSION_KEY = 'codeinoven-compaction'
 
 export function piCompactionExtension(): string {
@@ -33,8 +35,10 @@ const IMAGE_BUDGET_MARKER = '[image removed from the provider request: the reque
 // makes the reserved completion alone cross the line on a large-reserve model,
 // so the checkpoint fires on almost every turn. Pi's own threshold
 // (contextWindow minus a flat 16384) sits far above the usable budget and never
-// fires in time, which is why the app owns the trigger.
-const COMPACT_WINDOW_SHARE = 0.85
+// fires in time, which is why the app owns the trigger. The value comes from
+// the app's shared COMPACT_LINE_SHARE, so every harness whose trigger the app
+// owns checkpoints at the same point in its window.
+const COMPACT_WINDOW_SHARE = ${COMPACT_LINE_SHARE}
 // Verbatim trace retained when the active task page, or the current transcript
 // with no page boundary yet, has to be cut. Never below Pi's own 20k default,
 // and never a large share of the window, so the checkpoint plus the retained

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { BrowserLoadError } from '$shared/ipc-contract'
   import {
     browserLoadErrorCopy,
@@ -42,16 +42,16 @@
   const detail = $derived(browserLoadErrorDetail(error))
 </script>
 
-<div class="flex h-full min-h-0 w-full items-center justify-center px-6 py-10">
+<div class="flex h-full min-h-0 w-full min-w-0 items-center justify-center px-6 py-10">
   <div
-    class="flex w-full max-w-md flex-col items-center gap-3 text-center"
+    class="flex w-full min-w-0 max-w-md flex-col items-center gap-3 text-center"
     role="alert"
     data-region="browser-load-error"
   >
     <div class="flex h-11 w-11 items-center justify-center bg-elevated">
       <copy.icon size={20} class="text-dimmed" />
     </div>
-    <div class="flex flex-col gap-1">
+    <div class="flex w-full min-w-0 flex-col gap-1">
       <p class="text-sm font-semibold text-foreground">{copy.title}</p>
       <p class="text-xs leading-relaxed text-muted">{copy.description}</p>
     </div>
@@ -59,7 +59,7 @@
       {#if onEditAddress}
         <button
           type="button"
-          class="max-w-full cursor-pointer truncate border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:bg-overlay"
+          class="max-w-full min-w-0 cursor-pointer truncate border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted outline-none transition-colors hover:bg-overlay hover:text-foreground focus-visible:bg-overlay"
           title={url}
           aria-label={`Edit address ${url}`}
           onclick={onEditAddress}
@@ -68,14 +68,14 @@
         </button>
       {:else}
         <p
-          class="max-w-full truncate border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
+          class="max-w-full min-w-0 truncate border border-border bg-elevated px-2.5 py-1 font-mono text-xs text-muted"
           title={url}
         >
           {url}
         </p>
       {/if}
     {/if}
-    <p class="font-mono text-xs text-dimmed" title={detail}>{detail}</p>
+    <p class="max-w-full min-w-0 truncate font-mono text-xs text-dimmed" title={detail}>{detail}</p>
     <div class="mt-1 flex items-center gap-2">
       <button
         type="button"

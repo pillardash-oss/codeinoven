@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { APP_NAME } from '$shared/brand'

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ScopeSetupCommandsEditor from './ScopeSetupCommandsEditor.svelte'

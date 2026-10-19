@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import { isShippedBuild } from './app-resources'
 import { Logger } from '../system/logger'
 import { isAppleTeamId, webauthnKeychainAccessGroup } from '../../lib/browser/browser-webauthn'
 
@@ -55,7 +56,7 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
  * build with no team identifier cannot name the group the entitlement grants.
  */
 export function installPlatformAuthenticator(): void {
-  if (process.platform !== 'darwin' || !app.isPackaged) return
+  if (process.platform !== 'darwin' || !isShippedBuild()) return
 
   const teamId = (__CODEINOVEN_MAC_TEAM_ID__ ?? '').trim()
   if (!isAppleTeamId(teamId)) {

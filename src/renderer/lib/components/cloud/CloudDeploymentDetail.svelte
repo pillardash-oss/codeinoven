@@ -1,19 +1,19 @@
 <script lang="ts">
-  import CioArrowDown from '@pillardash-oss/cio-icon/CioArrowDown.svelte'
-  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
-  import CioBraces from '@pillardash-oss/cio-icon/CioBraces.svelte'
-  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioChevronUp from '@pillardash-oss/cio-icon/CioChevronUp.svelte'
-  import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioCloud from '@pillardash-oss/cio-icon/CioCloud.svelte'
-  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
-  import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioArrowDown from '@pdslng/cio-icon/CioArrowDown.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioBraces from '@pdslng/cio-icon/CioBraces.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioChevronUp from '@pdslng/cio-icon/CioChevronUp.svelte'
+  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -462,7 +462,7 @@
           <button
             type="button"
             class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 border border-border px-1.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Search log (Ctrl/Cmd+F)"
+            title={`Search log (${keymapState.labelFor('files-deployment-find')})`}
             aria-label="Search log"
             onclick={openSearch}
           >

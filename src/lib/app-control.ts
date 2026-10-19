@@ -55,3 +55,20 @@ export interface AppControlActionSummary {
   description: string
   params: string[]
 }
+
+/**
+ * A capture of the live app window, as an agent that needs to see the UI gets
+ * it.
+ *
+ * The app is an Electron window, so the in-app browser cannot render it: the
+ * renderer needs the preload bridge that only exists inside Electron. A capture
+ * is therefore the one way an agent can look at the real interface, and it is
+ * main-side work rather than a renderer round-trip, because only main can read
+ * a window's pixels.
+ */
+export interface AppControlCapture {
+  /** A PNG data URL. The gateway lifts it into an image content part. */
+  dataUrl: string
+  width: number
+  height: number
+}

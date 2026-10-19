@@ -57,8 +57,7 @@ async function registrySkillLocations(
       const shared = {
         skillId: binding.transportName,
         manager: 'cio' as const,
-        path: '',
-        activation: utility.activation
+        path: ''
       }
       if (utility.scope.level === 'global') {
         locations.push({ ...shared, scope: 'global', label: 'All harnesses' })

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioCode from '@pillardash-oss/cio-icon/CioCode.svelte'
-  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import type { CustomIcon } from '$shared/types'
   import { PROJECT_COLORS } from '$lib/project-colors'
   import {

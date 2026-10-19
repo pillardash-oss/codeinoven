@@ -1,5 +1,13 @@
 import { spawnSync } from 'node:child_process'
-import { chmodSync, copyFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { flipFuses, FuseVersion, FuseV1Options } from '@electron/fuses'
@@ -156,8 +164,8 @@ export default async function installNativeSplash(context) {
   let launcherExecutable
   if (platform === 'darwin' || platform === 'mas') {
     const macOsDirectory = join(context.appOutDir, `${productFilename}.app/Contents/MacOS`)
-    publicExecutable = join(macOsDirectory, productFilename)
-    electronExecutable = join(macOsDirectory, `${productFilename}-electron`)
+    publicExecutable = join(macOsDirectory, `${productFilename} Launcher`)
+    electronExecutable = join(macOsDirectory, productFilename)
     launcherExecutable = join(temporaryDirectory, productFilename)
     compileMac(launcherExecutable, temporaryDirectory, context.arch)
   } else if (platform === 'win32') {
@@ -175,10 +183,19 @@ export default async function installNativeSplash(context) {
   }
 
   // Fuses belong to Electron, not the tiny public launcher. Apply them while
-  // the original binary still has its standard packaged location, then rename
-  // it and let electron-builder sign both executables in its normal sign pass.
-  await hardenElectron(publicExecutable, platform)
-  renameSync(publicExecutable, electronExecutable)
+  // the original binary still has its standard packaged location. On macOS it
+  // retains the product name; other platforms move it aside for the launcher.
+  const isMac = platform === 'darwin' || platform === 'mas'
+  await hardenElectron(isMac ? electronExecutable : publicExecutable, platform)
+  if (isMac) {
+    const plistPath = join(context.appOutDir, `${productFilename}.app/Contents/Info.plist`)
+    const plist = readFileSync(plistPath, 'utf8')
+    const executableEntry = /(<key>CFBundleExecutable<\/key>\s*<string>)[^<]*(<\/string>)/
+    if (!executableEntry.test(plist)) throw new Error('Missing macOS bundle executable')
+    writeFileSync(plistPath, plist.replace(executableEntry, `$1${productFilename} Launcher$2`))
+  } else {
+    renameSync(publicExecutable, electronExecutable)
+  }
   copyFileSync(launcherExecutable, publicExecutable)
   chmodSync(publicExecutable, 0o755)
   chmodSync(electronExecutable, 0o755)

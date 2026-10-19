@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { toast } from 'svelte-sonner'
   import { APP_NAME } from '$shared/brand'
   import {

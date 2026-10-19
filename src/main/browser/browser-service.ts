@@ -4326,6 +4326,23 @@ export class BrowserService {
   }
 
   /**
+   * Lift the app's floating chrome back over a page surface that just mounted.
+   *
+   * A child view lands on top of whatever the app window already holds, and the
+   * toast card and the floating tab strip are bounded `WebContentsView`s in that
+   * same window: they are the app's own chrome, drawn over whatever page happens
+   * to be on screen. A tab's page, a popup window's page and an extension side
+   * panel's document are all mounted the same way, so every one of them has to
+   * hand the top back. Without this an open side panel covered the part of a
+   * toast it overlapped, because the panel was mounted after the card was drawn
+   * and the raise the card had done for itself no longer held.
+   */
+  private raisePageChrome(): void {
+    this.nativeStrip.raise()
+    this.nativeToasts.raise()
+  }
+
+  /**
    * The view plumbing popup windows run on.
    *
    * The registry owns popup lifetimes; every native call a view needs stays here,
@@ -4348,6 +4365,7 @@ export class BrowserService {
           this.window.contentView.addChildView(view)
           this.mountedPopupViews.add(view)
           view.setBounds(bounds)
+          this.raisePageChrome()
         } catch (error: unknown) {
           Logger.error('Browser popup window could not be placed:', error)
         }
@@ -4410,6 +4428,7 @@ export class BrowserService {
           this.window.contentView.addChildView(view)
           this.mountedSidePanelViews.add(view)
           view.setBounds(bounds)
+          this.raisePageChrome()
         } catch (error: unknown) {
           Logger.error('Browser extension side panel could not be placed:', error)
         }
@@ -6816,8 +6835,7 @@ export class BrowserService {
     this.stage.release(tab.view)
     this.forgetParked(tabId)
     this.window.contentView.addChildView(tab.view)
-    this.nativeStrip.raise()
-    this.nativeToasts.raise()
+    this.raisePageChrome()
     if (bounds !== null) {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)

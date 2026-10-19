@@ -7,42 +7,16 @@ import { retry } from 'builder-util'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 /**
- * The app uses a custom native-splash launcher architecture:
- *   - `Contents/MacOS/CodeInOven` — the launcher and bundle main executable
- *   - `Contents/MacOS/CodeInOven-electron` — the renamed Electron runtime
- *
- * The launcher `execv`s into `CodeInOven-electron`, so the RUNNING process is the
- * Electron binary. Squirrel.Mac captures the running process's designated
- * requirement (`identifier "CodeInOven-electron"`) and validates every update
- * bundle against it. Without a fix, that requirement can never be satisfied:
- * the update bundle's main executable is the launcher (identifier
- * `com.pillardash.codeinoven`), so every update fails with "code failed to
- * satisfy specified code requirement(s)".
- *
- * Existing installs run with the legacy `CodeInOven-electron` identifier, so
- * the top-level bundle must retain it for Squirrel.Mac update compatibility.
- * macOS UNNotification, however, rejects the running Electron process when its
- * signing identifier differs from CFBundleIdentifier. The runtime is therefore
- * signed with the canonical bundle identifier and a bridge designated
- * requirement that accepts both identities from the same Developer ID team.
- * Squirrel captures that bridge requirement from the running process, allowing
- * future update bundles to use either identifier without weakening the team or
- * Developer ID certificate constraints.
- *
- * Helpers and frameworks keep the identifiers osx-sign assigns by default.
- *
- * Implementation: both MacOS binaries are discovered by osx-sign's walk, which
- * signs all nested code before sealing the bundle with the final
- * `opts.app` sign. We never pre-sign or exclude anything ourselves — doing so
- * either desynchronizes hardened-runtime/timestamp flags or leaves the bundle
- * seal stale ("nested code is modified or invalid"). Instead we override the
- * identifier and designated requirement per file via `optionsForFile`, which
- * osx-sign applies to each codesign invocation it makes.
+ * The bundle entrypoint is CodeInOven Launcher; its supervised Electron runtime
+ * is CodeInOven so macOS shows the product name for capture and process activity.
+ * Preserve the legacy bundle signing identifier for existing Squirrel installs.
+ * The runtime uses the canonical bundle identifier and a team-constrained bridge
+ * requirement so notifications and subsequent updates retain their identity.
  */
 export default async function macSign(configuration) {
   const appPath = configuration.app
   const infoPlistPath = join(appPath, 'Contents', 'Info.plist')
-  let mainExecutable = 'CodeInOven'
+  let mainExecutable = 'CodeInOven Launcher'
   try {
     const plist = await readFile(infoPlistPath, 'utf8')
     const match = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
@@ -50,7 +24,8 @@ export default async function macSign(configuration) {
   } catch {
     // Fall back to the default above if the plist is not readable.
   }
-  const electronBinaryIdentifier = `${mainExecutable}-electron`
+  const runtimeExecutable = mainExecutable.replace(/ Launcher$/, '')
+  const electronBinaryIdentifier = `${runtimeExecutable}-electron`
   let bundleIdentifier = ''
   try {
     const plist = await readFile(infoPlistPath, 'utf8')
@@ -78,7 +53,7 @@ export default async function macSign(configuration) {
   // normalized or relative forms of the discovered file path.
   const isElectronBinary = (filePath) => {
     const normalized = String(filePath).replace(/^\.\/+/, '')
-    return normalized.endsWith(`Contents/MacOS/${electronBinaryIdentifier}`)
+    return normalized.endsWith(`Contents/MacOS/${runtimeExecutable}`)
   }
 
   const originalOptionsForFile = configuration.optionsForFile
@@ -97,7 +72,7 @@ export default async function macSign(configuration) {
       }
     }
     if (isElectronBinary(filePath)) {
-      // The renamed Electron runtime keeps the canonical bundle identifier
+      // The product-named Electron runtime keeps the canonical bundle identifier
       // (required by macOS UNNotification) plus the bridge requirement so
       // Squirrel.Mac accepts update bundles signed with either identifier.
       return {
