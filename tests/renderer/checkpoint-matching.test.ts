@@ -168,6 +168,29 @@ describe('checkpoint card placement', () => {
     expect(cardIndices(messages, checkpoints)).toEqual([1])
   })
 
+  // Regression: a turn's prompt normally follows the previous turn's assistant
+  // message, so an anchor test that required the message to be a "turn start"
+  // rejected every prompt after the first one. The first checkpoint then spanned
+  // the whole transcript and stole every later turn's card.
+  it('places one card per turn when each prompt follows the previous answer', () => {
+    const messages = [
+      msg('user', 500, 'p1'),
+      msg('assistant', 1000),
+      msg('assistant', 1900),
+      msg('user', 2000, 'p2'),
+      msg('assistant', 2100),
+      msg('assistant', 2200)
+    ]
+    const checkpoints = [
+      checkpoint('cp-1', 900, 1950, { changes: 1, sourceMessageId: 'p1' }),
+      checkpoint('cp-2', 2000, 2300, { changes: 2, sourceMessageId: 'p2' })
+    ]
+    const index = buildTranscriptIndex(messages, checkpoints)
+    expect(index.checkpoint[2]?.id).toBe('cp-1')
+    expect(index.checkpoint[5]?.id).toBe('cp-2')
+    expect(cardIndices(messages, checkpoints)).toEqual([2, 5])
+  })
+
   it('ignores active checkpoints', () => {
     const messages = [msg('user', 100, 'prompt-1'), msg('assistant', 150)]
     const cp = checkpoint('cp-1', 110, 160, {

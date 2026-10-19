@@ -1,3 +1,4 @@
+import { filterArchivedThreadRecords } from '../../database/archive-visibility'
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { validateEntityId } from '../ipc-validation'
@@ -523,9 +524,17 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     return thread
   })
 
-  ipcMain.handle('assistant:listMissedRuns', () => requireScheduler().listMissedRuns())
+  ipcMain.handle('assistant:listMissedRuns', () =>
+    filterArchivedThreadRecords(ctx.database, requireScheduler().listMissedRuns(), (record) => [
+      record.threadId
+    ])
+  )
 
-  ipcMain.handle('assistant:listSkippedRuns', () => requireScheduler().listSkippedRuns())
+  ipcMain.handle('assistant:listSkippedRuns', () =>
+    filterArchivedThreadRecords(ctx.database, requireScheduler().listSkippedRuns(), (record) => [
+      record.taskId
+    ])
+  )
 
   ipcMain.handle('assistant:hasRunsToday', (_, assistantId: unknown) =>
     requireScheduler().hasRunsToday(validateEntityId(assistantId, 'Assistant ID'))
@@ -534,19 +543,28 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:skipNextRun', async (_, assistantId: unknown) => {
     const scheduler = requireScheduler()
     await scheduler.skipNextRun(validateEntityId(assistantId, 'Assistant ID'))
-    return scheduler.listSkippedRuns()
+    return filterArchivedThreadRecords(ctx.database, scheduler.listSkippedRuns(), (record) => [
+      record.taskId
+    ])
   })
 
   ipcMain.handle('assistant:skipRunsToday', async (_, assistantId: unknown) => {
     const scheduler = requireScheduler()
     await scheduler.skipRunsToday(validateEntityId(assistantId, 'Assistant ID'))
-    return scheduler.listSkippedRuns()
+    return filterArchivedThreadRecords(ctx.database, scheduler.listSkippedRuns(), (record) => [
+      record.taskId
+    ])
   })
 
   // The durable record of unattended runs. Read from the ledger, not the thread
   // table, so a run whose thread was evicted or deleted still reports what
   // happened on the "While you were away" surfaces.
-  ipcMain.handle('assistant:listBackgroundRuns', () => requireScheduler().listBackgroundRuns())
+  ipcMain.handle('assistant:listBackgroundRuns', () =>
+    filterArchivedThreadRecords(ctx.database, requireScheduler().listBackgroundRuns(), (record) => [
+      record.taskId,
+      record.runThreadId
+    ])
+  )
 
   // Acknowledge one unattended run so it leaves the "While you were away"
   // surface for good. The ledger owns the durable removal; the fresh list is

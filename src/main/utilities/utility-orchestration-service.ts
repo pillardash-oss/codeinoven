@@ -249,6 +249,8 @@ export interface UtilityTurnRequest {
    * answers rather than at the end of the interview.
    */
   saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
+  /** Persist the clock choice during the live setup interview. */
+  saveAssistantSchedule?: (scheduled: boolean) => Promise<void>
   /** Persist settled reporting choices during the live setup interview. */
   saveAssistantReporting?: (reporting: AssistantReportingPatch) => Promise<void>
   budgetContext: UtilityTurnBudgetContext
@@ -2623,7 +2625,17 @@ export class UtilityOrchestrationService {
       )
       result = await state.request.saveBrainstormNotes(markdown)
     } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
-      if (operation === 'save_reporting') {
+      if (operation === 'save_schedule') {
+        if (!state.request.saveAssistantSchedule) {
+          throw new Error('Scheduling can only be saved in an assistant setup conversation')
+        }
+        const scheduled = operationInput['scheduled']
+        if (typeof scheduled !== 'boolean') {
+          throw new Error('save_schedule needs a boolean scheduled value')
+        }
+        await state.request.saveAssistantSchedule(scheduled)
+        result = { status: 'saved', scheduled }
+      } else if (operation === 'save_reporting') {
         if (!state.request.saveAssistantReporting) {
           throw new Error('Reporting can only be saved in an assistant setup conversation')
         }
@@ -2680,7 +2692,7 @@ export class UtilityOrchestrationService {
         result = await state.request.saveAssistantIdentity(identity)
       } else {
         throw new Error(
-          'The getting-started capability exposes save_checkpoint, save_identity and save_reporting'
+          'The getting-started capability exposes save_checkpoint, save_identity, save_schedule and save_reporting'
         )
       }
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {

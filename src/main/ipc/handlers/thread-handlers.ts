@@ -1,3 +1,4 @@
+import { unarchivedThreadSql } from '../../../lib/archives'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { join } from 'path'
 import { Logger } from '../../system/logger'
@@ -93,6 +94,12 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
     // transient git failure) heals lazily on its next open   off this read's
     // critical path, deduped while in flight.
     ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+      const visible = await ctx.database.queryViaWorker(
+        `SELECT id FROM threads WHERE id = ? AND project_id = ? AND ${unarchivedThreadSql()}`,
+        [threadId, projectId],
+        1
+      )
+      if (!visible.ok || visible.rows.length === 0) return null
       const ids = await waitForThreadReady(projectId, threadId)
       const thread = await threadManager.getThread(ids.projectId, ids.threadId)
       if (thread) settleThreadBranch(branchBackfillDeps, thread)

@@ -23,6 +23,7 @@
   import { pageReveal } from '$lib/components/layout/page-reveal'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
+  import AppConfirmDialog from '$lib/components/ui/AppConfirmDialog.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
   import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
@@ -2147,6 +2148,9 @@
     {/await}
   {/if}
   <Toaster />
+  <!-- Raised by menus that close as soon as one of their items is chosen, so the
+       question outlives the surface that asked it. -->
+  <AppConfirmDialog />
   <TextSelectionContextMenu />
   <TooltipHost />
   {#if scopeConfirmations.current}

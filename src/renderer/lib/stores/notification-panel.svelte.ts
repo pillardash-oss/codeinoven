@@ -1,3 +1,4 @@
+import type { ArchiveKind } from '$shared/archives'
 import { APP_SLUG } from '$shared/brand'
 import { SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
@@ -141,6 +142,17 @@ function newestFirst(items: readonly InAppNotification[]): InAppNotification[] {
 }
 
 class NotificationPanelState {
+  /** Archive visibility never creates dismissal tombstones; restoring can show the notice again. */
+  hideArchived(kind: ArchiveKind, id: string): void {
+    this._notifications = this._notifications.filter((entry) =>
+      kind === 'project'
+        ? entry.projectId !== id
+        : kind === 'assistant'
+          ? entry.assistantId !== id
+          : entry.threadId !== id
+    )
+  }
+
   private _notifications: InAppNotification[] = $state([])
   /**
    * Ids the user retired, kept so nothing can rebuild them behind their back.

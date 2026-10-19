@@ -71,6 +71,7 @@
   import Modal from '../ui/Modal.svelte'
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -1546,6 +1547,8 @@
       />
     {:else if section === 'cloud-deployments'}
       <CloudDeploymentsSettingsTab />
+    {:else if section === 'archives'}
+      <ArchivesSettingsTab />
     {:else if section === 'about'}
       <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->

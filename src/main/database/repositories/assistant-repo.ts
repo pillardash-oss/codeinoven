@@ -1,3 +1,4 @@
+import { unarchivedEntitySql } from '../../../lib/archives'
 import type { Database } from '../database'
 import type {
   Assistant,
@@ -240,6 +241,16 @@ export class AssistantRepo {
     return row ? rowToAssistant(row) : null
   }
 
+  /** Patch the clock choice without overwriting concurrent icon or identity edits. */
+  updateScheduled(id: string, scheduled: boolean, updatedAt: number): void {
+    this.db.run(
+      scheduled
+        ? 'UPDATE assistants SET scheduled = 1, updated_at = ? WHERE id = ?'
+        : 'UPDATE assistants SET scheduled = 0, schedule = NULL, schedule_name = NULL, schedule_updated_at = NULL, updated_at = ? WHERE id = ?',
+      [updatedAt, id]
+    )
+  }
+
   /** Patch only settled reporting columns, preserving concurrent panel edits. */
   updateReporting(
     id: string,
@@ -312,7 +323,9 @@ export class AssistantRepo {
    */
   list(): Assistant[] {
     return this.db
-      .all<AssistantRow>('SELECT * FROM assistants ORDER BY created_at DESC, id ASC')
+      .all<AssistantRow>(
+        `SELECT * FROM assistants WHERE ${unarchivedEntitySql('assistant', 'assistants')} ORDER BY created_at DESC, id ASC`
+      )
       .map(rowToAssistant)
   }
 
@@ -325,7 +338,7 @@ export class AssistantRepo {
    */
   async listViaWorker(): Promise<Assistant[]> {
     const result = await this.db.queryViaWorker(
-      'SELECT * FROM assistants ORDER BY created_at DESC, id ASC',
+      `SELECT * FROM assistants WHERE ${unarchivedEntitySql('assistant', 'assistants')} ORDER BY created_at DESC, id ASC`,
       [],
       0
     )

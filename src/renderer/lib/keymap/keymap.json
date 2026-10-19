@@ -175,6 +175,13 @@
       "label": "Chat & Messages",
       "shortcuts": [
         {
+          "id": "assistant-setup-primary-action",
+          "keys": ["mod", "enter"],
+          "label": "Continue after assistant setup",
+          "description": "Starts a task from the setup completion card, or submits the selected modification-session answer.",
+          "scenario": "An assistant setup completion or modification confirmation card is visible."
+        },
+        {
           "id": "chat-send",
           "keys": ["mod", "enter"],
           "label": "Send message",

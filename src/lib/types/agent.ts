@@ -77,6 +77,13 @@ export interface AgentDefaultsConfig {
 
 /** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
+  /** An explicitly opened behavior-editing session on an assistant's Getting started thread. */
+  assistantBehaviorSession?: {
+    startedAt: number
+    dismissals: number
+    /** A saved revision is ready for the session completion question. */
+    saved?: boolean
+  }
   /** Execution environment. Missing means this computer. */
   ovenId?: string
   /** Absolute workspace on the selected Oven, independent of the local project path. */

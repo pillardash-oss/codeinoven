@@ -1,3 +1,4 @@
+import { unarchivedThreadSql } from '../../lib/archives'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { registerRendererLogIpcHandler } from './renderer-log-ipc'
 import type { Database } from '../database/database'
@@ -64,6 +65,12 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
   )
   ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+    const visible = await database.queryViaWorker(
+      `SELECT id FROM threads WHERE id = ? AND project_id = ? AND ${unarchivedThreadSql()}`,
+      [threadId, projectId],
+      1
+    )
+    if (!visible.ok || visible.rows.length === 0) return null
     const thread = await threadManager.getThreadViaWorker(projectId, threadId)
     // A thread whose creation-time branch settle never completed (restart or a
     // transient git failure) heals lazily on its next open   off this read's

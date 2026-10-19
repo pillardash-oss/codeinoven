@@ -144,7 +144,7 @@
       const line = working ? 'Running now' : runRowLine(task, Date.now())
       return contextLabel ? `${contextLabel} · ${line}` : line
     }
-    if (knowledgeThread) return 'How-to conversation'
+    if (knowledgeThread) return 'Assistant behavior'
     subscribeMinute()
     return working ? 'Running now' : taskRunLine(task, nextRunAt, Date.now(), !scheduled)
   })

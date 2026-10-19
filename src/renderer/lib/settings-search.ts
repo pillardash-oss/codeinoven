@@ -1,3 +1,4 @@
+import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
 import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
 import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
@@ -261,6 +262,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Local usage, cost, and model rankings.',
     keywords: ['quota', 'usage', 'spend', 'activity'],
     icon: CioMessage
+  },
+  {
+    id: 'archives',
+    section: 'archives',
+    title: 'Archives',
+    description: 'Archived projects, threads, chats, and assistants.',
+    keywords: ['archive', 'restore', 'unarchive'],
+    icon: CioArchive
   },
   {
     id: 'about',

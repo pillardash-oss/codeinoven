@@ -87,18 +87,24 @@ class AssistantsState {
     if (this.initialized) return
     this.initialized = true
     this.disposers.push(
+      subscribe('archive:changed', () => {
+        void this.refreshMissedRuns()
+        void this.refreshBackgroundRuns()
+        void this.refreshSkippedRuns()
+        void this.refresh()
+      }),
       subscribe('assistant:changed', (assistants) => {
         this.publishAssistants(assistants)
         void this.refreshIcons()
       }),
-      subscribe('assistant:missedRunsChanged', (runs) => {
-        this.missedRuns = runs
+      subscribe('assistant:missedRunsChanged', () => {
+        void this.refreshMissedRuns()
       }),
-      subscribe('assistant:backgroundRunsChanged', (runs) => {
-        this.backgroundRuns = runs
+      subscribe('assistant:backgroundRunsChanged', () => {
+        void this.refreshBackgroundRuns()
       }),
-      subscribe('assistant:skippedAssistantRunsChanged', (runs) => {
-        this.publishSkippedRuns(runs)
+      subscribe('assistant:skippedAssistantRunsChanged', () => {
+        void this.refreshSkippedRuns()
       }),
       subscribe('assistant:checkpointChanged', (assistantId) => {
         void this.refreshCheckpoint(assistantId)

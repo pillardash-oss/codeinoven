@@ -129,7 +129,7 @@
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -148,6 +148,7 @@
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import { fullscreenFileChatHost } from '$lib/fullscreen-file-chat-portal'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
@@ -1195,7 +1196,7 @@
       ? [
           {
             id: 'assistant-knowledge',
-            label: 'How to',
+            label: 'Assistant behavior',
             icon: AssistantKnowledgeIcon,
             active: dockKindActive('assistant-knowledge'),
             onSelect: () =>
@@ -1704,9 +1705,7 @@
   let sidebarWasVisible = false
   /** Whether the sidebar's own panel is the one hosting a window-sized surface,
    *  which has to outlive `sidebarVisible` going false (see above). */
-  let sidebarHostsFullscreenEditor = $derived(
-    contextSidebarState.sidebarActiveTab?.kind === 'files' && projectFilesWorkspace.fullscreenOpen
-  )
+  let sidebarHostsFullscreenEditor = $derived(projectFilesWorkspace.fullscreenOpen)
   $effect(() => {
     if (sidebarVisible || sidebarHostsFullscreenEditor) {
       sidebarWasVisible = true
@@ -2478,6 +2477,30 @@
       listed.authoredWorkKinds = [...kinds]
     })
   })
+
+  onMount(() =>
+    subscribe('archive:changed', (kind, id, archived) => {
+      if (archived) {
+        const matches = (thread: Thread): boolean =>
+          kind === 'project'
+            ? thread.projectId === id
+            : kind === 'assistant'
+              ? thread.assistantId === id
+              : thread.id === id ||
+                thread.assistantTaskId === id ||
+                thread.coordinatorThreadId === id
+        allThreads = allThreads.filter((thread) => !matches(thread))
+        scopeState.archiveVisibilityChanged(matches)
+        notificationPanelState.hideArchived(kind, id)
+        const selected = workspaceState.selectedThread
+        if (selected && matches(selected)) workspaceState.clearThread()
+        if (kind === 'project') projects = projects.filter((project) => project.id !== id)
+        scopeState.setScopesFromProjects(projects, projectIcons)
+      }
+      if (!archived) scopeState.archiveVisibilityChanged()
+      void refreshListData()
+    })
+  )
 
   $effect(() => {
     return subscribe('thread:deleted', (projectId, threadId) => {
@@ -4669,7 +4692,7 @@
       upsertThreadInList(updated)
       scopeState.updateThread(updated)
     } catch (error) {
-      reportError(error, 'Could not hide the knowledge thread')
+      reportError(error, 'Could not hide the assistant behavior thread')
     }
   }
 
@@ -5273,27 +5296,34 @@
             easing: cubicOut
           }}
         >
-          <ContextSidebar
-            tabs={contextSidebarState.sidebarTabs}
-            activeTabId={contextSidebarState.sidebarActiveTabId}
-            width={contextSidebarState.width}
-            height={contextSidebarState.terminalHeight}
-            placement="right"
-            content={contextSidebarContent}
-            {tabPresentation}
-            onSelect={(id) => contextSidebarState.focus(id)}
-            onClose={closeContextTab}
-            onFullscreenTab={openTabFullscreen}
-            onMoveTab={(id, targetId, position) =>
-              contextSidebarState.reorder(id, targetId, position)}
-            onWidthChange={(width) => handleRailWidthChange(width)}
-            onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
-            onTerminalPlacementChange={(placement) =>
-              contextSidebarState.setTerminalPlacement(placement)}
-            onNewTerminal={openNewTerminal}
-            onNewBrowser={() => openNewBrowserTab()}
-            onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
-          />
+          <div
+            class="h-full min-h-0"
+            {@attach active && contextSidebarState.sidebarActiveTab?.kind === 'temporary-chat'
+              ? fullscreenFileChatHost
+              : undefined}
+          >
+            <ContextSidebar
+              tabs={contextSidebarState.sidebarTabs}
+              activeTabId={contextSidebarState.sidebarActiveTabId}
+              width={contextSidebarState.width}
+              height={contextSidebarState.terminalHeight}
+              placement="right"
+              content={contextSidebarContent}
+              {tabPresentation}
+              onSelect={(id) => contextSidebarState.focus(id)}
+              onClose={closeContextTab}
+              onFullscreenTab={openTabFullscreen}
+              onMoveTab={(id, targetId, position) =>
+                contextSidebarState.reorder(id, targetId, position)}
+              onWidthChange={(width) => handleRailWidthChange(width)}
+              onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
+              onTerminalPlacementChange={(placement) =>
+                contextSidebarState.setTerminalPlacement(placement)}
+              onNewTerminal={openNewTerminal}
+              onNewBrowser={() => openNewBrowserTab()}
+              onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
+            />
+          </div>
         </div>
       {/if}
       {#if terminalDockVisible}

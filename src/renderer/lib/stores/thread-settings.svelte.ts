@@ -97,7 +97,12 @@ export class ThreadSettingsStore {
 
   /** Remember these settings as the default for future threads. */
   commit(settings: ThreadSettings): void {
-    this.lastUsed = { ...settings, ovenId: undefined, ovenPath: undefined }
+    this.lastUsed = {
+      ...settings,
+      assistantBehaviorSession: undefined,
+      ovenId: undefined,
+      ovenPath: undefined
+    }
     persist(this.storageKey, this.lastUsed)
   }
 }

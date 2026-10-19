@@ -94,24 +94,35 @@ describe('assistants store', () => {
     expect(invoke).toHaveBeenCalledWith('assistant:runMissedRunNow', 't1:100')
   })
 
-  it('replaces the assistant and missed-run lists from pushed events', () => {
+  it('replaces the assistant list from a pushed event and refetches the missed-run ledger', async () => {
     let assistantsHandler: ((assistants: Assistant[]) => void) | undefined
-    let missedHandler: ((runs: MissedRun[]) => void) | undefined
+    let missedHandler: (() => void) | undefined
+    let missedRunReads = 0
+    const runs = [missed({ id: 't9:1', assistantId: 'r9' })]
     subscribe.mockImplementation((channel: string, callback: (payload: unknown) => void) => {
       if (channel === 'assistant:changed') assistantsHandler = callback as typeof assistantsHandler
-      if (channel === 'assistant:missedRunsChanged')
-        missedHandler = callback as typeof missedHandler
+      if (channel === 'assistant:missedRunsChanged') missedHandler = callback as () => void
       return () => {}
     })
-    invoke.mockResolvedValue([])
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'assistant:listMissedRuns') {
+        missedRunReads += 1
+        return runs
+      }
+      return []
+    })
     assistants.initialize()
+    await vi.waitFor(() => expect(missedRunReads).toBe(1))
 
     const pushed = [assistant({ id: 'r9', name: 'Pushed' })]
     assistantsHandler?.(pushed)
     expect(assistants.assistants).toEqual(pushed)
 
-    const runs = [missed({ id: 't9:1', assistantId: 'r9' })]
-    missedHandler?.(runs)
-    expect(assistants.missedRuns).toEqual(runs)
+    // A pushed missed-run event carries no payload the store trusts: the ledger is
+    // read back from the main process, since only it knows what stays visible.
+    assistants.missedRuns = []
+    missedHandler?.()
+    await vi.waitFor(() => expect(assistants.missedRuns).toEqual(runs))
+    expect(missedRunReads).toBe(2)
   })
 })
