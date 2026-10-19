@@ -7,7 +7,7 @@
   import { SvelteMap } from 'svelte/reactivity'
 
   import { getAnnotationToolbarHost, hasAnnotationToolbarHost } from '$lib/annotation-toolbar'
-  import Modal from '../ui/Modal.svelte'
+  import { Popover } from 'bits-ui'
   import ColorSwatches from '../shared/ColorSwatches.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import {
@@ -296,7 +296,7 @@
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Escape') return
     // The comment field owns Escape while it is open, so disarming here would
-    // fight the editor for the same key. The pen panel is a modal and owns its
+    // fight the editor for the same key. The pen dropdown owns its
     // own Escape for the same reason.
     if (activeEditingId || penOpen) return
     drawing = false
@@ -425,20 +425,78 @@
       {hint}
     </span>
   {/if}
-  <button
-    type="button"
-    class="relative flex h-7 w-7 items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white"
-    title="Annotation pen: colour and stroke width"
-    aria-label="Annotation pen: colour and stroke width"
-    onclick={() => (penOpen = true)}
-  >
-    <CioPalette size={13} />
-    <span
-      class="absolute -right-0.5 -bottom-0.5 h-3 w-3 border border-white"
-      style:background-color={annotationTool.color}
-      aria-hidden="true"
-    ></span>
-  </button>
+  <Popover.Root bind:open={penOpen}>
+    <Popover.Trigger
+      class="relative flex h-7 w-7 items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white"
+      title="Annotation pen: colour and stroke width"
+      aria-label="Annotation pen: colour and stroke width"
+    >
+      <CioPalette size={13} />
+      <span
+        class="absolute -right-0.5 -bottom-0.5 h-3 w-3 border border-white"
+        style:background-color={annotationTool.color}
+        aria-hidden="true"
+      ></span>
+    </Popover.Trigger>
+    <Popover.Portal>
+      <Popover.Content
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        collisionPadding={12}
+        class="z-70 w-72 max-w-[calc(100vw-1.5rem)] space-y-4 border bg-surface p-4 text-foreground shadow-xl"
+        aria-label="Annotation pen"
+      >
+        <div>
+          <span class="mb-2 block text-xs font-medium text-muted">Colour</span>
+          <ColorSwatches
+            size="sm"
+            allowNone={false}
+            value={annotationTool.color}
+            oncolorchange={(color) => {
+              if (color) annotationTool.setColor(color)
+            }}
+          />
+        </div>
+        <div>
+          <label
+            class="mb-2 flex items-center justify-between text-xs font-medium text-muted"
+            for={`annotation-stroke-${threadId}`}
+          >
+            <span>Stroke width</span>
+            <span class="font-mono text-foreground">{annotationTool.strokeWidth}px</span>
+          </label>
+          <input
+            id={`annotation-stroke-${threadId}`}
+            type="range"
+            min={MARK_MIN_STROKE_WIDTH}
+            max={MARK_MAX_STROKE_WIDTH}
+            step={1}
+            class="w-full"
+            bind:value={annotationTool.strokeWidth}
+          />
+          <div class="mt-3 flex h-10 items-center border bg-elevated px-2">
+            <svg
+              viewBox="0 0 120 40"
+              class="h-full w-full"
+              aria-hidden="true"
+              preserveAspectRatio="none"
+            >
+              <line
+                x1="6"
+                y1="20"
+                x2="114"
+                y2="20"
+                stroke={annotationTool.color}
+                stroke-width={annotationTool.strokeWidth}
+                stroke-linecap="round"
+              />
+            </svg>
+          </div>
+        </div>
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
   <button
     type="button"
     class={[
@@ -475,54 +533,3 @@
     onClose={closeEditor}
   />
 {/if}
-
-<Modal
-  open={penOpen}
-  title="Annotation pen"
-  onClose={() => (penOpen = false)}
-  panelWidth="max-w-[320px]"
-  contentClass="space-y-4 p-4"
->
-  <div>
-    <span class="mb-2 block text-xs font-medium text-muted">Colour</span>
-    <ColorSwatches
-      size="sm"
-      allowNone={false}
-      value={annotationTool.color}
-      oncolorchange={(color) => {
-        if (color) annotationTool.setColor(color)
-      }}
-    />
-  </div>
-  <div>
-    <label
-      class="mb-2 flex items-center justify-between text-xs font-medium text-muted"
-      for={`annotation-stroke-${threadId}`}
-    >
-      <span>Stroke width</span>
-      <span class="font-mono text-foreground">{annotationTool.strokeWidth}px</span>
-    </label>
-    <input
-      id={`annotation-stroke-${threadId}`}
-      type="range"
-      min={MARK_MIN_STROKE_WIDTH}
-      max={MARK_MAX_STROKE_WIDTH}
-      step={1}
-      class="w-full"
-      bind:value={annotationTool.strokeWidth}
-    />
-    <div class="mt-3 flex h-10 items-center border bg-elevated px-2">
-      <svg viewBox="0 0 120 40" class="h-full w-full" aria-hidden="true" preserveAspectRatio="none">
-        <line
-          x1="6"
-          y1="20"
-          x2="114"
-          y2="20"
-          stroke={annotationTool.color}
-          stroke-width={annotationTool.strokeWidth}
-          stroke-linecap="round"
-        />
-      </svg>
-    </div>
-  </div>
-</Modal>
