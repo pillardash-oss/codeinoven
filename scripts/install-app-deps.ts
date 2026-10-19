@@ -198,6 +198,38 @@ function selectToolset(installations: VisualStudioInstallation[]): ToolsetMatch 
   return null
 }
 
+/** The components a build for this machine's architecture needs from VS. */
+function requiredComponents(): string[] {
+  return process.arch === 'arm64'
+    ? [
+        'Microsoft.VisualStudio.Component.VC.Tools.ARM64',
+        'Microsoft.VisualStudio.Component.VC.Runtimes.ARM64.Spectre'
+      ]
+    : [
+        'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+        'Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre'
+      ]
+}
+
+function installerCommand(installationPath: string): string {
+  const components = requiredComponents()
+    .map((component) => `--add ${component}`)
+    .join(' ')
+  return `vs_installer.exe modify --installPath "${installationPath}" ${components} --quiet --norestart`
+}
+
+/**
+ * `node-pty` turns on Spectre mitigation, so its build needs the mitigated
+ * runtime for the same architecture even when the compiler is present.
+ */
+function hasSpectreLibraries(installationPath: string, toolset: string): boolean {
+  const target = TARGET_ARCHITECTURE[process.arch]
+  if (!target) return true
+  return existsSync(
+    join(installationPath, 'VC', 'Tools', 'MSVC', toolset, 'lib', 'spectre', target)
+  )
+}
+
 function describeInstallations(installations: VisualStudioInstallation[]): string {
   return installations
     .map((installation) => {
@@ -241,6 +273,14 @@ if (process.platform === 'win32') {
         Logger.info(
           `[install-app-deps] Building native modules with Visual Studio ${match.year} (toolset ${match.toolset}) at ${match.path}.`
         )
+        if (!hasSpectreLibraries(match.path, match.toolset)) {
+          Logger.error(
+            [
+              `[install-app-deps] Visual Studio ${match.year} has no Spectre-mitigated runtime for ${TARGET_ARCHITECTURE[process.arch] ?? process.arch}, which node-pty requires.`,
+              `Install it: ${installerCommand(match.path)}`
+            ].join('\n')
+          )
+        }
       } else {
         Logger.error(
           [
@@ -248,7 +288,11 @@ if (process.platform === 'win32') {
             installations.length > 0
               ? describeInstallations(installations)
               : '- no Visual Studio installation reported by vswhere',
-            `Install "Desktop development with C++" including the ${TARGET_ARCHITECTURE[process.arch] ?? process.arch} build tools, or set GYP_MSVS_VERSION to a year whose toolset is installed.`
+            `Add the ${TARGET_ARCHITECTURE[process.arch] ?? process.arch} C++ build tools to one of them:`,
+            ...installations.map(
+              (installation) => `  ${installerCommand(installation.installationPath)}`
+            ),
+            'Or set GYP_MSVS_VERSION to a year whose toolset is already installed.'
           ].join('\n')
         )
       }
