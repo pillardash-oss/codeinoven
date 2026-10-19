@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, resolve } from 'node:path'
 import type { OpenedPath } from '../../lib/types'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import { Logger } from './logger'
 
 /**
@@ -27,7 +28,7 @@ function isSwitchArgument(value: string): boolean {
  */
 function internalLaunchPaths(): Set<string> {
   const internal = new Set<string>()
-  if (!app.isPackaged) internal.add(resolve(app.getAppPath()))
+  if (!isShippedBuild()) internal.add(resolve(app.getAppPath()))
   internal.add(resolve(process.execPath))
   internal.add(resolve(process.resourcesPath))
   return internal

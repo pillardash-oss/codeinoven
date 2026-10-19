@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { mkdirSync } from 'fs'
 import { isAbsolute, join } from 'path'
 import { getConfigRoot, isUnpackagedElectronLaunch } from '../../lib/utils'
+import { isShippedBuild } from './app-resources'
 import { Logger } from '../system/logger'
 
 /**
@@ -28,7 +29,7 @@ import { Logger } from '../system/logger'
 export function configureElectronDataRoot(): void {
   // Windows production already uses Electron's established `%APPDATA%` location.
   // Keep it in place while unpackaged development still receives its own profile.
-  if (process.platform === 'win32' && app.isPackaged) return
+  if (process.platform === 'win32' && isShippedBuild()) return
   const profileDir = isUnpackagedElectronLaunch() ? 'dev-browser-profile' : 'electron'
   const managedRoot = join(getConfigRoot(), profileDir)
   try {

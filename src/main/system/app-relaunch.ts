@@ -1,12 +1,13 @@
 import { app } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 
 /** Development owns a renderer server as well as Electron; restart both. */
 export function queueAppRelaunch(): void {
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
-  if (app.isPackaged || process.env['NODE_ENV'] === 'production' || !rendererUrl) {
+  if (isShippedBuild() || process.env['NODE_ENV'] === 'production' || !rendererUrl) {
     app.relaunch()
     return
   }

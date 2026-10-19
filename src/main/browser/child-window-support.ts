@@ -1,7 +1,8 @@
-import { app, nativeTheme, type WebContents } from 'electron'
+import { nativeTheme, type WebContents } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { getMainBundleDirectory } from '../bootstrap/bundle-directory'
+import { isShippedBuild } from '../bootstrap/app-resources'
 
 /**
  * The three things every one of the app's own child windows needs to be built
@@ -46,7 +47,7 @@ export function loadRendererDocument(
   document: string,
   query: Record<string, string> = {}
 ): Promise<void> {
-  if (!app.isPackaged && process.env['ELECTRON_RENDERER_URL']) {
+  if (!isShippedBuild() && process.env['ELECTRON_RENDERER_URL']) {
     const url = new URL(document, `${process.env['ELECTRON_RENDERER_URL']}/`)
     for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value)
     return target.loadURL(url.href).catch(() => {})

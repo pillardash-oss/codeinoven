@@ -69,7 +69,10 @@ const { autoUpdater, autoUpdaterHandlers } = vi.hoisted(() => {
 vi.mock('electron-updater', () => ({ default: { autoUpdater } }))
 vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
-  app: { getVersion: () => '0.1.0' }
+  // The updater only runs in a shipped build, so the fixture is one: a
+  // development launch (isPackaged without a handed app path) has nothing to
+  // update and never reaches these flows.
+  app: { getVersion: () => '0.1.0', isPackaged: true }
 }))
 
 const DEFERRED_POLL_MS = 5_000

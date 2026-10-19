@@ -15,7 +15,7 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
-import { appResourcesRoot, appShipsPackagedResources } from './app-resources'
+import { appResourcesRoot, isShippedBuild } from './app-resources'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
 import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
@@ -538,7 +538,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // dictation only: throwing past this point would abort the rest of the graph,
   // leaving every feature channel (file reads included) unregistered.
   const speechResourcesRoot = appResourcesRoot()
-  const speechIsPackaged = appShipsPackagedResources()
+  const speechIsPackaged = isShippedBuild()
   const speechWorkerPath = (worker: string): string =>
     speechIsPackaged
       ? join(speechResourcesRoot, 'speech', worker)

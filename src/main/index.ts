@@ -46,7 +46,7 @@ import {
 } from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
 import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
-import { appShipsPackagedResources } from './bootstrap/app-resources'
+import { isShippedBuild } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
@@ -71,7 +71,7 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
 const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
-app.setName(appShipsPackagedResources() ? APP_NAME : 'Electron')
+app.setName(isShippedBuild() ? APP_NAME : 'Electron')
 // Use a standard Chrome user agent: app/runtime product tokens cause browser
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.
@@ -93,7 +93,7 @@ registerFilePreviewScheme()
 if (process.platform === 'win32' && !isWindowsStorePackage()) {
   app.setAppUserModelId(APP_ID)
 }
-if (appShipsPackagedResources()) {
+if (isShippedBuild()) {
   process.env['NODE_ENV'] = 'production'
 }
 
@@ -212,7 +212,7 @@ function markWorkspaceReadyIfInteractive(): void {
 }
 
 async function completeStartupIfReady(): Promise<void> {
-  const output = app.isPackaged ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
+  const output = isShippedBuild() ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
   if (
     !startupTelemetry.hasMarked('workspace:ready') ||
     !startupTelemetry.hasMarked('renderer:documentLoaded') ||
@@ -278,7 +278,7 @@ ipcMain.handle('app:rendererReady', async () => {
   await completeStartupIfReady()
 })
 
-const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+const isProduction = isShippedBuild() || process.env['NODE_ENV'] === 'production'
 
 /**
  * Window/session boundary validator. It guards external window creation,

@@ -11,6 +11,7 @@ import type {
 } from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
 import { isWindowsStorePackage } from '../../lib/utils'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
@@ -163,7 +164,16 @@ export class UpdaterService {
       // identity the Store owns delivery. Gating here is enough: the periodic
       // timer, the explicit check, the tray path, the updater IPC and the fatal
       // recovery path all key off `canAutoUpdate`.
-      canAutoUpdate: autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
+      //
+      // A development launch is gated the same way, and not by
+      // `autoUpdater.isUpdaterActive()` alone: that only asks
+      // `app.isPackaged`, which a misbranded dev runtime reports as true, and
+      // the check then opens `app-update.yml` in the Electron download's
+      // Resources directory, where no packaged feed config exists (ENOENT).
+      // Nothing updates during development anyway, so the app's own shipped
+      // build signal decides.
+      canAutoUpdate:
+        isShippedBuild() && autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
       state: 'idle',
       currentVersion: app.getVersion()
     }
