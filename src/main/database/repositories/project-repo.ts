@@ -1,3 +1,4 @@
+import { unarchivedEntitySql } from '../../../lib/archives'
 import type { Database } from '../database'
 import type { Project } from '../../../lib/types'
 
@@ -117,7 +118,7 @@ export class ProjectRepo {
 
   list(): Project[] {
     const rows = this.db.all<ProjectRow>(
-      'SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC'
+      `SELECT * FROM projects WHERE ${unarchivedEntitySql('project', 'projects')} ORDER BY sort_order ASC, updated_at DESC`
     )
     return rows.map(rowToProject)
   }
@@ -131,7 +132,7 @@ export class ProjectRepo {
    */
   async listViaWorker(): Promise<Project[]> {
     const result = await this.db.queryViaWorker(
-      'SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC',
+      `SELECT * FROM projects WHERE ${unarchivedEntitySql('project', 'projects')} ORDER BY sort_order ASC, updated_at DESC`,
       [],
       0
     )
@@ -159,7 +160,7 @@ export class ProjectRepo {
     const rows = this.db.all<ProjectRow>(
       `SELECT p.* FROM projects p
        JOIN project_fts fts ON p.rowid = fts.rowid
-       WHERE project_fts MATCH ?
+       WHERE project_fts MATCH ? AND ${unarchivedEntitySql('project', 'p')}
        ORDER BY rank
        LIMIT ?`,
       query,
@@ -192,7 +193,7 @@ export class ProjectRepo {
 
   listPinned(): Project[] {
     const rows = this.db.all<ProjectRow>(
-      'SELECT * FROM projects WHERE pinned = 1 ORDER BY sort_order ASC'
+      `SELECT * FROM projects WHERE pinned = 1 AND ${unarchivedEntitySql('project', 'projects')} ORDER BY sort_order ASC`
     )
     return rows.map(rowToProject)
   }

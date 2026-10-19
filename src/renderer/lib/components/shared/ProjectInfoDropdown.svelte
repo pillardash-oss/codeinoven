@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import { archiveItem } from '$lib/archive-actions'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioFork from '@pdslng/cio-icon/CioFork.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
@@ -154,6 +156,13 @@
       >
         <CioPencil size={14} class="text-muted" />
         Edit Project
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+        onSelect={() => void archiveItem('project', project.id)}
+      >
+        <CioArchive size={14} class="text-muted" />
+        Archive Project
       </DropdownMenu.Item>
     </DropdownMenu.Content>
   </DropdownMenu.Portal>

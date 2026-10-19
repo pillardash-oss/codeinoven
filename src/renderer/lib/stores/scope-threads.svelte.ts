@@ -443,6 +443,12 @@ export class ScopeThreads {
     }
   }
 
+  /** Archive changes invalidate completed hydration without re-filtering once per row. */
+  archiveVisibilityChanged(matches?: (thread: Thread) => boolean): void {
+    this.fullyHydratedProjects.clear()
+    if (matches) this.allScopeThreads = this.allScopeThreads.filter((thread) => !matches(thread))
+  }
+
   removeThread(threadId: string): void {
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
     const removedIds = new Set(

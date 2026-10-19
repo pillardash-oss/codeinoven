@@ -1,3 +1,4 @@
+import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
 import CioBoard from '@pdslng/cio-icon/CioBoard.svelte'
 import CioBook from '@pdslng/cio-icon/CioBook.svelte'
 import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
@@ -132,6 +133,12 @@ export const settingsTabs: Array<{
     label: 'Usage',
     keywords: ['usage', 'activity', 'tokens', 'cost', 'rankings'],
     icon: CioChart
+  },
+  {
+    id: 'archives',
+    label: 'Archives',
+    keywords: ['archive', 'restore', 'unarchive'],
+    icon: CioArchive
   },
   {
     id: 'about',

@@ -31,6 +31,7 @@ export type SettingsSection =
   | 'keymap'
   | 'cloud-deployments'
   | 'ovens'
+  | 'archives'
   | 'about'
 
 export type MainView =
@@ -58,6 +59,7 @@ export type MainView =
   | 'settings-keymap'
   | 'settings-cloud-deployments'
   | 'settings-ovens'
+  | 'settings-archives'
   | 'settings-about'
 
 export interface SelectedThreadReference {
@@ -204,6 +206,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-sound',
   'settings-search',
   'settings-keymap',
+  'settings-archives',
   'settings-about'
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -224,6 +227,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'search',
   'keymap',
   'cloud-deployments',
+  'archives',
   'about'
 ]
 const SETTINGS_VIEW_PREFIX = 'settings-'

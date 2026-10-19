@@ -1276,5 +1276,21 @@ export const DATABASE_SCHEMA_SQL = [
   THREAD_EXPERTS_SQL,
   DESIGN_REVISIONS_SQL,
   DESIGN_HISTORY_HEADS_SQL,
-  ASSISTANTS_SQL
+  ASSISTANTS_SQL,
+  `CREATE TABLE IF NOT EXISTS archives (
+    kind TEXT NOT NULL CHECK(kind IN ('project','thread','assistant')),
+    entity_id TEXT NOT NULL,
+    archived_at INTEGER NOT NULL,
+    PRIMARY KEY(kind, entity_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_archives_listing ON archives(kind, archived_at DESC, entity_id);
+  CREATE TRIGGER IF NOT EXISTS archives_project_delete AFTER DELETE ON projects BEGIN
+    DELETE FROM archives WHERE kind = 'project' AND entity_id = old.id;
+  END;
+  CREATE TRIGGER IF NOT EXISTS archives_thread_delete AFTER DELETE ON threads BEGIN
+    DELETE FROM archives WHERE kind = 'thread' AND entity_id = old.id;
+  END;
+  CREATE TRIGGER IF NOT EXISTS archives_assistant_delete AFTER DELETE ON assistants BEGIN
+    DELETE FROM archives WHERE kind = 'assistant' AND entity_id = old.id;
+  END;`
 ].join('\n')

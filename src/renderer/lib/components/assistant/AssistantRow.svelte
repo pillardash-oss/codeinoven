@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import { archiveItem } from '$lib/archive-actions'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioCalendar from '@pdslng/cio-icon/CioCalendar.svelte'
@@ -437,6 +439,13 @@
               <CioPin size={14} class="text-muted" />
               Pin Assistant
             {/if}
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+            onSelect={() => void archiveItem('assistant', assistant.id)}
+          >
+            <CioArchive size={14} class="text-muted" />
+            Archive Assistant
           </DropdownMenu.Item>
           <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
           <DropdownMenu.Item

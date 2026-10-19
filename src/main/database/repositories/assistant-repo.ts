@@ -1,3 +1,4 @@
+import { unarchivedEntitySql } from '../../../lib/archives'
 import type { Database } from '../database'
 import type {
   Assistant,
@@ -322,7 +323,9 @@ export class AssistantRepo {
    */
   list(): Assistant[] {
     return this.db
-      .all<AssistantRow>('SELECT * FROM assistants ORDER BY created_at DESC, id ASC')
+      .all<AssistantRow>(
+        `SELECT * FROM assistants WHERE ${unarchivedEntitySql('assistant', 'assistants')} ORDER BY created_at DESC, id ASC`
+      )
       .map(rowToAssistant)
   }
 
@@ -335,7 +338,7 @@ export class AssistantRepo {
    */
   async listViaWorker(): Promise<Assistant[]> {
     const result = await this.db.queryViaWorker(
-      'SELECT * FROM assistants ORDER BY created_at DESC, id ASC',
+      `SELECT * FROM assistants WHERE ${unarchivedEntitySql('assistant', 'assistants')} ORDER BY created_at DESC, id ASC`,
       [],
       0
     )

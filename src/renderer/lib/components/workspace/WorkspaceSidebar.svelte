@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import { archiveItem } from '$lib/archive-actions'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
@@ -1424,6 +1426,13 @@
                             Pin Project
                           {/if}
                         </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+                          onSelect={() => void archiveItem('project', project.id)}
+                        >
+                          <CioArchive size={14} class="text-muted" />
+                          Archive Project
+                        </DropdownMenu.Item>
                         <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
@@ -1685,6 +1694,13 @@
                         <CioPin size={14} class="text-muted" />
                         Pin Project
                       {/if}
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
+                      onSelect={() => void archiveItem('project', project.id)}
+                    >
+                      <CioArchive size={14} class="text-muted" />
+                      Archive Project
                     </DropdownMenu.Item>
                     <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
                     <DropdownMenu.Item

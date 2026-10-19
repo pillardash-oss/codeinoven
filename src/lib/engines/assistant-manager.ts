@@ -397,7 +397,7 @@ export class AssistantManager {
   /** Every thread of an assistant, hidden ones included. */
   private allAssistantThreads(assistantId: string): Thread[] {
     return this.threadRepo
-      .listByProject(ASSISTANT_SPACE_ID)
+      .listByProject(ASSISTANT_SPACE_ID, { includeArchived: true })
       .filter((task) => task.assistantId === assistantId)
   }
 

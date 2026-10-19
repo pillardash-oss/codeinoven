@@ -1,3 +1,4 @@
+import { unarchivedThreadSql } from '../../lib/archives'
 import { deliverWithWorkPathNotices } from '../design/work-path-notices'
 import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
 import { validateModelRuntimeSettings } from '../../lib/model-runtime-settings'
@@ -9605,6 +9606,19 @@ export class ChatEngine {
      *  the first user prompt in its conversation. */
     visiblePrompt = false
   ): Promise<AgentMessage> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    // Queue behind an in-flight optimistic create so a just-created thread can
+    // accept its first prompt as soon as its row is persisted.
+    await this.threadCreation?.awaitReady(threadId)
+    const visible = await this.database.queryViaWorker(
+      `SELECT id FROM threads WHERE id = ? AND project_id = ? AND ${unarchivedThreadSql()}`,
+      [threadId, projectId],
+      1
+    )
+    if (!visible.ok || visible.rows.length === 0) {
+      throw new Error('Unarchive this thread and its project or assistant before continuing')
+    }
     if (origin === 'user') {
       this.touchUserActivity()
       // A real user prompt re-arms automatic resumes: the stop latch only ever
@@ -9614,11 +9628,6 @@ export class ChatEngine {
       const { stoppedByUserAt: _stoppedByUserAt, ...resumedSettings } = settings
       settings = resumedSettings
     }
-    projectId = validateEntityId(projectId, 'Project ID')
-    threadId = validateEntityId(threadId, 'Thread ID')
-    // Queue behind an in-flight optimistic create so a just-created thread can
-    // accept its first prompt as soon as its row is persisted.
-    await this.threadCreation?.awaitReady(threadId)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
     const ovenThread = await this.threadManager.getThread(projectId, threadId)
@@ -26011,9 +26020,18 @@ export class ChatEngine {
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
     scheduler.attachNetworkTest(() => this.deviceOnline())
-    scheduler.attachStoppedThreadTest((projectId, threadId) =>
-      this.threadManager.wasStoppedByUser(projectId, threadId)
-    )
+    scheduler.attachStoppedThreadTest(async (projectId, threadId) => {
+      const visible = await this.database.queryViaWorker(
+        `SELECT id FROM threads WHERE id = ? AND project_id = ? AND ${unarchivedThreadSql()}`,
+        [threadId, projectId],
+        1
+      )
+      return (
+        !visible.ok ||
+        visible.rows.length === 0 ||
+        (await this.threadManager.wasStoppedByUser(projectId, threadId))
+      )
+    })
     void scheduler.attachContinue((record) => this.continueScheduledThread(record))
   }
 

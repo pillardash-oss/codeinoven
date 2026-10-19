@@ -892,7 +892,7 @@ export class SearchService {
       if (!entry) return
       const [id, job] = entry
       this.summaryJobs.delete(id)
-      if (job.generation !== this.generation) continue
+      if (job.generation !== this.generation || this.index.isParked(id)) continue
       const signal = this.summaryController.signal
       const startedAt = performance.now()
       try {
@@ -903,7 +903,8 @@ export class SearchService {
         }
         this.emitStatus()
         const summary = await this.summaries.get(job.thread, signal)
-        if (signal.aborted || job.generation !== this.generation) continue
+        if (signal.aborted || job.generation !== this.generation || this.index.isParked(id))
+          continue
         this.summaryDetail = {
           threadTitle: job.thread.title.slice(0, 100),
           stage: 'embedding',
@@ -916,7 +917,8 @@ export class SearchService {
           composeDocument(job.model.documentPrefix, job.thread.title, summary),
           signal
         )
-        if (signal.aborted || job.generation !== this.generation) continue
+        if (signal.aborted || job.generation !== this.generation || this.index.isParked(id))
+          continue
         await this.index.applySummary(
           job.thread,
           vector,

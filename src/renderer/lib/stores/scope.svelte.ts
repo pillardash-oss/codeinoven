@@ -587,6 +587,10 @@ class ScopeState {
     this.threads.mergeThreads(threads)
   }
 
+  archiveVisibilityChanged(matches?: (thread: Thread) => boolean): void {
+    this.threads.archiveVisibilityChanged(matches)
+  }
+
   removeThread(threadId: string): void {
     this.threads.removeThread(threadId)
   }

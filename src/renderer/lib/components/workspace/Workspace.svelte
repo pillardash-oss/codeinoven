@@ -129,7 +129,7 @@
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -2478,6 +2478,30 @@
       listed.authoredWorkKinds = [...kinds]
     })
   })
+
+  onMount(() =>
+    subscribe('archive:changed', (kind, id, archived) => {
+      if (archived) {
+        const matches = (thread: Thread): boolean =>
+          kind === 'project'
+            ? thread.projectId === id
+            : kind === 'assistant'
+              ? thread.assistantId === id
+              : thread.id === id ||
+                thread.assistantTaskId === id ||
+                thread.coordinatorThreadId === id
+        allThreads = allThreads.filter((thread) => !matches(thread))
+        scopeState.archiveVisibilityChanged(matches)
+        notificationPanelState.hideArchived(kind, id)
+        const selected = workspaceState.selectedThread
+        if (selected && matches(selected)) workspaceState.clearThread()
+        if (kind === 'project') projects = projects.filter((project) => project.id !== id)
+        scopeState.setScopesFromProjects(projects, projectIcons)
+      }
+      if (!archived) scopeState.archiveVisibilityChanged()
+      void refreshListData()
+    })
+  )
 
   $effect(() => {
     return subscribe('thread:deleted', (projectId, threadId) => {

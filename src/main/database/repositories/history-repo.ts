@@ -1,3 +1,4 @@
+import { unarchivedThreadSql } from '../../../lib/archives'
 import type { Database } from '../database'
 import type { HistoryEntry, HistoryRole } from '../../../lib/types'
 import type { ProviderDeltaSyncExecutor } from './agent-message-repo'
@@ -119,7 +120,7 @@ export class HistoryRepo {
         `SELECT he.* FROM history_entries he
          JOIN threads t ON t.id = he.thread_id
          JOIN history_fts fts ON he.rowid = fts.rowid
-         WHERE t.project_id = ? AND history_fts MATCH ?
+         WHERE t.project_id = ? AND history_fts MATCH ? AND ${unarchivedThreadSql('t')}
          ORDER BY he."sequence" DESC
          LIMIT ?`,
         projectId,
@@ -130,8 +131,9 @@ export class HistoryRepo {
     }
     const rows = this.db.all<HistoryRow>(
       `SELECT he.* FROM history_entries he
+       JOIN threads t ON t.id = he.thread_id
        JOIN history_fts fts ON he.rowid = fts.rowid
-       WHERE history_fts MATCH ?
+       WHERE history_fts MATCH ? AND ${unarchivedThreadSql('t')}
        ORDER BY he."sequence" DESC
        LIMIT ?`,
       query,
@@ -245,7 +247,7 @@ export function buildHistorySearchSql(
       sql: `SELECT he.* FROM history_entries he
         JOIN threads t ON t.id = he.thread_id
         JOIN history_fts fts ON he.rowid = fts.rowid
-        WHERE t.project_id = ? AND history_fts MATCH ?
+        WHERE t.project_id = ? AND history_fts MATCH ? AND ${unarchivedThreadSql('t')}
         ORDER BY he."sequence" DESC`,
       params: [projectId, query],
       maxRows
@@ -253,8 +255,9 @@ export function buildHistorySearchSql(
   }
   return {
     sql: `SELECT he.* FROM history_entries he
+      JOIN threads t ON t.id = he.thread_id
       JOIN history_fts fts ON he.rowid = fts.rowid
-      WHERE history_fts MATCH ?
+      WHERE history_fts MATCH ? AND ${unarchivedThreadSql('t')}
       ORDER BY he."sequence" DESC`,
     params: [query],
     maxRows
