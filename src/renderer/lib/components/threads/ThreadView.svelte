@@ -1643,6 +1643,12 @@
    * project, no assistant and no page behind it.
    */
   function composerIdentity(target: Thread, isNewThread: boolean): ComposerIdentity {
+    // A temporary chat is a conversation of its own, not a thread of the project
+    // it was opened from. Its thread carries that project's id only because that
+    // is where its files are read from, so the space checks below would name it
+    // as one of that space's assistant tasks: the assistant mark and the side
+    // chat's own title in place of what it actually is.
+    if (hasController) return { kind: 'chat', temporary: true }
     if (target.projectId === ASSISTANT_SPACE_ID) {
       // A run inherits its task's assistant, so this resolves for a task and each
       // of its runs alike; an assistant-less task is named by itself.
