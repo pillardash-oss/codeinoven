@@ -272,6 +272,25 @@ ipcMain.handle('app:waitForFeatures', () =>
   state.featuresReady ? undefined : featuresReadyPromise
 )
 
+ipcMain.handle('app:setWindowControls', (event, symbolColor: unknown, headerHeight: unknown) => {
+  if (process.platform !== 'win32') return
+  const window = state.mainWindow
+  if (!window || window.isDestroyed() || window.webContents !== event.sender) return
+  if (typeof symbolColor !== 'string' || !/^#[\da-f]{6}$/i.test(symbolColor)) return
+  if (
+    typeof headerHeight !== 'number' ||
+    !Number.isFinite(headerHeight) ||
+    headerHeight < 24 ||
+    headerHeight > 160
+  )
+    return
+  window.setTitleBarOverlay({
+    color: '#00000000',
+    symbolColor,
+    height: Math.ceil(headerHeight * window.webContents.getZoomFactor())
+  })
+})
+
 /**
  * The renderer reports when its initial hydration is done (visible projects,
  * selected project, recent active threads). Timestamps the final startup
@@ -476,7 +495,13 @@ function createWindow(): BrowserWindow {
     icon: getAppIconPath(),
     titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
     ...(process.platform === 'win32'
-      ? { titleBarOverlay: { color: getStartupBackground(), height: 48 } }
+      ? {
+          titleBarOverlay: {
+            color: '#00000000',
+            symbolColor: nativeTheme.shouldUseDarkColors ? '#f5f4f0' : '#081825',
+            height: 48
+          }
+        }
       : {}),
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {

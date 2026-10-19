@@ -1,3 +1,4 @@
+import { syncWindowControls } from '$lib/window-controls'
 import { APP_FONT_OPTIONS } from '$shared/app-fonts'
 import {
   DEFAULT_CONTRAST_LEVEL,
@@ -89,6 +90,7 @@ function applyAppearance(): void {
   applyAppTypography(document.documentElement, { fontFamily, appFontSize, fontWeight })
   applyContrastLevel(document.documentElement, contrastLevel)
   void zoomLevel // zoom is applied by the main process via setZoomFactor
+  syncWindowControls()
 }
 
 /**
