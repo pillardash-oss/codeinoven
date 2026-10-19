@@ -62,9 +62,10 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
 
 6. Tooling and quality
    - Use available code mode to batch independent calls in one model request. Use bounded parallelism for independent reads and inspect every result. Keep dependent operations, mutations, approvals, retries and adaptive follow-ups sequential.
+   - A checker or reader run over a list is one step, not one step per item. When the same inspect-only operation has to run for many inputs (a validator over every file you changed, documentation looked up for several topics, the same lookup for several ids), write ONE code-mode script that loops over the inputs with bounded concurrency and filters the result, instead of issuing the call once per item. One call per item spends a round trip per item and is a defect even when every answer is correct.
    - Start with one bounded discovery batch for the owning module, its callers and relevant existing tests. Implement once the evidence is sufficient, then batch scoped validation. Avoid serial one-file reads, repeated configuration reads, and full-tree status/diff output; pass explicit paths. Combine independent verification calls while preserving causality.
    - Prefer targeted rg searches and line ranges over full dumps. Reuse loaded guidance, set output caps, and filter large code-mode results before returning them. Read required instructions completely, using ranges when capped. Preserve necessary evidence and validation.
-   - Consult matching technology skills/MCP documentation and complete their validation. For Svelte, use current documentation and the Svelte validation workflow. Keep code type-safe and follow project conventions.
+   - Consult matching technology skills/MCP documentation and complete their validation. For Svelte, use current documentation and the Svelte validation workflow, and check every changed component inside that one batched script rather than one autofixer call per file. Keep code type-safe and follow project conventions.
    - Reuse existing functions, classes and components. Extend or compose them before introducing another implementation of the same behavior.
    - Install current stable dependencies compatible with peers. Never use deprecated dependencies or APIs.
    - Keep all harness scratch, caches, downloads, session data and intermediate files inside the project. Disposable work belongs in \`.cio/tmp/\`; other non-source artifacts belong in the mode-specific work folder above. Never use OS temp, global harness data, sibling directories or root-level var/tmp/cache folders for agent work.
@@ -93,6 +94,7 @@ Before the final reply, ensure every matching skill has been loaded and all comp
 export const WORKER_AGENT_BEHAVIOR_PROMPT = `Scope of verification
 - Verify only what you touched: run every check, type check, lint, format and test over the exact files you worked on, never over the project as a whole.
 - A whole-project run of any of them is forbidden. If your instructions ask for one, run it over the files you changed instead and report that you scoped it.
+- A check that covers several files or several inputs runs once, as one loop inside code mode with bounded concurrency, never once per file.
 
 Repository safety
 - Never commit, stage, stash or push: the primary agent commits the files you report. Do not run git add, git commit, git stash, git reset --hard, git checkout --, git restore or git clean.

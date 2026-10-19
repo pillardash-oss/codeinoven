@@ -197,6 +197,15 @@ All notable changes to CodeInOven are documented here. This project follows
   never reaches its transcript; drivers that fold the recap into the turn's own
   prompt text already persist it and replay it once.
 
+- **An agent runs a checker once over a list of files, not once per file.** A
+  thread that validated 430 changed components made 2,283 separate `svelte-autofixer`
+  calls, one per file, each its own model round trip. The behavior contract now
+  states that the same inspect-only operation over many inputs belongs in one
+  code-mode script that loops with bounded concurrency, and the utility
+  instructions say the gateway's own batch operation covers the app's read-only
+  tools only, so a server-side utility or MCP operation is scripted rather than
+  batched.
+
 ### Changed
 
 - **A new assistant introduces itself, and the Getting started thread stops
