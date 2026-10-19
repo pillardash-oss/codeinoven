@@ -36,10 +36,6 @@
   const panZoom = new PanZoom()
   let fullscreenViewport = $state<HTMLDivElement>()
 
-  $effect(() => {
-    if (!expanded) panZoom.reset()
-  })
-
   // The same snippet renders both the inline and fullscreen diagram, so
   // bind:this can't target one instance only   use an attachment instead.
   function bindFullscreenViewport(el: HTMLDivElement): () => void {
@@ -70,6 +66,7 @@
 
   function renderDiagram(source: string, _retryKey: number): Attachment<HTMLElement> {
     return () => {
+      const controller = new AbortController()
       let currentRender = 0
       let disposed = false
 
@@ -80,7 +77,12 @@
         errorDetail = undefined
 
         try {
-          const nextSvg = await renderMermaid(`${diagramId}-${renderNumber}`, source, readTheme())
+          const nextSvg = await renderMermaid(
+            `${diagramId}-${renderNumber}`,
+            source,
+            readTheme(),
+            controller.signal
+          )
           if (disposed || renderNumber !== currentRender) return
           if (nextSvg.trim() === '') throw new Error('Empty diagram output')
           svg = nextSvg
@@ -97,15 +99,10 @@
       }
 
       void update()
-      const themeObserver = new MutationObserver(() => void update())
-      themeObserver.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ['class']
-      })
 
       return () => {
         disposed = true
-        themeObserver.disconnect()
+        controller.abort()
         clearTimeout(copyResetTimer)
       }
     }
@@ -146,7 +143,7 @@
         class={['mermaid-svg min-w-full', fullscreen && 'mermaid-svg-fullscreen']}
         style={fullscreen ? panZoom.transform : undefined}
       >
-        <!-- eslint-disable-next-line svelte/no-at-html-tags -- Mermaid SVG is strict-mode rendered and DOMPurify-sanitized -->
+        <!-- eslint-disable-next-line svelte/no-at-html-tags -- Pele SVG is DOMPurify-sanitized -->
         {@html svg}
       </div>
     {:else if rendering}
@@ -264,7 +261,10 @@
 <Modal
   open={expanded}
   title="Mermaid diagram"
-  onClose={() => (expanded = false)}
+  onClose={() => {
+    expanded = false
+    panZoom.reset()
+  }}
   placement="fullscreen"
   panelClass="bg-surface"
   contentClass="flex flex-col overflow-hidden p-0"
@@ -275,10 +275,23 @@
 </Modal>
 
 <style>
+  .mermaid-svg {
+    --pele-bg: var(--color-surface);
+    --pele-fg: var(--color-foreground);
+    --pele-muted: var(--color-muted);
+    --pele-line: var(--color-muted);
+    --pele-surface: var(--color-surface);
+    --pele-surface-alt: var(--color-elevated);
+    --pele-border: var(--color-border-strong);
+    --pele-accent: var(--color-primary);
+    --pele-font: var(--font-app);
+    --pele-font-mono: var(--font-mono);
+    --pele-radius: 0;
+  }
+
   .mermaid-svg :global(svg) {
     display: block;
-    width: 100%;
-    min-width: 28rem;
+    max-width: 100%;
     height: auto;
     max-height: 70vh;
     margin-inline: auto;
