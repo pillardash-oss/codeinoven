@@ -103,8 +103,12 @@
   --color-terminal-bright-cyan: #87d7d7;
   --color-terminal-bright-white: #f5f4f0;
 
-  /* Bundled Oven Box is the default; Appearance overrides the active family. */
-  --font-app: 'Oven Box', 'JetBrains Mono Variable', ui-monospace, monospace;
+  /* Bundled Oven Box is the default; Appearance overrides the active family. The icon
+     fonts after it are the reader's own Nerd Fonts: they answer the icons a terminal
+     prints, which no bundled face carries. src/lib/app-fonts.ts holds the same table. */
+  --font-app:
+    'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
+    ui-monospace, monospace;
   --font-sans: var(--font-app);
   --font-mono: var(--font-app);
 }
