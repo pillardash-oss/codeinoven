@@ -463,12 +463,10 @@
     if (!fullscreenExplorerOpen) projectFilesWorkspace.toggleExplorer(projectId)
   }
 
+  /** The toggle exists only once there is a temporary chat to show, so the
+   *  reader stays as it was until a passage is explained or quick-chatted. */
   let fullscreenChatTitle = $derived(
-    fullscreenChatTabs.length === 0
-      ? 'No temporary chats yet'
-      : fullscreenChatOpen
-        ? 'Hide temporary chats'
-        : 'Show temporary chats'
+    fullscreenChatOpen ? 'Hide temporary chats' : 'Show temporary chats'
   )
 
   let fullscreenExplorerOpen = $derived(projectState.explorerVisible)
@@ -1404,22 +1402,23 @@
         {:else}Save{/if}
       </button>
     {/if}
-    <button
-      type="button"
-      class={[
-        'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center transition-colors',
-        fullscreenChatOpen
-          ? 'bg-overlay text-primary'
-          : 'text-dimmed hover:bg-elevated hover:text-foreground'
-      ]}
-      aria-label={fullscreenChatTitle}
-      title={fullscreenChatTitle}
-      aria-pressed={fullscreenChatOpen}
-      disabled={fullscreenChatTabs.length === 0}
-      onclick={toggleFullscreenChat}
-    >
-      <CioTemporaryChat size={15} />
-    </button>
+    {#if fullscreenChatTabs.length > 0}
+      <button
+        type="button"
+        class={[
+          'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center transition-colors',
+          fullscreenChatOpen
+            ? 'bg-overlay text-primary'
+            : 'text-dimmed hover:bg-elevated hover:text-foreground'
+        ]}
+        aria-label={fullscreenChatTitle}
+        title={fullscreenChatTitle}
+        aria-pressed={fullscreenChatOpen}
+        onclick={toggleFullscreenChat}
+      >
+        <CioTemporaryChat size={15} />
+      </button>
+    {/if}
     <button
       type="button"
       class={[
