@@ -42,14 +42,23 @@
     path: string
     /** Source being rendered, which is the file's draft while it is edited. */
     content: string
-    /** True when this view is the fullscreen reader. Its sidebar is behind the
-     *  modal, so an action that lands there has to give the modal up. */
+    /** True when this view is the fullscreen reader. */
     fullscreen?: boolean
-    /** Dismiss the fullscreen reader. Required to leave it from an action. */
+    /** Reveal the existing temporary chat inside the fullscreen reader. */
+    onOpenTemporaryChat?: () => void
+    /** Dismiss the fullscreen reader when opening a separate thread. */
     onExitFullscreen?: () => void
   }
 
-  let { projectId, threadId, path, content, fullscreen = false, onExitFullscreen }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    path,
+    content,
+    fullscreen = false,
+    onOpenTemporaryChat,
+    onExitFullscreen
+  }: Props = $props()
 
   /** Highlight registry name for document annotations. A conversation
    *  publishes its own name, so both a conversation and a document can be
@@ -337,9 +346,7 @@
       mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
     closeSelection()
-    // The side chat opens in the sidebar, which the fullscreen reader covers.
-    // Leaving fullscreen is what makes the action visible at all.
-    if (fullscreen) onExitFullscreen?.()
+    if (fullscreen) onOpenTemporaryChat?.()
   }
 
   /** Spin the selected passage into a thread of its own, seeded as its draft. */

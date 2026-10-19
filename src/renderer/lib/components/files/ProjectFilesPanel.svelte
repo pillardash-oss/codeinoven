@@ -1,6 +1,8 @@
 <script lang="ts">
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
+  import { fullscreenFileChatSlot, fullscreenFileChatTabs } from '$lib/fullscreen-file-chat-portal'
   import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
@@ -8,6 +10,7 @@
   import CioSave from '@pdslng/cio-icon/CioSave.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount, tick } from 'svelte'
+  import { LastKnown } from '$lib/last-known'
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { toast } from 'svelte-sonner'
@@ -109,7 +112,9 @@
       ? contextSidebarState.sidebarActiveTab
       : null
   )
-  let activeThreadId = $derived(contextTab?.threadId ?? null)
+  const lastFilesContext = new LastKnown<FilesContextTab>()
+  let retainedContextTab = $derived(lastFilesContext.get(contextTab))
+  let activeThreadId = $derived(retainedContextTab?.threadId ?? null)
   /** A conversation's file tree mounts on the thread's own app-owned workspace
    *  directory (a chat's artifact directory, an assistant task's working
    *  directory); real projects always use the project root regardless of the
@@ -143,8 +148,8 @@
    *  silently showing another checkout's files. */
   let scopeStale = $derived(!projectFilesWorkspace.listingsMatchMount(projectId))
   let activeTab = $derived(
-    contextTab?.fileTabId
-      ? (projectState.tabs.find((tab) => tab.id === contextTab?.fileTabId) ?? null)
+    retainedContextTab?.fileTabId
+      ? (projectState.tabs.find((tab) => tab.id === retainedContextTab?.fileTabId) ?? null)
       : null
   )
   let activeSession = $derived(activeTab ? (projectState.sessions[activeTab.path] ?? null) : null)
@@ -426,6 +431,46 @@
   let conflictSaveReady = $derived(conflictStatus.canSave)
   let conflictSaveText = $derived(conflictSaveActionLabels.resolve)
   let conflictSaveTitle = $derived(conflictSaveActionTitle('resolve'))
+  let fullscreenChatEnabled = $state(true)
+  let fullscreenChatTabs = $derived(
+    contextSidebarState.sidebarTabs.filter(
+      (tab) => tab.kind === 'temporary-chat' && tab.projectId === projectId
+    )
+  )
+  let fullscreenChatOpen = $derived(
+    fullscreenChatEnabled &&
+      contextSidebarState.sidebarVisible &&
+      contextSidebarState.sidebarActiveTab?.kind === 'temporary-chat' &&
+      fullscreenChatTabs.some((tab) => tab.id === contextSidebarState.sidebarActiveTabId)
+  )
+
+  function toggleFullscreenChat(): void {
+    if (fullscreenChatOpen) {
+      fullscreenChatEnabled = false
+      return
+    }
+    const tab = fullscreenChatTabs.at(-1)
+    if (!tab) return
+    fullscreenChatEnabled = true
+    contextSidebarState.focus(tab.id)
+  }
+
+  /** The reader's right side holds one panel at a time, so showing the file
+   *  tree puts the chat away, and the chat, wherever it already is, comes back
+   *  when the tree is asked for again. */
+  function showFullscreenExplorer(): void {
+    if (fullscreenChatOpen) fullscreenChatEnabled = false
+    if (!fullscreenExplorerOpen) projectFilesWorkspace.toggleExplorer(projectId)
+  }
+
+  let fullscreenChatTitle = $derived(
+    fullscreenChatTabs.length === 0
+      ? 'No temporary chats yet'
+      : fullscreenChatOpen
+        ? 'Hide temporary chats'
+        : 'Show temporary chats'
+  )
+
   let fullscreenExplorerOpen = $derived(projectState.explorerVisible)
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
@@ -449,7 +494,20 @@
     // The editor's `open` is derived from the store, so this is the whole
     // transition: no local mirror to keep in step.
     projectFilesWorkspace.requestFullscreen(projectId)
+    restoreFullscreenChat()
   }
+
+  function restoreFullscreenChat(): void {
+    const tabId = fullscreenFileChatTabs.get(projectId)
+    if (tabId && fullscreenChatTabs.some((tab) => tab.id === tabId)) {
+      fullscreenChatEnabled = true
+      contextSidebarState.focus(tabId)
+    }
+  }
+
+  onMount(() => {
+    if (fullscreenOpen) restoreFullscreenChat()
+  })
 
   /** Show the File info dialog (the same one the file tree's context menu
    *  opens) for the active file. */
@@ -466,6 +524,9 @@
     // The store is the whole transition: the editor's `open` is derived from it,
     // so there is no local mirror to keep in step. Assigning that derived as
     // well only overrides it  the store write is what closes the surface.
+    const tabId = contextSidebarState.sidebarActiveTabId
+    if (fullscreenChatOpen && tabId) fullscreenFileChatTabs.set(projectId, tabId)
+    else fullscreenFileChatTabs.delete(projectId)
     projectFilesWorkspace.setFullscreenActive(projectId, false)
   }
 
@@ -1280,16 +1341,16 @@
           <div
             class={[
               'group flex min-w-0 max-w-52 shrink-0 items-center',
-              contextTab?.id === fileTab.id
+              retainedContextTab?.id === fileTab.id
                 ? 'bg-elevated text-foreground'
                 : 'text-muted hover:bg-elevated hover:text-foreground'
             ]}
             role="tab"
-            aria-selected={contextTab?.id === fileTab.id}
+            aria-selected={retainedContextTab?.id === fileTab.id}
           >
             <button
               type="button"
-              data-active={contextTab?.id === fileTab.id ? 'true' : undefined}
+              data-active={retainedContextTab?.id === fileTab.id ? 'true' : undefined}
               class="flex min-w-0 items-center gap-1.5 py-1.5 pl-2 text-left"
               title={fileTab.path ?? fileTab.title}
               onclick={() => focusFullscreenFileTab(fileTab.id)}
@@ -1347,14 +1408,32 @@
       type="button"
       class={[
         'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center transition-colors',
-        fullscreenExplorerOpen
+        fullscreenChatOpen
           ? 'bg-overlay text-primary'
           : 'text-dimmed hover:bg-elevated hover:text-foreground'
       ]}
-      aria-label={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
-      aria-pressed={fullscreenExplorerOpen}
-      title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
-      onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
+      aria-label={fullscreenChatTitle}
+      title={fullscreenChatTitle}
+      aria-pressed={fullscreenChatOpen}
+      disabled={fullscreenChatTabs.length === 0}
+      onclick={toggleFullscreenChat}
+    >
+      <CioTemporaryChat size={15} />
+    </button>
+    <button
+      type="button"
+      class={[
+        'titlebar-no-drag ml-1 flex h-7 w-7 items-center justify-center transition-colors',
+        fullscreenExplorerOpen && !fullscreenChatOpen
+          ? 'bg-overlay text-primary'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      aria-label={fullscreenExplorerOpen && !fullscreenChatOpen
+        ? 'Hide file tree'
+        : 'Show file tree'}
+      aria-pressed={fullscreenExplorerOpen && !fullscreenChatOpen}
+      title={fullscreenExplorerOpen && !fullscreenChatOpen ? 'Hide file tree' : 'Show file tree'}
+      onclick={showFullscreenExplorer}
     >
       <CioFiles size={15} />
     </button>
@@ -1457,6 +1536,7 @@
             path={activeTab.path}
             content={visibleContent}
             fullscreen
+            onOpenTemporaryChat={() => (fullscreenChatEnabled = true)}
             onExitFullscreen={closeFullscreen}
           />
         {:else if activeTab?.view === 'preview' && hasAnyPreview(previewFlags)}
@@ -1527,7 +1607,14 @@
         {/if}
       </div>
     </div>
-    {#if fullscreenExplorerOpen && activeTab}
+    {#if fullscreenChatOpen}
+      <div
+        class="h-full min-h-0 shrink-0 border-l border-border"
+        style:width="{contextSidebarState.width}px"
+        style:max-width="60%"
+        {@attach fullscreenFileChatSlot}
+      ></div>
+    {:else if fullscreenExplorerOpen && activeTab}
       <div
         class="min-h-0"
         transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}

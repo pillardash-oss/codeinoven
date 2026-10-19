@@ -148,6 +148,7 @@
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import { fullscreenFileChatHost } from '$lib/fullscreen-file-chat-portal'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
@@ -1704,9 +1705,7 @@
   let sidebarWasVisible = false
   /** Whether the sidebar's own panel is the one hosting a window-sized surface,
    *  which has to outlive `sidebarVisible` going false (see above). */
-  let sidebarHostsFullscreenEditor = $derived(
-    contextSidebarState.sidebarActiveTab?.kind === 'files' && projectFilesWorkspace.fullscreenOpen
-  )
+  let sidebarHostsFullscreenEditor = $derived(projectFilesWorkspace.fullscreenOpen)
   $effect(() => {
     if (sidebarVisible || sidebarHostsFullscreenEditor) {
       sidebarWasVisible = true
@@ -5297,27 +5296,34 @@
             easing: cubicOut
           }}
         >
-          <ContextSidebar
-            tabs={contextSidebarState.sidebarTabs}
-            activeTabId={contextSidebarState.sidebarActiveTabId}
-            width={contextSidebarState.width}
-            height={contextSidebarState.terminalHeight}
-            placement="right"
-            content={contextSidebarContent}
-            {tabPresentation}
-            onSelect={(id) => contextSidebarState.focus(id)}
-            onClose={closeContextTab}
-            onFullscreenTab={openTabFullscreen}
-            onMoveTab={(id, targetId, position) =>
-              contextSidebarState.reorder(id, targetId, position)}
-            onWidthChange={(width) => handleRailWidthChange(width)}
-            onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
-            onTerminalPlacementChange={(placement) =>
-              contextSidebarState.setTerminalPlacement(placement)}
-            onNewTerminal={openNewTerminal}
-            onNewBrowser={() => openNewBrowserTab()}
-            onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
-          />
+          <div
+            class="h-full min-h-0"
+            {@attach active && contextSidebarState.sidebarActiveTab?.kind === 'temporary-chat'
+              ? fullscreenFileChatHost
+              : undefined}
+          >
+            <ContextSidebar
+              tabs={contextSidebarState.sidebarTabs}
+              activeTabId={contextSidebarState.sidebarActiveTabId}
+              width={contextSidebarState.width}
+              height={contextSidebarState.terminalHeight}
+              placement="right"
+              content={contextSidebarContent}
+              {tabPresentation}
+              onSelect={(id) => contextSidebarState.focus(id)}
+              onClose={closeContextTab}
+              onFullscreenTab={openTabFullscreen}
+              onMoveTab={(id, targetId, position) =>
+                contextSidebarState.reorder(id, targetId, position)}
+              onWidthChange={(width) => handleRailWidthChange(width)}
+              onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
+              onTerminalPlacementChange={(placement) =>
+                contextSidebarState.setTerminalPlacement(placement)}
+              onNewTerminal={openNewTerminal}
+              onNewBrowser={() => openNewBrowserTab()}
+              onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
+            />
+          </div>
         </div>
       {/if}
       {#if terminalDockVisible}

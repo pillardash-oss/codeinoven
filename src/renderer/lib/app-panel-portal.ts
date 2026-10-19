@@ -24,7 +24,7 @@ interface AppPanelHostBinding {
   fallback: HTMLElement
 }
 
-class AppPanelPortal {
+export class AppPanelPortal {
   private binding: AppPanelHostBinding | null = null
   private slots: HTMLElement[] = []
 

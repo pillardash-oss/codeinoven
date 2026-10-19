@@ -8,6 +8,7 @@
   import type { Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
   import { appPanelSlot } from '$lib/app-panel-portal'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
   import { logRendererError } from '$lib/system/renderer-logger'
   // BrowserPanel is a dynamic import: terminal and browser panels are the dock's
@@ -22,6 +23,7 @@
   import { assistants } from '$lib/stores/assistants.svelte'
   import {
     contextSidebarState,
+    type FilesContextTab,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import {
@@ -199,6 +201,28 @@
       : null
   )
 
+  const lastFilesTab = new LastKnown<FilesContextTab>()
+  let filesTab = $derived(
+    lastFilesTab.get(activeContextTab?.kind === 'files' ? activeContextTab : null)
+  )
+  /** The same key `activePanelKey` builds for a files tab, taken from the tab
+   *  this panel stays mounted on rather than the one in front: the file reader
+   *  outlives its own tab while its temporary chat is the active one. */
+  let filesPanelKey = $derived.by(() => {
+    if (!filesTab) return ''
+    const mount =
+      usesThreadWorkspaceMount(filesTab.projectId) ||
+      (selectedThread?.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+        ? `${filesTab.threadId}:${selectedThread?.settings?.ovenId}`
+        : 'project'
+    return `files:${filesTab.projectId}:${mount}`
+  })
+  let filesVisible = $derived(activeContextTab?.kind === 'files')
+  let keepFilesMounted = $derived(
+    filesVisible ||
+      Boolean(filesTab && projectFilesWorkspace.getState(filesTab.projectId).fullscreenActive)
+  )
+
   let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
 
   /** The thread whose own workspace the file tree mounts. Only a chat or an
@@ -302,7 +326,27 @@
     {/await}
   {/key}
 {/if}
-{#if activeContextTab}
+{#if keepFilesMounted && filesTab}
+  <div class="h-full" style:display={filesVisible ? 'block' : 'none'}>
+    {#key `${filesPanelKey}:${panelReloadNonce}`}
+      {#await loadPanelModule(PANEL_KEYS.projectFiles, () => import('../files/ProjectFilesPanel.svelte'))}
+        {@render panelLoading('Files')}
+      {:then { default: ProjectFilesPanel }}
+        <ProjectFilesPanel
+          projectId={filesTab.projectId}
+          projectName={filesRootIdentity.name}
+          projectLabel={filesRootIdentity.label}
+          assistantRoot={filesRootIdentity.assistant}
+          projectIconUrl={filesRootIdentity.iconUrl}
+          projectAccentColor={filesRootIdentity.accentColor}
+        />
+      {:catch error}
+        {@render panelLoadFailed(PANEL_KEYS.projectFiles, 'Files', error)}
+      {/await}
+    {/key}
+  </div>
+{/if}
+{#if activeContextTab && !filesVisible}
   <!-- Cross-fades the panel body when the active tool changes. Both the
        out-going and the in-coming panel are absolutely placed in the same cell,
        so they overlap for the length of the switch instead of one blinking off
@@ -331,20 +375,7 @@
           <!-- Rendered by the persistent, keep-mounted Git panel above: an Oven
                thread has no local turn checkpoints to diff. -->
         {:else if activeContextTab.kind === 'files'}
-          {#await loadPanelModule(PANEL_KEYS.projectFiles, () => import('../files/ProjectFilesPanel.svelte'))}
-            {@render panelLoading('Files')}
-          {:then { default: ProjectFilesPanel }}
-            <ProjectFilesPanel
-              projectId={activeContextTab.projectId}
-              projectName={filesRootIdentity.name}
-              projectLabel={filesRootIdentity.label}
-              assistantRoot={filesRootIdentity.assistant}
-              projectIconUrl={filesRootIdentity.iconUrl}
-              projectAccentColor={filesRootIdentity.accentColor}
-            />
-          {:catch error}
-            {@render panelLoadFailed(PANEL_KEYS.projectFiles, 'Files', error)}
-          {/await}
+          <!-- The file reader stays mounted above while its chat is active. -->
         {:else if activeContextTab.kind === 'diff'}
           {#await loadPanelModule(PANEL_KEYS.diffSidebar, () => import('../files/DiffSidebarPanel.svelte'))}
             {@render panelLoading('Changes')}
