@@ -59,7 +59,7 @@
     diffDetails = $state.raw<Record<string, DiffDetails>>({})
     diffErrors = $state.raw<Record<string, string>>({})
     pageStart = $state(0)
-    readonly pageSize = 8
+    readonly pageSize = 20
     private diffAbort: AbortController | null = null
     private readBatch: Promise<unknown> = Promise.resolve()
     loadingDiffs = $state(false)
@@ -551,6 +551,7 @@
 </script>
 
 <script lang="ts">
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
@@ -645,34 +646,40 @@
   {/if}
 
   <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
-    <div class="flex items-center bg-elevated p-0.5" role="group" aria-label="Changes view">
+    <div
+      class="flex shrink-0 items-center gap-0.5 border border-border bg-elevated p-0.5"
+      role="group"
+      aria-label="Changes view"
+    >
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 px-2.5 text-[0.625rem] font-medium transition-colors',
+          'flex h-5 w-6 shrink-0 items-center justify-center transition-colors',
           controller.mode === 'diffs'
-            ? 'bg-overlay text-foreground'
+            ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'
         ]}
         aria-pressed={controller.mode === 'diffs'}
         title="Show each file's diff stacked by file"
+        aria-label="Show file diffs"
         onclick={() => controller.setMode('diffs')}
       >
-        Diffs
+        <CioDiff size={12} aria-hidden="true" />
       </button>
       <button
         type="button"
         class={[
-          'flex h-6 items-center gap-1.5 px-2.5 text-[0.625rem] font-medium transition-colors',
+          'flex h-5 w-6 shrink-0 items-center justify-center transition-colors',
           controller.mode === 'files'
-            ? 'bg-overlay text-foreground'
+            ? 'bg-surface text-foreground shadow-sm'
             : 'text-muted hover:text-foreground'
         ]}
         aria-pressed={controller.mode === 'files'}
         title="Show the list of changed files with restore options"
+        aria-label="Show changed file list"
         onclick={() => controller.setMode('files')}
       >
-        File List
+        <CioCommit size={12} aria-hidden="true" />
       </button>
     </div>
     <span class="flex-1"></span>
@@ -680,21 +687,27 @@
     <button
       type="button"
       class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      aria-label="Refresh change history"
-      title="Refresh changes"
-      disabled={controller.loading}
+      aria-label={controller.loading || controller.loadingDiffs
+        ? 'Scanning changes'
+        : 'Refresh change history'}
+      title={controller.loading || controller.loadingDiffs ? 'Scanning changes' : 'Refresh changes'}
+      disabled={controller.loading || controller.loadingDiffs}
       onclick={() => void controller.refresh()}
     >
-      <CioRefresh size={13} class={controller.loading ? 'animate-spin' : ''} />
+      <CioRefresh
+        size={13}
+        class={controller.loading || controller.loadingDiffs ? 'animate-spin' : ''}
+      />
     </button>
   </div>
 
-  <div {@attach bindScrollContainer} class="min-h-0 flex-1 overflow-auto p-2">
+  <div
+    {@attach bindScrollContainer}
+    class="min-h-0 flex-1 overflow-auto p-2"
+    aria-busy={controller.loading || controller.loadingDiffs}
+  >
     {#if controller.loading && controller.turns.length === 0}
-      <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
-        <CioSpinner size={14} class="animate-spin" />
-        Loading changes
-      </div>
+      <div class="min-h-12"></div>
     {:else if controller.error}
       <div class="border border-danger/20 bg-danger/10 px-3 py-2">
         <p class="text-[0.6875rem] leading-relaxed text-danger">{controller.error}</p>
@@ -722,15 +735,19 @@
             >
             <button
               type="button"
-              class="px-2 py-1 hover:bg-elevated disabled:opacity-40"
+              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+              title="Previous files"
+              aria-label="Previous files"
               disabled={controller.pageStart === 0}
-              onclick={() => controller.changePage(-1)}>Previous files</button
+              onclick={() => controller.changePage(-1)}><CioBack size={13} /></button
             >
             <button
               type="button"
-              class="px-2 py-1 hover:bg-elevated disabled:opacity-40"
+              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+              title="Next files"
+              aria-label="Next files"
               disabled={controller.pageStart + controller.pageSize >= checkpoint.changes.length}
-              onclick={() => controller.changePage(1)}>Next files</button
+              onclick={() => controller.changePage(1)}><CioForward size={13} /></button
             >
           </div>
         {/if}
@@ -749,10 +766,7 @@
               </p>
             {/if}
             {#if controller.loadingDiffs && controller.fileDiffs.length === 0}
-              <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
-                <CioSpinner size={14} class="animate-spin" />
-                Loading diffs
-              </div>
+              <div class="min-h-12"></div>
             {:else if controller.fileDiffs.length === 0}
               <p class="px-3 py-4 text-center text-[0.625rem] text-dimmed">
                 {checkpoint.changes.length === 0
