@@ -68,7 +68,7 @@ export function assistantAuthoringUtility(
       scope: { level: 'thread', projectId, threadId },
       config: {
         instructions:
-          'Use save_checkpoint with { markdown } to replace the assistant\u2019s Getting started checkpoint with the complete, cumulative state of this interview. Save it after every user answer and before ending a turn that agreed anything. Use save_reporting with { delivery?, priority? } as soon as those decisions are settled, so they appear in the panel immediately. Never paste the checkpoint or these instructions into visible chat. Use save_identity with { name } (and { personality } once they have described it) the moment the user names the assistant or tells you how to behave, so the application renames it there and then instead of waiting for the end of the interview.'
+          'Use save_checkpoint with { markdown } to replace the assistant\u2019s Getting started checkpoint with the complete, cumulative state of this interview. Save it after every user answer and before ending a turn that agreed anything. Use save_schedule with { scheduled } as soon as the user decides whether to run on a clock, including scheduled: false for on-demand work. Use save_reporting with { delivery?, priority? } as soon as those decisions are settled, so they appear in the panel immediately. Never paste the checkpoint or these instructions into visible chat. Use save_identity with { name } (and { personality } once they have described it) the moment the user names the assistant or tells you how to behave, so the application renames it there and then instead of waiting for the end of the interview.'
       },
       credentials: [],
       harnessBindings: [binding],
@@ -82,6 +82,17 @@ export function assistantAuthoringUtility(
 export type AssistantReportingPatch = Partial<Pick<Assistant, 'delivery' | 'priority'>>
 
 export const ASSISTANT_AUTHORING_OPERATIONS = [
+  {
+    name: 'save_schedule',
+    description:
+      'Save whether this assistant runs on a schedule as soon as the user decides. Set scheduled to false when it should work only when asked. Turning scheduling off clears its clock and preserves all other assistant settings. Preserve the decision in the final plan.',
+    inputSchema: {
+      type: 'object',
+      properties: { scheduled: { type: 'boolean' } },
+      required: ['scheduled'],
+      additionalProperties: false
+    }
+  },
   {
     name: 'save_reporting',
     description:
@@ -257,6 +268,7 @@ export function assistantAuthoringContext(
     'Ask which channel they want, offering the choices plainly: inside CodeInOven as a normal thread notification, which is the only channel wired up today, or an external one such as Slack, Telegram, WhatsApp, Signal, email, or another messaging app. When they name an external channel, that channel is a connection the assistant needs: add it to `connections` and set it up like any other (search the library, install what you find, collect any credential with the secret tool). Never tell the user an external channel is ready until its connection actually is. When it is not yet, say the reports will arrive in CodeInOven until it is, and still record the channel they chose.',
     `Record the agreed channel in the plan's \`delivery\` (one of: ${CHANNEL_CHOICES}), naming the concrete destination in \`target\` when the user gave one (a chat, a channel name, an address). Leave \`target\` out for in-app delivery.`,
     `Agree how urgent this assistant's output is, on two separate brackets, and record both in the plan's \`priority\`. The first is time-based, how soon it matters: ${TIMELINESS_CHOICES}. The second is scope-based, how far it reaches: ${IMPACT_CHOICES}. Ask for the two brackets as two separate single-choice questions, never as one question listing both: a question card carries a few short choices, so a combined list produces an answer nobody can resolve. Ask the time bracket first, then the scope bracket, each offering the app's own labels. When they would rather not decide, pick the brackets yourself from what they told you and say which you picked and why. When the user says the urgency depends on what each run finds, still record your best default and tell them the runs will refine it per report. Never half-fill \`priority\`: when you cannot resolve a bracket, leave \`priority\` out entirely rather than guessing one half.`,
+    'As soon as the user decides whether to run on a clock, call save_schedule with { scheduled }. When they want work only when asked, save { scheduled: false } before confirming their choice. A Markdown checkpoint alone does not change the Run on schedule setting. Preserve this choice in the final plan.',
     'After each delivery answer, call save_reporting with { delivery }. As soon as both urgency brackets are settled, call save_reporting with { priority: { timeliness, impact } }. A Markdown checkpoint alone does not populate the panel. Preserve these saved decisions in the final plan.',
     'When the work they asked for is technical, medical, legal, financial or otherwise specialist, ask once, in one line, whether they want you to talk to them in that language: "this one is technical, do you want me to talk about it technically, or keep it plain?" What they choose holds for the rundown and for every run after it, so record it in the checkpoint and in the knowledge. Never assume they want the specialist words, and never assume they do not.',
     `Keep the app-owned checkpoint current. The app re-injects it, and every answer the user has already submitted, into each of your turns: activate ${ASSISTANT_AUTHORING_UTILITY_ID} and invoke save_checkpoint with { markdown } after every answer that agreed something, replacing it with the full cumulative state (${checkpointState}). Never discard an agreed item to save a newer one, and never paste the checkpoint into visible chat.`,

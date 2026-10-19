@@ -4301,6 +4301,8 @@ export class ChatEngine {
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
                 this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantSchedule: (scheduled: boolean) =>
+                this.saveAssistantSchedule(authoringAssistantId, scheduled),
               saveAssistantReporting: (reporting: AssistantReportingPatch) =>
                 this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
@@ -4639,6 +4641,8 @@ export class ChatEngine {
           ? {
               saveAssistantCheckpoint: (markdown: string) =>
                 this.saveAssistantCheckpoint(authoringAssistantId, markdown),
+              saveAssistantSchedule: (scheduled: boolean) =>
+                this.saveAssistantSchedule(authoringAssistantId, scheduled),
               saveAssistantReporting: (reporting: AssistantReportingPatch) =>
                 this.saveAssistantReporting(authoringAssistantId, reporting),
               saveAssistantIdentity: (identity: { name?: string; personality?: string }) =>
@@ -8372,6 +8376,15 @@ export class ChatEngine {
     ]
       .filter(Boolean)
       .join('\n\n')
+  }
+
+  /** Persist the clock choice while setup is still underway. */
+  private async saveAssistantSchedule(assistantId: string, scheduled: boolean): Promise<void> {
+    if (!(await this.assistantRepo.getViaWorker(assistantId))) {
+      throw new Error('The assistant no longer exists')
+    }
+    this.assistantRepo.updateScheduled(assistantId, scheduled, Date.now())
+    broadcastAssistantsChanged(await this.assistantRepo.listViaWorker())
   }
 
   /** Save settled reporting fields and publish the live panel state. */
