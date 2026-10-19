@@ -1,6 +1,7 @@
 <script module lang="ts">
   import { diffDetailsAsync } from './file-diff-async'
   import type { DiffDetails } from './file-diff'
+  import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import type { AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -15,6 +16,12 @@
   interface DiffPanelCache {
     checkpoints: TurnCheckpointSummary[]
     selectedCheckpointId: string | null
+    requestedCheckpointId: string | null
+    mode: ChangesMode
+    pageStart: number
+    selections: Record<string, string[]>
+    expandedDiffs: Record<string, boolean>
+    scrollTop: number
   }
 
   // A plain module-level object (not reactive state) so re-seeding can read it
@@ -75,6 +82,8 @@
     private lastSeededKey: string | null = null
     private pollTimer: ReturnType<typeof setInterval> | null = null
     private unsubscribeEvents: (() => void) | null = null
+    private started = false
+    pendingSelectedRestore = $state<{ checkpointId: string; paths: string[] } | null>(null)
 
     constructor() {
       // React to identity changes: re-seed durable state from the shared cache
@@ -85,38 +94,59 @@
       // the refresh issued right after it.
       $effect.root(() => {
         $effect(() => {
-          if (!this.projectId || !this.threadId) return
-          const key = `${this.projectId}:${this.threadId}`
-          if (key === this.lastSeededKey) return
-          const switched = this.lastSeededKey !== null
-          this.lastSeededKey = key
-          if (switched) this.generation += 1
-          let entry = panelCache[key]
-          if (!entry) {
-            entry = { checkpoints: [], selectedCheckpointId: null }
-            panelCache[key] = entry
-          }
-          this.cache = entry
-          this.checkpoints = entry.checkpoints
-          this.selectedCheckpointId = entry.selectedCheckpointId
-          this.diffAbort?.abort()
-          this.fileDiffs = []
-          this.diffDetails = {}
-          this.diffErrors = {}
-          this.pageStart = 0
-          this.liveTurn = null
-          this.loading = false
-          this.error = ''
-          this.restoringId = null
-          this.pendingUndoPath = null
-          this.busyPath = null
-          this.selections = {}
-          this.mode = 'diffs'
-          this.loadingDiffs = false
-          this.expandedDiffs = {}
-          this.flashPath = null
+          this.seedFromCache()
         })
       })
+    }
+
+    /**
+     * Seed this instance from the shared per-thread cache, once per identity.
+     *
+     * `start()` calls it too, because an effect the controller creates during
+     * construction runs after mount: seeding only from the effect would let the
+     * first refresh pick a turn before the cache was read, which is exactly the
+     * reset this cache exists to prevent. Calling it twice is a no-op.
+     */
+    private seedFromCache(): void {
+      if (!this.projectId || !this.threadId) return
+      const key = `${this.projectId}:${this.threadId}`
+      if (key === this.lastSeededKey) return
+      const switched = this.lastSeededKey !== null
+      this.lastSeededKey = key
+      if (switched) this.generation += 1
+      let entry = panelCache[key]
+      if (!entry) {
+        entry = {
+          checkpoints: [],
+          selectedCheckpointId: null,
+          requestedCheckpointId: null,
+          mode: 'diffs',
+          pageStart: 0,
+          selections: {},
+          expandedDiffs: {},
+          scrollTop: 0
+        }
+        panelCache[key] = entry
+      }
+      this.cache = entry
+      this.checkpoints = entry.checkpoints
+      this.selectedCheckpointId = entry.selectedCheckpointId
+      this.diffAbort?.abort()
+      this.fileDiffs = []
+      this.diffDetails = {}
+      this.diffErrors = {}
+      this.pageStart = entry.pageStart
+      this.liveTurn = null
+      this.loading = false
+      this.error = ''
+      this.restoringId = null
+      this.pendingUndoPath = null
+      this.busyPath = null
+      this.selections = entry.selections
+      this.mode = entry.mode
+      this.loadingDiffs = false
+      this.expandedDiffs = entry.expandedDiffs
+      this.flashPath = null
     }
 
     applyReveal(): void {
@@ -147,6 +177,29 @@
       if (!this.cache) return
       this.cache.checkpoints = this.checkpoints
       this.cache.selectedCheckpointId = this.selectedCheckpointId
+      this.cache.mode = this.mode
+      this.cache.pageStart = this.pageStart
+      this.cache.selections = this.selections
+      this.cache.expandedDiffs = this.expandedDiffs
+    }
+
+    setCheckpointTarget(id: string | null): void {
+      const changed = id !== this.checkpointId
+      this.checkpointId = id
+      if (changed && this.started && id && id !== this.selectedCheckpointId) void this.refresh(id)
+    }
+
+    private rememberScroll(): void {
+      if (this.cache && this.scrollContainer) this.cache.scrollTop = this.scrollContainer.scrollTop
+      this.writeback()
+    }
+
+    private async restoreScroll(): Promise<void> {
+      const generation = this.generation
+      await tick()
+      if (generation === this.generation && this.scrollContainer && this.cache) {
+        this.scrollContainer.scrollTop = this.cache.scrollTop
+      }
     }
 
     async refreshLive(): Promise<void> {
@@ -165,8 +218,8 @@
         this.syncPolling()
         if (finished) {
           // The turn just completed   pull its authoritative checkpoint in.
-          void this.refresh(this.selectedCheckpointId)
-        } else if (next && !previousLive) {
+          void this.refresh(this.selectedCheckpointId ?? undefined)
+        } else if (next && !previousLive && !this.selectedCheckpointId) {
           // A running turn takes focus once it produces its first file change.
           // Later refreshes preserve an explicit historical-turn selection.
           this.selectedCheckpointId = next.id
@@ -182,9 +235,23 @@
       }
     }
 
-    async refresh(
-      preferredCheckpointId = this.checkpointId ?? this.selectedCheckpointId
-    ): Promise<void> {
+    /**
+     * The turn the parent asked this panel to open, but only the first time it
+     * asked. The target is consumed here so that a turn the user picks by hand
+     * afterwards survives leaving the panel and coming back: remounting must not
+     * reset the panel to the turn the tab was originally opened for.
+     */
+    private takeCheckpointTarget(): string | null {
+      const target = this.checkpointId
+      if (!this.cache) return target
+      if (this.cache.requestedCheckpointId === target) return null
+      this.cache.requestedCheckpointId = target
+      return target
+    }
+
+    async refresh(preferredCheckpointId?: string): Promise<void> {
+      const target = this.takeCheckpointTarget()
+      const preferred = preferredCheckpointId ?? target ?? this.selectedCheckpointId
       const request = this.refreshGuard.begin()
       const generation = this.generation
       this.loading = true
@@ -203,9 +270,7 @@
           : nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
         const previousCheckpointId = this.selectedCheckpointId
         this.selectedCheckpointId =
-          nextTurns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
-          nextTurns[0]?.id ??
-          null
+          nextTurns.find((checkpoint) => checkpoint.id === preferred)?.id ?? nextTurns[0]?.id ?? null
         if (this.selectedCheckpointId !== previousCheckpointId) this.pageStart = 0
         this.writeback()
         void this.loadDiffs()
@@ -229,6 +294,7 @@
         this.diffDetails = {}
         this.diffErrors = {}
         this.loadingDiffs = false
+        await this.restoreScroll()
         return
       }
       const abort = new AbortController()
@@ -315,10 +381,12 @@
       }
       if (!current()) return
       this.loadingDiffs = false
+      await this.restoreScroll()
       this.applyReveal()
     }
 
     changePage(direction: number): void {
+      if (this.cache) this.cache.scrollTop = 0
       this.expandedDiffs = {}
       const total = this.selectedCheckpoint?.changes.length ?? 0
       this.pageStart = Math.max(
@@ -328,6 +396,7 @@
           this.pageStart + direction * this.pageSize
         )
       )
+      this.writeback()
       void this.loadDiffs()
     }
 
@@ -337,16 +406,20 @@
       this.pageStart = 0
       this.expandedDiffs = {}
       this.selectedCheckpointId = checkpoint.id
+      if (this.cache) this.cache.scrollTop = 0
       this.writeback()
       void this.loadDiffs()
     }
 
     setMode(mode: ChangesMode): void {
+      this.rememberScroll()
       this.mode = mode
+      this.writeback()
       void this.loadDiffs()
     }
 
     async openChange(checkpointId: string, path: string): Promise<void> {
+      this.rememberScroll()
       await projectFilesWorkspace.loadDirectory(this.projectId, '')
       contextSidebarState.openFiles(this.projectId, this.threadId)
       await projectFilesWorkspace.openCheckpointFile(this.projectId, checkpointId, path, 'diff')
@@ -357,12 +430,20 @@
       if (selected.has(path)) selected.delete(path)
       else selected.add(path)
       this.selections = { ...this.selections, [checkpointId]: [...selected] }
+      this.writeback()
     }
 
     async restoreSelected(checkpointId: string): Promise<void> {
       const paths = this.selections[checkpointId] ?? []
       if (paths.length === 0) return
-      await this.applyPaths(checkpointId, paths, 'undo')
+      this.pendingSelectedRestore = { checkpointId, paths: [...paths] }
+    }
+
+    async confirmSelectedRestore(): Promise<void> {
+      const pending = this.pendingSelectedRestore
+      if (!pending) return
+      this.pendingSelectedRestore = null
+      await this.applyPaths(pending.checkpointId, pending.paths, 'undo')
     }
 
     /**
@@ -487,6 +568,7 @@
         this.expandedDiffs[path] ??
         (Object.keys(this.expandedDiffs).length === 0 && this.fileDiffs[0]?.path === path)
       this.expandedDiffs = { [path]: !expanded }
+      this.writeback()
     }
 
     get completedCheckpoints(): TurnCheckpointSummary[] {
@@ -522,6 +604,8 @@
     }
 
     start(): void {
+      this.started = true
+      this.seedFromCache()
       this.unsubscribeEvents = subscribe('agent:event', (...args: unknown[]) => {
         const event = args[0] as AgentEvent
         if (!('projectId' in event) || !('threadId' in event)) return
@@ -538,6 +622,8 @@
     }
 
     stop(): void {
+      this.rememberScroll()
+      this.started = false
       this.generation += 1
       this.diffAbort?.abort()
       this.fileDiffs = []
@@ -591,7 +677,7 @@
     controller.threadId = threadId
   })
   $effect(() => {
-    controller.checkpointId = checkpointId
+    controller.setCheckpointTarget(checkpointId)
   })
   $effect(() => {
     controller.revealPath = revealPath
@@ -606,14 +692,6 @@
     controller.start()
     return () => controller.stop()
   })
-
-  function filename(path: string): string {
-    return path.split('/').at(-1) ?? path
-  }
-
-  function isMarkdown(path: string): boolean {
-    return /\.(?:md|mdown|markdown)$/iu.test(path)
-  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-app">
@@ -643,6 +721,38 @@
         <CioForward size={13} />
       </button>
     </div>
+  {/if}
+
+  {#if controller.selectedCheckpoint}
+    {@const checkpoint = controller.selectedCheckpoint}
+    <div class="flex min-h-10 shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <CioDiff size={13} class="shrink-0 text-info" />
+      <span class="min-w-0 flex-1">
+        <span class="flex items-center gap-1.5">
+          <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
+            {checkpoint.label}
+          </span>
+          {#if checkpoint.status === 'active'}
+            <span
+              class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
+            >
+              In progress
+            </span>
+          {/if}
+        </span>
+        <span class="block text-[0.5625rem] text-dimmed">
+          {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
+        </span>
+      </span>
+      <span class="tabular-nums text-[0.625rem] text-dimmed">
+        {checkpoint.changes.length}
+      </span>
+    </div>
+    {#if checkpoint.failure}
+      <p class="shrink-0 border-b border-border px-3 py-1.5 text-[0.625rem] text-danger">
+        {checkpoint.failure}
+      </p>
+    {/if}
   {/if}
 
   <div class="flex h-9 min-w-0 shrink-0 items-center gap-2 border-b border-border px-2.5">
@@ -682,6 +792,30 @@
         <CioCommit size={12} aria-hidden="true" />
       </button>
     </div>
+    {#if controller.mode === 'files' && controller.selectedCheckpoint}
+      {@const checkpoint = controller.selectedCheckpoint}
+      {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active' && checkpoint.changes.length > 0}
+        <div class="flex min-w-0 items-center gap-1">
+          <button
+            type="button"
+            class="border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+            disabled={controller.restoringId === checkpoint.id ||
+              (controller.selections[checkpoint.id] ?? []).length === 0}
+            onclick={() => void controller.restoreSelected(checkpoint.id)}
+          >
+            Restore selected
+          </button>
+          <button
+            type="button"
+            class="px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
+            disabled={controller.restoringId === checkpoint.id}
+            onclick={() => controller.requestRestoreRun(checkpoint.id)}
+          >
+            {controller.restoringId === checkpoint.id ? 'Restoring…' : 'Restore run'}
+          </button>
+        </div>
+      {/if}
+    {/if}
     <span class="flex-1"></span>
     {#if controller.selectedCheckpoint}
       {@const checkpoint = controller.selectedCheckpoint}
@@ -756,18 +890,6 @@
       {#if checkpoint}
         {#if controller.mode === 'diffs'}
           <div class="space-y-2">
-            {#if checkpoint.status === 'active'}
-              <p class="px-1 pb-1 text-[0.625rem] leading-relaxed text-dimmed">
-                Live changes this turn is still running.
-              </p>
-            {/if}
-            {#if checkpoint.failure}
-              <p
-                class="border border-danger/20 bg-danger/10 px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger"
-              >
-                {checkpoint.failure}
-              </p>
-            {/if}
             {#if controller.loadingDiffs && controller.fileDiffs.length === 0}
               <div class="min-h-12"></div>
             {:else if controller.fileDiffs.length === 0}
@@ -879,148 +1001,94 @@
           </div>
         {:else}
           <div class="space-y-2">
-            <section class="border border-border bg-surface">
-              <div class="flex min-h-10 items-center gap-2 px-3 py-2">
-                <CioDiff size={13} class="shrink-0 text-info" />
-                <span class="min-w-0 flex-1">
-                  <span class="flex items-center gap-1.5">
-                    <span
-                      class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground"
-                    >
-                      {checkpoint.label}
-                    </span>
-                    {#if checkpoint.status === 'active'}
-                      <span
-                        class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
-                      >
-                        In progress
-                      </span>
+            {#if checkpoint.changes.length === 0}
+              <p class="px-3 py-2 text-[0.625rem] text-dimmed">No file changes detected.</p>
+            {:else}
+              {#each checkpoint.changes.slice(controller.pageStart, controller.pageStart + controller.pageSize) as change (`${change.kind}:${change.path}`)}
+                {@const undone = checkpoint.rolledBackPaths?.includes(change.path) ?? false}
+                <section class="overflow-hidden border border-border bg-surface">
+                  <div
+                    class="flex min-h-9 items-center gap-2 px-3 transition-colors hover:bg-elevated"
+                  >
+                    {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active'}
+                      <Switch
+                        checked={(controller.selections[checkpoint.id] ?? []).includes(change.path)}
+                        disabled={checkpoint.rolledBackPaths?.includes(change.path)}
+                        aria-label={`Select ${change.path} to restore`}
+                        onchange={() => controller.toggleSelection(checkpoint.id, change.path)}
+                      />
                     {/if}
-                  </span>
-                  <span class="block text-[0.5625rem] text-dimmed">
-                    {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
-                  </span>
-                </span>
-                <span class="tabular-nums text-[0.625rem] text-dimmed">
-                  {checkpoint.changes.length}
-                </span>
-              </div>
-              <div class="border-t border-border py-1">
-                {#if checkpoint.failure}
-                  <p class="px-3 py-1.5 text-[0.625rem] leading-relaxed text-danger">
-                    {checkpoint.failure}
-                  </p>
-                {/if}
-                {#if checkpoint.status === 'active'}
-                  <p class="px-3 py-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-                    This turn is still running files update here as the agent edits them.
-                  </p>
-                {/if}
-                {#if checkpoint.changes.length === 0}
-                  <p class="px-3 py-2 text-[0.625rem] text-dimmed">No file changes detected.</p>
-                {:else}
-                  {#each checkpoint.changes.slice(controller.pageStart, controller.pageStart + controller.pageSize) as change (`${change.kind}:${change.path}`)}
-                    {@const undone = checkpoint.rolledBackPaths?.includes(change.path) ?? false}
-                    <div
-                      class="flex h-8 items-center gap-2 px-3 transition-colors hover:bg-elevated"
-                    >
-                      {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active'}
-                        <Switch
-                          checked={(controller.selections[checkpoint.id] ?? []).includes(
-                            change.path
-                          )}
-                          disabled={checkpoint.rolledBackPaths?.includes(change.path)}
-                          aria-label={`Select ${change.path} to restore`}
-                          onchange={() => controller.toggleSelection(checkpoint.id, change.path)}
-                        />
-                      {/if}
-                      <span
-                        class={[
-                          'w-4 shrink-0 text-center font-mono text-[0.625rem] font-semibold',
-                          change.kind === 'created'
-                            ? 'text-success'
-                            : change.kind === 'deleted'
-                              ? 'text-danger'
-                              : 'text-warning'
-                        ]}
-                      >
-                        {change.kind === 'created' ? 'A' : change.kind === 'deleted' ? 'D' : 'M'}
+                    <FileTypeIcon path={change.path} size={13} />
+                    {#if checkpoint.status === 'active'}
+                      <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
+                        {change.path}
                       </span>
-                      <FileTypeIcon path={change.path} />
-                      {#if checkpoint.status === 'active'}
-                        <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
-                          {change.path}
-                        </span>
-                      {:else}
-                        <button
-                          type="button"
-                          class="min-w-0 flex-1 truncate text-left font-mono text-[0.625rem] text-muted hover:text-foreground"
-                          class:line-through={undone}
-                          title={`Open ${change.path}`}
-                          onclick={() => void controller.openChange(checkpoint.id, change.path)}
-                        >
-                          {isMarkdown(change.path) ? filename(change.path) : change.path}
-                        </button>
-                      {/if}
-                      {#if change.binary}
-                        <span class="text-[0.5625rem] text-dimmed">binary</span>
-                      {/if}
-                      {#if checkpoint.status !== 'active'}
-                        <button
-                          type="button"
-                          class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                          disabled={controller.restoringId !== null}
-                          aria-label={undone
-                            ? `Redo the changes to ${change.path}`
-                            : `Undo the changes to ${change.path}`}
-                          title={undone
-                            ? `Redo the changes to ${change.path}`
-                            : `Undo the changes to ${change.path}`}
-                          onclick={() =>
-                            undone
-                              ? void controller.redoPath(checkpoint.id, change.path)
-                              : controller.requestUndoPath(checkpoint.id, change.path)}
-                        >
-                          {#if controller.busyPath === change.path}
-                            <CioSpinner size={13} class="animate-spin" />
-                          {:else if undone}
-                            <CioRefresh size={13} />
-                          {:else}
-                            <CioUndo size={13} />
-                          {/if}
-                        </button>
-                      {/if}
-                    </div>
-                  {/each}
-                  {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active'}
-                    <div class="flex items-center gap-2 border-t border-border px-3 py-2">
+                    {:else}
                       <button
                         type="button"
-                        class="border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={controller.restoringId === checkpoint.id ||
-                          (controller.selections[checkpoint.id] ?? []).length === 0}
-                        onclick={() => void controller.restoreSelected(checkpoint.id)}
+                        class="min-w-0 flex-1 truncate text-left font-mono text-[0.625rem] text-muted hover:text-foreground"
+                        class:line-through={undone}
+                        title={`Open ${change.path}`}
+                        onclick={() => void controller.openChange(checkpoint.id, change.path)}
                       >
-                        Restore selected
+                        {change.path}
                       </button>
+                    {/if}
+                    {#if change.binary}
+                      <span class="shrink-0 text-[0.5625rem] text-dimmed">binary</span>
+                    {:else}
+                      <span class="shrink-0 font-mono text-[0.625rem] tabular-nums text-success"
+                        >+{change.additions ?? 0}</span
+                      >
+                      <span class="shrink-0 font-mono text-[0.625rem] tabular-nums text-danger"
+                        >−{change.deletions ?? 0}</span
+                      >
+                    {/if}
+                    {#if checkpoint.status !== 'active'}
                       <button
                         type="button"
-                        class="px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
-                        disabled={controller.restoringId === checkpoint.id}
-                        onclick={() => controller.requestRestoreRun(checkpoint.id)}
+                        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={controller.restoringId !== null}
+                        aria-label={undone
+                          ? `Redo the changes to ${change.path}`
+                          : `Undo the changes to ${change.path}`}
+                        title={undone
+                          ? `Redo the changes to ${change.path}`
+                          : `Undo the changes to ${change.path}`}
+                        onclick={() =>
+                          undone
+                            ? void controller.redoPath(checkpoint.id, change.path)
+                            : controller.requestUndoPath(checkpoint.id, change.path)}
                       >
-                        {controller.restoringId === checkpoint.id ? 'Restoring…' : 'Restore run'}
+                        {#if controller.busyPath === change.path}
+                          <CioSpinner size={13} class="animate-spin" />
+                        {:else if undone}
+                          <CioRefresh size={13} />
+                        {:else}
+                          <CioUndo size={13} />
+                        {/if}
                       </button>
-                    </div>
-                  {/if}
-                {/if}
-              </div>
-            </section>
+                    {/if}
+                  </div>
+                </section>
+              {/each}
+            {/if}
           </div>
         {/if}
       {/if}
     {/if}
   </div>
+
+  <ConfirmDialog
+    open={controller.pendingSelectedRestore !== null}
+    title="Restore the selected files to their pre-run state?"
+    onCancel={() => (controller.pendingSelectedRestore = null)}
+    onConfirm={() => void controller.confirmSelectedRestore()}
+    confirmLabel="Restore selected"
+    busy={controller.restoringId !== null}
+  >
+    <p>The selected files return to the content they had before this turn started.</p>
+  </ConfirmDialog>
 
   <ConfirmDialog
     open={controller.pendingRestoreId !== null}
