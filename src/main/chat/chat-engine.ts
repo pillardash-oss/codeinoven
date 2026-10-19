@@ -5265,8 +5265,12 @@ export class ChatEngine {
    */
   private async discoveryWorkingDirectory(projectId: string): Promise<string> {
     const project = await this.projectManager.getProject(projectId)
-    if (!project || (project.source === 'local' && project.path))
+    // A missing project row must never fail an app-wide pass: a cold data root
+    // requests the inbox catalog before its hidden row is written, and discovery
+    // needs nothing from the project anyway.
+    if (project?.source === 'local' && project.path) {
       return this.resolveProjectPath(projectId)
+    }
     return this.ephemeralWorkingDirectory()
   }
 
