@@ -1428,7 +1428,7 @@
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
-                          onSelect={() => void archiveItem('project', project.id)}
+                          onSelect={() => void archiveItem('project', project.id, project.name)}
                         >
                           <CioArchive size={14} class="text-muted" />
                           Archive Project
@@ -1697,7 +1697,7 @@
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
-                      onSelect={() => void archiveItem('project', project.id)}
+                      onSelect={() => void archiveItem('project', project.id, project.name)}
                     >
                       <CioArchive size={14} class="text-muted" />
                       Archive Project

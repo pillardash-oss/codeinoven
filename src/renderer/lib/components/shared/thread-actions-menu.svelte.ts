@@ -224,7 +224,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
             {
               label: 'Archive thread',
               icon: CioArchive,
-              onClick: () => void archiveItem('thread', thread.id)
+              onClick: () => void archiveItem('thread', thread.id, thread.title)
             },
             { label: '', divider: true }
           ]),
