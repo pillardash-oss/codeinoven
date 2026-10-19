@@ -327,6 +327,15 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **A comment written in a temporary chat now exists.** Selecting a passage
+  inside a side chat dropped the text into the composer and nothing else: the
+  comment editor never opened, because a side chat keeps its own references on
+  its tab instead of in the thread store the editor read. A side chat now keeps
+  the passage, the comment written on it and the range it was taken from
+  together, so the highlight is drawn, the comment editor opens on the passage,
+  the composer chip edits and removes it, and the comment travels to the harness
+  in the turn's `<selection>` block beside the quoted text.
+
 - **A selection keeps up with shift and the arrow keys.** Highlighting a passage
   and then extending or trimming it with shift and an arrow key left the action
   menu, the comment popover and the quote they carry on the text the pointer had

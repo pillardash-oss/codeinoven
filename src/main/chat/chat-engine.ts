@@ -602,6 +602,7 @@ import {
   formatHistoryRecap,
   formatInterviewDecisions,
   formatProjectReferenceContext,
+  formatTemporaryReferenceContext,
   hasTerminalSpecContractMarker,
   mermaidValidationFailureMessage,
   mermaidValidationNotice,
@@ -11033,7 +11034,7 @@ export class ChatEngine {
     if (isContinuationRelayPrompt(text)) {
       validatedAttachments = await this.relayAttachments(projectId, threadId, validatedAttachments)
     }
-    const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
+    const referenceBlock = formatTemporaryReferenceContext(validatedReferences)
     let context = initialContext
       ? validateBoundedString(initialContext, 'Temporary chat context', 1, 100_000)
       : ''
@@ -11126,11 +11127,7 @@ export class ChatEngine {
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
-    const promptText = selectedTexts.length
-      ? `Referenced response selections:\n${selectedTexts
-          .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
-          .join('\n\n')}\n\nUser request:\n${text}`
-      : text
+    const promptText = referenceBlock ? `${referenceBlock}\n\nUser request:\n${text}` : text
     const completion = this.waitForSessionCompletion(temporary.sessionId, null, 'Temporary chat')
     try {
       const memoryPrompt = await this.memoryService.formatCurrent(
@@ -11511,12 +11508,8 @@ export class ChatEngine {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
     }
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
-    const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
-    const promptText = selectedTexts.length
-      ? `Referenced response selections:\n${selectedTexts
-          .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
-          .join('\n\n')}\n\nUser request:\n${text}`
-      : text
+    const referenceBlock = formatTemporaryReferenceContext(validatedReferences)
+    const promptText = referenceBlock ? `${referenceBlock}\n\nUser request:\n${text}` : text
     const steerUserMessageId = userMessageId
       ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
       : createMessageId()

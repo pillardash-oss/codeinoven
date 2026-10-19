@@ -2742,6 +2742,17 @@
   const RESPONSE_RANGE_RETRIES = 3
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
+  /**
+   * The selections this conversation draws on screen.
+   *
+   * A thread keeps them in its own store; a side chat owns no Thread row, so its
+   * controller keeps them on its tab. Both describe a passage, its comment and
+   * the range it came from, which is everything the highlight, the bubble and
+   * the comment editor need, so the surface is the same for either.
+   */
+  let annotationReferences = $derived(
+    controller?.references ? [...controller.references] : responseReferences
+  )
   const responseReferenceRanges = new SvelteMap<string, Range>()
   /** Identity of this view as the CSS highlight registry's owner, so its
    *  teardown can never clear highlights another view published. */
@@ -2786,7 +2797,7 @@
     x: number,
     y: number
   ): ResponseSelectionCandidate | null {
-    const reference = responseReferences.find((candidate) => candidate.id === referenceId)
+    const reference = annotationReferences.find((candidate) => candidate.id === referenceId)
     const range = responseReferenceRanges.get(referenceId)
     if (!reference || !range) return null
     if (
@@ -2890,7 +2901,7 @@
       return
     responseBubblePositions = withUnmeasuredAnchors(
       measureAnnotationBubbles(scrollEl, responseReferenceRanges),
-      responseReferences.map((reference) => reference.id),
+      annotationReferences.map((reference) => reference.id),
       responseAnchorFallback
     )
   }
@@ -2905,7 +2916,7 @@
    * conversation when even that message is not mounted.
    */
   function responseAnchorFallback(id: string): { x: number; y: number } | null {
-    const messageId = responseReferences.find((reference) => reference.id === id)?.messageId
+    const messageId = annotationReferences.find((reference) => reference.id === id)?.messageId
     const rect = messageId
       ? document.getElementById(`msg-${messageId}`)?.getBoundingClientRect()
       : undefined
@@ -3026,10 +3037,22 @@
     const selection = responseSelection
     if (!selection) return
     // Temporary chats keep their composer references on the controller   the
-    // thread-scoped store below is invisible to them.
+    // thread-scoped store below is invisible to them   but they became a
+    // reference like any other, so the comment editor opens on the passage and
+    // the comment rides to the harness with it.
     if (controller?.addSelection) {
-      controller.addSelection(selection.text)
+      const referenceId = controller.addSelection({
+        text: selection.text,
+        messageId: selection.messageId,
+        startOffset: selection.startOffset,
+        endOffset: selection.endOffset
+      })
+      if (!referenceId) return
+      responseReferenceRanges.set(referenceId, selection.range)
+      refreshResponseHighlights()
+      updateResponseBubblePositions()
       closeResponseSelection()
+      commentEditorReferenceId = referenceId
       return
     }
     const id = crypto.randomUUID()
@@ -3064,7 +3087,6 @@
     updateResponseBubblePositions()
     if (commentEditorReferenceId === id) commentEditorReferenceId = null
   }
-
   function clearResponseReferences(): void {
     responseReferencesState.clearThread(thread.projectId, thread.id)
     responseReferenceRanges.clear()
@@ -3075,7 +3097,11 @@
 
   /** Save or clear the user comment attached to a reference anchor. */
   function saveResponseReferenceComment(id: string, comment: string): void {
-    responseReferencesState.updateComment(thread.projectId, thread.id, id, comment)
+    if (controller?.updateReferenceComment) {
+      controller.updateReferenceComment(id, comment)
+    } else {
+      responseReferencesState.updateComment(thread.projectId, thread.id, id, comment)
+    }
     commentEditorReferenceId = null
     // Saving closes the editor that held the caret, so the comment is now only
     // attached to the chat component. Hand focus back to the composer: the very
@@ -3084,6 +3110,12 @@
   }
 
   function persistResponseReferenceCommentDraft(id: string, comment: string): void {
+    // A temporary chat has no stored draft: its reference list is its own only
+    // copy, so the text being typed is the comment from the first keystroke.
+    if (controller?.updateReferenceComment) {
+      controller.updateReferenceComment(id, comment)
+      return
+    }
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
   }
 
@@ -3243,7 +3275,7 @@
   }
 
   async function editResponseReference(id: string): Promise<void> {
-    const reference = responseReferences.find((candidate) => candidate.id === id)
+    const reference = annotationReferences.find((candidate) => candidate.id === id)
     if (!reference) return
     // A document annotation is drawn in the file panel and a design element in
     // the browser, not in the conversation, so each of their edit actions opens
@@ -3282,7 +3314,7 @@
     // and no bubble to pin.
     if (reference.messageId) await jumpToMessage(reference.messageId)
     if (!alive) return
-    syncResponseHighlights(responseReferences)
+    syncResponseHighlights(annotationReferences)
     await tick()
     if (!alive) return
     updateResponseBubblePositions()
@@ -3298,24 +3330,34 @@
   function removeComposerReference(id: string): void {
     if (controller?.removeReference) {
       controller.removeReference(id)
-    } else {
-      removeResponseReference(id)
+      // The side chat's ranges and bubble positions live in this view, so a
+      // reference the controller dropped has to stop being drawn here too.
+      responseReferenceRanges.delete(id)
+      refreshResponseHighlights()
+      updateResponseBubblePositions()
+      if (commentEditorReferenceId === id) commentEditorReferenceId = null
+      return
     }
+    removeResponseReference(id)
   }
 
   /** Clear all composer selection references, routing to the controller for temporary chats. */
   function clearComposerReferences(): void {
     if (controller?.clearReferences) {
       controller.clearReferences()
-    } else {
-      clearResponseReferences()
+      responseReferenceRanges.clear()
+      refreshResponseHighlights()
+      responseBubblePositions = {}
+      commentEditorReferenceId = null
+      return
     }
+    clearResponseReferences()
   }
 
   function commentEditorReference(): ResponseReferenceAnchor | null {
     const id = commentEditorReferenceId
     if (!id) return null
-    return responseReferences.find((reference) => reference.id === id) ?? null
+    return annotationReferences.find((reference) => reference.id === id) ?? null
   }
 
   /** Where the open comment editor anchors.
@@ -3345,16 +3387,16 @@
   // and a range that failed to rebuild in that state was never retried. That is
   // what left a comment with no bubble and no highlight on return.
   $effect(() => {
-    void responseReferences.length
+    void annotationReferences.length
     void visibleMessages.length
     void conversationBusy
     void threadMessages.streamRevision(thread.projectId, conversationId)
     void active
-    if (responseReferences.length === 0) return
+    if (annotationReferences.length === 0) return
     responseRangeRetriesLeft = RESPONSE_RANGE_RETRIES
     void tick().then(() => {
       if (!alive) return
-      syncResponseHighlights(responseReferences)
+      syncResponseHighlights(annotationReferences)
     })
   })
 
@@ -5327,7 +5369,7 @@
         })
         .catch(() => {})
     })
-    scheduleResponseHighlightRestore(responseReferences)
+    scheduleResponseHighlightRestore(annotationReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
     queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
@@ -12948,7 +12990,7 @@
 {/if}
 
 <!-- Comment bubbles pinned to attached response selections -->
-{#each responseReferences as reference, referenceIndex (reference.id)}
+{#each annotationReferences as reference, referenceIndex (reference.id)}
   {@const position = responseBubblePositions[reference.id]}
   {#if position?.visible}
     <ResponseAnnotationBubble
@@ -15128,7 +15170,7 @@
                       references={composerReferences}
                       onRemoveReference={removeComposerReference}
                       onRemoveAllReferences={clearComposerReferences}
-                      onEditReference={controller ? undefined : editResponseReference}
+                      onEditReference={editResponseReference}
                       onSend={sendComposerMessage}
                       onNeedsAiAccount={() => (aiAccountPromptOpen = true)}
                       historyMessages={composerHistoryTexts}
