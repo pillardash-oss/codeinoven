@@ -239,6 +239,46 @@ function scriptWritePaths(command: string): string[] {
       if (code[match.index]) addExpression(match[1])
     }
   }
+  // `p = Path('src/x.ts')` and later `p.write_text(...)` is how the Codex
+  // harness edits files from an inline script. The writer is a bare variable,
+  // so the literal has to be resolved from its assignment before the call
+  // reads as a write target; without that the whole heredoc yields no path, the
+  // turn claims no file, and completion drops the real edit from the card.
+  const pythonPathVariable = new RegExp(
+    String.raw`(?:^|[;\n])\s*([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(?:pathlib\s*\.\s*)?Path\s*\(\s*(${STATIC_PATH_EXPRESSION})\s*\)`,
+    'gmu'
+  )
+  const pythonVariableWriter = new RegExp(
+    String.raw`\b([A-Za-z_][A-Za-z_0-9]*)\s*\.\s*(?:touch|write_bytes|write_text)\s*\(`,
+    'gmu'
+  )
+  // Read assignments and writers in source order: one script commonly reuses
+  // the same variable for several files, so a writer resolves against the value
+  // the variable holds at its own position, never the script's final one.
+  const pathEvents: Array<{ at: number; name: string; literal?: string }> = []
+  for (const match of command.matchAll(pythonPathVariable)) {
+    if (!code[match.index]) continue
+    const name = match[1]
+    const literal = staticStringValue(match[2] ?? '')
+    if (name && literal && match.index !== undefined) {
+      pathEvents.push({ at: match.index, name, literal })
+    }
+  }
+  for (const match of command.matchAll(pythonVariableWriter)) {
+    if (!code[match.index]) continue
+    const name = match[1]
+    if (name && match.index !== undefined) pathEvents.push({ at: match.index, name })
+  }
+  pathEvents.sort((left, right) => left.at - right.at)
+  const pathVariables = new Map<string, string>()
+  for (const event of pathEvents) {
+    if (event.literal) {
+      pathVariables.set(event.name, event.literal)
+      continue
+    }
+    const resolved = pathVariables.get(event.name)
+    if (resolved) candidates.push(resolved)
+  }
   return candidates
 }
 
