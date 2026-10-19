@@ -32,7 +32,10 @@ export function windowsGitBins(root: string): string[] {
   return [join(root, 'cmd'), join(root, 'bin'), join(root, 'usr', 'bin')]
 }
 
-export async function windowsGitRuntimeAt(root: string): Promise<WindowsGitRuntime | null> {
+export async function windowsGitRuntimeAt(
+  root: string,
+  deadline = Number.POSITIVE_INFINITY
+): Promise<WindowsGitRuntime | null> {
   const bash = join(root, 'bin', 'bash.exe')
   const ssh = join(root, 'usr', 'bin', 'ssh.exe')
   try {
@@ -43,6 +46,7 @@ export async function windowsGitRuntimeAt(root: string): Promise<WindowsGitRunti
       join(root, 'usr', 'bin', 'bash.exe'),
       join(root, 'usr', 'bin', 'msys-2.0.dll')
     ]) {
+      if (Date.now() >= deadline) return null
       if (!(await stat(file)).isFile()) return null
     }
     return { root, bash, ssh }
@@ -53,6 +57,7 @@ export async function windowsGitRuntimeAt(root: string): Promise<WindowsGitRunti
 
 let selected: WindowsGitRuntime | null = null
 let cached: { key: string; runtime: WindowsGitRuntime | null; expires: number } | undefined
+const discovering = new Map<string, Promise<WindowsGitRuntime | null>>()
 
 export function selectedWindowsGitRuntime(): WindowsGitRuntime | null {
   return selected
@@ -71,6 +76,23 @@ export async function findWindowsGitRuntime(
   const path = windowsPathValue(env)
   const key = JSON.stringify([bash, path, common])
   if (cached?.key === key && cached.expires > Date.now()) return cached.runtime
+  const existing = discovering.get(key)
+  if (existing) return existing
+  const discovery = discoverWindowsGitRuntime(bash, path, common, key)
+  discovering.set(key, discovery)
+  try {
+    return await discovery
+  } finally {
+    discovering.delete(key)
+  }
+}
+
+async function discoverWindowsGitRuntime(
+  bash: string | undefined,
+  path: string,
+  common: string[],
+  key: string
+): Promise<WindowsGitRuntime | null> {
   const pathRoots = path
     .split(';')
     .filter(Boolean)
@@ -81,18 +103,35 @@ export async function findWindowsGitRuntime(
     })
   const roots = [
     ...(bash ? [dirname(dirname(bash)), dirname(dirname(dirname(bash)))] : []),
-    ...pathRoots,
-    ...common
+    ...(selected ? [selected.root] : []),
+    ...common,
+    ...pathRoots
   ]
-  for (const root of new Set(roots)) {
-    const runtime = await windowsGitRuntimeAt(root)
-    if (runtime) {
-      selected = runtime
-      cached = { key, runtime, expires: Date.now() + 30_000 }
-      return runtime
+  const deadline = Date.now() + 1_500
+  const scan = async (): Promise<WindowsGitRuntime | null> => {
+    for (const root of new Set(roots)) {
+      if (Date.now() >= deadline) return null
+      // An offline network PATH entry can hold a filesystem worker for minutes.
+      if (/^(?:\\\\|\/\/)/u.test(root)) continue
+      const runtime = await windowsGitRuntimeAt(root, deadline)
+      if (Date.now() >= deadline) return null
+      if (runtime) return runtime
     }
+    return null
   }
-  selected = null
-  cached = { key, runtime: null, expires: Date.now() + 5_000 }
-  return null
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let runtime: WindowsGitRuntime | null
+  try {
+    runtime = await Promise.race([
+      scan(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 1_500)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+  selected = runtime
+  cached = { key, runtime, expires: Date.now() + (runtime ? 30_000 : 5_000) }
+  return runtime
 }

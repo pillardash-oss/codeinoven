@@ -180,6 +180,12 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
+  // This independent prerequisite must not hold the feature graph, a first
+  // message, or terminal creation behind a download/extraction promise.
+  if (process.platform === 'win32')
+    void import('../drivers/windows-git-runtime')
+      .then(({ startWindowsGitPreparation }) => startWindowsGitPreparation())
+      .catch((error: unknown) => Logger.error('Windows Git startup preparation failed', error))
   const [
     { registerIpcHandlers },
     { ProjectManager },

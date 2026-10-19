@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../../lib/brand'
-import { ensureWindowsGitRuntime } from '../drivers/windows-git-runtime'
+import { prepareWindowsGitRuntime } from '../drivers/windows-git-runtime'
 import type { UpdateBlockerTerminal } from '../../lib/ipc-contract'
 import { Logger } from './logger'
 import { dailyLogRelativePath, PTY_EVENTS_LOG_FILE } from './log-paths'
@@ -260,7 +260,7 @@ export class PtyService {
   private async prepareWindowsShell(): Promise<void> {
     if (process.platform !== 'win32') return
     try {
-      await ensureWindowsGitRuntime()
+      await prepareWindowsGitRuntime()
     } catch (error) {
       Logger.info('Windows Git setup unavailable; continuing with a native terminal', error)
     }

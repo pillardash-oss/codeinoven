@@ -736,9 +736,9 @@ export async function prepareHarnessInvocation(
   )
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
   if (runtime.target.kind !== 'wsl' && options.prepareWindowsTools !== false) {
-    const { ensureWindowsGitRuntime } = await import('./windows-git-runtime')
+    const { prepareWindowsGitRuntime } = await import('./windows-git-runtime')
     try {
-      const git = await ensureWindowsGitRuntime(env)
+      const git = await prepareWindowsGitRuntime(env)
       env = buildProcessEnvironment(env)
       if (git) env['CLAUDE_CODE_GIT_BASH_PATH'] = git.bash
     } catch (error) {
