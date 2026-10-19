@@ -557,11 +557,13 @@
 
   const isNightlyChannel = $derived(config.updateChannel === 'nightly')
 
-  /** Installed build's version, marked as nightly when the user is on the nightly channel. */
-  const displayVersion = $derived.by(() => {
-    const base = updaterState.status.currentVersion ?? '0.1.0'
-    return base.includes('nightly') ? base : isNightlyChannel ? `${base}-nightly` : base
-  })
+  /**
+   * The installed build's own version, exactly as it was packaged. No channel
+   * suffix is synthesised: a stable build subscribed to the nightly channel is
+   * still that stable build, and the Changelog below reads the release for this
+   * exact version, so the two always agree.
+   */
+  const displayVersion = $derived(updaterState.status.currentVersion ?? '0.1.0')
 
   /**
    * Load the blockers, then show the modal over the settings page.
