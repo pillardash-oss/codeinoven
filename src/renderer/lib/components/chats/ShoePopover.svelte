@@ -78,7 +78,7 @@
       onOpenAutoFocus={(event) => event.preventDefault()}
       onCloseAutoFocus={(event) => event.preventDefault()}
       class="z-90 w-72 overflow-x-hidden overflow-y-auto border border-border bg-surface shadow-lg {panelClass}"
-      style="max-height: min(26rem, var(--bits-popover-content-available-height))"
+      style="max-height: var(--bits-popover-content-available-height, 60vh)"
       aria-label={label}
     >
       {@render children()}
