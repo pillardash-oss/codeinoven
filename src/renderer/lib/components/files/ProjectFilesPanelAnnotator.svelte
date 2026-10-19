@@ -262,11 +262,28 @@
    * highlighted when the pointer came up. A selection that collapses or leaves
    * the document closes the menu, which is what its absence means.
    */
+  /**
+   * Whether an emptied selection happened inside this document.
+   *
+   * A caret that has moved into a field is not the user clearing this passage:
+   * the note editor takes focus the moment the menu opens a note, and a menu
+   * that closed on that would take the actions away from the note being written.
+   * A selection that emptied inside the document is the passage being cleared,
+   * and closes the menu.
+   */
+  function selectionTouchesDocument(): boolean {
+    const selection = document.getSelection()
+    const root = documentRoot
+    if (!selection || !root) return true
+    return root.contains(selection.anchorNode) || root.contains(selection.focusNode)
+  }
+
   $effect(() => {
     if (!selectionMenuOpen) return
     return trackLiveSelection(
       () => captureDocumentSelection(documentRoot),
       (candidate) => {
+        if (!candidate && !selectionTouchesDocument()) return
         pendingSelection = candidate
       }
     )

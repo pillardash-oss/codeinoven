@@ -384,6 +384,7 @@
   } from '$lib/selection-menu'
   import {
     captureResponseSelection,
+    responseElementFor,
     responseRangeFor,
     responseRangeIsCurrent,
     RESPONSE_HIGHLIGHT_NAME,
@@ -2827,16 +2828,36 @@
   }
 
   /**
+   * Whether an emptied selection happened inside the responses.
+   *
+   * A caret that has moved into a field is not the user clearing this highlight:
+   * the comment editor takes focus the moment the menu opens a comment, and a
+   * menu that closed on that would take the actions away from the comment being
+   * written. A selection that emptied inside a response is the highlight being
+   * cleared, and closes the menu.
+   */
+  function selectionTouchesResponses(): boolean {
+    const selection = document.getSelection()
+    if (!selection) return true
+    return (
+      responseElementFor(selection.anchorNode) !== null ||
+      responseElementFor(selection.focusNode) !== null
+    )
+  }
+
+  /**
    * Follow the selection while the menu is open.
    *
    * Shift and an arrow key extend or trim a selection without any pointer event,
    * and the menu has to describe the text highlighted now rather than the text
-   * that was highlighted when the pointer came up. A selection that collapses or
-   * leaves the responses closes the menu, which is what its absence means.
+   * that was highlighted when the pointer came up. A selection that emptied
+   * inside a response closes the menu; one that has only left the responses,
+   * like a caret the comment editor took, leaves the menu where it is.
    */
   $effect(() => {
     if (!selectionMenuOpen) return
     return trackLiveSelection(captureResponseSelection, (candidate) => {
+      if (!candidate && !selectionTouchesResponses()) return
       responseSelection = candidate
     })
   })
