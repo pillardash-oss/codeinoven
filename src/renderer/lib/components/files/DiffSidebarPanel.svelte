@@ -708,10 +708,11 @@
 
 <div class="flex h-full min-h-0 flex-col bg-app">
   {#if controller.turns.length > 0}
-    <div class="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
+    {@const checkpoint = controller.selectedCheckpoint}
+    <div class="flex shrink-0 items-start gap-2 border-b border-border px-2 py-1.5">
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show previous turn"
         title="Previous turn"
         disabled={controller.selectedIndex >= controller.turns.length - 1}
@@ -719,12 +720,43 @@
       >
         <CioBack size={13} />
       </button>
-      <span class="text-[0.625rem] font-medium tabular-nums text-muted">
-        Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
-      </span>
+      <div class="min-w-0 flex-1 py-0.5">
+        {#if checkpoint}
+          <span class="flex items-center gap-1.5">
+            <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
+              {checkpoint.label}
+            </span>
+            {#if checkpoint.status === 'active'}
+              <span
+                class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
+              >
+                In progress
+              </span>
+            {/if}
+          </span>
+          <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.5625rem] text-dimmed">
+            <span class="shrink-0 tabular-nums">
+              Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
+            </span>
+            <span class="shrink-0" aria-hidden="true">·</span>
+            <span class="shrink-0 tabular-nums">
+              {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
+            </span>
+            <span class="shrink-0" aria-hidden="true">·</span>
+            <span class="shrink-0 tabular-nums">{checkpoint.changes.length}</span>
+          </span>
+        {:else}
+          <span class="text-[0.625rem] font-medium tabular-nums text-muted">
+            Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
+          </span>
+        {/if}
+        {#if checkpoint?.failure}
+          <p class="mt-0.5 text-[0.625rem] leading-relaxed text-danger">{checkpoint.failure}</p>
+        {/if}
+      </div>
       <button
         type="button"
-        class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
         aria-label="Show next turn"
         title="Next turn"
         disabled={controller.selectedIndex <= 0}
@@ -893,38 +925,6 @@
       />
     </button>
   </div>
-
-  {#if controller.selectedCheckpoint}
-    {@const checkpoint = controller.selectedCheckpoint}
-    <div class="flex min-h-10 shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-      <CioDiff size={13} class="shrink-0 text-info" />
-      <span class="min-w-0 flex-1">
-        <span class="flex items-center gap-1.5">
-          <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
-            {checkpoint.label}
-          </span>
-          {#if checkpoint.status === 'active'}
-            <span
-              class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
-            >
-              In progress
-            </span>
-          {/if}
-        </span>
-        <span class="block text-[0.5625rem] text-dimmed">
-          {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
-        </span>
-      </span>
-      <span class="tabular-nums text-[0.625rem] text-dimmed">
-        {checkpoint.changes.length}
-      </span>
-    </div>
-    {#if checkpoint.failure}
-      <p class="shrink-0 border-b border-border px-3 py-1.5 text-[0.625rem] text-danger">
-        {checkpoint.failure}
-      </p>
-    {/if}
-  {/if}
 
   <div
     {@attach bindScrollContainer}
