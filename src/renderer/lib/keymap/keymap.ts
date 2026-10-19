@@ -334,6 +334,42 @@ export function formatKeyCombo(keys: readonly string[], isMac = isMacPlatform())
   return keymapKeyGroups(keys, isMac).join(' / ')
 }
 
+// ─── Element transport ────────────────────────────────────────────────────
+
+/**
+ * Encode symbolic key tokens for the `data-shortcut` attribute an element wears.
+ *
+ * A plain comma join cannot carry this registry: `,` is itself a key token
+ * (`nav-settings` is `mod` + `,`), so the separator and the payload collide and
+ * the tooltip chip loses the real key. Each token is percent-encoded before it
+ * is joined, which keeps the attribute a single readable string that survives
+ * any token the registry or a user override can hold.
+ */
+export function encodeShortcutTokens(keys: readonly string[]): string | undefined {
+  if (keys.length === 0) return undefined
+  return keys.map((key) => encodeURIComponent(key)).join(',')
+}
+
+/**
+ * Decode a `data-shortcut` attribute back into symbolic key tokens.
+ *
+ * Unreadable tokens are kept verbatim instead of throwing: a stray attribute
+ * must never break the tooltip it is decorating.
+ */
+export function decodeShortcutTokens(raw: string | null | undefined): readonly string[] {
+  if (!raw) return []
+  const keys: string[] = []
+  for (const part of raw.split(',')) {
+    if (part === '') continue
+    try {
+      keys.push(decodeURIComponent(part))
+    } catch {
+      keys.push(part)
+    }
+  }
+  return keys
+}
+
 const KEYMAP_BY_ID: Map<string, KeymapShortcut> = new Map(
   KEYMAP.categories.flatMap((category) =>
     category.shortcuts.map((shortcut) => [shortcut.id, shortcut] as const)

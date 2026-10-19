@@ -39,6 +39,7 @@
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { copyText } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import { osFileManagerLabel, revealInOsFileManager } from '$lib/os-file-manager'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -1241,7 +1242,7 @@
                               class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                               aria-label="New thread in {project.name}"
                               title="New thread"
-                              data-shortcut={keymapState.keysFor('nav-new-thread').join(',')}
+                              data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
                               onclick={() => onCreateThread(project)}
                             >
                               <CioPlus size={12} />
@@ -1503,7 +1504,7 @@
                           class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                           aria-label="New thread in {project.name}"
                           title="New thread"
-                          data-shortcut={keymapState.keysFor('nav-new-thread').join(',')}
+                          data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
                           onclick={() => onCreateThread(project)}
                         >
                           <CioPlus size={12} />

@@ -12,6 +12,7 @@
   import OvenProjectModal from './OvenProjectModal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
   import { folderBaseName } from '$lib/project-location'
@@ -162,7 +163,7 @@
       class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
-      data-shortcut={keymapState.keysFor('nav-new-project').join(',')}
+      data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-project'))}
     >
       <CioProjects size={15} strokeWidth={1.8} />
     </DropdownMenu.Trigger>
