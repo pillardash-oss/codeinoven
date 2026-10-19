@@ -77,6 +77,8 @@
   } from './connection-library'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import CardFoot from '$lib/components/shared/CardFoot.svelte'
+  import CardButton from '$lib/components/shared/CardButton.svelte'
   import ConnectionRow from './ConnectionRow.svelte'
   import AssistantAgentPicker from './AssistantAgentPicker.svelte'
   import AssistantExecutionPicker from './AssistantExecutionPicker.svelte'
@@ -622,6 +624,7 @@
 
   /** The soonest intended fire across this panel's tasks, or null when none is scheduled. */
   const nextRunAt = $derived.by(() => {
+    if (assistant?.paused) return null
     let earliest: number | null = null
     for (const entry of runScopeTasks) {
       const candidate = assistants.nextRunForTask(entry)
@@ -630,7 +633,9 @@
     }
     return earliest
   })
-  const nextRunLabel = $derived(nextRunAt === null ? 'Not scheduled' : formatDateTime(nextRunAt))
+  const nextRunLabel = $derived(
+    assistant?.paused ? '-' : nextRunAt === null ? 'Not scheduled' : formatDateTime(nextRunAt)
+  )
   const nextRunRelative = $derived(
     nextRunAt === null ? null : describeRelativeTime(nextRunAt, Date.now())
   )
@@ -997,29 +1002,11 @@
 {#snippet panelContent()}
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if activeTab === 'all'}
-      <div class="flex flex-col gap-2 pl-3">
+      <div class="flex flex-col gap-3 p-3">
         {#if assistant}
           {#if scheduled}
-            <div class="flex flex-col gap-2 border border-border bg-surface px-2.5 py-2">
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  class="flex shrink-0 items-center gap-1.5 bg-primary px-2 py-1 text-[0.6875rem] text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-                  title="Run this assistant now, even while paused"
-                  aria-label="Run this assistant now"
-                  disabled={running || !knowledgeComplete}
-                  onclick={() => void runNow()}
-                >
-                  <CioUndo size={12} strokeWidth={1.8} class={running ? 'animate-spin' : ''} />
-                  Run now
-                </button>
-                <span class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-dimmed">
-                  {knowledgeComplete
-                    ? 'Test it without waiting for the schedule.'
-                    : 'Save a knowledge first.'}
-                </span>
-              </div>
-              <dl class="flex flex-wrap gap-x-5 gap-y-1">
+            <div class="flex flex-col border border-border bg-surface">
+              <dl class="flex flex-wrap gap-x-5 gap-y-2 p-3">
                 <div class="flex flex-col gap-0.5">
                   <dt
                     class="text-[0.5625rem] tracking-wide text-dimmed uppercase"
@@ -1048,6 +1035,26 @@
                   <dd class="text-[0.75rem] text-foreground">{nextRunLabel}</dd>
                 </div>
               </dl>
+              <CardFoot>
+                {#snippet left()}
+                  <p class="text-[0.6875rem] leading-relaxed text-muted">
+                    {knowledgeComplete
+                      ? 'Run a task now without waiting for the schedule.'
+                      : 'Save the assistant instructions first.'}
+                  </p>
+                {/snippet}
+                {#snippet right()}
+                  <CardButton
+                    label="Run now"
+                    title="Run a task now, even while the assistant is paused"
+                    icon={CioUndo}
+                    variant="primary"
+                    loading={running}
+                    disabled={running || !knowledgeComplete}
+                    onclick={() => void runNow()}
+                  />
+                {/snippet}
+              </CardFoot>
             </div>
           {/if}
 
