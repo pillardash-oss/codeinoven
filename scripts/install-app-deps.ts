@@ -12,10 +12,14 @@
  *
  * Before handing over to `electron-builder install-app-deps`, this script looks
  * for the newest installation whose installed compiler matches the toolset
- * node-gyp derives from that installation's year, and points
- * `GYP_MSVS_VERSION` at it. An explicit `GYP_MSVS_VERSION` always wins, and
- * when nothing matches the rebuild still runs with node-gyp's own detection so
- * the failure stays visible; the lines below name the toolset to install.
+ * node-gyp derives from that installation's year, and pins that year through
+ * `npm_config_msvs_version`, the only channel node-gyp 12 still reads (its
+ * `msvs-version` option ignores the `--msvs_version` flag that
+ * `@electron/rebuild` forwards from `GYP_MSVS_VERSION`, which is why setting
+ * that variable alone never changed the toolset). An explicit year always
+ * wins, and when nothing matches the rebuild still runs with node-gyp's own
+ * detection so the failure stays visible; the lines below name the toolset to
+ * install.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
@@ -184,34 +188,46 @@ function describeInstallations(installations: VisualStudioInstallation[]): strin
 const args = ['install-app-deps']
 const environment: NodeJS.ProcessEnv = { ...process.env }
 
-if (process.platform === 'win32' && !environment.GYP_MSVS_VERSION) {
-  try {
-    const vswhere = visualStudioInstaller()
-    const installations = vswhere ? installedVisualStudios(vswhere) : []
-    const match = selectToolset(installations)
-    if (match) {
-      environment.GYP_MSVS_VERSION = match.year
-      Logger.dev(
-        `[install-app-deps] Building native modules with Visual Studio ${match.year} (toolset ${match.toolset}) at ${match.path}.`
-      )
-    } else {
+/** node-gyp reads the requested year from npm config, not from its own flag. */
+function applyYear(year: string): void {
+  environment.npm_config_msvs_version = year
+  environment.GYP_MSVS_VERSION = year
+}
+
+const configuredYear = environment.npm_config_msvs_version ?? environment.GYP_MSVS_VERSION
+
+if (process.platform === 'win32') {
+  if (configuredYear) {
+    applyYear(configuredYear)
+  } else {
+    try {
+      const vswhere = visualStudioInstaller()
+      const installations = vswhere ? installedVisualStudios(vswhere) : []
+      const match = selectToolset(installations)
+      if (match) {
+        applyYear(match.year)
+        Logger.info(
+          `[install-app-deps] Building native modules with Visual Studio ${match.year} (toolset ${match.toolset}) at ${match.path}.`
+        )
+      } else {
+        Logger.error(
+          [
+            '[install-app-deps] No Visual Studio C++ toolset matches the one node-gyp derives from its year.',
+            installations.length > 0
+              ? describeInstallations(installations)
+              : '- no Visual Studio installation reported by vswhere',
+            `Install "Desktop development with C++" including the ${TARGET_ARCHITECTURE[process.arch] ?? process.arch} build tools, or set GYP_MSVS_VERSION to a year whose toolset is installed.`
+          ].join('\n')
+        )
+      }
+    } catch (error) {
+      // Inspecting Visual Studio must never decide whether the install succeeds;
+      // node-gyp's own detection stays the fallback.
       Logger.error(
-        [
-          '[install-app-deps] No Visual Studio C++ toolset matches the one node-gyp derives from its year.',
-          installations.length > 0
-            ? describeInstallations(installations)
-            : '- no Visual Studio installation reported by vswhere',
-          `Install "Desktop development with C++" including the ${TARGET_ARCHITECTURE[process.arch] ?? process.arch} build tools, or set GYP_MSVS_VERSION to a year whose toolset is installed.`
-        ].join('\n')
+        '[install-app-deps] Could not inspect Visual Studio; using node-gyp detection:',
+        error
       )
     }
-  } catch (error) {
-    // Inspecting Visual Studio must never decide whether the install succeeds;
-    // node-gyp's own detection stays the fallback.
-    Logger.error(
-      '[install-app-deps] Could not inspect Visual Studio; using node-gyp detection:',
-      error
-    )
   }
 }
 
