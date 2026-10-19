@@ -723,38 +723,6 @@
     </div>
   {/if}
 
-  {#if controller.selectedCheckpoint}
-    {@const checkpoint = controller.selectedCheckpoint}
-    <div class="flex min-h-10 shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-      <CioDiff size={13} class="shrink-0 text-info" />
-      <span class="min-w-0 flex-1">
-        <span class="flex items-center gap-1.5">
-          <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
-            {checkpoint.label}
-          </span>
-          {#if checkpoint.status === 'active'}
-            <span
-              class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
-            >
-              In progress
-            </span>
-          {/if}
-        </span>
-        <span class="block text-[0.5625rem] text-dimmed">
-          {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
-        </span>
-      </span>
-      <span class="tabular-nums text-[0.625rem] text-dimmed">
-        {checkpoint.changes.length}
-      </span>
-    </div>
-    {#if checkpoint.failure}
-      <p class="shrink-0 border-b border-border px-3 py-1.5 text-[0.625rem] text-danger">
-        {checkpoint.failure}
-      </p>
-    {/if}
-  {/if}
-
   <div class="flex h-9 min-w-0 shrink-0 items-center gap-2 border-b border-border px-2.5">
     <div
       class="flex shrink-0 items-center gap-0.5 border border-border bg-elevated p-0.5"
@@ -863,6 +831,38 @@
       />
     </button>
   </div>
+
+  {#if controller.selectedCheckpoint}
+    {@const checkpoint = controller.selectedCheckpoint}
+    <div class="flex min-h-10 shrink-0 items-center gap-2 border-b border-border px-3 py-2">
+      <CioDiff size={13} class="shrink-0 text-info" />
+      <span class="min-w-0 flex-1">
+        <span class="flex items-center gap-1.5">
+          <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
+            {checkpoint.label}
+          </span>
+          {#if checkpoint.status === 'active'}
+            <span
+              class="shrink-0 bg-info/10 px-1.5 py-0.5 text-[0.5625rem] font-semibold text-info"
+            >
+              In progress
+            </span>
+          {/if}
+        </span>
+        <span class="block text-[0.5625rem] text-dimmed">
+          {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
+        </span>
+      </span>
+      <span class="tabular-nums text-[0.625rem] text-dimmed">
+        {checkpoint.changes.length}
+      </span>
+    </div>
+    {#if checkpoint.failure}
+      <p class="shrink-0 border-b border-border px-3 py-1.5 text-[0.625rem] text-danger">
+        {checkpoint.failure}
+      </p>
+    {/if}
+  {/if}
 
   <div
     {@attach bindScrollContainer}
