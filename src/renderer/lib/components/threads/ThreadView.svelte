@@ -193,6 +193,8 @@
   } from '$lib/components/assistant/assistant-recap'
   import { assistantResultText } from '$shared/assistant-result'
   import AssistantRecapCard from '$lib/components/assistant/AssistantRecapCard.svelte'
+  import AssistantReadyCard from '$lib/components/assistant/AssistantReadyCard.svelte'
+  import AssistantSessionQuestion from '$lib/components/assistant/AssistantSessionQuestion.svelte'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
@@ -7547,6 +7549,39 @@
    *  host while its knowledge is missing, and the editing host once it is saved. */
   const assistantSetupThread = $derived(isAssistantSetupThread(thread))
 
+  const assistantBehaviorSession = $derived(settings.assistantBehaviorSession)
+  const assistantSessionReady = $derived(
+    !busy &&
+      assistantBehaviorSession !== undefined &&
+      (assistantBehaviorSession.saved === true ||
+        (messages.at(-1)?.role === 'assistant' &&
+          (messages.at(-1)?.createdAt ?? 0) > assistantBehaviorSession.startedAt &&
+          messages.at(-1)?.completedAt !== undefined))
+  )
+
+  function modifyAssistantBehavior(): void {
+    updateSettings({
+      ...settings,
+      assistantBehaviorSession: { startedAt: Date.now(), dismissals: 0 }
+    })
+    void tick().then(() => focusVisibleComposer())
+  }
+
+  function finishAssistantBehaviorSession(): void {
+    updateSettings({ ...settings, assistantBehaviorSession: undefined })
+  }
+
+  function dismissAssistantSessionQuestion(): void {
+    if (!assistantBehaviorSession || assistantBehaviorSession.dismissals > 0) {
+      finishAssistantBehaviorSession()
+      return
+    }
+    updateSettings({
+      ...settings,
+      assistantBehaviorSession: { ...assistantBehaviorSession, dismissals: 1 }
+    })
+  }
+
   /**
    * Whether the assistant still wears the name the create flow had to store.
    * Nothing about an assistant built by talking is known at first, so the copy
@@ -7671,6 +7706,16 @@
       assistantRecapDismissed !== assistantDraftSignature
   )
 
+  const assistantComposerCovered = $derived(
+    assistantSetupThread &&
+      assistantKnowledgeComplete &&
+      !busy &&
+      !assistantDraft &&
+      !assistantSaving &&
+      pendingQuestionRequests.length === 0 &&
+      (assistantBehaviorSession === undefined || assistantSessionReady)
+  )
+
   function keepEditingAssistant(): void {
     assistantRecapDismissed = assistantDraftSignature
   }
@@ -7724,6 +7769,12 @@
     if (!assistantId) return
     const firstSave = !assistantKnowledgeComplete
     const saved = await saveAssistantKnowledge()
+    if (saved && !firstSave && assistantBehaviorSession) {
+      updateSettings({
+        ...settings,
+        assistantBehaviorSession: { ...assistantBehaviorSession, saved: true }
+      })
+    }
     if (saved && firstSave) await assistants.postSetup(assistantId).catch(() => undefined)
   }
 
@@ -14891,6 +14942,26 @@
                 {/if}
                 {#if foreignRunActive}
                   <ForeignRunCard projectId={thread.projectId} threadId={thread.id} />
+                {:else if assistantComposerCovered}
+                  {#if assistantBehaviorSession && active}
+                    {#key `${thread.id}:${assistantBehaviorSession.startedAt}:${assistantBehaviorSession.dismissals}`}
+                      <AssistantSessionQuestion
+                        projectId={thread.projectId}
+                        threadId={thread.id}
+                        repeated={assistantBehaviorSession.dismissals > 0}
+                        onDone={finishAssistantBehaviorSession}
+                        onContinue={modifyAssistantBehavior}
+                        onDismiss={dismissAssistantSessionQuestion}
+                      />
+                    {/key}
+                  {:else}
+                    <AssistantReadyCard
+                      threadId={thread.id}
+                      {active}
+                      onModify={modifyAssistantBehavior}
+                      onStartTask={() => workspaceState.requestAssistantTask()}
+                    />
+                  {/if}
                 {:else}
                   {#key composerRestoreKey}
                     <ChatComposer

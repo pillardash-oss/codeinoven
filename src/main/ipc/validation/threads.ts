@@ -61,6 +61,7 @@ const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrac
 const THREAD_TITLE_SOURCES = new Set<ThreadTitleSource>(['default', 'auto', 'manual'])
 
 const THREAD_SETTINGS_FIELDS = new Set([
+  'assistantBehaviorSession',
   'ovenId',
   'ovenPath',
   'harnessId',
@@ -153,6 +154,26 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         ? false
         : validateBoolean(input.assignmentMode, 'Assignment'),
     loopMode: input.loopMode === undefined ? false : validateBoolean(input.loopMode, 'Achievement')
+  }
+  if (input.assistantBehaviorSession !== undefined) {
+    const session = assertRecord(input.assistantBehaviorSession, 'Assistant behavior session')
+    rejectUnknownFields(
+      session,
+      new Set(['startedAt', 'dismissals', 'saved']),
+      'assistant behavior session'
+    )
+    settings.assistantBehaviorSession = {
+      startedAt: validateBoundedInteger(
+        session.startedAt,
+        'Session start',
+        0,
+        Number.MAX_SAFE_INTEGER
+      ),
+      dismissals: validateBoundedInteger(session.dismissals, 'Session dismissals', 0, 1),
+      ...(session.saved === undefined
+        ? {}
+        : { saved: validateBoolean(session.saved, 'Saved revision') })
+    }
   }
   if (input.accountId !== undefined) {
     settings.accountId = validateEntityId(input.accountId, 'Account ID', 256)
