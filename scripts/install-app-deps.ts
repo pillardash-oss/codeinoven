@@ -22,7 +22,7 @@
  * install.
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Logger } from '../src/main/system/logger'
@@ -125,20 +125,47 @@ function hasWindowsSdk(packages: unknown): boolean {
 }
 
 /**
- * Finds the compiler directory node-gyp's vcxproj expects for this install.
+ * The compiler version MSBuild will use for this installation. When the
+ * default-version file names a compiler that is not on disk, MSBuild reports
+ * MSB8020 for the installation's own toolset even though the directory exists.
+ */
+function defaultToolsetVersion(installationPath: string): string | null {
+  const file = join(
+    installationPath,
+    'VC',
+    'Auxiliary',
+    'Build',
+    'Microsoft.VCToolsVersion.default.txt'
+  )
+  try {
+    const version = readFileSync(file, 'utf8').trim()
+    return version.length > 0 ? version : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Finds the compiler node-gyp's vcxproj expects for this install.
  * `VC/Tools/MSVC/<version>/bin/Host<host>/<target>/cl.exe` is exactly what
  * MSBuild resolves a `PlatformToolset` to, so its presence is the same test
- * that produced MSB8020.
+ * that produced MSB8020. A default-version file wins over a directory scan,
+ * because that is the version MSBuild actually resolves.
  */
 function findCompiler(installationPath: string, prefixes: string[]): string | null {
   const msvcRoot = join(installationPath, 'VC', 'Tools', 'MSVC')
   const target = TARGET_ARCHITECTURE[process.arch]
   if (!target || !existsSync(msvcRoot)) return null
+  const declared = defaultToolsetVersion(installationPath)
   let toolsets: string[]
-  try {
-    toolsets = readdirSync(msvcRoot)
-  } catch {
-    return null
+  if (declared) {
+    toolsets = [declared]
+  } else {
+    try {
+      toolsets = readdirSync(msvcRoot)
+    } catch {
+      return null
+    }
   }
   for (const toolset of toolsets.filter((entry) =>
     prefixes.some((prefix) => entry.startsWith(prefix))
@@ -188,10 +215,15 @@ function describeInstallations(installations: VisualStudioInstallation[]): strin
 const args = ['install-app-deps']
 const environment: NodeJS.ProcessEnv = { ...process.env }
 
-/** node-gyp reads the requested year from npm config, not from its own flag. */
-function applyYear(year: string): void {
+/**
+ * node-gyp reads the requested year from npm config, not from its own flag.
+ * `VCINSTALLDIR` additionally makes that installation the only one node-gyp is
+ * allowed to use, the same way a VS developer prompt would.
+ */
+function applyYear(year: string, installationPath?: string): void {
   environment.npm_config_msvs_version = year
   environment.GYP_MSVS_VERSION = year
+  if (installationPath) environment.VCINSTALLDIR = join(installationPath, 'VC')
 }
 
 const configuredYear = environment.npm_config_msvs_version ?? environment.GYP_MSVS_VERSION
@@ -205,7 +237,7 @@ if (process.platform === 'win32') {
       const installations = vswhere ? installedVisualStudios(vswhere) : []
       const match = selectToolset(installations)
       if (match) {
-        applyYear(match.year)
+        applyYear(match.year, match.path)
         Logger.info(
           `[install-app-deps] Building native modules with Visual Studio ${match.year} (toolset ${match.toolset}) at ${match.path}.`
         )
