@@ -442,24 +442,20 @@
   </div>
 {/snippet}
 
-<!-- The panel opens above the control, and its room is whatever the trigger has
-     above and beside it: a fixed-width panel was clipped by the conversation pane
-     whenever the shoe was narrow or the base font size was raised. The shell also
-     takes a tap as well as a hover, so a touch reaches the same reading. -->
+<!-- The panel opens above the control, portal-positioned so no pane can clip it.
+     The shell takes a tap as well as a hover, so a touch reaches the same reading. -->
 <ShoePopover label="Context and provider usage" {onReveal} {onHide}>
-  {#snippet trigger({ open, toggle })}
+  {#snippet trigger({ props })}
     <!-- Console usage control: a four-cell column and its number, the reading the
          shoe carries. The cells keep the app's severity colours, so a nearly full
          context still reads amber then red at a glance. -->
     <button
-      type="button"
+      {...props}
       class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      aria-expanded={open}
       aria-label={boundedPercent === undefined
         ? 'Context usage unavailable'
         : `Context ${Math.round(boundedPercent)}% used`}
       title="Context and usage"
-      onclick={toggle}
     >
       <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
         {#each METER_CELLS as cell (cell)}

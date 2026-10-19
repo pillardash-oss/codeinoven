@@ -321,9 +321,64 @@
     if (!projectId || !path) return
     void projectRemotes.ensure(projectId, path)
   })
+
+  /**
+   * Whether the row is out of room. The rate and the context percent are the first
+   * readings it gives up, because a tap or a hover restores both from the panel
+   * behind their marks, and nothing else in the row states them.
+   *
+   * The decision is measured, never a width of the composer: the shoe hugs its own
+   * content, so a width threshold is a guess about how long the names in the row
+   * happen to be, and it takes the figures away while the row still has room to
+   * spare.
+   */
+  let tight = $state(false)
+  const MEASURING_CLASS = 'shoe-measuring'
+
+  /**
+   * Attached to the row, which is the box that has to hold every segment: the card
+   * above it hugs the row until the composer runs out of room, so the card's own
+   * resize is what reports a tighter composer and a longer name alike.
+   */
+  function attachRow(row: HTMLElement): () => void {
+    const foundCard = row.parentElement
+    const foundWrapper = foundCard?.parentElement
+    if (!foundCard || !foundWrapper) return () => {}
+    const card: HTMLElement = foundCard
+    const wrapper: HTMLElement = foundWrapper
+
+    function measure(): void {
+      const wrapperStyle = getComputedStyle(wrapper)
+      const cardStyle = getComputedStyle(card)
+      const available =
+        wrapper.clientWidth -
+        Number.parseFloat(wrapperStyle.paddingLeft) -
+        Number.parseFloat(wrapperStyle.paddingRight) -
+        Number.parseFloat(cardStyle.paddingLeft) -
+        Number.parseFloat(cardStyle.paddingRight) -
+        Number.parseFloat(cardStyle.borderLeftWidth) -
+        Number.parseFloat(cardStyle.borderRightWidth)
+      if (!(available > 0)) return
+      // One synchronous read of the row at the width it asks for, with every reading
+      // in it: nothing else can say whether they fit, and nothing paints between this
+      // class going on and coming off.
+      row.classList.add(MEASURING_CLASS)
+      const natural = row.scrollWidth
+      row.classList.remove(MEASURING_CLASS)
+      tight = natural > available
+    }
+
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(card)
+    return () => observer.disconnect()
+  }
 </script>
 
-<div class="flex min-w-0 items-center gap-px whitespace-nowrap">
+<div
+  class="flex min-w-0 items-center gap-px whitespace-nowrap {tight ? 'shoe-tight' : ''}"
+  {@attach attachRow}
+>
   <!-- Scope: the board the thread belongs to. Project threads only. -->
   {#if bucket}
     <div class="relative min-w-0">
@@ -417,20 +472,13 @@
     <!-- The branch is the one reading the row never gives up: it stays, truncated, and
          a tap states the whole name, because a branch that is hidden is a branch the
          user cannot check what the work will land on. -->
-    <ShoePopover
-      label="Branch"
-      openOnHover={false}
-      panelClass="p-2.5"
-      class="flex h-6 min-w-0 shrink items-center"
-    >
-      {#snippet trigger({ open, toggle })}
+    <ShoePopover label="Branch" openOnHover={false} panelClass="p-2.5">
+      {#snippet trigger({ props })}
         <button
-          type="button"
-          class="flex h-6 min-w-0 cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          {...props}
+          class="flex h-6 min-w-0 shrink cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
           title={branchTitle}
-          aria-expanded={open}
           aria-label={`Branch ${project.branch}. Open to read the full name`}
-          onclick={toggle}
         >
           <CioTabGit size={11} class="shrink-0 text-dimmed" />
           <span class="shoe-branch-label truncate">{project.branch}</span>
@@ -576,15 +624,13 @@
     {@const vendorMarkShown =
       providerName !== undefined &&
       (attribution?.harnessId === undefined || !vendorMatches(attribution.harnessId, providerName))}
-    <ShoePopover label="Generation speed details" class="flex h-6 min-w-0 shrink items-center">
-      {#snippet trigger({ open, toggle })}
+    <ShoePopover label="Generation speed details">
+      {#snippet trigger({ props })}
         <button
-          type="button"
+          {...props}
           class="flex h-6 min-w-0 shrink items-center gap-1 px-2 text-[0.625rem] text-muted tabular-nums transition-colors hover:bg-elevated hover:text-foreground"
-          aria-expanded={open}
           title="Generation speed details"
           aria-label="Generation speed details"
-          onclick={toggle}
         >
           <CioActions size={12} class="shrink-0" />
           <!-- The rate keeps a column of its own: a fixed width, so a reading that
@@ -736,11 +782,13 @@
      `@container` class), so every threshold below is a width of the room the
      composer leaves that wrapper: the composer, less the wrapper's own inline
      padding. As the composer tightens, give the truncating stages room in
-     order   the tips first (they are read once), then the rate and the percent,
-     which a tap or a hover restores from the panel behind each mark, then the
-     worker label and the location, then the scope and Oven names. The branch
-     keeps a name of some length all the way down, and the identity is what holds
-     out longest.
+     order   the tips first (they are read once), then the worker label and the
+     location, then the scope and Oven names. The branch keeps a name of some
+     length all the way down, and the identity is what holds out longest.
+
+     The rate and the context percent are not on that list, because no width can
+     say when they cost the row something: see `.shoe-tight` below, which is set by
+     measuring the row instead.
 
      The scope badge, the Oven's label and the context percent are drawn by child
      components, so only `:global(...)` reaches them from here. `shoe-branch-label`,
@@ -770,14 +818,30 @@
       min-width: 0;
       max-width: 4.5rem;
     }
+  }
 
-    /* The rate and the percent are readings a tap or a hover restores from the
-       panels behind them, so they are the first to go   down to their own mark,
-       which keeps saying what they are and what they would state. */
-    .shoe-generation-label,
-    :global(.context-usage-label) {
-      display: none;
-    }
+  /* Out of room, as measured: the rate and the context percent go down to their own
+     marks, each of which still says what it is, and each of which states its figure
+     under a tap or a hover. Nothing else in the row gives up a figure this early.
+
+     These rules are global on purpose: the class they key off is put on the row by
+     the measurement below, not written in this template where the compiler could
+     find it, and the measuring rule has to be able to win over the hiding one. */
+  :global(.shoe-tight .shoe-generation-label),
+  :global(.shoe-tight .context-usage-label) {
+    display: none;
+  }
+
+  /* The one read that decides it: the row laid out at the width it asks for, with
+     every reading in it. Nothing paints between the class going on and coming off. */
+  :global(.shoe-measuring) {
+    flex: none;
+    width: max-content;
+  }
+
+  :global(.shoe-measuring .shoe-generation-label),
+  :global(.shoe-measuring .context-usage-label) {
+    display: inline;
   }
 
   @container (max-width: 610px) {

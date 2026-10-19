@@ -1,15 +1,14 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
-  import { trackEscapeMenu } from '$lib/overlay-close.svelte'
-  import { POPOVER_EDGE_GAP, sizeUpwardPopover } from '$lib/popover-room'
+  import { Popover } from 'bits-ui'
 
   interface Props {
-    /** Accessible name of the panel, and the subject of the close control. */
+    /** Accessible name of the panel this trigger opens. */
     label: string
     /**
-     * Whether hovering the trigger opens the panel. Reads that a hover already
-     * restores elsewhere   a custom tooltip, a title   turn this off and let a tap
-     * be the only way in, so the two never stack on top of each other.
+     * Whether hovering the trigger opens the panel, on top of a tap or a click.
+     * A reading that a hover already restores elsewhere   a custom tooltip, a title  
+     * turns this off, so that a tap is the only way in and the two never stack.
      */
     openOnHover?: boolean
     /** Called as the panel is shown, for readings that are fetched on reveal. */
@@ -18,10 +17,9 @@
     onHide?: () => void
     /** The panel frame's own padding, since its content is what differs. */
     panelClass?: string
-    /** The trigger's own box, for the segments that sit in the shoe's row. */
-    class?: string
-    /** The control that opens the panel; the toggle and the open state come from here. */
-    trigger: Snippet<[{ open: boolean; toggle: () => void }]>
+    /** The trigger's own markup. `props` carries bits-ui's own trigger contract
+     *  (`onclick`, `aria-expanded`, ids), so it is spread onto the control. */
+    trigger: Snippet<[{ props: Record<string, unknown> }]>
     children: Snippet
   }
 
@@ -31,115 +29,59 @@
     onReveal,
     onHide,
     panelClass = 'p-3',
-    class: className = '',
     trigger,
     children
   }: Props = $props()
 
-  /** Hovering opens the panel; a tap opens it and keeps it open, because a finger
-   *  has no hover to hold it there. */
-  let hovered = $state(false)
-  let pinned = $state(false)
-  let open = $derived(hovered || pinned)
-
   /**
-   * The panel's room is re-measured every time it is about to be shown: the dock
-   * column it sits in is dragged rather than resized, so a window resize listener
-   * alone would leave the panel sized from the column's previous width.
+   * The pointer may leave the trigger on its way into the panel. bits-ui bridges that
+   * trip with a grace area over the gap, and this is the extra moment it keeps the
+   * panel up after the pointer has left both, so a diagonal reach does not drop it.
    */
-  let panel: HTMLElement | null = null
+  const HOVER_CLOSE_GRACE_MS = 150
 
-  function measureRoom(): void {
-    if (panel) sizeUpwardPopover(panel, { gap: POPOVER_EDGE_GAP })
+  /** Held here rather than inside bits-ui because the caller's own reveal and hide
+   *  work   flushing live usage, stopping the refresh   rides the same transition. */
+  let open = $state(false)
+
+  function handleOpenChange(next: boolean): void {
+    open = next
+    if (next) onReveal?.()
+    else onHide?.()
   }
-
-  function attachPanel(node: HTMLElement): () => void {
-    panel = node
-    measureRoom()
-    window.addEventListener('resize', measureRoom)
-    return () => {
-      panel = null
-      window.removeEventListener('resize', measureRoom)
-    }
-  }
-
-  function reveal(): void {
-    if (open) return
-    hovered = true
-    measureRoom()
-    onReveal?.()
-  }
-
-  function hide(): void {
-    if (pinned) return
-    hovered = false
-    onHide?.()
-  }
-
-  function toggle(): void {
-    if (pinned) {
-      dismiss()
-      return
-    }
-    pinned = true
-    measureRoom()
-    onReveal?.()
-  }
-
-  function dismiss(): void {
-    const wasOpen = open
-    pinned = false
-    hovered = false
-    if (wasOpen) onHide?.()
-  }
-
-  trackEscapeMenu(() => pinned, dismiss)
-
-  const panelWrapperClass = $derived(
-    `absolute bottom-full right-0 z-40 w-72 pb-1.5 ${
-      open ? 'visible opacity-100' : 'invisible opacity-0'
-    }`
-  )
 </script>
 
-<div
-  class="group relative {className}"
-  role="group"
-  aria-label={label}
-  onpointerenter={openOnHover ? reveal : undefined}
-  onpointerleave={openOnHover ? hide : undefined}
->
-  {@render trigger({ open, toggle })}
+<!--
+  The panel is portaled and positioned by the overlay primitive the rest of the app
+  already uses: it escapes every ancestor that hides overflow   the conversation pane,
+  a dock column   so a narrow composer can no longer cut its first characters off, it
+  turns over and shifts to fit the window it opens in, and it caps its own height to
+  the room it has above the trigger.
 
-  <!-- A tap keeps the panel open with no pointer to hold it there, so the next tap
-       anywhere else closes it the way a menu does. -->
-  {#if pinned}
-    <button
-      type="button"
-      class="fixed inset-0 z-30 cursor-default"
-      aria-label="Close {label}"
-      onclick={dismiss}
-    ></button>
-  {/if}
+  Focus never moves: the panel is opened by a pointer as often as by a click, and
+  taking focus would end the message being typed in the composer underneath it.
+-->
+<Popover.Root {open} onOpenChange={handleOpenChange}>
+  <Popover.Trigger {openOnHover} openDelay={0} closeDelay={HOVER_CLOSE_GRACE_MS}>
+    {#snippet child({ props })}
+      {@render trigger({ props })}
+    {/snippet}
+  </Popover.Trigger>
 
-  <!-- The panel opens above the trigger with a gap, and that gap is this wrapper's own
-       bottom padding, never a margin: a margin is a dead band the pointer crosses on
-       its way up, and the panel would close under the user's hand as they reached for
-       it. The wrapper is also what `sizeUpwardPopover` caps, so the panel keeps the
-       right edge it hangs from while its width follows the room it has. -->
-  <div {@attach attachPanel} class={panelWrapperClass} role="dialog" aria-label={label}>
-    <div
-      class="popover-panel w-full overflow-y-auto border border-border bg-surface shadow-lg {panelClass}"
+  <Popover.Portal>
+    <Popover.Content
+      side="top"
+      align="end"
+      sideOffset={8}
+      collisionPadding={12}
+      trapFocus={false}
+      onOpenAutoFocus={(event) => event.preventDefault()}
+      onCloseAutoFocus={(event) => event.preventDefault()}
+      class="z-90 w-72 overflow-x-hidden overflow-y-auto border border-border bg-surface shadow-lg {panelClass}"
+      style="max-height: min(26rem, var(--bits-popover-content-available-height))"
+      aria-label={label}
     >
       {@render children()}
-    </div>
-  </div>
-</div>
-
-<style>
-  /* The height the trigger has above it, published by `sizeUpwardPopover`, is the
-     cap; the fallback covers the first frame before that measurement lands. */
-  .popover-panel {
-    max-height: var(--popover-max-height, min(26rem, 60vh));
-  }
-</style>
+    </Popover.Content>
+  </Popover.Portal>
+</Popover.Root>
