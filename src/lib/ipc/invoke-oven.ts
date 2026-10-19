@@ -27,6 +27,7 @@ import type { Contract } from './contract-helpers'
 import type { Thread } from '../types'
 
 export const invokeOvenContract = {
+  'oven:hostTrust:respond': {} as Contract<[requestId: string, approved: boolean], void>,
   'oven:testConnection': {} as Contract<
     [input: SaveOvenInput, requestId: string],
     OvenConnectionStatus

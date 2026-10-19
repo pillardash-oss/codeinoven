@@ -24,7 +24,9 @@
   {#if request}
     <div class="space-y-2">
       {#each request.options.body as paragraph (paragraph)}
-        <p class="text-sm leading-relaxed text-foreground">{paragraph}</p>
+        <p class="text-sm leading-relaxed whitespace-pre-wrap wrap-anywhere text-foreground">
+          {paragraph}
+        </p>
       {/each}
     </div>
   {/if}

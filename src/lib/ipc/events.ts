@@ -54,6 +54,8 @@ import type {
 import type { AppControlRequest } from '../app-control'
 
 export const IPC_EVENT_CONTRACT = {
+  'oven:hostTrust:request': [] as unknown as [request: { requestId: string; prompt: string }],
+  'oven:hostTrust:closed': [] as unknown as [requestId: string],
   'archive:changed': [] as unknown as [
     kind: import('../archives').ArchiveKind,
     id: string,

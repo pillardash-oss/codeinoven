@@ -141,6 +141,8 @@ function remoteCommandIssue(stderr: string): string {
   return 'Check the package manager or command on the Oven, then retry this step.'
 }
 
+class OvenHostVerificationRequired extends Error {}
+
 export class OvenSsh {
   /**
    * One queue per Oven, so commands to the same machine stay serialized without
@@ -366,6 +368,9 @@ export class OvenSsh {
       throw new Error('Choose a valid development-server port.')
     this.initialized ??= this.cleanStaleCredentials()
     await this.initialized
+    // Verify before a streaming channel starts, when a trust prompt can still
+    // pause and retry without closing the browser socket.
+    await remoteShell(this, id)
     const sockets = new Set<Socket>()
     const server = createServer((socket) => {
       if (sockets.size >= 4) {
@@ -593,7 +598,7 @@ export class OvenSsh {
         connection.host,
         ...(command === undefined ? [] : [command])
       )
-      return {
+      const invocation: OvenSshInvocation = {
         executable,
         args,
         env,
@@ -602,6 +607,15 @@ export class OvenSsh {
           if (scratch) await rm(scratch, { recursive: true, force: true })
         }
       }
+      if (tty) {
+        const { verifyOvenHost } = await import('./oven-host-trust')
+        await verifyOvenHost(
+          invocation,
+          this.registry.storage.resolve('ovens/host-verification'),
+          this.signal
+        )
+      }
+      return invocation
     } catch (error) {
       delete env['CIO_OVEN_KEY_PASSPHRASE']
       if (scratch) await rm(scratch, { recursive: true, force: true })
@@ -617,7 +631,8 @@ export class OvenSsh {
     channel?: { socket: Socket; remotePort: number },
     onOutput?: (chunk: string) => void,
     forwardAgent = false,
-    maxOutputBytes = 2 * 1024 * 1024
+    maxOutputBytes = 2 * 1024 * 1024,
+    allowHostVerification = true
   ): Promise<string> {
     if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
     this.signal?.throwIfAborted()
@@ -648,6 +663,8 @@ export class OvenSsh {
         let bytes = 0
         let failure: Error | undefined
         let timedOut = false
+        let unknownHost = false
+        let changedHost = false
         let sshIssue = 'Check authentication and trust this host with OpenSSH before reconnecting.'
         const timer =
           timeoutMs > 0
@@ -680,10 +697,12 @@ export class OvenSsh {
           const text = chunk.toString('utf8')
           remoteStderr = (remoteStderr + text).slice(-8192)
           onOutput?.(text)
-          if (/REMOTE HOST IDENTIFICATION HAS CHANGED/u.test(text)) {
+          if (/REMOTE HOST IDENTIFICATION HAS CHANGED|REVOKED HOST KEY/u.test(text)) {
+            changedHost = true
             sshIssue =
               'The host key changed. Verify the host identity before updating OpenSSH trust.'
           } else if (/Host key verification failed/u.test(text)) {
+            unknownHost = true
             sshIssue =
               'This host is not trusted by OpenSSH. Verify its fingerprint and connect with OpenSSH first.'
           } else if (/Permission denied/u.test(text)) {
@@ -708,6 +727,10 @@ export class OvenSsh {
         })
         child.stdin.on('error', () => undefined)
         child.on('close', (code) => {
+          unknownHost ||= /Host key verification failed/u.test(remoteStderr)
+          changedHost ||= /REMOTE HOST IDENTIFICATION HAS CHANGED|REVOKED HOST KEY/u.test(
+            remoteStderr
+          )
           clearTimeout(timer)
           this.signal?.removeEventListener('abort', abort)
           delete env['CIO_OVEN_KEY_PASSPHRASE']
@@ -715,6 +738,7 @@ export class OvenSsh {
           else if (failure) reject(failure)
           else if (timedOut)
             reject(new Error('The Oven did not respond before the connection timeout.'))
+          else if (unknownHost && !changedHost) reject(new OvenHostVerificationRequired(sshIssue))
           else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
           else if (code !== 0) {
@@ -728,6 +752,26 @@ export class OvenSsh {
         })
         if (!channel) child.stdin.end(input)
       })
+    } catch (error) {
+      if (!(error instanceof OvenHostVerificationRequired) || !allowHostVerification || channel)
+        throw error
+      const { verifyOvenHost } = await import('./oven-host-trust')
+      await verifyOvenHost(
+        prepared,
+        this.registry.storage.resolve('ovens/host-verification'),
+        this.signal
+      )
+      return await this.run(
+        id,
+        command,
+        input,
+        timeoutMs,
+        channel,
+        onOutput,
+        forwardAgent,
+        maxOutputBytes,
+        false
+      )
     } finally {
       await prepared.dispose()
     }

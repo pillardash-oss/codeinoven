@@ -26,6 +26,7 @@ import { validateOvenHarnessId, validateStartOvenSetup } from './oven-validation
 import { validateOvenAgentRegistration, validateOvenAgentScriptRequest } from './oven-validation'
 import { OvenAgentService } from './oven-agent-service'
 import { Logger } from '../system/logger'
+import { registerOvenHostTrustIpc } from './oven-host-trust'
 
 export function registerOvenIpc(
   storage: StorageEngine,
@@ -36,6 +37,7 @@ export function registerOvenIpc(
   projectFiles: ProjectFilesService,
   scopeNames: (projectId: string) => Record<string, string>
 ): OvenService {
+  registerOvenHostTrustIpc()
   const registry = new OvenRegistry(storage, vault)
   const service = new OvenService(registry)
   const transfers = new OvenTransfers(service)
