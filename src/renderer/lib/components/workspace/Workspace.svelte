@@ -1195,7 +1195,7 @@
       ? [
           {
             id: 'assistant-knowledge',
-            label: 'How to',
+            label: 'Assistant behavior',
             icon: AssistantKnowledgeIcon,
             active: dockKindActive('assistant-knowledge'),
             onSelect: () =>
@@ -4669,7 +4669,7 @@
       upsertThreadInList(updated)
       scopeState.updateThread(updated)
     } catch (error) {
-      reportError(error, 'Could not hide the knowledge thread')
+      reportError(error, 'Could not hide the assistant behavior thread')
     }
   }
 

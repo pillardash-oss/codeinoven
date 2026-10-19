@@ -1096,7 +1096,7 @@ export function handoffSummary(
   ]
   if (assistant) lines.push(`Assistant: ${assistant.name}`)
   const knowledge = assistant?.knowledge?.trim()
-  if (knowledge) lines.push('', 'How-to:', knowledge)
+  if (knowledge) lines.push('', 'Assistant behavior:', knowledge)
   if (task.lastRunAt !== undefined) {
     lines.push('', `Last scheduled run: ${formatDateTime(task.lastRunAt)}`)
   }

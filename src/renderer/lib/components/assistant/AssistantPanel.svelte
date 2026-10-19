@@ -715,7 +715,9 @@
     } catch (error) {
       reportError(
         error,
-        revealing ? 'Could not show the knowledge thread' : 'Could not hide the knowledge thread'
+        revealing
+          ? 'Could not show the assistant behavior thread'
+          : 'Could not hide the assistant behavior thread'
       )
     } finally {
       knowledgeThreadBusy = false
@@ -921,8 +923,8 @@
       <button
         type="button"
         class="mt-1 border border-border px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Open this assistant's knowledge thread"
-        aria-label="Open this assistant's knowledge thread"
+        title="Open this assistant's behavior thread"
+        aria-label="Open this assistant's behavior thread"
         onclick={openKnowledgeTask}
       >
         Open the task
@@ -1584,14 +1586,16 @@
       type="button"
       class="flex shrink-0 items-center gap-1.5 border-t border-border px-3 py-1.5 text-left text-[0.625rem] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
       title={knowledgeThreadHidden
-        ? 'Show the assistant’s knowledge thread again'
-        : 'Hide the assistant’s knowledge thread from the sidebar'}
+        ? 'Show the assistant behavior thread again'
+        : 'Hide the assistant behavior thread from the sidebar'}
       disabled={knowledgeThreadBusy}
       onclick={() => void toggleKnowledgeThread()}
     >
       <AssistantIcon mark="knowledge" size={14} class="shrink-0" />
       <span class="truncate">
-        {knowledgeThreadHidden ? 'Show knowledge thread' : 'Hide knowledge thread'}
+        {knowledgeThreadHidden
+          ? 'Show assistant behavior thread'
+          : 'Hide assistant behavior thread'}
       </span>
     </button>
   {/if}
