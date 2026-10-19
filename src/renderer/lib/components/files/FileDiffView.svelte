@@ -2,23 +2,46 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
+  import { FileDiffState } from './file-diff-state.svelte'
   import DiffRows from './DiffRows.svelte'
-  import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
+  import {
+    DEFAULT_CONTEXT_LINES,
+    type DiffDetails,
+    type DiffHunk,
+    type DiffLine
+  } from './file-diff'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {
     diff: TurnCheckpointFileDiff
+    /** Reuse worker results supplied by the owning panel. */
+    preparedDetails?: DiffDetails | null
     /** Caps the height of the scrollable diff area (e.g. "24rem"). */
     maxHeight?: string
   }
 
-  let { diff, maxHeight = undefined }: Props = $props()
-  let details = $derived(
-    diffDetails(diff.before, diff.after, diff.beforeStartLine, diff.afterStartLine)
+  let { diff, preparedDetails = null, maxHeight = undefined }: Props = $props()
+  const computation = new FileDiffState(() =>
+    diff.binary || preparedDetails
+      ? null
+      : {
+          before: diff.before,
+          after: diff.after,
+          beforeStartLine: diff.beforeStartLine,
+          afterStartLine: diff.afterStartLine
+        }
   )
-  /** Hunks with more changed lines than this render a notice instead of lines. */
-  let maxDiffLines = $derived(appConfigState.maxDiffLines)
+  const emptyDetails: DiffDetails = { lines: [], hunks: [], additions: 0, deletions: 0 }
+  let details = $derived(preparedDetails ?? computation.details ?? emptyDetails)
+  let maxDiffLines = $derived(Math.min(appConfigState.maxDiffLines, 400))
+  let hunkPage = $state(0)
+  const HUNKS_PER_PAGE = 3
+  let pageStart = $derived(
+    Math.min(hunkPage, Math.max(0, Math.ceil(details.hunks.length / HUNKS_PER_PAGE) - 1)) *
+      HUNKS_PER_PAGE
+  )
+  let visibleHunks = $derived(details.hunks.slice(pageStart, pageStart + HUNKS_PER_PAGE))
 
   const REVEAL_STEP = 10
 
@@ -43,11 +66,14 @@
 
   function hunkWindow(hunk: DiffHunk): HunkWindow {
     const state = reveal[hunk.id] ?? { above: 0, below: 0 }
-    const above = Math.min(DEFAULT_CONTEXT_LINES + state.above, hunk.contextBefore)
-    const below = Math.min(DEFAULT_CONTEXT_LINES + state.below, hunk.contextAfter)
+    const above = Math.min(DEFAULT_CONTEXT_LINES + state.above, hunk.contextBefore, 100)
+    const below = Math.min(DEFAULT_CONTEXT_LINES + state.below, hunk.contextAfter, 100)
     const start = hunk.changeStart - above
     const end = hunk.changeEnd + below
-    const lines = details.lines.slice(start, end + 1)
+    const lines =
+      hunk.changeEnd - hunk.changeStart + 1 > maxDiffLines
+        ? []
+        : details.lines.slice(start, end + 1)
     const beforeLines = lines.flatMap((line) =>
       line.beforeLine === undefined ? [] : [line.beforeLine]
     )
@@ -104,7 +130,7 @@
     <span class="shrink-0 font-mono tabular-nums text-success">+{additions}</span>
     <span class="shrink-0 font-mono tabular-nums text-danger">−{deletions}</span>
     <span class="flex-1"></span>
-    {#if !isFolded && hidden > 0}
+    {#if !isFolded && hidden > 0 && (reveal[hunk.id]?.[direction] ?? 0) + DEFAULT_CONTEXT_LINES < 100}
       <button
         type="button"
         class="shrink-0 px-1.5 py-0.5 text-[0.5625rem] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
@@ -137,13 +163,17 @@
     <div
       class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-1 font-mono text-[0.6875rem] leading-5"
     >
-      {#if details.hunks.length === 0}
+      {#if !preparedDetails && computation.error}
+        <p class="px-3 py-4 text-center text-muted" role="note">{computation.error}</p>
+      {:else if !preparedDetails && !computation.details}
+        <p class="px-3 py-4 text-center text-dimmed" role="status">Computing diff…</p>
+      {:else if details.hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
       {:else}
-        {#each details.hunks as hunk (hunk.id)}
+        {#each visibleHunks as hunk (hunk.id)}
           {@const w = hunkWindow(hunk)}
-          {@const hunkAdditions = w.lines.filter((line) => line.kind === 'added').length}
-          {@const hunkDeletions = w.lines.filter((line) => line.kind === 'deleted').length}
+          {@const hunkAdditions = hunk.additions}
+          {@const hunkDeletions = hunk.deletions}
           {@const hunkChanged = hunkAdditions + hunkDeletions}
           {@const isFolded = foldedHunks[hunk.id] ?? false}
           {@const limitExceeded = hunkChanged > maxDiffLines}
@@ -167,6 +197,26 @@
             {/if}
           </section>
         {/each}
+        {#if details.hunks.length > HUNKS_PER_PAGE}
+          <div class="flex items-center justify-end gap-2 px-3 py-2 font-sans text-xs">
+            <span
+              >{pageStart + 1}–{Math.min(pageStart + HUNKS_PER_PAGE, details.hunks.length)} of {details
+                .hunks.length} hunks</span
+            >
+            <button
+              type="button"
+              class="px-2 py-1 hover:bg-elevated disabled:opacity-40"
+              disabled={pageStart === 0}
+              onclick={() => (hunkPage -= 1)}>Previous hunks</button
+            >
+            <button
+              type="button"
+              class="px-2 py-1 hover:bg-elevated disabled:opacity-40"
+              disabled={pageStart + HUNKS_PER_PAGE >= details.hunks.length}
+              onclick={() => (hunkPage += 1)}>Next hunks</button
+            >
+          </div>
+        {/if}
       {/if}
     </div>
   </div>

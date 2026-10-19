@@ -47,7 +47,7 @@
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
-  import { diffDetails } from './file-diff'
+  import { FileDiffState } from './file-diff-state.svelte'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
   import { beautifyFileContent, fileBeautifyLabel } from '$lib/file-beautify'
   import FileImagePreview from './FileImagePreview.svelte'
@@ -160,11 +160,17 @@
   let activeSession = $derived(activeTab ? (projectState.sessions[activeTab.path] ?? null) : null)
   let dirty = $derived(activeSession ? activeSession.draft !== activeSession.source.content : false)
   let checkpointDiff = $derived(activeTab?.checkpointDiff ?? null)
-  let diffStats = $derived(
+  const diffComputation = new FileDiffState(() =>
     activeTab?.view === 'diff' && checkpointDiff && !checkpointDiff.binary
-      ? diffDetails(checkpointDiff.before, checkpointDiff.after)
+      ? {
+          before: checkpointDiff.before,
+          after: checkpointDiff.after,
+          beforeStartLine: checkpointDiff.beforeStartLine,
+          afterStartLine: checkpointDiff.afterStartLine
+        }
       : null
   )
+  let diffStats = $derived(diffComputation.details)
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
   /** Reload is available for text files with a session and for previewable
    *  files without one (media, images, SVG, PDF, Files), which re-read
@@ -1257,7 +1263,13 @@
           Loading diff
         </div>
       {:else if activeTab.view === 'diff' && checkpointDiff}
-        <FileDiffView diff={checkpointDiff} />
+        {#if diffComputation.error}
+          <p class="px-3 py-4 text-xs text-muted" role="note">{diffComputation.error}</p>
+        {:else if diffStats || checkpointDiff.binary}
+          <FileDiffView diff={checkpointDiff} preparedDetails={diffStats} />
+        {:else}
+          <p class="px-3 py-4 text-xs text-muted" role="status">Computing diff…</p>
+        {/if}
       {:else if activeTab.view === 'annotate' && showAnnotateToggle && activeThreadId}
         <ProjectFilesPanelAnnotator
           {projectId}
@@ -1640,7 +1652,13 @@
             spokenProgress={speechController.activeSegmentProgress}
           />
         {:else if activeTab?.view === 'diff' && checkpointDiff}
-          <FileDiffView diff={checkpointDiff} />
+          {#if diffComputation.error}
+            <p class="px-3 py-4 text-xs text-muted" role="note">{diffComputation.error}</p>
+          {:else if diffStats || checkpointDiff.binary}
+            <FileDiffView diff={checkpointDiff} preparedDetails={diffStats} />
+          {:else}
+            <p class="px-3 py-4 text-xs text-muted" role="status">Computing diff…</p>
+          {/if}
         {:else if activeTab?.view === 'annotate' && showAnnotateToggle && activeThreadId}
           <ProjectFilesPanelAnnotator
             {projectId}

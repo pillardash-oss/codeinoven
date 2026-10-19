@@ -1,6 +1,6 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { LatestRequestGuard } from '$lib/refresh-guard'
-import { diffDetails } from '$lib/components/files/file-diff'
+import { diffDetailsAsync } from '$lib/components/files/file-diff-async'
 import { appQuitState } from './app-quit.svelte'
 import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
 
@@ -16,7 +16,7 @@ export interface ChangeLineTotals {
  *  this many diffs at once, so a large change set is counted in small batches
  *  rather than hammering disk and IPC. */
 const MAX_LIVE_STAT_FILES = 24
-const LIVE_STAT_CONCURRENCY = 6
+const LIVE_STAT_CONCURRENCY = 2
 
 /**
  * The change set the Changes rail icon summarizes for the conversation on
@@ -50,6 +50,7 @@ class ThreadChangesState {
   private readonly totalsGuard = new LatestRequestGuard()
   private generation = 0
   private liveTotalsKey: string | null = null
+  private totalsAbort: AbortController | null = null
 
   /** The change set the indicator summarizes: the live turn while one runs,
    *  otherwise the newest recorded change set. */
@@ -81,6 +82,7 @@ class ThreadChangesState {
     this.ensureStarted()
     this.projectId = projectId
     this.threadId = threadId
+    this.totalsAbort?.abort()
     this.generation += 1
     this.live = null
     this.latest = null
@@ -94,6 +96,7 @@ class ThreadChangesState {
     if (this.projectId === null && this.threadId === null) return
     this.projectId = null
     this.threadId = null
+    this.totalsAbort?.abort()
     this.generation += 1
     this.live = null
     this.latest = null
@@ -118,10 +121,13 @@ class ThreadChangesState {
     const threadId = this.threadId
     if (!projectId || !threadId || appQuitState.quitting) return
     this.liveTotalsKey = key
+    this.totalsAbort?.abort()
+    const abort = new AbortController()
+    this.totalsAbort = abort
     const request = this.totalsGuard.begin()
     const generation = this.generation
     const stillCurrent = (): boolean =>
-      generation === this.generation && this.totalsGuard.isCurrent(request)
+      !abort.signal.aborted && generation === this.generation && this.totalsGuard.isCurrent(request)
     const countable = live.changes.filter((change) => !change.binary)
     const sample = countable.slice(0, MAX_LIVE_STAT_FILES)
     let additions = 0
@@ -144,7 +150,12 @@ class ThreadChangesState {
             return
           }
           if (diff.truncated) partial = true
-          const details = diffDetails(diff.before, diff.after)
+          if (!stillCurrent()) return
+          const details = await diffDetailsAsync(
+            { before: diff.before, after: diff.after },
+            abort.signal
+          )
+          if (!stillCurrent()) return
           additions += details.additions
           deletions += details.deletions
         } catch {
@@ -199,6 +210,7 @@ class ThreadChangesState {
     try {
       const live = await invoke('checkpoint:activeSummary', projectId, threadId)
       if (generation !== this.generation || !this.summaryGuard.isCurrent(request)) return
+      this.totalsAbort?.abort()
       this.live = live
       this.liveTotals = null
       this.liveTotalsKey = null
@@ -228,6 +240,7 @@ class ThreadChangesState {
       const live = await invoke('checkpoint:activeSummary', projectId, threadId)
       if (generation !== this.generation || !this.summaryGuard.isCurrent(request)) return
       if (!live) return
+      this.totalsAbort?.abort()
       this.live = live
       this.liveTotals = null
       this.liveTotalsKey = null

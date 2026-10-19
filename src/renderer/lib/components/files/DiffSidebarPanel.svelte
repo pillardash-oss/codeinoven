@@ -1,4 +1,6 @@
 <script module lang="ts">
+  import { diffDetailsAsync } from './file-diff-async'
+  import type { DiffDetails } from './file-diff'
   import { SvelteSet } from 'svelte/reactivity'
   import type { AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -13,12 +15,11 @@
   interface DiffPanelCache {
     checkpoints: TurnCheckpointSummary[]
     selectedCheckpointId: string | null
-    fileDiffsByCheckpoint: Record<string, TurnCheckpointFileDiff[]>
   }
 
   // A plain module-level object (not reactive state) so re-seeding can read it
   // from inside a reactive effect without triggering state_unsafe_mutation. The
-  // entries and their diff maps are plain Records so the controller can re-seed
+  // entries are plain Records so the controller can re-seed
   // with direct property access (no function calls) inside an effect.
   const panelCache: Record<string, DiffPanelCache> = {}
 
@@ -36,10 +37,9 @@
     checkpointId = $state<string | null>(null)
     revealPath = $state<string | null>(null)
     revealNonce = $state(0)
-    checkpoints = $state<TurnCheckpointSummary[]>([])
+    checkpoints = $state.raw<TurnCheckpointSummary[]>([])
     /** The running turn's live change summary   absent once the turn completes. */
-    liveTurn = $state<TurnCheckpointSummary | null>(null)
-    liveRevision = $state(0)
+    liveTurn = $state.raw<TurnCheckpointSummary | null>(null)
     selectedCheckpointId = $state<string | null>(null)
     loading = $state(false)
     error = $state('')
@@ -55,11 +55,16 @@
     busyPath = $state<string | null>(null)
     selections = $state<Record<string, string[]>>({})
     mode = $state<ChangesMode>('diffs')
-    fileDiffs = $state<TurnCheckpointFileDiff[]>([])
+    fileDiffs = $state.raw<TurnCheckpointFileDiff[]>([])
+    diffDetails = $state.raw<Record<string, DiffDetails>>({})
+    diffErrors = $state.raw<Record<string, string>>({})
+    pageStart = $state(0)
+    readonly pageSize = 8
+    private diffAbort: AbortController | null = null
+    private readBatch: Promise<unknown> = Promise.resolve()
     loadingDiffs = $state(false)
     expandedDiffs = $state<Record<string, boolean>>({})
     flashPath = $state<string | null>(null)
-    loadedDiffKey: string | null = null
     scrollContainer = $state<HTMLElement | null>(null)
 
     private refreshGuard = new LatestRequestGuard()
@@ -88,19 +93,18 @@
           if (switched) this.generation += 1
           let entry = panelCache[key]
           if (!entry) {
-            entry = { checkpoints: [], selectedCheckpointId: null, fileDiffsByCheckpoint: {} }
+            entry = { checkpoints: [], selectedCheckpointId: null }
             panelCache[key] = entry
           }
           this.cache = entry
           this.checkpoints = entry.checkpoints
           this.selectedCheckpointId = entry.selectedCheckpointId
-          const cachedDiffs = entry.selectedCheckpointId
-            ? (entry.fileDiffsByCheckpoint[entry.selectedCheckpointId] ?? null)
-            : null
-          this.fileDiffs = cachedDiffs ?? []
-          this.loadedDiffKey = cachedDiffs ? entry.selectedCheckpointId : null
+          this.diffAbort?.abort()
+          this.fileDiffs = []
+          this.diffDetails = {}
+          this.diffErrors = {}
+          this.pageStart = 0
           this.liveTurn = null
-          this.liveRevision = 0
           this.loading = false
           this.error = ''
           this.restoringId = null
@@ -118,7 +122,15 @@
     applyReveal(): void {
       const target = this.revealPath
       if (!target || this.revealNonce <= 0) return
+      const index =
+        this.selectedCheckpoint?.changes.findIndex((change) => change.path === target) ?? -1
+      if (index >= 0 && Math.floor(index / this.pageSize) * this.pageSize !== this.pageStart) {
+        this.pageStart = Math.floor(index / this.pageSize) * this.pageSize
+        void this.loadDiffs()
+        return
+      }
       if (!this.fileDiffs.some((diff) => diff.path === target)) return
+      this.expandedDiffs = { [target]: true }
       const el = this.scrollContainer?.querySelector<HTMLElement>(
         `[data-reveal-path="${CSS.escape(target)}"]`
       )
@@ -131,12 +143,6 @@
       }, 1600)
     }
 
-    private diffCacheKeyFor(checkpoint: TurnCheckpointSummary): string {
-      // Live and final views share one checkpoint id; keeping the live diffs under
-      // a distinct key makes completion swap in the authoritative persisted diffs.
-      return checkpoint.status === 'active' ? `${checkpoint.id}:live` : checkpoint.id
-    }
-
     private writeback(): void {
       if (!this.cache) return
       this.cache.checkpoints = this.checkpoints
@@ -147,7 +153,7 @@
       // The live summary is a database read. Stop on the quit signal: the main
       // process closes the database while the window is still open, and this
       // poll would otherwise land on it.
-      if (appQuitState.quitting) return
+      if (appQuitState.quitting || this.loadingDiffs) return
       const request = this.liveRefreshGuard.begin()
       const generation = this.generation
       try {
@@ -156,7 +162,7 @@
         const previousLive = this.liveTurn
         const finished = previousLive !== null && next === null
         this.liveTurn = next
-        if (next) this.liveRevision += 1
+        this.syncPolling()
         if (finished) {
           // The turn just completed   pull its authoritative checkpoint in.
           void this.refresh(this.selectedCheckpointId)
@@ -191,13 +197,16 @@
         if (generation !== this.generation || !this.refreshGuard.isCurrent(request)) return
         this.checkpoints = nextCheckpoints
         this.liveTurn = nextLive
+        this.syncPolling()
         const nextTurns = nextLive
           ? [nextLive, ...nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')]
           : nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
+        const previousCheckpointId = this.selectedCheckpointId
         this.selectedCheckpointId =
           nextTurns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
           nextTurns[0]?.id ??
           null
+        if (this.selectedCheckpointId !== previousCheckpointId) this.pageStart = 0
         this.writeback()
         void this.loadDiffs()
       } catch (reason) {
@@ -214,57 +223,119 @@
     private async loadDiffs(): Promise<void> {
       const generation = this.generation
       const checkpoint = this.selectedCheckpoint
+      this.diffAbort?.abort()
+      if (this.mode !== 'diffs') {
+        this.fileDiffs = []
+        this.diffDetails = {}
+        this.diffErrors = {}
+        this.loadingDiffs = false
+        return
+      }
+      const abort = new AbortController()
+      this.diffAbort = abort
       if (!checkpoint) {
         this.fileDiffs = []
-        this.loadedDiffKey = null
+        this.loadingDiffs = false
         return
       }
-      const key =
-        checkpoint.status === 'active'
-          ? `${this.diffCacheKeyFor(checkpoint)}#${this.liveRevision}`
-          : this.diffCacheKeyFor(checkpoint)
-      if (this.loadedDiffKey === key) {
-        this.applyReveal()
-        return
-      }
+      this.pageStart = Math.min(
+        this.pageStart,
+        Math.max(0, Math.ceil(checkpoint.changes.length / this.pageSize) - 1) * this.pageSize
+      )
       const request = this.diffRefreshGuard.begin()
-      const isLive = checkpoint.status === 'active'
-      this.loadedDiffKey = key
+      const current = (): boolean =>
+        !abort.signal.aborted &&
+        generation === this.generation &&
+        this.diffRefreshGuard.isCurrent(request)
       this.fileDiffs = []
+      this.diffDetails = {}
+      this.diffErrors = {}
       this.loadingDiffs = true
-      const results = await Promise.allSettled(
-        checkpoint.changes.map((change) =>
-          invoke(
-            isLive ? 'checkpoint:liveDiff' : 'checkpoint:diff',
-            this.projectId,
-            this.threadId,
-            checkpoint.id,
-            change.path
+      const changes = checkpoint.changes.slice(this.pageStart, this.pageStart + this.pageSize)
+      // Two file reads per batch, then sequential worker computation. Publish each
+      // completed file and yield before requesting another batch. Retain one page.
+      for (let index = 0; index < changes.length; index += 2) {
+        if (!current()) return
+        const batch = this.readBatch.then(() => {
+          if (!current()) return []
+          return Promise.allSettled(
+            changes
+              .slice(index, index + 2)
+              .map((change) =>
+                invoke(
+                  checkpoint.status === 'active' ? 'checkpoint:liveDiff' : 'checkpoint:diff',
+                  this.projectId,
+                  this.threadId,
+                  checkpoint.id,
+                  change.path
+                )
+              )
           )
+        })
+        this.readBatch = batch.catch(() => {})
+        const results = await batch
+        for (let offset = 0; offset < results.length; offset += 1) {
+          if (!current()) return
+          const result = results[offset]
+          const path = changes[index + offset].path
+          if (result.status === 'rejected') {
+            this.diffErrors = { ...this.diffErrors, [path]: `Could not load the diff for ${path}.` }
+            this.fileDiffs = [
+              ...this.fileDiffs,
+              { path, kind: changes[index + offset].kind, binary: false, truncated: false }
+            ]
+            continue
+          }
+          const diff = result.value
+          if (!diff.binary) {
+            try {
+              const details = await diffDetailsAsync(
+                {
+                  before: diff.before,
+                  after: diff.after,
+                  beforeStartLine: diff.beforeStartLine,
+                  afterStartLine: diff.afterStartLine
+                },
+                abort.signal
+              )
+              if (!current()) return
+              this.diffDetails = { ...this.diffDetails, [path]: details }
+            } catch (reason) {
+              if (!current()) return
+              this.diffErrors = {
+                ...this.diffErrors,
+                [path]: reason instanceof Error ? reason.message : 'Diff preview failed.'
+              }
+            }
+          }
+          if (!current()) return
+          this.fileDiffs = [...this.fileDiffs, diff]
+          await new Promise<void>((resolve) => setTimeout(resolve, 0))
+        }
+      }
+      if (!current()) return
+      this.loadingDiffs = false
+      this.applyReveal()
+    }
+
+    changePage(direction: number): void {
+      this.expandedDiffs = {}
+      const total = this.selectedCheckpoint?.changes.length ?? 0
+      this.pageStart = Math.max(
+        0,
+        Math.min(
+          Math.max(0, Math.ceil(total / this.pageSize) - 1) * this.pageSize,
+          this.pageStart + direction * this.pageSize
         )
       )
-      if (generation !== this.generation || !this.diffRefreshGuard.isCurrent(request)) return
-      this.fileDiffs = results.flatMap((result) =>
-        result.status === 'fulfilled' ? [result.value as TurnCheckpointFileDiff] : []
-      )
-      this.expandedDiffs = results.reduce<Record<string, boolean>>(
-        (next, result) => {
-          if (result.status === 'fulfilled') {
-            const path = (result.value as TurnCheckpointFileDiff).path
-            if (!(path in next)) next[path] = true
-          }
-          return next
-        },
-        { ...this.expandedDiffs }
-      )
-      this.loadingDiffs = false
-      if (this.cache) this.cache.fileDiffsByCheckpoint[key] = this.fileDiffs
-      this.applyReveal()
+      void this.loadDiffs()
     }
 
     selectTurn(index: number): void {
       const checkpoint = this.turns[index]
       if (!checkpoint) return
+      this.pageStart = 0
+      this.expandedDiffs = {}
       this.selectedCheckpointId = checkpoint.id
       this.writeback()
       void this.loadDiffs()
@@ -272,6 +343,7 @@
 
     setMode(mode: ChangesMode): void {
       this.mode = mode
+      void this.loadDiffs()
     }
 
     async openChange(checkpointId: string, path: string): Promise<void> {
@@ -411,7 +483,10 @@
     }
 
     toggleDiff(path: string): void {
-      this.expandedDiffs = { ...this.expandedDiffs, [path]: !(this.expandedDiffs[path] ?? true) }
+      const expanded =
+        this.expandedDiffs[path] ??
+        (Object.keys(this.expandedDiffs).length === 0 && this.fileDiffs[0]?.path === path)
+      this.expandedDiffs = { [path]: !expanded }
     }
 
     get completedCheckpoints(): TurnCheckpointSummary[] {
@@ -437,8 +512,16 @@
       return this.turns[this.selectedIndex] ?? null
     }
 
+    private syncPolling(): void {
+      if (this.liveTurn && !this.pollTimer) {
+        this.pollTimer = setInterval(() => void this.refreshLive(), 2_500)
+      } else if (!this.liveTurn && this.pollTimer) {
+        clearInterval(this.pollTimer)
+        this.pollTimer = null
+      }
+    }
+
     start(): void {
-      this.pollTimer = setInterval(() => void this.refreshLive(), 2_500)
       this.unsubscribeEvents = subscribe('agent:event', (...args: unknown[]) => {
         const event = args[0] as AgentEvent
         if (!('projectId' in event) || !('threadId' in event)) return
@@ -455,6 +538,10 @@
     }
 
     stop(): void {
+      this.generation += 1
+      this.diffAbort?.abort()
+      this.fileDiffs = []
+      this.diffDetails = {}
       if (this.pollTimer) clearInterval(this.pollTimer)
       this.pollTimer = null
       this.unsubscribeEvents?.()
@@ -480,7 +567,6 @@
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
-  import { diffDetails } from './file-diff'
 
   interface Props {
     projectId: string
@@ -626,6 +712,28 @@
     {:else}
       {@const checkpoint = controller.selectedCheckpoint}
       {#if checkpoint}
+        {#if checkpoint.changes.length > controller.pageSize}
+          <div class="flex items-center justify-end gap-2 text-xs text-muted">
+            <span
+              >{controller.pageStart + 1}–{Math.min(
+                controller.pageStart + controller.pageSize,
+                checkpoint.changes.length
+              )} of {checkpoint.changes.length} files</span
+            >
+            <button
+              type="button"
+              class="px-2 py-1 hover:bg-elevated disabled:opacity-40"
+              disabled={controller.pageStart === 0}
+              onclick={() => controller.changePage(-1)}>Previous files</button
+            >
+            <button
+              type="button"
+              class="px-2 py-1 hover:bg-elevated disabled:opacity-40"
+              disabled={controller.pageStart + controller.pageSize >= checkpoint.changes.length}
+              onclick={() => controller.changePage(1)}>Next files</button
+            >
+          </div>
+        {/if}
         {#if controller.mode === 'diffs'}
           <div class="space-y-2">
             {#if checkpoint.status === 'active'}
@@ -653,11 +761,12 @@
               </p>
             {:else}
               {#each controller.fileDiffs as fileDiff (fileDiff.path)}
-                {@const details = fileDiff.binary
-                  ? null
-                  : diffDetails(fileDiff.before, fileDiff.after)}
+                {@const details = controller.diffDetails[fileDiff.path] ?? null}
                 {@const stats = details}
-                {@const expanded = controller.expandedDiffs[fileDiff.path] ?? true}
+                {@const expanded =
+                  controller.expandedDiffs[fileDiff.path] ??
+                  (Object.keys(controller.expandedDiffs).length === 0 &&
+                    controller.fileDiffs[0]?.path === fileDiff.path)}
                 {@const undone = checkpoint.rolledBackPaths?.includes(fileDiff.path) ?? false}
                 <section
                   data-reveal-path={fileDiff.path}
@@ -738,7 +847,13 @@
                   </div>
                   {#if expanded}
                     <div class="border-t border-border">
-                      <FileDiffView diff={fileDiff} maxHeight="24rem" />
+                      {#if controller.diffErrors[fileDiff.path]}
+                        <p class="px-3 py-3 text-xs text-muted" role="note">
+                          {controller.diffErrors[fileDiff.path]}
+                        </p>
+                      {:else}
+                        <FileDiffView diff={fileDiff} preparedDetails={details} maxHeight="24rem" />
+                      {/if}
                     </div>
                   {/if}
                 </section>
@@ -787,7 +902,7 @@
                 {#if checkpoint.changes.length === 0}
                   <p class="px-3 py-2 text-[0.625rem] text-dimmed">No file changes detected.</p>
                 {:else}
-                  {#each checkpoint.changes as change (`${change.kind}:${change.path}`)}
+                  {#each checkpoint.changes.slice(controller.pageStart, controller.pageStart + controller.pageSize) as change (`${change.kind}:${change.path}`)}
                     {@const undone = checkpoint.rolledBackPaths?.includes(change.path) ?? false}
                     <div
                       class="flex h-8 items-center gap-2 px-3 transition-colors hover:bg-elevated"
