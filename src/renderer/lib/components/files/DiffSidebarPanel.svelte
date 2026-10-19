@@ -72,6 +72,8 @@
     loadingDiffs = $state(false)
     expandedDiffs = $state<Record<string, boolean>>({})
     flashPath = $state<string | null>(null)
+    /** The restore dropdown in the Files toolbar, closed by default. */
+    restoreMenuOpen = $state(false)
     scrollContainer = $state<HTMLElement | null>(null)
 
     private refreshGuard = new LatestRequestGuard()
@@ -405,6 +407,7 @@
       if (!checkpoint) return
       this.pageStart = 0
       this.expandedDiffs = {}
+      this.restoreMenuOpen = false
       this.selectedCheckpointId = checkpoint.id
       if (this.cache) this.cache.scrollTop = 0
       this.writeback()
@@ -413,6 +416,7 @@
 
     setMode(mode: ChangesMode): void {
       this.rememberScroll()
+      this.restoreMenuOpen = false
       this.mode = mode
       this.writeback()
       void this.loadDiffs()
@@ -624,6 +628,7 @@
     stop(): void {
       this.rememberScroll()
       this.started = false
+      this.restoreMenuOpen = false
       this.generation += 1
       this.diffAbort?.abort()
       this.fileDiffs = []
@@ -637,6 +642,7 @@
 </script>
 
 <script lang="ts">
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
@@ -693,6 +699,12 @@
     return () => controller.stop()
   })
 </script>
+
+<svelte:window
+  onkeydown={(event) => {
+    if (event.key === 'Escape' && controller.restoreMenuOpen) controller.restoreMenuOpen = false
+  }}
+/>
 
 <div class="flex h-full min-h-0 flex-col bg-app">
   {#if controller.turns.length > 0}
@@ -762,25 +774,75 @@
     </div>
     {#if controller.mode === 'files' && controller.selectedCheckpoint}
       {@const checkpoint = controller.selectedCheckpoint}
+      {@const selectedCount = (controller.selections[checkpoint.id] ?? []).length}
       {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active' && checkpoint.changes.length > 0}
-        <div class="flex min-w-0 items-center gap-1">
+        <div class="relative shrink-0">
           <button
             type="button"
-            class="border border-border px-2 py-1 text-[0.625rem] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-            disabled={controller.restoringId === checkpoint.id ||
-              (controller.selections[checkpoint.id] ?? []).length === 0}
-            onclick={() => void controller.restoreSelected(checkpoint.id)}
+            class="flex h-6 items-center gap-1 border border-border px-2 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+            title="Restore files changed by this run"
+            aria-label="Restore files changed by this run"
+            aria-haspopup="menu"
+            aria-expanded={controller.restoreMenuOpen}
+            disabled={controller.restoringId !== null}
+            onclick={() => (controller.restoreMenuOpen = !controller.restoreMenuOpen)}
           >
-            Restore selected
+            {controller.restoringId === checkpoint.id ? 'Restoring…' : 'Restore'}
+            <CioChevronDown size={11} aria-hidden="true" />
           </button>
-          <button
-            type="button"
-            class="px-2 py-1 text-[0.625rem] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
-            disabled={controller.restoringId === checkpoint.id}
-            onclick={() => controller.requestRestoreRun(checkpoint.id)}
-          >
-            {controller.restoringId === checkpoint.id ? 'Restoring…' : 'Restore run'}
-          </button>
+          {#if controller.restoreMenuOpen}
+            <button
+              type="button"
+              class="fixed inset-0 z-30 cursor-default"
+              aria-label="Close restore menu"
+              title="Close restore menu"
+              onclick={() => (controller.restoreMenuOpen = false)}
+            ></button>
+            <div
+              class="absolute left-0 z-40 mt-1 w-52 border border-border bg-surface p-1 shadow-lg"
+              role="menu"
+              aria-label="Restore options"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] text-danger transition-colors hover:bg-danger/10"
+                onclick={() => {
+                  controller.restoreMenuOpen = false
+                  controller.requestRestoreRun(checkpoint.id)
+                }}
+              >
+                <CioUndo size={13} class="shrink-0" aria-hidden="true" />
+                Restore run
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                class={[
+                  'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[0.6875rem] transition-colors',
+                  selectedCount > 0
+                    ? 'bg-primary/10 text-foreground hover:bg-primary/15'
+                    : 'text-muted'
+                ]}
+                title={selectedCount > 0
+                  ? `Restore the ${selectedCount} selected file${selectedCount === 1 ? '' : 's'}`
+                  : 'Select files below to restore them'}
+                disabled={selectedCount === 0 || controller.restoringId !== null}
+                onclick={() => {
+                  controller.restoreMenuOpen = false
+                  void controller.restoreSelected(checkpoint.id)
+                }}
+              >
+                <CioCheck size={13} class="shrink-0" aria-hidden="true" />
+                Restore selected
+                {#if selectedCount > 0}
+                  <span class="ml-auto tabular-nums text-[0.625rem] text-dimmed">
+                    {selectedCount}
+                  </span>
+                {/if}
+              </button>
+            </div>
+          {/if}
         </div>
       {/if}
     {/if}
@@ -793,7 +855,7 @@
             >{controller.pageStart + 1}–{Math.min(
               controller.pageStart + controller.pageSize,
               checkpoint.changes.length
-            )} of {checkpoint.changes.length} files</span
+            )} of {checkpoint.changes.length}</span
           >
           <button
             type="button"
