@@ -380,8 +380,11 @@ export class ComputerUsePipService {
     this.resetWindowCapture()
     this.clearAutoDismiss()
     this.clearLoop()
-    await this.releaseDriverConnection()
+    // Publish the closed state before the teardown awaits anything: closing the
+    // client and handing back the daemon claim can take a moment (or never settle
+    // if the driver process is wedged), and the overlay must already be gone.
     if (wasActive) this.broadcastState()
+    await this.releaseDriverConnection()
   }
 
   private clearAutoDismiss(): void {
