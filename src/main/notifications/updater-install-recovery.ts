@@ -1,5 +1,5 @@
-import type { Dirent } from 'node:fs'
-import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { opendir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { Logger } from '../system/logger'
 
@@ -246,24 +246,33 @@ interface StagingRule {
 }
 
 const NSIS_PLUGIN_DIR = /^ns[A-Za-z0-9]{4,8}\.tmp$/
-/** What electron-builder's installer unpacks into NSIS's `$PLUGINSDIR`. */
-const NSIS_APP_PACKAGE = /^app-(ia32|x64|arm64|universal)\.(7z|zip)$/
-
+// Exact helper bytes shipped before ownership markers were introduced.
+const LEGACY_WINDOWS_HELPER_HASHES = new Set([
+  'a2979a7e8c4d5c3138c0a6cb47f1d566f69f4b9f07eb0fe430c19b1a25d424ec',
+  '2e2f6e66b010902ef20cfa3ed81efb335cac641c8d2e651030190c45510079ef'
+])
 /**
  * NSIS `$PLUGINSDIR` lives in `%TEMP%` under a generic `nsXXXXXX.tmp` name
  * shared by every NSIS installer on the machine, so a name match alone is not
- * proof of ownership. electron-builder puts the app archive itself in there,
- * which is enough to attribute the directory to us.
+ * proof of ownership. Require our installer marker or exact legacy helper
+ * bytes; generic archives and 7z-out also belong to unrelated applications.
  */
 async function ownsNsisPluginDir(entry: string): Promise<boolean> {
   try {
-    const names = await readdir(entry)
-    if (names.some((name) => NSIS_APP_PACKAGE.test(name))) return true
-    const sevenZipOut = join(entry, '7z-out')
-    const contents = await readdir(sevenZipOut).catch(() => null)
-    return contents !== null
+    const marker = join(entry, 'codeinoven-update-owner')
+    if ((await stat(marker)).size !== 10) return false
+    return (await readFile(marker, 'utf8')) === 'CodeInOven'
   } catch {
-    return false
+    try {
+      const helper = join(entry, 'close-windows-app.ps1')
+      if ((await stat(helper)).size > 64 * 1024) return false
+      const digest = createHash('sha256')
+        .update((await readFile(helper, 'utf8')).replaceAll('\r\n', '\n'))
+        .digest('hex')
+      return LEGACY_WINDOWS_HELPER_HASHES.has(digest)
+    } catch {
+      return false
+    }
   }
 }
 
@@ -296,7 +305,7 @@ function stagingRules(context: StagingSweepContext): StagingRule[] {
           // copying it into the install directory; a killed installer leaves it.
           label: 'NSIS plugin directory',
           directory: context.tmpDir,
-          minAgeMs: 0,
+          minAgeMs: 24 * 60 * 60 * 1000,
           matches: (name) => NSIS_PLUGIN_DIR.test(name),
           ownedBy: ownsNsisPluginDir
         }
@@ -323,8 +332,8 @@ function stagingRules(context: StagingSweepContext): StagingRule[] {
  * Remove the staging this platform's installer abandoned. Only entries this app
  * can positively attribute to itself are touched, and each rule carries the age
  * its own installer requires: zero for staging that only exists while an
- * installer process is alive (all of which has exited before the relaunched app
- * starts), an hour for mount points a running instance may still hold open.
+ * installer process is alive on macOS, a day for marked Windows directories,
+ * and an hour for mount points a running instance may still hold open.
  */
 export async function purgeAbandonedInstallStaging(
   context: StagingSweepContext,
@@ -339,31 +348,28 @@ export async function purgeAbandonedInstallStaging(
       deferred += 1
       continue
     }
-    let entries: Dirent[]
+    let inspected = 0
     try {
-      entries = await readdir(rule.directory, { withFileTypes: true })
+      const entries = await opendir(rule.directory)
+      for await (const candidate of entries) {
+        if (++inspected > MAX_SWEEP_CANDIDATES || removed.length >= MAX_SWEEP_REMOVALS) {
+          deferred += 1
+          break
+        }
+        if (!candidate.isDirectory() || !rule.matches(candidate.name)) continue
+        const entry = join(rule.directory, candidate.name)
+        try {
+          const info = await stat(entry)
+          if (now - info.mtimeMs < rule.minAgeMs) continue
+          if (rule.ownedBy && !(await rule.ownedBy(entry))) continue
+          await rm(entry, { recursive: true, force: true })
+          removed.push(entry)
+        } catch (error: unknown) {
+          Logger.dev(`Updater: could not remove staging ${entry}`, error)
+        }
+      }
     } catch (error: unknown) {
       Logger.dev(`Updater: staging sweep skipped ${rule.label}`, error)
-      continue
-    }
-    const candidates = entries.filter((entry) => rule.matches(entry.name))
-    if (candidates.length > MAX_SWEEP_CANDIDATES)
-      deferred += candidates.length - MAX_SWEEP_CANDIDATES
-    for (const candidate of candidates.slice(0, MAX_SWEEP_CANDIDATES)) {
-      if (removed.length >= MAX_SWEEP_REMOVALS) {
-        deferred += 1
-        continue
-      }
-      const entry = join(rule.directory, candidate.name)
-      try {
-        const info = await stat(entry)
-        if (now - info.mtimeMs < rule.minAgeMs) continue
-        if (rule.ownedBy && !(await rule.ownedBy(entry))) continue
-        await rm(entry, { recursive: true, force: true })
-        removed.push(entry)
-      } catch (error: unknown) {
-        Logger.dev(`Updater: could not remove staging ${entry}`, error)
-      }
     }
   }
 

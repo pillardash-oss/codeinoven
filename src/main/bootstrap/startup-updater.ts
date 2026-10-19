@@ -1,6 +1,11 @@
 import type { BootstrapState } from './bootstrap-state'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
+import { app } from 'electron'
+import os from 'node:os'
+import { cleanUpdaterCache } from '../notifications/updater-cache-cleanup'
+import { getAppCacheDir, resolveUpdaterCacheLocation } from '../notifications/updater-download'
+import { purgeAbandonedInstallStaging } from '../notifications/updater-install-recovery'
 
 const starting = new WeakMap<BootstrapState, Promise<void>>()
 
@@ -39,6 +44,21 @@ export function startStartupUpdater(state: BootstrapState, storage: StorageEngin
         activeSessionCount: () =>
           state.featuresReady || state.startupRecovery || state.startupServicesFailed ? 0 : 1
       })
+    }
+    // Sweep before checks/downloads can acquire a cache file. Newer pending
+    // updates survive startup so interrupted downloads remain resumable.
+    const cache = resolveUpdaterCacheLocation()
+    if (cache && state.updaterService.status.canAutoUpdate) {
+      await cleanUpdaterCache(cache.cacheDir, { installedVersion: app.getVersion() })
+      if (process.platform === 'win32')
+        await purgeAbandonedInstallStaging({
+          platform: process.platform,
+          tmpDir: os.tmpdir(),
+          cacheHome: getAppCacheDir(process.platform, os.homedir()),
+          updaterCacheDir: cache.cacheDir,
+          bundleId: null,
+          appName: app.getName().toLowerCase()
+        })
     }
     state.updaterService.start()
     // Tray integration is optional and must not hold the independent updater.
