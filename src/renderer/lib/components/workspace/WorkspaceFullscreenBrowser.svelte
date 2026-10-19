@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import BrowserPanel from '$lib/components/browser/BrowserPanel.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'

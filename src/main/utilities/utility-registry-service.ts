@@ -1089,14 +1089,17 @@ function defaultBinding(kind: UtilityKind): Omit<HarnessUtilityBinding, 'harness
 }
 
 /**
- * App-owned activation invariant. An MCP server is never launched natively into
- * a harness: the app starts its client inside the turn and exposes its tools
- * through the utility gateway, so `always` has no path to run and would leave
- * the utility inert. Normalize it to `on_demand` on every write and on every
- * registry read, which also repairs entries stored before this invariant.
+ * App-owned activation invariant. Neither an MCP server nor a skill is ever
+ * launched natively into a harness. An MCP client runs inside the turn behind
+ * the utility gateway, so `always` has no path to run and would leave the
+ * utility inert. A skill is knowledge rather than wiring: whether it applies is
+ * a property of the task, not of the utility, so the agent reads its
+ * description and loads the ones that match. Either way it normalizes to
+ * `on_demand` on every write and on every registry read, which also repairs
+ * entries stored before this invariant.
  */
 function normalizeActivation(kind: UtilityKind, activation: UtilityActivation): UtilityActivation {
-  return kind === 'mcp' ? 'on_demand' : activation
+  return kind === 'mcp' || kind === 'skill' ? 'on_demand' : activation
 }
 
 function parseScope(value: unknown): UtilityScope {

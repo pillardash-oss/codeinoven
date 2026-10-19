@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioUndo from '@pillardash-oss/cio-icon/CioUndo.svelte'
-  import CioZoomIn from '@pillardash-oss/cio-icon/CioZoomIn.svelte'
-  import CioZoomOut from '@pillardash-oss/cio-icon/CioZoomOut.svelte'
+  import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
+  import CioZoomIn from '@pdslng/cio-icon/CioZoomIn.svelte'
+  import CioZoomOut from '@pdslng/cio-icon/CioZoomOut.svelte'
   import type { PanZoom } from '$lib/pan-zoom.svelte'
 
   interface Props {

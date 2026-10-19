@@ -193,7 +193,7 @@ static const char *current_executable(void) {
 
 static NSString *electron_path(void) {
   return [[NSBundle.mainBundle.executablePath stringByDeletingLastPathComponent]
-      stringByAppendingPathComponent:@"CodeInOven-electron"];
+      stringByAppendingPathComponent:@"CodeInOven"];
 }
 
 static int launch_electron(int argc, const char *argv[]) {

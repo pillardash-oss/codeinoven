@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount } from 'svelte'
 
   import { invoke } from '$lib/ipc.svelte'
@@ -893,11 +893,13 @@
 
         <!-- Scope decides where a capability is installed and which turns can
              reach it, so every credential-free kind chooses it. An MCP server
-             always loads on demand behind the gateway, so its activation is
-             fixed rather than chosen. -->
+             and a skill both load on demand behind the gateway, so neither has
+             an activation to choose. -->
         {#if !isNative && !isAppOwned}
-          <div class="grid gap-3 {draft.kind === 'mcp' ? '' : 'grid-cols-2'}">
-            {#if draft.kind !== 'mcp'}
+          <div
+            class="grid gap-3 {draft.kind === 'mcp' || draft.kind === 'skill' ? '' : 'grid-cols-2'}"
+          >
+            {#if draft.kind !== 'mcp' && draft.kind !== 'skill'}
               <label class="space-y-1 text-xs font-medium">
                 <span>Activation</span>
                 <select
@@ -927,6 +929,11 @@
             <p class="text-xs text-muted">
               MCP servers always load on demand and run behind the CodeInOven utility gateway, so
               nothing is written into your harness or project config.
+            </p>
+          {:else if draft.kind === 'skill'}
+            <p class="text-xs text-muted">
+              Skills always load on demand: the agent matches a skill's description against the work
+              at hand and reads only the ones that apply, so no skill sits in every turn of context.
             </p>
           {/if}
           {#if draft.scopeLevel !== 'global'}

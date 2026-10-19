@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioDisplay from '@pillardash-oss/cio-icon/CioDisplay.svelte'
-  import CioServer from '@pillardash-oss/cio-icon/CioServer.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import { onMount } from 'svelte'
 
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'

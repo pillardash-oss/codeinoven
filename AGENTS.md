@@ -1,26 +1,28 @@
-You are able to use the Svelte MCP server, where you have access to comprehensive Svelte 5 and SvelteKit documentation. Here's how to use the available tools effectively:
+You are able to use the Svelte MCP server, where you have access to comprehensive Svelte 5 and SvelteKit documentation. It is an app-managed utility rather than a native tool: find it with `cio_util_find` (query "svelte"), activate it with `cio_util_init`, then invoke the operations below with `cio_util_use`. Here's how to use them effectively:
 
 ## Available MCP Tools
 
 ### 1. list-sections
 
 Use this FIRST to discover all available documentation sections. Returns a structured list with titles, use_cases, and paths.
-When asked about Svelte or SvelteKit topics, ALWAYS use this tool at the start of the chat to find relevant sections.
+Run it at the start of any task that involves writing or reviewing Svelte/SvelteKit code in this project.
 
 ### 2. get-documentation
 
-Retrieves full documentation content for specific sections. Accepts single or multiple sections.
-After calling the list-sections tool, you MUST analyze the returned documentation sections (especially the use_cases field) and then use the get-documentation tool to fetch ALL documentation sections that are relevant for the user's task.
+Retrieves full documentation content for specific sections. `section` accepts a single name or an array, so fetch every relevant section in ONE call.
+After calling list-sections, analyze the returned `use_cases` fields and fetch the sections the task actually needs. The server itself warns this call is token intensive, so implement from your own knowledge and let `svelte-autofixer` catch mistakes first; reach for documentation when the task touches runes, routing, or anything you are unsure about, not by default.
 
 ### 3. svelte-autofixer
 
-Analyzes Svelte code and returns issues and suggestions.
-You MUST use this tool whenever writing Svelte code before sending it to the user. Keep calling it until no issues or suggestions are returned.
+Analyzes Svelte code and returns issues and suggestions. `code` accepts the component source OR a path to the file, `desired_svelte_version` is 5 for this project (`package.json`), and `filename` is the component name with its extension, never a path. This project does not enable the experimental async option, so leave `async` alone.
+You MUST run it over every Svelte file you write or change before reporting the work as done, and iterate until no issues or suggestions are returned.
+
+**Batch it.** Run the whole set of files in ONE code-mode script that loops over them with bounded concurrency and returns only the findings, never one call per file. A 430-file change was once checked with 2,283 separate calls, one file at a time, and that is a defect even when every answer is correct. The gateway's own batch operation cannot carry these calls (it covers the app's read-only tools only), so code mode is the path.
 
 ### 4. playground-link
 
 Generates a Svelte Playground link with the provided code.
-After completing the code, ask the user if they want a playground link. Only call this tool after user confirmation and NEVER if code was written to files in their project.
+After completing the code, ask the user if they want a playground link. Only call this tool after user confirmation, and NEVER when the code was written into files in their project, which is the normal case here.
 
 ## Rules You Must Follow
 
@@ -38,7 +40,7 @@ After completing the code, ask the user if they want a playground link. Only cal
 - Avoid using redundant tailwindcss class like: `text-text-muted text-inherited`
 - Avoid using tailwindcss classes like this `z-[10]` when `z-10` is possible
 - Do not ever write any typescript code like this: `variable as any`!
-- For every svelte/sveltekit code you write, always use the latest svelte/sveltekit documentation to ensure you're using the latest features and best practices.
+- For every svelte/sveltekit code you write, always use the latest svelte/sveltekit documentation to ensure you're using the latest features and best practices, and validate every changed component with the batched `svelte-autofixer` pass described above.
 - Never import SvelteKit-only modules like `$app/*` into shared utilities, domain modules, Convex-adjacent code, or anything that may be bundled outside the SvelteKit app runtime. If runtime detection is needed in shared code, use platform-safe checks like `typeof window !== 'undefined'` or pass the value in from a SvelteKit entrypoint instead.
 - It is forbidden in this app to use console.\* we use the logger class for logging! Any console.log that should show up on the dev env only should be done with the Logger.dev method.
 - Always commit your work (the files you worked on regardless of any untracked changes or other git conflicts), so that I can easily audit your work.

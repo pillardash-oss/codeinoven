@@ -56,6 +56,17 @@ export interface AgentDefaultsConfig {
   seniorEngineer?: AgentModelSelection
   worker?: AgentModelSelection
   auditor?: AgentModelSelection
+  /**
+   * Model for pawn agents: background worker threads an agent spawns for itself
+   * with `cio_pawn_agent`. A pawn answers only to the agent that spawned it, the
+   * user never prompts it, and it is never tied to one harness or account: the
+   * user picks any available combination here.
+   *
+   * User-owned. Only the Agents settings page sets or clears it (the agent-facing
+   * `config:update` channel is stripped of this field), and an agent that finds no
+   * pawn default spawns one on its own model rather than writing this value.
+   */
+  pawn?: AgentModelSelection
   /** Vision model used to describe images for text-only models. */
   imageDescriptor?: AgentModelSelection
   /** Fallback vision model tried automatically when the primary image descriptor fails. */

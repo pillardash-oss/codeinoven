@@ -11,6 +11,7 @@ import type {
 } from '../../lib/ipc-contract'
 import type { ReleaseChannel } from '../../lib/download-mirror'
 import { isWindowsStorePackage } from '../../lib/utils'
+import { isShippedBuild } from '../bootstrap/app-resources'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
@@ -39,6 +40,7 @@ import {
   type UpdateArtifactInfo
 } from './updater-download'
 
+const UPDATE_CHECK_TIMEOUT_MS = 30_000
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
 const PENDING_INSTALL_FILE = 'updater/install-pending.json'
@@ -162,7 +164,16 @@ export class UpdaterService {
       // identity the Store owns delivery. Gating here is enough: the periodic
       // timer, the explicit check, the tray path, the updater IPC and the fatal
       // recovery path all key off `canAutoUpdate`.
-      canAutoUpdate: autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
+      //
+      // A development launch is gated the same way, and not by
+      // `autoUpdater.isUpdaterActive()` alone: that only asks
+      // `app.isPackaged`, which a misbranded dev runtime reports as true, and
+      // the check then opens `app-update.yml` in the Electron download's
+      // Resources directory, where no packaged feed config exists (ENOENT).
+      // Nothing updates during development anyway, so the app's own shipped
+      // build signal decides.
+      canAutoUpdate:
+        isShippedBuild() && autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
       state: 'idle',
       currentVersion: app.getVersion()
     }
@@ -459,25 +470,30 @@ export class UpdaterService {
       Logger.error('Updater: check-cycle hook failed', error)
     }
     if (!this._status.canAutoUpdate) return this.status
+    if (this.checkInFlight) return this.status
     this.explicitCheckInFlight = explicit
     this.checkInFlight = true
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       await this.applyConfiguredChannel()
-      await autoUpdater
-        .checkForUpdates()
-        .catch((error: unknown) => {
-          Logger.error('Updater: check failed', error)
-          this.settleCheckFailure(error)
+      await Promise.race([
+        autoUpdater.checkForUpdates(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error('Update check timed out. Please try again.')),
+            UPDATE_CHECK_TIMEOUT_MS
+          )
         })
-        .finally(() => {
-          this.checkInFlight = false
-          this.explicitCheckInFlight = false
-        })
+      ])
+      // Some updater implementations resolve without emitting a terminal event.
+      if (this._status.state === 'checking') this.updateState({ state: 'idle' })
     } catch (error: unknown) {
       Logger.error('Updater: check failed', error)
+      this.settleCheckFailure(error)
+    } finally {
+      if (timeout) clearTimeout(timeout)
       this.checkInFlight = false
       this.explicitCheckInFlight = false
-      this.settleCheckFailure(error)
     }
     return this.status
   }

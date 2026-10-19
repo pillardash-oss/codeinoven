@@ -1,12 +1,14 @@
 <script lang="ts">
-  import CioBack from '@pillardash-oss/cio-icon/CioBack.svelte'
-  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
-  import CioNotes from '@pillardash-oss/cio-icon/CioNotes.svelte'
-  import CioNotifications from '@pillardash-oss/cio-icon/CioNotifications.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioThreadBrowser from '@pillardash-oss/cio-icon/CioThreadBrowser.svelte'
-  import CioTools from '@pillardash-oss/cio-icon/CioTools.svelte'
+  const isWindows = window.api?.windowInfo.platform === 'win32'
+
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
+  import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
+  import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
@@ -243,7 +245,9 @@
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center bg-surface pr-1"
   data-guide="header"
-  style={trafficLightInsetStyle({ mirrorRightInset: false })}
+  style={isWindows
+    ? 'padding-right: max(0.25rem, calc(100vw - env(titlebar-area-width, 100vw)))'
+    : trafficLightInsetStyle({ mirrorRightInset: false })}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <button
@@ -254,7 +258,9 @@
       onclick={() => threadSwitcherRequest.requestOpen()}
     >
       <VendorIcon name="CodeInOven" size={20} />
-      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"> cio </span>
+      <span class="whitespace-nowrap text-[0.75rem] font-medium tracking-tight"
+        >{isWindows ? 'CodeInOven' : 'cio'}</span
+      >
     </button>
 
     <!-- Global navigation: back / forward -->

@@ -15,6 +15,7 @@ export function piCoreToolsEventsSource(): string {
   return `  // A fresh, resumed, or forked session must not expose sub-agent tools before
   // its first turn: apply the published scope as soon as the session starts.
   pi.on('session_start', async () => {
+    applyCioWindowsShells()
     applyCioSubAgentScope()
   })
 
@@ -28,7 +29,7 @@ export function piCoreToolsEventsSource(): string {
   // searches are not progress the user can see, so only work that changes
   // something counts.
   const CIO_TODO_CHECKIN_STEPS = 10
-  const CIO_TODO_WORK_TOOLS = new Set(['edit', 'write', 'bash', 'codemode'])
+  const CIO_TODO_WORK_TOOLS = new Set(['edit', 'write', 'bash', 'powershell', 'cmd', 'codemode'])
 
   pi.on('tool_execution_end', (event) => {
     if (!event || event.isError) return
@@ -223,8 +224,13 @@ export function piCoreToolsEventsSource(): string {
     // Pi reports each surface's annotations here, and an MCP server can connect
     // between turns, so the read-only set is refreshed before every turn.
     refreshCioReadOnlyTools(pi)
+    applyCioWindowsShells()
     applyCioSubAgentScope()
-    const extra = loadCioSystemPrompt()
+    const activeWindowsShells = windowsShellTools.filter((tool) => pi.getActiveTools().includes(tool.name))
+    const windowsGuidance = activeWindowsShells.length === 0 ? '' :
+      'Windows command execution: native tools available here: ' + activeWindowsShells.map((tool) => tool.name).join(', ') +
+      '. Use PowerShell syntax with powershell and CMD.exe syntax with cmd. Git Bash is optional. If bash is unavailable, continue with an available native tool. Inspect files directly with read, ls, find and grep; do not ask the user to paste project source because bash is missing.'
+    const extra = [loadCioSystemPrompt(), windowsGuidance].filter(Boolean).join('\\n\\n')
     const isProjectMode = extra.includes(CIO_PROJECT_MODE_MARKER)
     const withIdentity =
       isProjectMode && event.systemPrompt.includes(PI_ASSISTANT_IDENTITY_LINE)

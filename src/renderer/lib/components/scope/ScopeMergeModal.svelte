@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioRefresh from '@pillardash-oss/cio-icon/CioRefresh.svelte'
+  import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import ScopeHealthNotice from './ScopeHealthNotice.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'

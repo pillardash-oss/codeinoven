@@ -300,7 +300,11 @@ function parseTool(
         : failed
           ? ('error' as const)
           : ('completed' as const),
-      input: toolInput(item),
+      input: {
+        ...toolInput(item),
+        ...(command ? { command } : {}),
+        ...(typeof item['cwd'] === 'string' ? { cwd: item['cwd'] } : {})
+      },
       title: command,
       output,
       ...(output === undefined

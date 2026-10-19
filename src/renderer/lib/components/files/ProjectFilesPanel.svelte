@@ -1,12 +1,12 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
-  import CioFolderOpen from '@pillardash-oss/cio-icon/CioFolderOpen.svelte'
-  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
-  import CioMinimize from '@pillardash-oss/cio-icon/CioMinimize.svelte'
-  import CioSave from '@pillardash-oss/cio-icon/CioSave.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
+  import CioSave from '@pdslng/cio-icon/CioSave.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { onMount, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
@@ -1005,7 +1005,9 @@
             (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
             (activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving))}
           saving={activeFileInMergeEditor ? conflictStatus.saving : Boolean(activeSession?.saving)}
-          saveLabel={activeFileInMergeEditor ? conflictSaveText : 'Save file (Cmd/Ctrl+S)'}
+          saveLabel={activeFileInMergeEditor
+            ? conflictSaveText
+            : `Save file (${keymapState.labelFor('files-save')})`}
           saveTitle={activeFileInMergeEditor ? conflictSaveTitle : undefined}
           fullscreen={false}
           onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
@@ -1326,7 +1328,9 @@
         disabled={deletedAtCheckpoint ||
           (activeFileInMergeEditor ? !conflictSaveReady : !dirty) ||
           (activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving)}
-        title={activeFileInMergeEditor ? conflictSaveTitle : 'Save file (Cmd/Ctrl+S)'}
+        title={activeFileInMergeEditor
+          ? conflictSaveTitle
+          : `Save file (${keymapState.labelFor('files-save')})`}
         onclick={runPanelSave}
       >
         {#if activeFileInMergeEditor ? conflictStatus.saving : activeSession?.saving}
@@ -1336,7 +1340,7 @@
         {/if}
         {#if activeFileInMergeEditor}
           {conflictSaveText}
-        {:else}CioSave{/if}
+        {:else}Save{/if}
       </button>
     {/if}
     <button

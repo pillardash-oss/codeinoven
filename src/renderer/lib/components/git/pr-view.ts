@@ -5,14 +5,14 @@
  * neither the badge classes nor the view list can live inside the reader.
  */
 
-import CioChat from '@pillardash-oss/cio-icon/CioChat.svelte'
-import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
-import CioCrossCircle from '@pillardash-oss/cio-icon/CioCrossCircle.svelte'
-import CioDiff from '@pillardash-oss/cio-icon/CioDiff.svelte'
-import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
-import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+import CioChat from '@pdslng/cio-icon/CioChat.svelte'
+import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
+import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import type {
   PrListFilter,
   PrListSort,

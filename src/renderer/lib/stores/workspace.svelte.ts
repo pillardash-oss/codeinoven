@@ -16,6 +16,7 @@ import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
 import { openComposerFocusWindow } from '$lib/focus/composer-focus'
 import { scheduleDeferredWork } from '$lib/deferred-work'
+import { relativeTimeClock } from '$lib/relative-time.svelte'
 import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
@@ -256,6 +257,10 @@ class WorkspaceState {
     // load never duplicates this read.
     void threadMessages.preload(thread.projectId, thread.id)
     recentVisits.recordThread(thread)
+    // The sidebar rows stamp their last-activity age against the shared clock,
+    // so opening a thread re-reads it on the spot: the row the user just entered
+    // is measured against this moment instead of the last shared tick.
+    relativeTimeClock.refresh()
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null

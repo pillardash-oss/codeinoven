@@ -21,10 +21,10 @@ Linux system package commands run directly as root or through sudo for other use
 **Settings → Ovens → Add via agent** registers a machine that prepared itself, without this computer reaching it first. The first step shows the one command to run on the machine:
 
 ```sh
-npx cio-oven start
+npx @pdslng/cio-oven start
 ```
 
-The command needs Node.js 22 or later already installed. It writes the same service bundle this app would push, verifies its SHA-256, starts the durable service, and prints a registration code; the service keeps running after the shell exits and after this app closes. Name the machine's SSH port in the **SSH port on the machine** field to put it in the command, as in `npx cio-oven start --port 2222`; leave it empty and the command uses the machine's own `sshd` port. The command and its flags are described in **Add a machine with one command** below.
+The command needs Node.js 22 or later already installed. It writes the same service bundle this app would push, verifies its SHA-256, starts the durable service, and prints a registration code; the service keeps running after the shell exits and after this app closes. Name the machine's SSH port in the **SSH port on the machine** field to put it in the command, as in `npx @pdslng/cio-oven start --port 2222`; leave it empty and the command uses the machine's own `sshd` port. The command and its flags are described in **Add a machine with one command** below.
 
 Paste the printed code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved.
 
@@ -40,13 +40,13 @@ The app reaches the machine the same way it reaches any Oven: over SSH to the du
 
 ## Add a machine with one command
 
-The published `cio-oven` CLI prepares a machine from its own shell, without this app reaching it first. It writes the same service bundle, starts the same durable service, and prints the same registration code as the agent installer, so an Oven prepared either way registers identically.
+The published `@pdslng/cio-oven` CLI prepares a machine from its own shell, without this app reaching it first. It writes the same service bundle, starts the same durable service, and prints the same registration code as the agent installer, so an Oven prepared either way registers identically.
 
 ```sh
-npx cio-oven start
+npx @pdslng/cio-oven start
 ```
 
-It asks for the Oven name, the SSH port to publish, and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via agent**. Every question has a flag, so it also runs unattended: `npx cio-oven start --yes`, or `npx cio-oven start --port 2222 --yes --no-identity`. A port you name, with `--port` or at the prompt, is honoured: it is published only when SSH answers on it, and refused with the fix instructions when it does not, rather than being switched to a different port. A port it detected on its own is corrected to the one that answers.
+It asks for the Oven name, the SSH port to publish, and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via agent**. Every question has a flag, so it also runs unattended: `npx @pdslng/cio-oven start --yes`, or `npx @pdslng/cio-oven start --port 2222 --yes --no-identity`. A port you name, with `--port` or at the prompt, is honoured: it is published only when SSH answers on it, and refused with the fix instructions when it does not, rather than being switched to a different port. A port it detected on its own is corrected to the one that answers.
 
 ## Windows Ovens
 
@@ -55,14 +55,14 @@ Windows OpenSSH starts `cmd.exe` by default and PowerShell only when it is confi
 On Windows the service runs with no console window. A console program a Windows shell starts owns a visible window, and OpenSSH there ends the whole process tree when the session closes, so CodeInOven does not start the daemon directly. It registers a scheduled task named **CodeInOven Oven** that runs at logon, and starts it through `wscript`, whose own process has no console and launches `node` with window style 0. The Task Scheduler owns the process rather than the SSH session, so it survives the shell closing, this app closing, and a reboot, and it appears in Task Scheduler and in Task Manager like any other background process.
 
 ```sh
-npx cio-oven status    # installed and running, with the service revision
-npx cio-oven stop      # stop the durable service
-npx cio-oven restart   # replace the running service with the current release
+npx @pdslng/cio-oven status    # installed and running, with the service revision
+npx @pdslng/cio-oven stop      # stop the durable service
+npx @pdslng/cio-oven restart   # replace the running service with the current release
 ```
 
 Everything it writes stays under the same app-managed directory this app uses, `~/.config/pillardash/codeinoven/ovens`. An Oven prepared by an earlier build kept that state in a sibling `codeinoven-oven` directory; the service moves it across the next time it starts, leaving behind only the runtime files of any daemon still running there, and never overwriting an entry the new location already has. A dedicated key is created at `~/.ssh/codeinoven-oven-agent` and authorized for the account; on a Windows administrator account the key is also authorized in the machine-wide `administrators_authorized_keys`, and the command prints the exact line to add when that file needs an elevated shell. Node.js 22 or later must already be installed, because the Oven service runs on it.
 
-The service survives the command exiting, the shell closing, and this app closing. `npx cio-oven stop` stops it and disables the logon task, so an Oven stopped on purpose stays stopped until `npx cio-oven start` runs again. On a machine that forbids scheduled tasks, CodeInOven falls back to starting the same hidden launcher through the WMI provider, which is equally windowless but does not return after a reboot.
+The service survives the command exiting, the shell closing, and this app closing. `npx @pdslng/cio-oven stop` stops it and disables the logon task, so an Oven stopped on purpose stays stopped until `npx @pdslng/cio-oven start` runs again. On a machine that forbids scheduled tasks, CodeInOven falls back to starting the same hidden launcher through the WMI provider, which is equally windowless but does not return after a reboot.
 
 ## The Oven clock
 

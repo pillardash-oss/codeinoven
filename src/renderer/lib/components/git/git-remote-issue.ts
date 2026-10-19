@@ -1,7 +1,7 @@
-import CioCloudOff from '@pillardash-oss/cio-icon/CioCloudOff.svelte'
-import CioSearchX from '@pillardash-oss/cio-icon/CioSearchX.svelte'
-import CioShieldAlert from '@pillardash-oss/cio-icon/CioShieldAlert.svelte'
-import CioWifiOff from '@pillardash-oss/cio-icon/CioWifiOff.svelte'
+import CioCloudOff from '@pdslng/cio-icon/CioCloudOff.svelte'
+import CioSearchX from '@pdslng/cio-icon/CioSearchX.svelte'
+import CioShieldAlert from '@pdslng/cio-icon/CioShieldAlert.svelte'
+import CioWifiOff from '@pdslng/cio-icon/CioWifiOff.svelte'
 import type { Component } from 'svelte'
 import type { GitRemoteIssueKind } from '$shared/types'
 

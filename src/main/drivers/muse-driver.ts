@@ -46,6 +46,7 @@ import type {
   ThinkingLevel
 } from '../../lib/types'
 import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
+import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
 import { attachmentReference, attachmentTarget } from './attachment-reference'
 import { buildProcessEnvironment } from './cli-environment'
 import type {
@@ -343,14 +344,16 @@ export class MuseDriver extends PersistentCliDriver {
     }
 
     // Native automatic compaction keeps the provider context window bounded
-    // even for this stateless harness (mirrored history + recap).
+    // even for this stateless harness (mirrored history + recap). The soft
+    // threshold starts the compaction and stays below the app-wide checkpoint
+    // line; the hard threshold is that line, so no turn runs past it.
     args.push(
       '--context-compaction-strategy',
       'summary-preserved-suffix/v1',
       '--context-compaction-soft-threshold',
       '0.8',
       '--context-compaction-hard-threshold',
-      '0.95'
+      String(COMPACT_LINE_SHARE)
     )
 
     // Subagents share the CodeInOven-managed worktree/scope. Do not

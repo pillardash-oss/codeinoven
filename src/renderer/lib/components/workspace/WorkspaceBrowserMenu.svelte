@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCookie from '@pillardash-oss/cio-icon/CioCookie.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
+  import CioCookie from '@pdslng/cio-icon/CioCookie.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {

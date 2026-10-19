@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { delimiter, join, resolve, win32 } from 'node:path'
-import { app } from 'electron'
 import type { HarnessExecutionTarget } from '../../lib/types'
 import {
   buildProcessEnvironment,
@@ -10,6 +9,8 @@ import {
   resolveExecutablePath
 } from './cli-environment'
 import { spawnInUtilityHost } from './harness-utility-host'
+import { appResourcesRoot } from '../bootstrap/app-resources'
+import { Logger } from '../system/logger'
 
 /**
  * Entry points of the bundled Pi resource (see `scripts/build-pi-harness.ts`).
@@ -29,9 +30,7 @@ type BundledPiEntry = 'rpc' | 'cli'
  * WSL   a real install always takes priority.
  */
 function bundledPiEntryPath(entry: BundledPiEntry): string | undefined {
-  const base = app.isPackaged
-    ? join(process.resourcesPath, 'harnesses/pi')
-    : join(app.getAppPath(), 'resources/harnesses/pi')
+  const base = join(appResourcesRoot(), 'harnesses/pi')
   const path = join(base, entry === 'cli' ? 'dist/bundle/cli.js' : 'dist/bundle/rpc-entry.js')
   return existsSync(path) ? path : undefined
 }
@@ -56,9 +55,7 @@ function applyBundledEntry(
  * which do not exist in the packaged app's own node_modules.
  */
 export function bundledPiVendorDir(): string | undefined {
-  const base = app.isPackaged
-    ? join(process.resourcesPath, 'harnesses/pi')
-    : join(app.getAppPath(), 'resources/harnesses/pi')
+  const base = join(appResourcesRoot(), 'harnesses/pi')
   const vendor = join(base, 'vendor')
   return existsSync(vendor) ? vendor : undefined
 }
@@ -671,6 +668,8 @@ function prepareNativeInvocation(
 }
 
 export interface HarnessInvocationOptions {
+  /** Metadata/auth-only commands do not need a Bash installation. */
+  prepareWindowsTools?: boolean
   cwd?: string
   env?: NodeJS.ProcessEnv
   /**
@@ -691,7 +690,7 @@ export async function prepareHarnessInvocation(
   args: string[],
   options: HarnessInvocationOptions = {}
 ): Promise<PreparedHarnessInvocation> {
-  const env = { ...(options.env ?? buildProcessEnvironment()) }
+  let env = { ...(options.env ?? buildProcessEnvironment()) }
   if (options.cwd) {
     // Set all runtime conventions before launch so harness children inherit
     // workspace scratch without changing the desktop process environment. A
@@ -736,6 +735,17 @@ export async function prepareHarnessInvocation(
     options.bundledEntry
   )
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
+  if (runtime.target.kind !== 'wsl' && options.prepareWindowsTools !== false) {
+    const { ensureWindowsGitRuntime } = await import('./windows-git-runtime')
+    try {
+      const git = await ensureWindowsGitRuntime(env)
+      env = buildProcessEnvironment(env)
+      if (git) env['CLAUDE_CODE_GIT_BASH_PATH'] = git.bash
+    } catch (error) {
+      // Native PowerShell/CMD remain usable when provisioning cannot reach GitHub.
+      Logger.info('Windows Git setup unavailable; continuing with native shells', error)
+    }
+  }
   if (runtime.target.kind === 'bundled') {
     return {
       command: runtime.executable,
@@ -980,6 +990,7 @@ export async function runHarnessCommand(
   } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   const prepared = await prepareHarnessInvocation(command, args, {
+    prepareWindowsTools: options.prepareWindowsTools ?? false,
     ...(options.cwd ? { cwd: options.cwd } : {}),
     ...(options.env ? { env: options.env } : {}),
     ...(options.bundledEntry ? { bundledEntry: options.bundledEntry } : {})

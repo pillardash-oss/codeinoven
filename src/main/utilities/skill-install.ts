@@ -3,7 +3,7 @@ import { skillInstallDocument } from '../../lib/skill-frontmatter'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
-import type { UtilityActivation, UtilityDefinitionInput } from '../../lib/types'
+import type { UtilityDefinitionInput } from '../../lib/types'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -62,7 +62,6 @@ export interface MarketSkillInstallRequest {
   scope: MarketSkillScope
   projectIds: string[]
   harnessIds: string[]
-  activation?: UtilityActivation
 }
 
 export interface MarketSkillInstallContext {
@@ -97,8 +96,7 @@ async function recordInstall(
     sourceType: isGithubSkillSource(request.source) ? 'github' : 'well-known',
     scope: copy.scope,
     ...(copy.projectId ? { projectId: copy.projectId } : {}),
-    ...(copy.harnessIds?.length ? { harnessIds: copy.harnessIds } : {}),
-    ...(request.activation ? { activation: request.activation } : {})
+    ...(copy.harnessIds?.length ? { harnessIds: copy.harnessIds } : {})
   }))
   await new SkillInstallRecordStore(context.storage).upsert(records)
   return records.map((record) =>
@@ -120,10 +118,6 @@ async function installManagedSkill(
   if (request.scope === 'harnesses') {
     throw new TypeError('CodeInOven-managed skills support global or project scope')
   }
-  const activation = request.activation
-  if (activation !== 'always' && activation !== 'on_demand') {
-    throw new TypeError('Select always available or on-demand activation')
-  }
   const detail = await loadSkillMarketDetail(`${request.source}/${request.skillId}`)
   if (!detail.skillMarkdown.trim()) {
     throw new Error('This source does not expose a readable SKILL.md for CodeInOven to manage')
@@ -142,7 +136,10 @@ async function installManagedSkill(
     name: marketSkillName(request.source, request.skillId),
     description: detail.description,
     enabled: true,
-    activation,
+    // A skill is knowledge, never standing context: the agent matches its
+    // description against the task and loads it then. The registry normalizes
+    // this too, so a caller cannot make a skill permanently resident.
+    activation: 'on_demand',
     scope: utilityScope,
     config: {
       instructions: skillInstallDocument({

@@ -1,4 +1,4 @@
-import CioClock from '@pillardash-oss/cio-icon/CioClock.svelte'
+import CioClock from '@pdslng/cio-icon/CioClock.svelte'
 import {
   isThreadAwaitingUser,
   isThreadRetryPaused,

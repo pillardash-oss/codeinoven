@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COMPACT_LINE_SHARE,
   DEFAULT_PROMPT_BUDGET,
   budgetTurnLayers,
   computePromptBudget,
@@ -68,6 +69,20 @@ describe('token estimation and truncation', () => {
     expect(truncateToTokenBudget(text, 500)).toHaveLength(1_000)
     expect(truncateToTokenBudget(text, 0)).toBe('')
   })
+
+  it('keeps the requested end when truncating', () => {
+    // A conversation transcript must survive on its newest end, so `'tail'`
+    // drops the oldest turns instead of the turns the model continues from.
+    const text = `HEAD_MARKER${'x'.repeat(1_000)}TAIL_MARKER`
+    const tail = truncateToTokenBudget(text, 10, 'tail')
+    expect(tail).toHaveLength(40)
+    expect(tail).toContain('TAIL_MARKER')
+    expect(tail).not.toContain('HEAD_MARKER')
+    const head = truncateToTokenBudget(text, 10)
+    expect(head).toHaveLength(40)
+    expect(head).toContain('HEAD_MARKER')
+    expect(head).not.toContain('TAIL_MARKER')
+  })
 })
 
 describe('budgetTurnLayers (final-composition contract)', () => {
@@ -105,7 +120,7 @@ describe('budgetTurnLayers (final-composition contract)', () => {
     )
     expect(layers.recapTokens).toBe(recapTokenBudget(available))
     // The recap stays strictly below the checkpoint line, never a fixed count.
-    expect(layers.recapTokens).toBeLessThan(Math.floor(available * 0.85))
+    expect(layers.recapTokens).toBeLessThan(Math.floor(available * COMPACT_LINE_SHARE))
     expect(layers.totalTokens).toBeLessThanOrEqual(available)
   })
 

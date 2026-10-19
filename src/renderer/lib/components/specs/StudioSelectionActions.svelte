@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioTemporaryChat from '@pillardash-oss/cio-icon/CioTemporaryChat.svelte'
+  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   interface Props {
     onExplain: () => void
     onQuickChat: () => void

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-  import CioPlugZap from '@pillardash-oss/cio-icon/CioPlugZap.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioPlugZap from '@pdslng/cio-icon/CioPlugZap.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { McpConnectionTestResult, McpProbeTarget } from '$shared/types'
 

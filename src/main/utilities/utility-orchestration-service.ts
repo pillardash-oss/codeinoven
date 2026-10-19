@@ -67,6 +67,7 @@ import {
   type EngineeringToolOperation
 } from '../../lib/engineering-tools'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '../../lib/scope-tool'
+import { PAWN_AGENT_TOOL_NAME, isPawnTool } from '../../lib/pawn-tools'
 import { ADB_CAPABILITY_SEARCH_QUERY } from '../../lib/adb-skill'
 import { DESIGN_CAPABILITY_SEARCH_QUERY, designCapabilityDocs } from '../../lib/design-skill'
 import { VIDEO_CAPABILITY_SEARCH_QUERY, videoCapabilityDocs } from '../../lib/video-skill'
@@ -484,6 +485,25 @@ export interface EngineeringToolContext {
   harnessId: string
 }
 
+/** The turn a pawn agent call came from. */
+export interface PawnToolContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
+/**
+ * Runs one pawn agent tool call for the turn that asked for it: it spawns or
+ * continues a background thread owned by that turn's agent. The chat engine
+ * supplies it because it owns thread creation, sessions and turn completion.
+ */
+export type PawnToolExecutor = (
+  input: Record<string, unknown>,
+  context: PawnToolContext
+) => Promise<unknown>
+
 /** The turn an app-control call came from. */
 export interface AppControlContext {
   projectId: string
@@ -608,6 +628,7 @@ export class UtilityOrchestrationService {
   private orchestrationExecutor: OrchestrationExecutor | null = null
   private appControlExecutor: AppControlExecutor | null = null
   private engineeringExecutor: EngineeringToolExecutor | null = null
+  private pawnExecutor: PawnToolExecutor | null = null
   /** How the app learns that this turn entered a design or video session. */
   private authoredWorkSessionRecorder: AuthoredWorkSessionRecorder | null = null
   /** Serializes bank read-modify-write per thread so turns cannot clobber entries. */
@@ -719,6 +740,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.engineering(state, input, 'spec')
       case CREATE_ASSIGNMENT_TOOL_NAME:
         return (state, input) => this.engineering(state, input, 'assignment')
+      case PAWN_AGENT_TOOL_NAME:
+        return (state, input) => this.pawn(state, input)
       default:
         return null
     }
@@ -891,6 +914,34 @@ export class UtilityOrchestrationService {
    */
   setEngineeringExecutor(executor: EngineeringToolExecutor | null): void {
     this.engineeringExecutor = executor
+  }
+
+  /**
+   * Register the executor that spawns and continues pawn agents. The chat engine
+   * supplies it because it owns thread creation and turn completion.
+   */
+  setPawnExecutor(executor: PawnToolExecutor | null): void {
+    this.pawnExecutor = executor
+  }
+
+  /**
+   * Run one pawn agent operation for the turn that asked for it.
+   *
+   * The executor owns thread creation, model resolution and turn completion, so
+   * this handler only forwards the call with the turn it belongs to. A missing
+   * executor means the feature is unavailable in this deployment, reported
+   * plainly rather than as an empty result.
+   */
+  private async pawn(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const executor = this.pawnExecutor
+    if (!executor) throw new Error('Pawn agents are unavailable in this deployment')
+    return executor(input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
   }
 
   /**
@@ -1068,12 +1119,14 @@ export class UtilityOrchestrationService {
     const imageDescriptorEligible = eligible.some(
       ({ utility }) => utility.kind === 'image_descriptor'
     )
-    // MCP servers are always `on_demand` and always reached through the gateway, so
-    // they never appear in the native `always` overlay. Keep the kind check even though
-    // the registry normalizes the activation: a legacy entry read straight from disk
-    // must not sneak into a harness launch. See normalizeActivation in the registry.
+    // Neither an MCP server nor a skill is ever launched natively into a harness:
+    // both are `on_demand` and reached through the gateway. Keep the kind check even
+    // though the registry normalizes the activation: a legacy entry read straight
+    // from disk must not sneak into a harness launch. See normalizeActivation in the
+    // registry.
     const always = eligible.filter(
-      ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
+      ({ utility }) =>
+        utility.activation === 'always' && utility.kind !== 'mcp' && utility.kind !== 'skill'
     )
     // A design session was opened by the user, so the design capability is active
     // from the first token: the playbook travels with the turn and the preview
@@ -1161,6 +1214,13 @@ export class UtilityOrchestrationService {
       if (isEngineeringTool(name)) {
         return request.artifactTools === true
       }
+      // A pawn agent is how any agent keeps work out of its own context: the
+      // tool spawns a thread that answers only to the caller, so it is offered
+      // on every turn that carries the gateway at all, the same way asking for
+      // a secret or reporting a problem is.
+      if (isPawnTool(name)) {
+        return true
+      }
       // The app-control tools let a turn drive the app itself. A thread running
       // in full access reaches them with no tag, which is the starting block for
       // the per-channel permission gates to come; every other thread reaches
@@ -1240,9 +1300,15 @@ export class UtilityOrchestrationService {
       GATEWAY_DISCOVERY_INSTRUCTION,
       'Use available code mode to batch independent tool calls in one model request. Run independent reads with bounded parallelism and inspect every result; keep dependent operations, mutations, approvals and retries sequential. Filter large results before returning them to the model. Reuse loaded documentation and activated utilities. Read workstation targets only when dispatching work, and the app catalog only when driving the app.',
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
+      `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a needed capability is missing, load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer its installation card. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
       `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
+      ...(gatewayTools.some(({ name }) => isPawnTool(name))
+        ? [
+            `A pawn agent (${PAWN_AGENT_TOOL_NAME}) is an independent worker thread that answers only to you: it is how you do real work without spending your own context. Spawn one for a long implementation, a broad refactor, independent verification, or research that would otherwise flood this conversation, and give it the complete task, the files it owns, and how to check its own work. It runs on the user's pawn default model when one is configured, otherwise on your model at the lowest thinking level, and it never commits: read its report, inspect the files it touched, and commit them yourself. You keep directing it: when the user corrects or redirects a pawn's work, call the tool again with that pawn's pawn_id and their instruction, and it reaches the work in progress instead of starting over. Do not spawn a second pawn to change direction.`
+          ]
+        : []),
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
             `For a requested Brainstorm, PRD, spec or Assignment, discover the matching cio_create_* schema through cio:gateway and invoke it. Ask once whether the user wants independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
@@ -1275,7 +1341,7 @@ export class UtilityOrchestrationService {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
           ]
         : []),
       ...(hasDesignCapability

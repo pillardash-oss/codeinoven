@@ -9,15 +9,15 @@
 </script>
 
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioCopy from '@pillardash-oss/cio-icon/CioCopy.svelte'
-  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
-  import CioSparkles from '@pillardash-oss/cio-icon/CioSparkles.svelte'
-  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
-  import CioThreads from '@pillardash-oss/cio-icon/CioThreads.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
   import { copyText } from '$lib/copy-text'
   interface Props {

@@ -18,6 +18,7 @@ import type {
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
+import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
 import {
@@ -251,6 +252,17 @@ export class CodexDriver extends PersistentCliDriver {
     return catalogs
   }
 
+  async modelContext(
+    projectPath: string,
+    modelId: string
+  ): Promise<Pick<ProviderModel, 'contextWindow' | 'contextWindows'> | null> {
+    const windows = await this.codexWindowCatalog(projectPath, true)
+    const window = windows.get(modelId)
+    return window
+      ? { contextWindow: window.defaultWindow, contextWindows: codexContextWindowOptions(window) }
+      : null
+  }
+
   override async listCommands(projectPath: string): Promise<HarnessCommand[]> {
     const commands: HarnessCommand[] = [
       {
@@ -447,7 +459,7 @@ export class CodexDriver extends PersistentCliDriver {
             ? {}
             : {
                 model_context_window: contextWindow,
-                model_auto_compact_token_limit: Math.floor(contextWindow * 0.9)
+                model_auto_compact_token_limit: Math.floor(contextWindow * COMPACT_LINE_SHARE)
               })
         }
       }
@@ -473,8 +485,9 @@ export class CodexDriver extends PersistentCliDriver {
         const currentMessageId = options.userMessageId ?? session.messages.at(-1)?.id
         return formatHistoryRecap(
           session.messages.filter((message) => message.id !== currentMessageId),
-          // Apply the transport cap below, keeping the recent end of history.
-          // The formatter's default budget retains the oldest prefix instead.
+          // Apply the transport cap below, keeping the recent end of history,
+          // so the formatter is given no budget of its own here: the cap that
+          // follows is the one that trims the oldest end when it must.
           { maxInputTokens: Number.MAX_SAFE_INTEGER }
         )
       }
@@ -1286,10 +1299,14 @@ export class CodexDriver extends PersistentCliDriver {
    * runs with. A failed read yields an empty catalog rather than a guessed
    * figure: a model with no stated window shows no window options at all.
    */
-  private async codexWindowCatalog(projectPath: string): Promise<CodexWindowCatalog> {
+  private async codexWindowCatalog(
+    projectPath: string,
+    force = false
+  ): Promise<CodexWindowCatalog> {
     const home = this.codexHomeKey()
     const cached = this.codexWindowsByHome.get(home)
-    if (cached && Date.now() - cached.readAt < CODEX_WINDOW_CATALOG_TTL_MS) return cached.catalog
+    if (!force && cached && Date.now() - cached.readAt < CODEX_WINDOW_CATALOG_TTL_MS)
+      return cached.catalog
     const pending = this.codexWindowReads.get(home)
     if (pending) return pending
     const read = this.readCodexWindowCatalog(projectPath)
@@ -2541,7 +2558,7 @@ export class CodexDriver extends PersistentCliDriver {
         '-c',
         `model_context_window=${contextWindow}`,
         '-c',
-        `model_auto_compact_token_limit=${Math.floor(contextWindow * 0.9)}`
+        `model_auto_compact_token_limit=${Math.floor(contextWindow * COMPACT_LINE_SHARE)}`
       )
     }
     const { env, args: providerArgs } = await this.customProviderOverlay()

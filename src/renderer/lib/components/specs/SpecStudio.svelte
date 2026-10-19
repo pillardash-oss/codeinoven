@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
-  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioMessage from '@pillardash-oss/cio-icon/CioMessage.svelte'
-  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
   import { onDestroy, tick } from 'svelte'
   import { exportEngineeringSpecMarkdown } from '$shared/spec/spec-markdown'
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
@@ -469,10 +469,17 @@
     void selectAndScroll(sections[nextIndex].id)
   }
 
-  function captureDocumentSelection(): void {
-    if (!canDecide && (!onExplainSelection || !onQuickChatSelection)) return
+  /**
+   * The passage a selection in the document names, as a pending annotation.
+   *
+   * Kept apart from `captureDocumentSelection` because it is also what follows
+   * the selection afterwards: the overlay re-runs it while the popover is open,
+   * so a selection extended with shift and the arrow keys keeps its quote, its
+   * offsets and its position in step with the highlighted text.
+   */
+  function pendingAnchorFromSelection(): PendingAnnotation | null {
     const selection = window.getSelection()
-    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
     const range = selection.getRangeAt(0)
     const commonNode =
       range.commonAncestorContainer instanceof Element
@@ -481,7 +488,7 @@
     const sectionElement = commonNode?.closest<HTMLElement>('[data-spec-section]')
     const sectionId = sectionElement?.dataset.specSection as SpecSectionId | undefined
     const quote = selection.toString().trim()
-    if (!sectionElement || !sectionId || !quote) return
+    if (!sectionElement || !sectionId || !quote) return null
     const rect = range.getBoundingClientRect()
     const lines = markdownLineForQuote(
       draft,
@@ -490,7 +497,7 @@
       selectionOccurrence(sectionElement, range, quote)
     )
     selectedSection = sectionId
-    const anchor: PendingAnnotation = {
+    return {
       section: sectionId,
       quote,
       ...lines,
@@ -499,7 +506,13 @@
       sectionLevel: false,
       selectionActions: true
     }
-    overlay.beginPending(anchor)
+  }
+
+  function captureDocumentSelection(): void {
+    if (!canDecide && (!onExplainSelection || !onQuickChatSelection)) return
+    const anchor = pendingAnchorFromSelection()
+    if (!anchor) return
+    overlay.beginPending(anchor, pendingAnchorFromSelection)
     annotationBody = ''
   }
 

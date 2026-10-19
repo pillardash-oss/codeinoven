@@ -434,6 +434,16 @@ export interface HarnessDriver {
   readonly capabilities: HarnessCapabilities
   readonly authCapabilities?: HarnessAuthCapabilities
 
+  /**
+   * Whether a history recap handed to this harness for a turn survives in the
+   * harness's own transcript afterwards. Drivers that fold the recap into the
+   * turn's prompt text (the default) retain it, so a restored delta is sent
+   * once. pi returns the recap from a context hook for that turn only and never
+   * records it, so the engine has to replay the delta on every later turn of an
+   * adopted session or the restored conversation disappears after one answer.
+   */
+  readonly retainsRecapInTranscript?: boolean
+
   /** Attach task-level process tracking after driver construction. */
   setProcessObserver?(observer: AgentProcessObserver): void
 
@@ -624,6 +634,27 @@ export interface HarnessDriver {
   restoreNativeBinding?(projectPath: string, sessionId: string, threadId: string): Promise<boolean>
 
   /**
+   * The session record this driver still holds for a thread, so the engine can
+   * resume its native transcript after the thread moves back from another
+   * harness. A harness switch is a branch, not a reset: the session parked by
+   * the previous switch keeps its transcript and its provider prompt cache, so
+   * resuming it is a cache read instead of a cold replay. Returns null when the
+   * driver holds no parked session for the thread.
+   */
+  findThreadSession?(
+    projectPath: string,
+    threadId: string
+  ): Promise<{ sessionId: string; lastMessageId?: string; native: boolean } | null>
+
+  /**
+   * Keep a session record (and its native transcript) on disk after the thread
+   * moved to another harness, pruning the older parked records this driver
+   * still holds for the same thread. The session's in-memory state is already
+   * retired by the caller; this is only the durable side of parking.
+   */
+  parkThreadSession?(projectPath: string, threadId: string, sessionId: string): Promise<void>
+
+  /**
    * Seed a freshly created session with the thread's edited history as a
    * native transcript, so the next turn resumes the real conversation instead
    * of replaying the mirror as a history recap. Returns true when the session
@@ -704,6 +735,12 @@ export interface HarnessDriver {
 
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
+
+  /** Read the selected model's context metadata without full model discovery. */
+  modelContext?(
+    projectPath: string,
+    modelId: string
+  ): Promise<Pick<ProviderCatalog['models'][number], 'contextWindow' | 'contextWindows'> | null>
 
   /**
    * Cheap, spawn-free staleness fingerprint of the driver's provider-catalog

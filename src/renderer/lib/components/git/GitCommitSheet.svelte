@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioCommit from '@pillardash-oss/cio-icon/CioCommit.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'

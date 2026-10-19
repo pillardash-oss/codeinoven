@@ -1,4 +1,4 @@
-import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
+import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 
 import type { ActionDefinition, ActionSelection } from '$lib/actions'

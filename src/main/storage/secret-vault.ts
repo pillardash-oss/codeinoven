@@ -1,11 +1,20 @@
 import { safeStorage } from 'electron'
 import { uuidv7 } from '../../lib/id'
+import { clearRepeatedFailure, reportRepeatedFailure } from '../system/repeated-failure-log'
+import {
+  VaultCiphertextUnreadableError,
+  VaultRecordMissingError,
+  VaultUnavailableError
+} from './secret-vault-errors'
+import { describeVaultWriter, type VaultWriterIdentity } from './secret-vault-writer'
 import type { StorageEngine } from './storage-engine'
 
 interface EncryptedSecretRecord {
   value: string
   createdAt: number
   updatedAt: number
+  /** The build that wrote this ciphertext; absent on records written before it was recorded. */
+  writer?: VaultWriterIdentity
 }
 
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
@@ -44,6 +53,13 @@ function mcpOAuthClientRef(utilityId: string): string {
  *
  * Ciphertext is stored under CodeInOven's config root. Callers persist only
  * the opaque reference returned by `save`; plaintext never crosses IPC.
+ *
+ * Ciphertext is portable only within one OS keyring identity: `safeStorage`
+ * derives its key from the app name, so every launch that shares this vault must
+ * report the same name. A record written by a launch that reported another name
+ * can never be decrypted here, which is why a read failure is classified and
+ * reported (`VaultCiphertextUnreadableError`) instead of surfacing as a bare
+ * keyring error, and why the App names every launch identically.
  */
 export class SecretVault {
   private readonly storePath = 'secrets/vault.json'
@@ -56,7 +72,7 @@ export class SecretVault {
 
   async save(value: string, existingRef?: string): Promise<string> {
     if (!this.isAvailable()) {
-      throw new Error('Secure credential storage is unavailable on this device')
+      throw new VaultUnavailableError()
     }
     if (!value) throw new TypeError('Credential value must not be empty')
 
@@ -64,12 +80,17 @@ export class SecretVault {
       const ref = existingRef ?? `secret_${uuidv7()}`
       const existing = store[ref]
       const now = Date.now()
+      const writer = describeVaultWriter()
       store[ref] = {
         value: safeStorage.encryptString(value).toString('base64'),
         createdAt: existing?.createdAt ?? now,
-        updatedAt: now
+        updatedAt: now,
+        ...(writer ? { writer } : {})
       }
       await this.storage.write(this.storePath, store)
+      // Storing a credential again is the repair for an unreadable one, so it also
+      // closes that credential's incident instead of leaving it failing for ever.
+      clearRepeatedFailure(unreadableCredentialLabel(ref))
       return ref
     })
   }
@@ -165,11 +186,28 @@ export class SecretVault {
 
   async resolve(ref: string): Promise<string> {
     if (!this.isAvailable()) {
-      throw new Error('Secure credential storage is unavailable on this device')
+      throw new VaultUnavailableError()
     }
     const record = (await this.load())[ref]
-    if (!record) throw new Error('Credential not found')
-    return safeStorage.decryptString(Buffer.from(record.value, 'base64'))
+    if (!record) throw new VaultRecordMissingError(ref)
+
+    try {
+      const value = safeStorage.decryptString(Buffer.from(record.value, 'base64'))
+      clearRepeatedFailure(unreadableCredentialLabel(ref))
+      return value
+    } catch (failure) {
+      // The Git sidebar polls a status that reads this vault every few seconds, so
+      // one unreadable credential reports itself once at error level and repeats at
+      // dev level until it is stored again.
+      const unreadable = new VaultCiphertextUnreadableError(
+        ref,
+        record.writer ?? null,
+        describeVaultWriter(),
+        failure
+      )
+      reportRepeatedFailure(unreadableCredentialLabel(ref), unreadable)
+      throw unreadable
+    }
   }
 
   async remove(ref: string): Promise<void> {
@@ -195,4 +233,12 @@ export class SecretVault {
     vaultWriteTails.set(this.storage, current)
     return current
   }
+}
+
+/**
+ * One incident per credential, so a second unreadable ref reports on its own and
+ * repairing one credential does not silence another.
+ */
+function unreadableCredentialLabel(ref: string): string {
+  return `Credential "${ref}" could not be decrypted with this launch's OS keyring key`
 }

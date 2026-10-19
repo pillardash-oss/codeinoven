@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSend from '@pillardash-oss/cio-icon/CioSend.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSend from '@pdslng/cio-icon/CioSend.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   /**
    * The reply composer for one conversation entry.
    *

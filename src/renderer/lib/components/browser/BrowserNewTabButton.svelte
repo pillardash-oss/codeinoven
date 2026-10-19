@@ -1,7 +1,8 @@
 <script lang="ts">
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
 
   /**
@@ -30,7 +31,7 @@
       class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
       aria-label="New browser tab"
       title="New tab"
-      data-shortcut={keymapState.keysFor('browser-new-tab').join(',')}
+      data-shortcut={encodeShortcutTokens(keymapState.keysFor('browser-new-tab'))}
       onclick={() => globalBrowser.openNewTabAddress()}
     >
       <CioPlus size={15} strokeWidth={1.8} />

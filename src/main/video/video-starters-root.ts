@@ -1,5 +1,5 @@
-import { app } from 'electron'
 import { join } from 'node:path'
+import { appResourcesRoot } from '../bootstrap/app-resources'
 
 /**
  * Where the films the app ships are installed.
@@ -10,7 +10,5 @@ import { join } from 'node:path'
  * about where a starter is.
  */
 export function videoStartersRoot(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'video-starters')
-    : join(app.getAppPath(), 'resources', 'video-starters')
+  return join(appResourcesRoot(), 'video-starters')
 }

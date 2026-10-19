@@ -140,6 +140,17 @@ export interface AgentSubagentActivity {
   /** Project-relative paths the sub-agent's file tools edited or wrote. */
   files?: string[]
   time?: { start: number; end?: number }
+  /**
+   * True when the delegated worker is a pawn agent: an independent thread the
+   * app spawned for an agent, rather than a session nested inside the harness.
+   *
+   * A pawn wears the same card, body and session view as a sub-agent, because
+   * the agent that reads them needs the same three things (the prompt it gave,
+   * the work as it happened, and the final report). Only the mark changes, so
+   * the rail can tell the two apart, and `childSessionId` names a session on the
+   * pawn's own thread rather than one nested under its parent.
+   */
+  pawn?: boolean
 }
 
 /** User-facing copy for a turn whose full text is an internal agent instruction. */

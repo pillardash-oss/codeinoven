@@ -759,6 +759,10 @@ export class BrowserOverlayWindow {
         return
       }
       if (!modal || (input.type !== 'keyDown' && input.type !== 'keyUp')) return
+      // The overlay's DOM routes Enter with its actual field identity. Sending
+      // it here too can use stale focus, lose submission, or submit twice.
+      // Modified primary-action shortcuts still use the modal key route.
+      if (input.key === 'Enter' && !input.control && !input.meta) return
       sendToRenderer(this.parent.webContents, 'browser:overlay:dockKey', {
         id: modal.id,
         type: input.type === 'keyDown' ? 'keydown' : 'keyup',

@@ -1,9 +1,9 @@
 <script lang="ts">
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioCpu from '@pillardash-oss/cio-icon/CioCpu.svelte'
-  import CioMemory from '@pillardash-oss/cio-icon/CioMemory.svelte'
-  import CioPerson from '@pillardash-oss/cio-icon/CioPerson.svelte'
-  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
+  import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
   import { onMount, tick } from 'svelte'
   import { DropdownMenu, Popover } from 'bits-ui'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -234,11 +234,21 @@
     selectedProvider?.models.find((model) => model.id === modelId) ??
       displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
   )
-  let runtimeModel = $derived(
-    displayProviders
+  let runtimeModel = $derived.by(() => {
+    const model = displayProviders
       .find((provider) => provider.id === providerId && provider.harnessId === harnessId)
       ?.models.find((model) => model.id === modelId)
-  )
+    const metadata = projectId
+      ? providerCatalog.modelContext(projectId, harnessId, providerId, modelId, accountId)
+      : undefined
+    return model && metadata ? { ...model, ...metadata } : model
+  })
+
+  function refreshSelectedContext(): void {
+    if (projectId) {
+      void providerCatalog.refreshModelContext(projectId, harnessId, providerId, modelId, accountId)
+    }
+  }
   let fastSupported = $derived(runtimeModel?.fastSupported === true)
   let ultrafastSupported = $derived(
     harnessId === 'codex' && providerId === 'openai' && runtimeModel?.ultrafastSupported === true
@@ -628,6 +638,15 @@
     const nextAccountId = accountIdFor(nextHarnessId, nextProviderId, knownAccounts)
     const token = ++selectionToken
     onSelect(nextProviderId, nextModelId, nextHarnessId, nextAccountId)
+    if (projectId) {
+      void providerCatalog.refreshModelContext(
+        projectId,
+        nextHarnessId,
+        nextProviderId,
+        nextModelId,
+        nextAccountId
+      )
+    }
     if (!sameHarness) {
       // Invalidate any in-flight loadAccounts for the previous harness before
       // the parent applies the new harness prop. The shared reactive cache now
@@ -643,6 +662,15 @@
           const resolvedAccountId = accountIdFor(nextHarnessId, nextProviderId, resolved)
           if (resolvedAccountId !== nextAccountId) {
             onSelect(nextProviderId, nextModelId, nextHarnessId, resolvedAccountId)
+            if (projectId) {
+              void providerCatalog.refreshModelContext(
+                projectId,
+                nextHarnessId,
+                nextProviderId,
+                nextModelId,
+                resolvedAccountId
+              )
+            }
           }
         })
         .catch(() => undefined)
@@ -801,7 +829,13 @@
           {contextWindows}
           contextWindow={runtimeSettings?.contextWindow}
           defaultContextWindow={runtimeModel?.contextWindow ?? contextWindows[0]}
-          bind:menuOpen={runtimeMenuOpen}
+          bind:menuOpen={
+            () => runtimeMenuOpen,
+            (value) => {
+              runtimeMenuOpen = value
+              if (value) refreshSelectedContext()
+            }
+          }
           disabled={disabled || !onSelectRuntime}
           onSelect={chooseSpeed}
           onSelectContext={(tokens) =>

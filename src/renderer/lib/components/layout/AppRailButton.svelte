@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ICON_SIZE, RAIL_ICON_STROKE } from '$lib/components/icons/cio/scale'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import RailAudioBadge from './RailAudioBadge.svelte'
   import type { Component, Snippet } from 'svelte'
 
@@ -79,7 +80,7 @@
   aria-label={label}
   aria-current={active ? 'page' : undefined}
   title={label}
-  data-shortcut={shortcut.length > 0 ? shortcut.join(',') : undefined}
+  data-shortcut={encodeShortcutTokens(shortcut)}
   {disabled}
   onpointerenter={onHover}
   onclick={onSelect}

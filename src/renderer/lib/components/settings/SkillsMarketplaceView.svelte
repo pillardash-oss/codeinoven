@@ -1,10 +1,10 @@
 <script lang="ts">
-  import CioBook from '@pillardash-oss/cio-icon/CioBook.svelte'
-  import CioBookmark from '@pillardash-oss/cio-icon/CioBookmark.svelte'
-  import CioFlame from '@pillardash-oss/cio-icon/CioFlame.svelte'
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioTrendingUp from '@pillardash-oss/cio-icon/CioTrendingUp.svelte'
+  import CioBook from '@pdslng/cio-icon/CioBook.svelte'
+  import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
+  import CioFlame from '@pdslng/cio-icon/CioFlame.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTrendingUp from '@pdslng/cio-icon/CioTrendingUp.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     cachedSkillMarketLeaderboard,

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '@pillardash-oss/cio-icon/CioAttention.svelte'
-  import CioCheckCircle from '@pillardash-oss/cio-icon/CioCheckCircle.svelte'
-  import CioPullRequest from '@pillardash-oss/cio-icon/CioPullRequest.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
+  import CioPullRequest from '@pdslng/cio-icon/CioPullRequest.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'

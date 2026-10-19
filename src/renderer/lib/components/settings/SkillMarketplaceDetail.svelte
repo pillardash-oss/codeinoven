@@ -1,17 +1,17 @@
 <script lang="ts">
-  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
-  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
-  import CioCalendar from '@pillardash-oss/cio-icon/CioCalendar.svelte'
-  import CioCheck from '@pillardash-oss/cio-icon/CioCheck.svelte'
-  import CioDownload from '@pillardash-oss/cio-icon/CioDownload.svelte'
-  import CioExternalLink from '@pillardash-oss/cio-icon/CioExternalLink.svelte'
-  import CioFork from '@pillardash-oss/cio-icon/CioFork.svelte'
-  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
-  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
-  import CioStar from '@pillardash-oss/cio-icon/CioStar.svelte'
-  import CioTerminal from '@pillardash-oss/cio-icon/CioTerminal.svelte'
-  import CioTrash from '@pillardash-oss/cio-icon/CioTrash.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioCalendar from '@pdslng/cio-icon/CioCalendar.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import CioFork from '@pdslng/cio-icon/CioFork.svelte'
+  import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
+  import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
@@ -36,8 +36,7 @@
     Project,
     SkillMarketDetail,
     SkillMarketEntry,
-    SkillMarketInstallRequest,
-    UtilityActivation
+    SkillMarketInstallRequest
   } from '$shared/types'
   import { onMount } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -85,7 +84,6 @@
   let installedMessage = $state('')
   let manager = $state<InstallManager>('native')
   let scope = $state<InstallScope>('global')
-  let activation = $state<UtilityActivation>('on_demand')
   let selectedProjectIds = $state<string[]>([])
   let selectedHarnessIds = $state<string[]>([])
   let projects = $state<ScopeProject[]>([])
@@ -150,10 +148,11 @@
     const projectCount = selectedProjectIds.length
     const harnessCount = selectedHarnessIds.length
     if (manager === 'cio') {
-      const availability = activation === 'always' ? 'always available' : 'loaded on demand'
+      // A managed skill always loads on demand, so the destination is all the
+      // card can promise.
       return scope === 'global'
-        ? `${APP_NAME} utility · global · ${availability}`
-        : `${APP_NAME} utility · ${projectCount || 'no'} project${projectCount === 1 ? '' : 's'} · ${availability}`
+        ? `${APP_NAME} utility · global`
+        : `${APP_NAME} utility · ${projectCount || 'no'} project${projectCount === 1 ? '' : 's'}`
     }
     if (scope === 'global') return `All harnesses · ${SHARED_GLOBAL_SKILL_PATH}`
     if (scope === 'projects') {
@@ -173,11 +172,7 @@
   let selectionInstalled = $derived.by(() => {
     if (installedLocations.length === 0) return false
     if (manager === 'cio') {
-      // Activation is part of the request, so switching between on-demand and
-      // always-available has to keep the install action available.
-      const managed = installedLocations.filter(
-        (location) => location.manager === 'cio' && location.activation === activation
-      )
+      const managed = installedLocations.filter((location) => location.manager === 'cio')
       if (scope === 'global') return managed.some((location) => location.scope === 'global')
       if (selectedProjectIds.length === 0) return false
       return selectedProjectIds.every((projectId) =>
@@ -267,8 +262,7 @@
             ? { kind: 'global' }
             : scope === 'projects'
               ? { kind: 'projects', projectIds: selectedProjectIds }
-              : { kind: 'harnesses', harnessIds: selectedHarnessIds },
-        ...(manager === 'cio' ? { activation } : {})
+              : { kind: 'harnesses', harnessIds: selectedHarnessIds }
       }
       await invoke('utilities:installMarketSkill', request)
       // The install changed the registry and the skill folders on disk, so the
@@ -534,37 +528,7 @@
           {/if}
         </div>
 
-        {#if manager === 'cio'}
-          <div class="mt-4 space-y-2">
-            <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
-              Availability
-            </p>
-            <button
-              type="button"
-              class="flex w-full items-start gap-2 border p-2.5 text-left transition-colors {activation ===
-              'on_demand'
-                ? 'border-primary bg-primary/10'
-                : 'bg-elevated hover:bg-overlay'}"
-              aria-pressed={activation === 'on_demand'}
-              onclick={() => (activation = 'on_demand')}
-            >
-              <span class="text-xs font-medium">On demand</span>
-              <span class="ml-auto text-[0.625rem] text-muted">Match by task</span>
-            </button>
-            <button
-              type="button"
-              class="flex w-full items-start gap-2 border p-2.5 text-left transition-colors {activation ===
-              'always'
-                ? 'border-primary bg-primary/10'
-                : 'bg-elevated hover:bg-overlay'}"
-              aria-pressed={activation === 'always'}
-              onclick={() => (activation = 'always')}
-            >
-              <span class="text-xs font-medium">Always available</span>
-              <span class="ml-auto text-[0.625rem] text-muted">Every turn</span>
-            </button>
-          </div>
-        {:else if scope === 'harnesses'}
+        {#if scope === 'harnesses'}
           <div class="mt-4 min-w-0 space-y-2">
             <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
               Select harnesses

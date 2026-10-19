@@ -7,6 +7,7 @@ import type { ResolvedImageEntry } from '../../providers/image-descriptor-provid
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
 import type { UtilitySuggestionResolution } from '../../../lib/utility-suggestion'
 import type {
+  FileChangeSource,
   AgentMessage,
   AgentModelSelection,
   AgentPart,
@@ -122,12 +123,14 @@ export interface SessionInfo {
    *  the estimate fallback must stay disabled for them. */
   hasReportedTokenUsage?: boolean
   changedPaths?: Set<string>
+  changeSources?: Map<string, FileChangeSource[]>
+  rejectedChangeSources?: Map<string, Set<string>>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
-  /** Whether this turn invoked a shell-like tool. Its before/after project diff
-   *  is the completion fallback if command parsing or a stat window misses a write. */
+  unboundedWindowToolIds?: Set<string>
+  /** Whether this turn invoked a shell-like tool. Never authorizes a workspace-wide claim. */
   unboundedToolObserved?: boolean
   /** Paths the user saved through the in-app editor while this turn ran.
    *  These are the user's own edits   never attributed to the thread. */

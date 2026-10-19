@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.62",
+  "version": "0.5.63",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.4.3",
@@ -42,7 +42,7 @@
   },
   "scripts": {
     "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && electron-builder install-app-deps && bun scripts/ensure-pty-helper.ts",
-    "predev": "bun run --filter @pillardash-oss/cio-icon build && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/ensure-pty-helper.ts && bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
+    "predev": "bun run --filter @pdslng/cio-icon build && bun scripts/ensure-ffmpeg-binary.ts && bun scripts/ensure-pty-helper.ts && bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "dev:probe": "bun scripts/dev-probe.ts",
     "probe": "bun scripts/probe.ts",
@@ -80,13 +80,13 @@
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
     "msix:build": "bun scripts/msix.ts",
-    "prebuild": "bun run --filter @pillardash-oss/cio-icon build",
-    "prebuild:production": "bun run --filter @pillardash-oss/cio-icon build",
-    "precheck": "bun run --filter @pillardash-oss/cio-icon build",
-    "pretest": "bun run --filter @pillardash-oss/cio-icon build"
+    "prebuild": "bun run --filter @pdslng/cio-icon build",
+    "prebuild:production": "bun run --filter @pdslng/cio-icon build",
+    "precheck": "bun run --filter @pdslng/cio-icon build",
+    "pretest": "bun run --filter @pdslng/cio-icon build"
   },
   "dependencies": {
-    "@pillardash-oss/cio-icon": "workspace:*",
+    "@pdslng/cio-icon": "workspace:*",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",

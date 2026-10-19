@@ -7,6 +7,10 @@
  * the window itself. A popover with a fixed height simply loses its first rows to that
  * clip, with no scrollbar to reach them. Sizing the popover from the room it actually
  * has is what lets it scroll inside its own box instead.
+ *
+ * A popover whose box the app does not own the room for   the shoe's own readings, which
+ * open from a composer that any pane may narrow   is portaled and positioned by the
+ * app's overlay primitive instead, so that no ancestor can clip it at all.
  */
 
 /**
@@ -21,20 +25,30 @@
  * number. `gap` is the clearance the popover keeps from the edge it opens toward.
  */
 export function roomAbove(element: HTMLElement, edgeY: number, gap: number): number {
-  const clipTop = Math.max(0, nearestClipTop(element))
-  return Math.max(0, Math.floor(edgeY - clipTop - gap))
+  return Math.max(0, Math.floor(edgeY - nearestClipBounds(element).top - gap))
 }
 
 /**
- * Top of the nearest ancestor that clips vertical overflow, or the viewport top when
- * every ancestor lets content through. Never negative: a clipping ancestor that has
- * itself scrolled above the window can only offer room that is already off screen.
+ * Where an upward popover's box ends at the top: the nearest ancestor that clips
+ * overflow, or the window's own top where every ancestor lets content through. Never
+ * above the window: a clipping ancestor that has itself scrolled above it can only
+ * offer room already off screen.
  */
-function nearestClipTop(element: HTMLElement): number {
+interface ClipBounds {
+  top: number
+}
+
+function nearestClipBounds(element: HTMLElement): ClipBounds {
+  const bounds: ClipBounds = { top: 0 }
+  let clipped = false
   let node = element.parentElement
-  while (node) {
-    if (getComputedStyle(node).overflowY !== 'visible') return node.getBoundingClientRect().top
+  while (node && !clipped) {
+    if (getComputedStyle(node).overflowY !== 'visible') {
+      bounds.top = node.getBoundingClientRect().top
+      clipped = true
+    }
     node = node.parentElement
   }
-  return 0
+  bounds.top = Math.max(0, bounds.top)
+  return bounds
 }

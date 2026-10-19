@@ -581,7 +581,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
         excludeTurns: true,
         config: {
           model_context_window: 1_000_000,
-          model_auto_compact_token_limit: 900_000,
+          model_auto_compact_token_limit: 825_000,
           tool_output_token_limit: 3_000
         },
         developerInstructions: CODEX_QUESTION_INSTRUCTION,
