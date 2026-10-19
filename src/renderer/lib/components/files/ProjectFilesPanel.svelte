@@ -1340,7 +1340,7 @@
         {/if}
         {#if activeFileInMergeEditor}
           {conflictSaveText}
-        {:else}CioSave{/if}
+        {:else}Save{/if}
       </button>
     {/if}
     <button
