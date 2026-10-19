@@ -27,7 +27,11 @@ import type { Contract } from './contract-helpers'
 import type { Thread } from '../types'
 
 export const invokeOvenContract = {
-  'oven:testConnection': {} as Contract<[input: SaveOvenInput], OvenConnectionStatus>,
+  'oven:testConnection': {} as Contract<
+    [input: SaveOvenInput, requestId: string],
+    OvenConnectionStatus
+  >,
+  'oven:cancelConnectionTest': {} as Contract<[requestId: string], void>,
   'oven:connectionHealth': {} as Contract<[id: string], OvenConnectionStatus>,
   'oven:validateIdentity': {} as Contract<[path: string], string>,
   'oven:rootOperation': {} as Contract<
@@ -83,7 +87,10 @@ export const invokeOvenContract = {
   >,
   'oven:agent:script': {} as Contract<[input: OvenAgentScriptRequest], OvenAgentScript>,
   'oven:agent:preview': {} as Contract<[code: string], OvenAgentPreview>,
-  'oven:agent:test': {} as Contract<[input: OvenAgentRegistrationInput], OvenConnectionStatus>,
+  'oven:agent:test': {} as Contract<
+    [input: OvenAgentRegistrationInput, requestId: string],
+    OvenConnectionStatus
+  >,
   'oven:agent:reachable': {} as Contract<[code: string], OvenEndpoint | null>,
   'oven:agent:register': {} as Contract<[input: OvenAgentRegistrationInput], OvenAgentRegistration>
 }

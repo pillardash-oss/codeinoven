@@ -45,6 +45,7 @@
   let detected = $state<OvenEndpoint | null>(null)
   /** True while a full SSH probe is running against the machine. */
   let testing = $state(false)
+  let connectionTestId: string | undefined
   /** The result of the last Test connection, cleared when the target changes. */
   let testResult = $state<OvenConnectionStatus | null>(null)
   let error = $state('')
@@ -66,6 +67,7 @@
   }
 
   function onCodeInput(value: string): void {
+    cancelConnectionTest()
     code = value
     // A preview belongs to the code it was read from. Editing the code
     // invalidates it rather than letting a stale machine be registered.
@@ -76,6 +78,7 @@
 
   /** Drop a stale probe result the moment its target changes. */
   function onTargetChange(): void {
+    cancelConnectionTest()
     testResult = null
   }
 
@@ -93,16 +96,23 @@
       error = 'Enter the address or SSH alias this computer reaches the machine on.'
       return
     }
+    const requestId = crypto.randomUUID()
+    connectionTestId = requestId
     testing = true
     error = ''
     testResult = null
     try {
-      testResult = await invoke('oven:agent:test', { code, host: address, port })
+      const result = await invoke('oven:agent:test', { code, host: address, port }, requestId)
+      if (connectionTestId !== requestId) return
+      testResult = result
       if (testResult.state === 'connected') toast.success('Connection works')
     } catch (cause) {
-      error = message(cause)
+      if (connectionTestId === requestId) error = message(cause)
     } finally {
-      testing = false
+      if (connectionTestId === requestId) {
+        connectionTestId = undefined
+        testing = false
+      }
     }
   }
 
@@ -181,7 +191,15 @@
     }
   }
 
+  function cancelConnectionTest(): void {
+    const requestId = connectionTestId
+    connectionTestId = undefined
+    testing = false
+    if (requestId) void invoke('oven:cancelConnectionTest', requestId).catch(() => undefined)
+  }
+
   function close(): void {
+    cancelConnectionTest()
     code = ''
     preview = null
     host = ''

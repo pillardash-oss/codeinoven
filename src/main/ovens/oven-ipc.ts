@@ -11,7 +11,7 @@ import type { ProjectFilesService } from '../editor/project-files-service'
 import { app } from 'electron'
 import { OvenTransfers } from './oven-transfers'
 import { OvenPreview } from './oven-preview'
-import type { OvenTransferInput, OvenWorkspaceRequest } from '../../lib/ovens'
+import type { OvenConnectionStatus, OvenTransferInput, OvenWorkspaceRequest } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import { LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
@@ -89,8 +89,36 @@ export function registerOvenIpc(
     if (id === LOCAL_OVEN_ID) throw new Error('The Local oven does not run oven setup.')
     return id
   }
-  ipcMain.handle('oven:testConnection', (_event, raw: unknown) =>
-    testDraftConnection(registry, validateSaveOven(raw))
+  const connectionTests = new Map<string, AbortController>()
+  const testKey = (senderId: number, requestId: unknown): string => {
+    if (typeof requestId !== 'string' || requestId.length > 100 || !requestId)
+      throw new Error('Invalid connection test request.')
+    return `${senderId}:${requestId}`
+  }
+  ipcMain.handle('oven:cancelConnectionTest', (event, requestId: unknown) => {
+    connectionTests
+      .get(testKey(event.sender.id, requestId))
+      ?.abort(new Error('Connection test cancelled.'))
+  })
+  const runConnectionTest = async (
+    senderId: number,
+    requestId: unknown,
+    run: (signal: AbortSignal) => Promise<OvenConnectionStatus>
+  ) => {
+    const key = testKey(senderId, requestId)
+    const controller = new AbortController()
+    connectionTests.get(key)?.abort()
+    connectionTests.set(key, controller)
+    try {
+      return await run(controller.signal)
+    } finally {
+      if (connectionTests.get(key) === controller) connectionTests.delete(key)
+    }
+  }
+  ipcMain.handle('oven:testConnection', (event, raw: unknown, requestId: unknown) =>
+    runConnectionTest(event.sender.id, requestId, (signal) =>
+      testDraftConnection(registry, validateSaveOven(raw), signal)
+    )
   )
   ipcMain.handle('oven:connectionHealth', async (_event, raw: unknown) => {
     const id = ovenId(raw)
@@ -273,8 +301,10 @@ export function registerOvenIpc(
     if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
     return agentService.reachableEndpoint(raw)
   })
-  ipcMain.handle('oven:agent:test', (_event, raw: unknown) =>
-    agentService.test(validateOvenAgentRegistration(raw))
+  ipcMain.handle('oven:agent:test', (event, raw: unknown, requestId: unknown) =>
+    runConnectionTest(event.sender.id, requestId, (signal) =>
+      agentService.test(validateOvenAgentRegistration(raw), signal)
+    )
   )
   ipcMain.handle('oven:agent:register', (_event, raw: unknown) =>
     agentService.register(validateOvenAgentRegistration(raw))

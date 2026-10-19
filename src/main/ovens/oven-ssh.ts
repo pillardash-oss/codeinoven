@@ -153,7 +153,10 @@ export class OvenSsh {
   private initialized: Promise<void> | undefined
   private multiplexReady: Promise<void> | undefined
 
-  constructor(private readonly registry: OvenSshRegistry) {}
+  constructor(
+    private readonly registry: OvenSshRegistry,
+    private readonly signal?: AbortSignal
+  ) {}
 
   /** Serialize transport work per Oven, so a reconnect never floods one device. */
   execute(
@@ -513,7 +516,7 @@ export class OvenSsh {
     // Share one SSH connection per Oven across every command in the app, so a
     // turn does not pay a full handshake on each poll. `ControlPersist` closes
     // it only once nothing is using it (see oven-ssh-multiplex.ts).
-    if (multiplexSupported()) {
+    if (multiplexSupported() && !this.signal) {
       this.multiplexReady ??= ensureMultiplexDirectory(this.registry.storage)
       await this.multiplexReady
       args.push(
@@ -617,6 +620,7 @@ export class OvenSsh {
     maxOutputBytes = 2 * 1024 * 1024
   ): Promise<string> {
     if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
+    this.signal?.throwIfAborted()
     const prepared = await this.prepare(
       id,
       channel ? undefined : command,
@@ -626,6 +630,7 @@ export class OvenSsh {
     )
     const { executable, args, env } = prepared
     try {
+      this.signal?.throwIfAborted()
       if (channel?.socket.destroyed) throw new Error('The preview connection closed.')
       return await new Promise<string>((resolve, reject) => {
         const child = spawn(executable, args, {
@@ -633,6 +638,11 @@ export class OvenSsh {
           windowsHide: true,
           stdio: ['pipe', 'pipe', 'pipe']
         })
+        const abort = (): void => {
+          child.kill('SIGKILL')
+        }
+        this.signal?.addEventListener('abort', abort, { once: true })
+        if (this.signal?.aborted) abort()
         let output = ''
         let remoteStderr = ''
         let bytes = 0
@@ -699,8 +709,10 @@ export class OvenSsh {
         child.stdin.on('error', () => undefined)
         child.on('close', (code) => {
           clearTimeout(timer)
+          this.signal?.removeEventListener('abort', abort)
           delete env['CIO_OVEN_KEY_PASSPHRASE']
-          if (failure) reject(failure)
+          if (this.signal?.aborted) reject(this.signal.reason)
+          else if (failure) reject(failure)
           else if (timedOut)
             reject(new Error('The Oven did not respond before the connection timeout.'))
           else if (code === 255 || code === null)

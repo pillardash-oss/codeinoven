@@ -82,9 +82,12 @@ export class OvenAgentService {
    * read-only inspect the app uses everywhere else, so authentication, host trust,
    * and the remote shell are all exercised before anything is stored.
    */
-  async test(input: OvenAgentRegistrationInput): Promise<OvenConnectionStatus> {
+  async test(
+    input: OvenAgentRegistrationInput,
+    signal?: AbortSignal
+  ): Promise<OvenConnectionStatus> {
     const descriptor = decodeOvenAgentDescriptor(input.code)
-    return testDraftConnection(this.registry, this.saveInputFor(descriptor, input))
+    return testDraftConnection(this.registry, this.saveInputFor(descriptor, input), signal)
   }
 
   /** Validate a descriptor and save it as an Oven, storing any identity in the vault. */
