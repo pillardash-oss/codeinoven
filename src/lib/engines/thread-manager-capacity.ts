@@ -16,6 +16,10 @@ export const REGULAR_BUCKET = '__regular_bucket__'
  * its row, and the thread parks in `spec` between stages anyway, so evicting it
  * would destroy in-flight work. Workers and auditors are already kept out of the
  * candidate list, so only the coordinator needs the guard here.
+ *
+ * An archived thread is invincible by a stronger rule than this predicate: the
+ * candidate query never returns one (nor any thread whose subtree holds one),
+ * so it cannot reach an eviction decision at all.
  */
 export function isProtectedFromAutomaticCleanup(
   thread: Pick<Thread, 'pinned' | 'status' | 'assignmentRole' | 'achievementRole'>

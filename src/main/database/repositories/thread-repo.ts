@@ -1,4 +1,4 @@
-import { unarchivedThreadSql } from '../../../lib/archives'
+import { unarchivedSubtreeSql, unarchivedThreadSql } from '../../../lib/archives'
 import { ledgerContextUsageSql } from '../thread-context-usage-sql'
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
@@ -911,6 +911,10 @@ export class ThreadRepo {
   /**
    * Read only the fields needed to enforce per-project capacity on the worker.
    * Orchestration children do not count toward the user-visible thread bound.
+   *
+   * An archived thread is invincible: it is never a candidate, it never occupies
+   * one of the project's slots, and neither is a thread whose subtree holds one,
+   * because deleting that thread would take the archived conversation with it.
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
@@ -918,6 +922,7 @@ export class ThreadRepo {
        FROM threads
        WHERE project_id = ?
          AND ${unarchivedThreadSql()}
+         AND ${unarchivedSubtreeSql()}
          AND assignment_role IS NOT 'worker'
          AND achievement_role IS NOT 'auditor'
          AND coordinator_thread_id IS NULL
