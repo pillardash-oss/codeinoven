@@ -45,7 +45,8 @@ const TARGET_ARCHITECTURE: Record<string, string> = {
 interface VisualStudioInstallation {
   installationPath: string
   installationVersion: string
-  packages?: string[]
+  /** vswhere reports package objects (`{ id, version, type }`) here. */
+  packages?: unknown
 }
 
 interface ToolsetMatch {
@@ -89,19 +90,33 @@ function installedVisualStudios(vswhere: string): VisualStudioInstallation[] {
   }
 }
 
+function packageIds(packages: unknown): string[] | null {
+  if (!Array.isArray(packages)) return null
+  const ids: string[] = []
+  for (const entry of packages) {
+    if (typeof entry === 'string') {
+      ids.push(entry)
+    } else if (typeof entry === 'object' && entry !== null && 'id' in entry) {
+      const { id } = entry
+      if (typeof id === 'string') ids.push(id)
+    }
+  }
+  return ids
+}
+
 /**
  * node-gyp only accepts an installation that carries a Windows SDK, so the
  * pinned year has to clear the same bar.
  */
-function hasWindowsSdk(packages: string[] | undefined): boolean {
-  // vswhere only ships package ids when -include packages is supported, which
-  // it has been for years; without them there is nothing to second-guess.
-  if (!packages) return true
-  return packages.some(
-    (entry) =>
-      entry.startsWith('Microsoft.VisualStudio.Component.Windows10SDK.') ||
-      entry.startsWith('Microsoft.VisualStudio.Component.Windows11SDK.') ||
-      entry === 'Microsoft.VisualStudio.Component.Windows81SDK'
+function hasWindowsSdk(packages: unknown): boolean {
+  // Without the package list there is nothing to second-guess.
+  const ids = packageIds(packages)
+  if (!ids) return true
+  return ids.some(
+    (id) =>
+      id.startsWith('Microsoft.VisualStudio.Component.Windows10SDK.') ||
+      id.startsWith('Microsoft.VisualStudio.Component.Windows11SDK.') ||
+      id === 'Microsoft.VisualStudio.Component.Windows81SDK'
   )
 }
 
@@ -170,23 +185,32 @@ const args = ['install-app-deps']
 const environment: NodeJS.ProcessEnv = { ...process.env }
 
 if (process.platform === 'win32' && !environment.GYP_MSVS_VERSION) {
-  const vswhere = visualStudioInstaller()
-  const installations = vswhere ? installedVisualStudios(vswhere) : []
-  const match = selectToolset(installations)
-  if (match) {
-    environment.GYP_MSVS_VERSION = match.year
-    Logger.dev(
-      `[install-app-deps] Building native modules with Visual Studio ${match.year} (toolset ${match.toolset}) at ${match.path}.`
-    )
-  } else {
+  try {
+    const vswhere = visualStudioInstaller()
+    const installations = vswhere ? installedVisualStudios(vswhere) : []
+    const match = selectToolset(installations)
+    if (match) {
+      environment.GYP_MSVS_VERSION = match.year
+      Logger.dev(
+        `[install-app-deps] Building native modules with Visual Studio ${match.year} (toolset ${match.toolset}) at ${match.path}.`
+      )
+    } else {
+      Logger.error(
+        [
+          '[install-app-deps] No Visual Studio C++ toolset matches the one node-gyp derives from its year.',
+          installations.length > 0
+            ? describeInstallations(installations)
+            : '- no Visual Studio installation reported by vswhere',
+          `Install "Desktop development with C++" including the ${TARGET_ARCHITECTURE[process.arch] ?? process.arch} build tools, or set GYP_MSVS_VERSION to a year whose toolset is installed.`
+        ].join('\n')
+      )
+    }
+  } catch (error) {
+    // Inspecting Visual Studio must never decide whether the install succeeds;
+    // node-gyp's own detection stays the fallback.
     Logger.error(
-      [
-        '[install-app-deps] No Visual Studio C++ toolset matches the one node-gyp derives from its year.',
-        installations.length > 0
-          ? describeInstallations(installations)
-          : '- no Visual Studio installation reported by vswhere',
-        `Install "Desktop development with C++" including the ${TARGET_ARCHITECTURE[process.arch] ?? process.arch} build tools, or set GYP_MSVS_VERSION to a year whose toolset is installed.`
-      ].join('\n')
+      '[install-app-deps] Could not inspect Visual Studio; using node-gyp detection:',
+      error
     )
   }
 }
