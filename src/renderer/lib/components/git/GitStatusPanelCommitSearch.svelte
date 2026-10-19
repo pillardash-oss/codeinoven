@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioSearch from '@pillardash-oss/cio-icon/CioSearch.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { GitCommitInfo } from '$shared/types'
   import FindInBar from '../files/FindInBar.svelte'
   import { formatCompactAge } from '$shared/date-time-format'

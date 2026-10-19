@@ -1,7 +1,7 @@
 <script lang="ts">
-  import CioArrowLeft from '@pillardash-oss/cio-icon/CioArrowLeft.svelte'
-  import CioArrowRight from '@pillardash-oss/cio-icon/CioArrowRight.svelte'
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import { onMount } from 'svelte'
 
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'

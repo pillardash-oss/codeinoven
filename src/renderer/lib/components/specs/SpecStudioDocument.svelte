@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioMessagePlus from '@pillardash-oss/cio-icon/CioMessagePlus.svelte'
+  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
   import type {
     CapturableSpecContextType,
     EngineeringSpec,

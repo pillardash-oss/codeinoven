@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioSubagent from '@pillardash-oss/cio-icon/CioSubagent.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import { onDestroy, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'

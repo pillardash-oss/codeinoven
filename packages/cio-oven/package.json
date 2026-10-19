@@ -1,5 +1,5 @@
 {
-  "name": "@pillardash-oss/cio-oven",
+  "name": "@pdslng/cio-oven",
   "version": "0.5.65",
   "description": "Turn a machine into a CodeInOven Oven: start, inspect, and stop the durable Oven service from one command.",
   "license": "MIT",

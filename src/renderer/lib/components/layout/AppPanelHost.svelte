@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioAlertCircle from '@pillardash-oss/cio-icon/CioAlertCircle.svelte'
-  import CioSpinner from '@pillardash-oss/cio-icon/CioSpinner.svelte'
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { appPanelHost } from '$lib/app-panel-portal'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'

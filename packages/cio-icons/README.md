@@ -1,10 +1,10 @@
-# @pillardash-oss/cio-icon
+# @pdslng/cio-icon
 
 The handcrafted CodeInOven icon set, distributed as tree-shakeable Svelte 5 components.
 
 ```svelte
 <script lang="ts">
-  import { CioArchive } from '@pillardash-oss/cio-icon'
+  import { CioArchive } from '@pdslng/cio-icon'
 </script>
 
 <CioArchive size={20} aria-label="Archive" role="img" />

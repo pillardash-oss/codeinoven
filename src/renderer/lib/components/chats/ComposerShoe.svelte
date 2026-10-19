@@ -75,13 +75,13 @@
 </script>
 
 <script lang="ts">
-  import CioActions from '@pillardash-oss/cio-icon/CioActions.svelte'
-  import CioChevronDown from '@pillardash-oss/cio-icon/CioChevronDown.svelte'
-  import CioClipboardCheck from '@pillardash-oss/cio-icon/CioClipboardCheck.svelte'
-  import CioClipboardX from '@pillardash-oss/cio-icon/CioClipboardX.svelte'
-  import CioFiles from '@pillardash-oss/cio-icon/CioFiles.svelte'
-  import CioForward from '@pillardash-oss/cio-icon/CioForward.svelte'
-  import CioTabGit from '@pillardash-oss/cio-icon/CioTabGit.svelte'
+  import CioActions from '@pdslng/cio-icon/CioActions.svelte'
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioClipboardCheck from '@pdslng/cio-icon/CioClipboardCheck.svelte'
+  import CioClipboardX from '@pdslng/cio-icon/CioClipboardX.svelte'
+  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'

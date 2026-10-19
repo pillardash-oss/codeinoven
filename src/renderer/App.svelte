@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioBrowser from '@pillardash-oss/cio-icon/CioBrowser.svelte'
-  import CioFind from '@pillardash-oss/cio-icon/CioFind.svelte'
-  import CioProjects from '@pillardash-oss/cio-icon/CioProjects.svelte'
-  import CioThreads from '@pillardash-oss/cio-icon/CioThreads.svelte'
+  import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
+  import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+  import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import { onMount } from 'svelte'
   import type {
     CommandPaletteProps,

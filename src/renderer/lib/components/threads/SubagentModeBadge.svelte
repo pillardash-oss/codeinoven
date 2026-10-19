@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioEnter from '@pillardash-oss/cio-icon/CioEnter.svelte'
-  import CioLayers from '@pillardash-oss/cio-icon/CioLayers.svelte'
+  import CioEnter from '@pdslng/cio-icon/CioEnter.svelte'
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import { subagentModeLabel, subagentModeTitle } from '$lib/subagent-presentation'
 
   interface Props {

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioPlay from '@pillardash-oss/cio-icon/CioPlay.svelte'
-  import CioShieldCheck from '@pillardash-oss/cio-icon/CioShieldCheck.svelte'
+  import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
+  import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'

@@ -1,6 +1,6 @@
 <script lang="ts">
-  import CioClose from '@pillardash-oss/cio-icon/CioClose.svelte'
-  import CioPlus from '@pillardash-oss/cio-icon/CioPlus.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
 
   interface Props {
