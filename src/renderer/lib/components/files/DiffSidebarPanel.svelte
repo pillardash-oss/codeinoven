@@ -734,7 +734,9 @@
               </span>
             {/if}
           </span>
-          <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-[0.5625rem] text-dimmed">
+          <span
+            class="mt-0.5 flex min-w-0 items-center justify-center gap-1.5 text-[0.5625rem] text-dimmed"
+          >
             <span class="shrink-0 tabular-nums">
               Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
             </span>
@@ -743,7 +745,7 @@
               {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
             </span>
             <span class="shrink-0" aria-hidden="true">·</span>
-            <span class="shrink-0 tabular-nums">{checkpoint.changes.length}</span>
+            <span class="shrink-0 tabular-nums">{checkpoint.changes.length.toLocaleString()} changes</span>
           </span>
         {:else}
           <span class="text-[0.625rem] font-medium tabular-nums text-muted">
