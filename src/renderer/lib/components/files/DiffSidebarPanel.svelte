@@ -645,7 +645,7 @@
     </div>
   {/if}
 
-  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
+  <div class="flex h-9 min-w-0 shrink-0 items-center gap-2 border-b border-border px-2.5">
     <div
       class="flex shrink-0 items-center gap-0.5 border border-border bg-elevated p-0.5"
       role="group"
@@ -683,6 +683,35 @@
       </button>
     </div>
     <span class="flex-1"></span>
+    {#if controller.selectedCheckpoint}
+      {@const checkpoint = controller.selectedCheckpoint}
+      {#if checkpoint.changes.length > controller.pageSize}
+        <div class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted">
+          <span class="truncate tabular-nums"
+            >{controller.pageStart + 1}–{Math.min(
+              controller.pageStart + controller.pageSize,
+              checkpoint.changes.length
+            )} of {checkpoint.changes.length} files</span
+          >
+          <button
+            type="button"
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+            title="Previous files"
+            aria-label="Previous files"
+            disabled={controller.pageStart === 0}
+            onclick={() => controller.changePage(-1)}><CioBack size={13} /></button
+          >
+          <button
+            type="button"
+            class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+            title="Next files"
+            aria-label="Next files"
+            disabled={controller.pageStart + controller.pageSize >= checkpoint.changes.length}
+            onclick={() => controller.changePage(1)}><CioForward size={13} /></button
+          >
+        </div>
+      {/if}
+    {/if}
     <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={13} />
     <button
       type="button"
@@ -725,32 +754,6 @@
     {:else}
       {@const checkpoint = controller.selectedCheckpoint}
       {#if checkpoint}
-        {#if checkpoint.changes.length > controller.pageSize}
-          <div class="flex items-center justify-end gap-2 text-xs text-muted">
-            <span
-              >{controller.pageStart + 1}–{Math.min(
-                controller.pageStart + controller.pageSize,
-                checkpoint.changes.length
-              )} of {checkpoint.changes.length} files</span
-            >
-            <button
-              type="button"
-              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-              title="Previous files"
-              aria-label="Previous files"
-              disabled={controller.pageStart === 0}
-              onclick={() => controller.changePage(-1)}><CioBack size={13} /></button
-            >
-            <button
-              type="button"
-              class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
-              title="Next files"
-              aria-label="Next files"
-              disabled={controller.pageStart + controller.pageSize >= checkpoint.changes.length}
-              onclick={() => controller.changePage(1)}><CioForward size={13} /></button
-            >
-          </div>
-        {/if}
         {#if controller.mode === 'diffs'}
           <div class="space-y-2">
             {#if checkpoint.status === 'active'}
