@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { delimiter, join, resolve, win32 } from 'node:path'
-import { app } from 'electron'
 import type { HarnessExecutionTarget } from '../../lib/types'
 import {
   buildProcessEnvironment,
@@ -10,6 +9,7 @@ import {
   resolveExecutablePath
 } from './cli-environment'
 import { spawnInUtilityHost } from './harness-utility-host'
+import { appResourcesRoot } from '../bootstrap/app-resources'
 import { Logger } from '../system/logger'
 
 /**
@@ -30,9 +30,7 @@ type BundledPiEntry = 'rpc' | 'cli'
  * WSL   a real install always takes priority.
  */
 function bundledPiEntryPath(entry: BundledPiEntry): string | undefined {
-  const base = app.isPackaged
-    ? join(process.resourcesPath, 'harnesses/pi')
-    : join(app.getAppPath(), 'resources/harnesses/pi')
+  const base = join(appResourcesRoot(), 'harnesses/pi')
   const path = join(base, entry === 'cli' ? 'dist/bundle/cli.js' : 'dist/bundle/rpc-entry.js')
   return existsSync(path) ? path : undefined
 }
@@ -57,9 +55,7 @@ function applyBundledEntry(
  * which do not exist in the packaged app's own node_modules.
  */
 export function bundledPiVendorDir(): string | undefined {
-  const base = app.isPackaged
-    ? join(process.resourcesPath, 'harnesses/pi')
-    : join(app.getAppPath(), 'resources/harnesses/pi')
+  const base = join(appResourcesRoot(), 'harnesses/pi')
   const vendor = join(base, 'vendor')
   return existsSync(vendor) ? vendor : undefined
 }

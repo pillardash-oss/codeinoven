@@ -46,6 +46,7 @@ import {
 } from './bootstrap/quit-lifecycle'
 import { flushOpenedPathsToRenderer, installOpenWithHandling } from './bootstrap/open-with'
 import { bootPostPaintServices, attachWindowServices } from './bootstrap/post-paint-services'
+import { appShipsPackagedResources } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
@@ -70,7 +71,7 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
 const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
-app.setName(app.isPackaged ? APP_NAME : 'Electron')
+app.setName(appShipsPackagedResources() ? APP_NAME : 'Electron')
 // Use a standard Chrome user agent: app/runtime product tokens cause browser
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.
@@ -92,7 +93,7 @@ registerFilePreviewScheme()
 if (process.platform === 'win32' && !isWindowsStorePackage()) {
   app.setAppUserModelId(APP_ID)
 }
-if (app.isPackaged) {
+if (appShipsPackagedResources()) {
   process.env['NODE_ENV'] = 'production'
 }
 

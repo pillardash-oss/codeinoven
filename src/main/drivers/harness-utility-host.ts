@@ -1,9 +1,10 @@
-import { app, utilityProcess, type UtilityProcess } from 'electron'
+import { utilityProcess, type UtilityProcess } from 'electron'
 import { spawn, ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { PassThrough } from 'node:stream'
 import { join } from 'node:path'
 import type { PreparedHarnessInvocation } from './harness-runtime'
+import { appResourcesRoot } from '../bootstrap/app-resources'
 import { Logger } from '../system/logger'
 
 /**
@@ -22,9 +23,7 @@ import { Logger } from '../system/logger'
 
 /** Disk location of the bridge module shipped beside the bundled harness. */
 export function utilityBridgePath(): string | null {
-  const candidate = app.isPackaged
-    ? join(process.resourcesPath, 'harnesses/utility-bridge.cjs')
-    : join(app.getAppPath(), 'resources/harnesses/utility-bridge.cjs')
+  const candidate = join(appResourcesRoot(), 'harnesses/utility-bridge.cjs')
   return existsSync(candidate) ? candidate : null
 }
 

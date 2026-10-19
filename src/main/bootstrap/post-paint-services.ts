@@ -15,6 +15,7 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { getConfigRoot } from '../../lib/utils'
+import { appResourcesRoot, appShipsPackagedResources } from './app-resources'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
 import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
@@ -532,33 +533,45 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // A settled run's outcome now belongs in the "While you were away" list.
     broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])
   })
-  state.speechService = new SpeechService(
-    {
-      catalogPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/model-catalog.json')
-        : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
-      mlxWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/mlx-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker'),
-      coremlWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/coreml-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/coreml-worker'),
-      nativeCaptureWorkerPath: app.isPackaged
-        ? join(process.resourcesPath, 'speech/speech-capture-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/speech-capture-worker')
-    },
-    undefined,
-    (input) => state.chatEngine!.cleanupSpeechTranscript(input),
-    (input) => state.chatEngine!.transcribeSpeechAudio(input),
-    (input) => state.chatEngine!.learnSpeechLessons(input),
-    (pid, command, cwd) =>
-      state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
-  )
-  await state.speechService.initialize()
+  // Speech is an optional capability, and its resources are the first bundled
+  // assets a misresolved resources root breaks. A failure here must degrade
+  // dictation only: throwing past this point would abort the rest of the graph,
+  // leaving every feature channel (file reads included) unregistered.
+  const speechResourcesRoot = appResourcesRoot()
+  const speechIsPackaged = appShipsPackagedResources()
+  const speechWorkerPath = (worker: string): string =>
+    speechIsPackaged
+      ? join(speechResourcesRoot, 'speech', worker)
+      : join(speechResourcesRoot, 'speech/runtime/darwin-arm64', worker)
+  try {
+    const speechService = new SpeechService(
+      {
+        catalogPath: join(speechResourcesRoot, 'speech/model-catalog.json'),
+        mlxWorkerPath: speechWorkerPath('mlx-worker'),
+        coremlWorkerPath: speechWorkerPath('coreml-worker'),
+        nativeCaptureWorkerPath: speechWorkerPath('speech-capture-worker')
+      },
+      undefined,
+      (input) => state.chatEngine!.cleanupSpeechTranscript(input),
+      (input) => state.chatEngine!.transcribeSpeechAudio(input),
+      (input) => state.chatEngine!.learnSpeechLessons(input),
+      (pid, command, cwd) =>
+        state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
+    )
+    await speechService.initialize()
+    state.speechService = speechService
+    state.unregisterSpeechIpc = registerSpeechIpc(
+      speechService,
+      () => state.mainWindow?.webContents ?? null
+    )
+  } catch (error) {
+    state.speechService = null
+    Logger.error('Speech services unavailable; dictation stays disabled', error)
+  }
   // Initialize auto-evict timers from persisted sound settings
   try {
     const cfg = await storage.getConfig()
-    state.speechService.updateUnloadOptions({
+    state.speechService?.updateUnloadOptions({
       asr: cfg.sound.asrUnload,
       cleanup: cfg.sound.cleanupUnload,
       tts: cfg.sound.ttsUnload
@@ -566,10 +579,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   } catch {
     // defaults already applied
   }
-  state.unregisterSpeechIpc = registerSpeechIpc(
-    state.speechService,
-    () => state.mainWindow?.webContents ?? null
-  )
   // Intent search shares the one local llama.cpp runtime with speech, so both
   // draw from the same discovered/downloaded binary and the same process journal.
   state.searchService = new SearchService(database, {
@@ -822,7 +831,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     threadCreation: context.threadCreation,
     threadDeletion: context.threadDeletion,
     hydrationHandlersRegistered: true,
-    speechService: state.speechService,
+    speechService: state.speechService ?? undefined,
     utilityFootprint,
     onScopedPathResolver: (resolve) => {
       state.appfileScopedPathResolver = resolve

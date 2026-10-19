@@ -3,11 +3,12 @@
  * branding. Repair bundles prepared by older CodeInOven branding scripts and
  * re-sign changed resources so native OS integrations keep working.
  */
-import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Logger } from '../src/main/system/logger'
+import { APP_NAME } from '../src/lib/brand'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -26,13 +27,28 @@ if (!existsSync(plistPath)) {
 }
 
 // Restore the standard launch path even if an earlier preparation selected
-// CodeInOven. Preserve existing executables because a dev instance may use them.
+// CodeInOven. Electron decides `app.isPackaged` from the executable it actually
+// resolved, so a symlink (or any path resolving outside this file) makes a
+// development launch report itself as packaged while `process.resourcesPath`
+// still points at this Electron download, and every bundled resource then
+// resolves into a directory that does not exist (`resources/speech/...`). A real
+// file at the conventional path is what keeps a dev launch reported as
+// unpackaged, so a link is replaced instead of trusted.
 const executableDirectory = join(appBundle, 'Contents/MacOS')
 const originalExecutable = join(executableDirectory, developmentName)
+const productExecutable = join(executableDirectory, APP_NAME)
 let resourcesChanged = false
-if (!existsSync(originalExecutable)) {
-  copyFileSync(join(executableDirectory, 'CodeInOven'), originalExecutable)
+const executableIsRealFile =
+  existsSync(originalExecutable) && !lstatSync(originalExecutable).isSymbolicLink()
+if (!executableIsRealFile && existsSync(productExecutable)) {
+  rmSync(originalExecutable, { force: true })
+  copyFileSync(productExecutable, originalExecutable)
   resourcesChanged = true
+  Logger.dev('[brand-electron] Replaced a non-Electron entry point with a real executable.')
+} else if (!executableIsRealFile) {
+  Logger.error(
+    '[brand-electron] The dev executable is not Electron itself and no product executable can restore it; bundled resources will not resolve.'
+  )
 }
 const pathTxt = join(root, 'node_modules/electron/path.txt')
 const developmentPath = 'Electron.app/Contents/MacOS/Electron'
