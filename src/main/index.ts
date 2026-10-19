@@ -22,6 +22,7 @@ import {
   lockDownProductionWindow
 } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
+import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry } from './system/startup-telemetry'
@@ -495,7 +496,7 @@ function createWindow(): BrowserWindow {
       devTools: true,
       // The preload resolves the platform traffic-light layout from this flag
       // so the renderer never flashes a wrong inset on first paint.
-      additionalArguments: [getTrafficLightArg()],
+      additionalArguments: [getTrafficLightArg(), getBuildEnvironmentArg()],
       // Built-in Chromium PDF plugin (PDFium-backed viewer, annotations,
       // forms, search)   available in Electron 29+.
       plugins: true

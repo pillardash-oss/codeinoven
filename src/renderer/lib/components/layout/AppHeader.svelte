@@ -10,10 +10,12 @@
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { buildEnvironmentLabel } from '$shared/build-environment'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -52,6 +54,11 @@
   }
 
   let { activeView, goBack, goForward, navigation }: Props = $props()
+
+  /** A checkout and a probe run the same source, so the one thing that tells
+   *  them apart is where their data lives. The header says which this is, and a
+   *  shipped build says nothing at all. */
+  let buildLabel = $derived(buildEnvironmentLabel(window.api?.windowInfo.buildEnvironment) ?? null)
 
   /** Settings takes over the header   no thread title or thread controls. */
   let onSettings = $derived(isSettingsView(activeView))
@@ -165,7 +172,7 @@
           scopeState.updateThread(updated)
         }
       } catch (error) {
-        reportError(error, 'Could not hide the knowledge thread')
+        reportError(error, 'Could not hide the assistant behavior thread')
       }
     }
   })
@@ -262,6 +269,16 @@
         >{isWindows ? 'CodeInOven' : 'cio'}</span
       >
     </button>
+
+    {#if buildLabel}
+      <StatusPill
+        tone="neutral"
+        dot
+        title="CodeInOven {buildLabel} build"
+        aria-label="CodeInOven build: {buildLabel}"
+        class="px-1 py-0">{buildLabel}</StatusPill
+      >
+    {/if}
 
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
