@@ -60,6 +60,7 @@ describe('changedPathsFromTool', () => {
 from pathlib import Path
 p=Path('src/lib/assistant-authoring.ts');s=p.read_text();p.write_text(s)
 p=Path('src/main/utilities/utility-orchestration-service.ts');s=p.read_text().replace('a','b');p.write_text(s)
+p=Path('src/main/chat/chat-engine.ts');p.write_text('''import type { X } from 'y'\n''')
 PY"`
         }
       }
@@ -67,7 +68,8 @@ PY"`
 
     expect(changedPathsFromTool('/project', part)).toEqual([
       'src/lib/assistant-authoring.ts',
-      'src/main/utilities/utility-orchestration-service.ts'
+      'src/main/utilities/utility-orchestration-service.ts',
+      'src/main/chat/chat-engine.ts'
     ])
   })
 
