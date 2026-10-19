@@ -393,14 +393,14 @@
           align="end"
           sideOffset={4}
           collisionPadding={8}
-          class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
+          class="z-50 w-56 overflow-hidden border bg-surface p-1 whitespace-nowrap shadow-lg"
         >
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
             onSelect={() => onOpenKnowledge(assistant)}
           >
             <AssistantIcon mark="knowledge" size={14} class="text-muted" />
-            What it knows
+            Assistant behavior
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
@@ -442,7 +442,7 @@
           </DropdownMenu.Item>
           <DropdownMenu.Item
             class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
-            onSelect={() => void archiveItem('assistant', assistant.id)}
+            onSelect={() => void archiveItem('assistant', assistant.id, assistant.name)}
           >
             <CioArchive size={14} class="text-muted" />
             Archive Assistant

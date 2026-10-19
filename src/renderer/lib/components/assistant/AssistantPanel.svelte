@@ -268,7 +268,7 @@
     editingId = null
     await persistAssistant(
       { knowledge: serializeKnowledgeSections(next) },
-      'Could not save the knowledge'
+      'Could not save the assistant behavior'
     )
   }
 
@@ -1067,7 +1067,7 @@
                 icon: 'knowledge',
                 detail: knowledgeComplete
                   ? `${sections.length} section${sections.length === 1 ? '' : 's'} · ${scheduleLabel}`
-                  : 'No knowledge yet. Describe the assistant to the agent in its task.',
+                  : 'No behavior yet. Describe the assistant to the agent in its task.',
                 target: 'assistant',
                 warn: !knowledgeComplete
               })}
@@ -1146,7 +1146,7 @@
             {/if}
             <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
               <div class="flex items-center justify-between gap-2">
-                <h2 class="text-[0.875rem] font-semibold text-foreground">What it knows</h2>
+                <h2 class="text-[0.875rem] font-semibold text-foreground">Assistant behavior</h2>
                 <span class="text-[0.625rem] text-dimmed"
                   >{sections.length} {sections.length === 1 ? 'section' : 'sections'}</span
                 >

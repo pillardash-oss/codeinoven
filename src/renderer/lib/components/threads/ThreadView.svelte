@@ -2135,7 +2135,7 @@
       actions.push({
         id: 'command:save-knowledge',
         title: '/save-knowledge',
-        description: 'Fallback: save the knowledge the agent drafted for this assistant',
+        description: 'Fallback: save the behavior the agent drafted for this assistant',
         category: 'command',
         source: applicationActionSource,
         keywords: [
@@ -7847,7 +7847,8 @@
       assistantRecapDismissed = ''
       return true
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'The knowledge could not be saved.'
+      errorMessage =
+        error instanceof Error ? error.message : 'The assistant behavior could not be saved.'
       return false
     } finally {
       assistantSaving = false
@@ -14426,12 +14427,13 @@
                       Tell {assistantName} what you want it to handle. It asks what it needs, and writes
                       down what it learns so every run follows it.
                     {:else if assistantName && assistantSetupThread}
-                      This conversation is where you teach {assistantName} and change what it knows. To
+                      This conversation is where you teach {assistantName} and change its behavior. To
                       give it a task, start a new one with the New task button in the header, or press
                       {assistantNewTaskShortcut}.
                     {:else if assistantName}
-                      This task runs on what <span class="text-foreground">{assistantName}</span> knows.
-                      Send a message to run it now, or change anything in What it knows.
+                      This task runs on <span class="text-foreground">{assistantName}</span>'s
+                      behavior. Send a message to run it now, or change anything in Assistant
+                      behavior.
                     {:else}
                       Describe what this task should do and the agent will take it from there.
                     {/if}
@@ -14969,7 +14971,7 @@
                       placeholder={assistantMode && assistantName && !assistantKnowledgeComplete
                         ? `Tell ${assistantName} what you want it to do…`
                         : assistantSetupThread && assistantKnowledgeComplete
-                          ? 'Change what it knows, its times, or a connection…'
+                          ? 'Change its behavior, its times, or a connection…'
                           : activePlanningEntry === 'brainstorm'
                             ? 'Add details to the Brainstorm discussion…'
                             : activePlanningEntry === 'spec'
