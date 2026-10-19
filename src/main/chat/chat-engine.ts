@@ -6936,7 +6936,27 @@ export class ChatEngine {
     if (!Number.isSafeInteger(pid) || pid <= 0) {
       throw new TypeError('Process ID must be a positive integer')
     }
+    // A pid the task manager shows can be a terminal's own shell. Ending it is
+    // the same intent as closing that terminal, so the session is announced as
+    // a deliberate stop first: without that the renderer reads the exit as a
+    // crashed shell and restarts it, and the process the user just ended is
+    // back before the list refreshes.
+    this.ptyStopAnnouncer?.(pid)
     return this.agentProcesses.killProcessGlobal(pid, force)
+  }
+
+  /**
+   * Announces to the renderer that the terminal session behind a killed pid is
+   * ending on purpose, so it does not respawn the shell. Wired by the bootstrap
+   * from the PTY service, which is the only side that knows the sessions.
+   */
+  private ptyStopAnnouncer: ((pid: number) => boolean) | null = null
+
+  /**
+   * Register how a task-manager kill announces a terminal's deliberate stop.
+   */
+  setPtyStopAnnouncer(announcer: ((pid: number) => boolean) | null): void {
+    this.ptyStopAnnouncer = announcer
   }
 
   /** Stop one registered app service through the action it registered with. */

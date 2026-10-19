@@ -954,6 +954,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         }
       })
     }
+    // A pid the task manager ends can be a terminal's own shell. The PTY
+    // service announces that stop so the renderer does not respawn it as a
+    // crash, which is the difference between a kill that holds and a shell that
+    // is back a moment later.
+    state.chatEngine?.setPtyStopAnnouncer(
+      (pid) => state.ptyService?.announceStopForPid(pid) ?? false
+    )
     state.ptyService.register()
     state.providerConnection.register()
     state.openCodeV2Service.register()

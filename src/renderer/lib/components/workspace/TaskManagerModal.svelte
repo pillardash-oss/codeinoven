@@ -83,6 +83,9 @@
     processes: TaskManagerProcess[]
     services: TaskManagerService[]
     pids: number[]
+    /** Ids of the services under this node that can be stopped, so the node's
+     *  switch can select them alongside the processes. */
+    serviceIds: string[]
     memoryBytes: number
     cpuPercent: number
   }
@@ -107,19 +110,38 @@
   /** Raw query text; matching is case-insensitive and token by token. */
   let searchQuery = $state('')
   let selected = new SvelteSet<number>()
+  /** Selected services by id. A service has no pid of its own, so it could never
+   *  be selected through `selected`, which is why the owner switches used to skip
+   *  every preview server an owner was running. */
+  let selectedServices = new SvelteSet<string>()
   /** Tree nodes folded away, keyed by node id (`app`, `project:<id>`, `thread:<id>`). */
   let collapsed = new SvelteSet<string>()
   let ending = $state(false)
   let forceEndTargets = $state<readonly TaskManagerProcess[]>([])
   let forceEnding = $state(false)
-  /** Service awaiting stop confirmation; null when no dialog is open. */
-  let stopTarget = $state<TaskManagerService | null>(null)
+  /**
+   * Services awaiting a stop confirmation, and whether confirming also ends the
+   * selected processes (the footer's bulk End) or only these services (a row's
+   * own stop button).
+   */
+  let stopConfirm = $state<{
+    services: readonly TaskManagerService[]
+    endSelection: boolean
+  } | null>(null)
   let stopping = $state(false)
   let projectIconsRequest: Promise<void> | null = null
   const projectColors = new SvelteMap<string, string>()
   const projectIconUrls = new SvelteMap<string, string>()
 
   const selectedProcesses = $derived(processes.filter((process) => selected.has(process.pid)))
+
+  /** Selected services that can still be stopped; a stale id is ignored. */
+  const selectedServiceRows = $derived(
+    services.filter((service) => selectedServices.has(service.id))
+  )
+
+  /** Everything the footer's End action would end. */
+  const selectionCount = $derived(selected.size + selectedServiceRows.length)
 
   /**
    * The footer's project filter rows, in the shape the shared in-panel picker
@@ -294,6 +316,7 @@
       processes: [],
       services: [],
       pids: [],
+      serviceIds: [],
       memoryBytes: 0,
       cpuPercent: 0
     }
@@ -332,6 +355,7 @@
     const list = [...groups.values()]
     for (const group of list) {
       group.pids = group.processes.map((process) => process.pid)
+      group.serviceIds = stoppableServices(group.services).map((service) => service.id)
       const totals = aggregateResources(group.processes, group.services)
       group.memoryBytes = totals.memoryBytes
       group.cpuPercent = totals.cpuPercent
@@ -350,6 +374,11 @@
   )
 
   const appOwnedPids = $derived(appScopedProcesses.map((process) => process.pid))
+
+  /** App-owned services the task manager may end, as selectable ids. */
+  const appOwnedServiceIds = $derived(
+    stoppableServices(appOwnedServices).map((service) => service.id)
+  )
 
   const appOwnedTotals = $derived(aggregateResources(appScopedProcesses, appOwnedServices))
 
@@ -370,17 +399,53 @@
     else collapsed.add(key)
   }
 
-  function allSelected(pids: readonly number[]): boolean {
-    return pids.length > 0 && pids.every((pid) => selected.has(pid))
+  /** The services a node can end: a runtime the app owns for its whole run has
+   *  no stop action, so it is never part of a selection. */
+  function stoppableServices(
+    services: readonly TaskManagerService[]
+  ): readonly TaskManagerService[] {
+    return services.filter((service) => service.stoppable)
   }
 
-  /** Select every pid not yet selected; clear them all once every one is set. */
-  function toggleGroup(pids: readonly number[]): void {
-    if (allSelected(pids)) {
+  /** Whether every process and every stoppable service under a node is selected. */
+  function nodeAllSelected(pids: readonly number[], serviceIds: readonly string[]): boolean {
+    if (pids.length === 0 && serviceIds.length === 0) return false
+    return (
+      pids.every((pid) => selected.has(pid)) &&
+      serviceIds.every((serviceId) => selectedServices.has(serviceId))
+    )
+  }
+
+  /**
+   * Select every process and stoppable service under a node, or clear them all
+   * once the whole node is already selected.
+   *
+   * The services are part of the same switch because they are part of the same
+   * owner: a preview server an owner started is that owner's footprint, and a
+   * switch that selected only its processes made "everything under this" a
+   * promise the task manager did not keep.
+   */
+  function toggleGroupSelection(pids: readonly number[], serviceIds: readonly string[]): void {
+    if (nodeAllSelected(pids, serviceIds)) {
       for (const pid of pids) selected.delete(pid)
+      for (const serviceId of serviceIds) selectedServices.delete(serviceId)
       return
     }
     for (const pid of pids) selected.add(pid)
+    for (const serviceId of serviceIds) selectedServices.add(serviceId)
+  }
+
+  /** What a node's switch will select, named for what the node actually runs. */
+  function selectAllLabel(
+    label: string,
+    pids: readonly number[],
+    serviceIds: readonly string[]
+  ): string {
+    if (pids.length > 0 && serviceIds.length > 0) {
+      return `Select every process and service under ${label}`
+    }
+    if (serviceIds.length > 0) return `Select every service under ${label}`
+    return `Select every process under ${label}`
   }
 
   const SERVICE_KIND_LABELS: Record<TaskManagerServiceKind, string> = {
@@ -408,6 +473,13 @@
   function toggleSelected(process: TaskManagerProcess): void {
     if (selected.has(process.pid)) selected.delete(process.pid)
     else selected.add(process.pid)
+  }
+
+  /** Select or clear one service row, for the switch on a stoppable row. */
+  function toggleSelectedService(service: TaskManagerService): void {
+    if (!service.stoppable) return
+    if (selectedServices.has(service.id)) selectedServices.delete(service.id)
+    else selectedServices.add(service.id)
   }
 
   /** Aggregate use across every managed runtime, counting each process once. */
@@ -453,11 +525,15 @@
     }
   }
 
-  /** Drop any selected pid that no longer exists after a refresh. */
+  /** Drop any selected pid or service that no longer exists after a refresh. */
   function pruneSelection(): void {
     const alive = new Set(processes.map((process) => process.pid))
     for (const pid of [...selected]) {
       if (!alive.has(pid)) selected.delete(pid)
+    }
+    const liveServices = new Set(services.map((service) => service.id))
+    for (const serviceId of [...selectedServices]) {
+      if (!liveServices.has(serviceId)) selectedServices.delete(serviceId)
     }
   }
 
@@ -700,26 +776,50 @@
     }
   }
 
-  /** Gracefully end every currently selected process. */
-  async function endSelected(): Promise<void> {
-    const targets = selectedProcesses
-    if (targets.length === 0 || ending) return
+  /**
+   * Gracefully end the selection: every selected process, plus every selected
+   * service through the stop action it registered.
+   *
+   * One path for both, because the footer's End acts on one selection: the
+   * node switch that selected these rows promised to end what was under it, and
+   * stopping only the processes left the services (the preview servers, the MCP
+   * children) running behind a cleared selection.
+   */
+  async function performEnd(): Promise<void> {
+    const processTargets = selectedProcesses
+    const serviceTargets = selectedServiceRows
+    if (processTargets.length === 0 && serviceTargets.length === 0) return
     ending = true
     error = ''
     try {
-      await Promise.all(
-        targets.map((process) => invoke('taskManager:killProcess', process.pid, false))
-      )
+      await Promise.all([
+        ...processTargets.map((process) => invoke('taskManager:killProcess', process.pid, false)),
+        ...serviceTargets.map((service) => invoke('taskManager:stopService', service.id))
+      ])
       selected.clear()
+      selectedServices.clear()
       await load()
     } catch (killError) {
       error =
         killError instanceof Error
           ? killError.message
-          : 'One or more processes could not be stopped.'
+          : 'One or more runtimes could not be stopped.'
     } finally {
       ending = false
     }
+  }
+
+  /**
+   * The footer's End action. A selection that includes a service is confirmed
+   * first, exactly as a row's own stop button is: stopping one ends a loopback
+   * server or an MCP child rather than a process the app can simply respawn.
+   */
+  function requestEnd(): void {
+    if (selectedServiceRows.length > 0) {
+      stopConfirm = { services: selectedServiceRows, endSelection: true }
+      return
+    }
+    void performEnd()
   }
 
   /** Force-end every currently selected process (confirmation first). */
@@ -752,17 +852,29 @@
   /** Stopping a service ends a loopback server or MCP child, so confirm first. */
   function requestStopService(service: TaskManagerService): void {
     if (!service.stoppable || stopping) return
-    stopTarget = service
+    stopConfirm = { services: [service], endSelection: false }
   }
 
-  async function confirmStopService(): Promise<void> {
-    const target = stopTarget
+  /**
+   * Honour the stop confirmation: either the selected services alone (a row's
+   * own stop button) or the whole selection the footer's End was asked for.
+   */
+  async function confirmStopServices(): Promise<void> {
+    const target = stopConfirm
     if (!target || stopping) return
+    if (target.endSelection) {
+      stopConfirm = null
+      await performEnd()
+      return
+    }
     stopping = true
     error = ''
     try {
-      await invoke('taskManager:stopService', target.id)
-      stopTarget = null
+      await Promise.all(
+        target.services.map((service) => invoke('taskManager:stopService', service.id))
+      )
+      for (const service of target.services) selectedServices.delete(service.id)
+      stopConfirm = null
       await load()
     } catch (stopError) {
       error = stopError instanceof Error ? stopError.message : 'The service could not be stopped.'
@@ -855,7 +967,26 @@
         {/snippet}
 
         {#snippet serviceRow(service: TaskManagerService)}
-          <li class="flex items-start gap-3 px-5 py-3">
+          <li
+            class="flex items-start gap-3 px-5 py-3 transition-colors {selectedServices.has(
+              service.id
+            )
+              ? 'bg-elevated'
+              : 'hover:bg-elevated'}"
+          >
+            {#if service.stoppable}
+              <Switch
+                checked={selectedServices.has(service.id)}
+                onchange={() => toggleSelectedService(service)}
+                aria-label={`Select ${service.name}`}
+                title={`Select ${service.name}`}
+                class="mt-1 shrink-0"
+              />
+            {:else}
+              <!-- A runtime the app owns for its whole run cannot be selected,
+              so its row keeps the switch column empty and aligned. -->
+              <span class="mt-1 h-4 w-7 shrink-0" aria-hidden="true"></span>
+            {/if}
             <span
               class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised text-primary"
             >
@@ -1083,11 +1214,11 @@
             count={appScopedProcesses.length + appOwnedServices.length}
             memoryLabel={formatMemory(appOwnedTotals.memoryBytes)}
             cpuLabel={formatCpu(appOwnedTotals.cpuPercent)}
-            switchChecked={allSelected(appOwnedPids)}
-            switchLabel={appOwnedPids.length > 0
-              ? `Select every app-owned process under ${APP_NAME}`
-              : 'No processes to select'}
-            onswitch={appOwnedPids.length > 0 ? () => toggleGroup(appOwnedPids) : undefined}
+            switchChecked={nodeAllSelected(appOwnedPids, appOwnedServiceIds)}
+            switchLabel={selectAllLabel(APP_NAME, appOwnedPids, appOwnedServiceIds)}
+            onswitch={appOwnedPids.length + appOwnedServiceIds.length > 0
+              ? () => toggleGroupSelection(appOwnedPids, appOwnedServiceIds)
+              : undefined}
           >
             {#snippet icon()}
               <VendorIcon id="codeinoven" name={APP_NAME} size={18} class="shrink-0" />
@@ -1116,9 +1247,11 @@
             count={group.processes.length + group.services.length}
             memoryLabel={formatMemory(group.memoryBytes)}
             cpuLabel={formatCpu(group.cpuPercent)}
-            switchChecked={allSelected(group.pids)}
-            switchLabel={`Select every process under ${group.label}`}
-            onswitch={group.pids.length > 0 ? () => toggleGroup(group.pids) : undefined}
+            switchChecked={nodeAllSelected(group.pids, group.serviceIds)}
+            switchLabel={selectAllLabel(group.label, group.pids, group.serviceIds)}
+            onswitch={group.pids.length + group.serviceIds.length > 0
+              ? () => toggleGroupSelection(group.pids, group.serviceIds)
+              : undefined}
           >
             {#snippet icon()}
               <!-- A group is an owner   a project, or a thread inside one   so it
@@ -1194,8 +1327,8 @@
             </span>
           {/if}
           <p class="min-w-0 truncate text-xs text-dimmed tabular-nums">
-            {#if selected.size > 0}
-              {selected.size} of {processes.length} selected
+            {#if selectionCount > 0}
+              {selectionCount} of {processes.length + services.length} selected
             {:else}
               {processes.length} processes · {services.length} services
             {/if}
@@ -1293,13 +1426,14 @@
             Refresh
           {/if}
         </button>
-        {#if selected.size > 0}
+        {#if selectionCount > 0}
           <button
             type="button"
             class="inline-flex h-8 items-center gap-1.5 border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             disabled={ending || forceEnding}
-            title="Gracefully stop the selected processes"
-            onclick={() => void endSelected()}
+            title="End the selected processes and stop the selected services"
+            aria-label="End the selected processes and stop the selected services"
+            onclick={requestEnd}
           >
             {#if ending}
               <span
@@ -1312,6 +1446,8 @@
             {/if}
             End
           </button>
+        {/if}
+        {#if selected.size > 0}
           <button
             type="button"
             class="inline-flex h-8 items-center gap-1.5 bg-danger px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-40"
@@ -1376,25 +1512,47 @@
 </Modal>
 
 <ConfirmDialog
-  open={stopTarget !== null}
-  title="Stop service?"
-  confirmLabel="Stop service"
-  busy={stopping}
+  open={stopConfirm !== null}
+  title={stopConfirm && stopConfirm.services.length > 1 ? 'Stop services?' : 'Stop service?'}
+  confirmLabel={stopConfirm?.endSelection ? 'End selected' : 'Stop service'}
+  busy={stopping || ending}
   onCancel={() => {
-    if (!stopping) stopTarget = null
+    if (!stopping && !ending) stopConfirm = null
   }}
-  onConfirm={confirmStopService}
+  onConfirm={confirmStopServices}
 >
-  {#if stopTarget}
-    <p>
-      Stop <span class="font-medium text-foreground">{stopTarget.name}</span>?
-    </p>
-    {#if stopTarget.detail}
-      <p class="truncate font-mono text-xs text-dimmed" title={stopTarget.detail}>
-        {stopTarget.detail}
+  {#if stopConfirm}
+    {#if stopConfirm.services.length === 1}
+      <p>
+        Stop <span class="font-medium text-foreground">{stopConfirm.services[0].name}</span>?
+      </p>
+      {#if stopConfirm.services[0].detail}
+        <p class="truncate font-mono text-xs text-dimmed" title={stopConfirm.services[0].detail}>
+          {stopConfirm.services[0].detail}
+        </p>
+      {/if}
+    {:else}
+      <p>
+        Stop <span class="font-medium text-foreground">{stopConfirm.services.length}</span>
+        selected services?
+      </p>
+      <ul class="space-y-1">
+        {#each stopConfirm.services as service (service.id)}
+          <li class="truncate font-mono text-xs text-dimmed" title={service.detail ?? service.name}>
+            {service.name}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+    {#if stopConfirm.endSelection && selected.size > 0}
+      <p>
+        The <span class="font-medium text-foreground">{selected.size}</span> selected process{selected.size ===
+        1
+          ? ''
+          : 'es'} end as well.
       </p>
     {/if}
-    <p>Anything using it loses this runtime until it starts again.</p>
+    <p>Anything using them loses this runtime until it starts again.</p>
   {/if}
 </ConfirmDialog>
 

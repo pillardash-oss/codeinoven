@@ -9,8 +9,9 @@ import { attachMouseTracking } from './mouse-tracking'
 import { registerTerminalHost } from './host-registry'
 import { FileLinkProvider } from './path-links'
 import { loadGhosttyWeb } from './runtime'
-import { invoke, subscribe } from '$lib/ipc.svelte'
+import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { composerOwnsKeyboardFocus } from '$lib/focus/composer-focus'
+import { appQuitState } from '$lib/stores/app-quit.svelte'
 
 /** Options for attaching a terminal session to a visible panel. */
 export interface TerminalAttachOptions {
@@ -66,6 +67,13 @@ export interface TerminalSession {
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
   kind: 'shell' | 'action'
+  /**
+   * The app ended this shell on purpose (an update install stopping work, or a
+   * kill from the task manager). Read at respawn time: a shell that exited on
+   * its own is restarted like a desktop terminal, one the app stopped stays
+   * stopped, and only a new terminal brings a shell back here.
+   */
+  stoppedByApp: boolean
 }
 
 const MAX_RESPAWNS = 5
@@ -403,7 +411,8 @@ class TerminalSessionManager {
       directory: null,
       ovenShellId: null,
       respawnCount: 0,
-      kind: 'shell'
+      kind: 'shell',
+      stoppedByApp: false
     }
     this.sessions.set(id, session)
 
@@ -459,6 +468,14 @@ class TerminalSessionManager {
         session.exited = true
         return
       }
+      // A shell the app stopped on purpose, or one that ended while the app is
+      // quitting, must not come back: respawning it here is what made an update
+      // install wait forever on a terminal it had already stopped. Guarded
+      // because a window can outlive its preload by one hot reload.
+      if (session.stoppedByApp || appQuitState.quitting) {
+        session.exited = true
+        return
+      }
       if (session.respawnCount >= MAX_RESPAWNS) {
         session.exited = true
         return
@@ -484,6 +501,15 @@ class TerminalSessionManager {
         session.exited = true
       }
     }
+
+    // The app's own stop, announced before the shell is killed. Marking the
+    // session here is what keeps the exit below from reading as a crash.
+    subs.push(
+      subscribeGuarded('pty:sessionsClosed', (ids) => {
+        if (!ids.includes(id)) return
+        session.stoppedByApp = true
+      })
+    )
 
     subs.push(
       subscribe(`pty:exit:${id}`, () => {

@@ -43,6 +43,14 @@ import {
 const UPDATE_CHECK_TIMEOUT_MS = 30_000
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
+/**
+ * How long a dispatched install may leave this process running before it counts
+ * as failed. The payload is handed to the platform installer, which quits us to
+ * swap the bundle; macOS ShipIt can reject a staged build without ever quitting
+ * us or reporting anything, and that is exactly the shape that used to leave the
+ * install surface spinning forever.
+ */
+const INSTALL_QUIT_WATCHDOG_MS = 30_000
 const PENDING_INSTALL_FILE = 'updater/install-pending.json'
 /** GitHub release lookup by exact tag (public repo, no auth needed). */
 function githubReleaseTagUrl(tag: string): string {
@@ -150,6 +158,8 @@ export class UpdaterService {
   private installFailure: InstallFailureState | null = null
   /** True between handing the payload to the platform installer and its exit. */
   private installDispatched = false
+  /** Bounds how long a dispatched install may leave us running; see its arm site. */
+  private installQuitWatchdog: ReturnType<typeof setTimeout> | null = null
   private installRecoveryPending = false
   /**
    * Runs at the start of every update-check cycle (startup, periodic, explicit).
@@ -261,15 +271,28 @@ export class UpdaterService {
       // installer, so record it here instead of waiting for the relaunch to
       // reveal it: macOS ShipIt, the NSIS installer, and the AppImage runtime
       // all fail silently from our side.
-      if (this.installDispatched) {
+      const failedDispatch = this.installDispatched
+      if (failedDispatch) {
         this.installDispatched = false
+        this.clearInstallQuitWatchdog()
         void this.recordInstallFailure(this._status.availableVersion)
       }
       // An install that failed before it could quit must not leave the park gate
       // disabled: the app has to stay parkable in the menu bar.
       this.updateQuitHooks?.end()
+      // An install that had already been handed over is never a background blip:
+      // we are still running, the user clicked install, and nothing else is
+      // going to tell them. Report it before the idle-state guard below, which
+      // exists for transient check failures and would otherwise swallow it.
+      if (failedDispatch) {
+        this.updateState({
+          state: 'error',
+          errorMessage: `The update could not be installed: ${error.message}`
+        })
+        return
+      }
       // During a check, the rejected check promise settles the state (see
-      // `settleCheckFailure`)   the event must not race it into a sticky error.
+      // `settleCheckFailure`): the event must not race it into a sticky error.
       // Idle/checking states mean the failure came from a background check, so
       // a transient network issue must not leave a sticky sidebar badge.
       if (
@@ -449,6 +472,7 @@ export class UpdaterService {
       this.timer = null
     }
     this.clearDeferredInstall()
+    this.clearInstallQuitWatchdog()
     // Persist a still-pending install so the next launch resumes it.
     if (this.installPending) {
       void this.persistPendingInstall()
@@ -891,23 +915,26 @@ export class UpdaterService {
    * fetches fresh bytes instead of replaying the artifact that was rejected.
    */
   private async purgeStaging(dropPendingPayload: boolean): Promise<void> {
-    const cacheLocation = resolveUpdaterCacheLocation()
-    let bundleId: string | null = null
-    if (process.platform === 'darwin') {
-      bundleId = await readMacBundleIdentifier(process.resourcesPath)
-      if (bundleId === null) {
-        Logger.dev('Updater: no bundle identifier resolved, skipping ShipIt staging sweep')
-      }
-    }
-    const context: StagingSweepContext = {
-      platform: process.platform,
-      tmpDir: os.tmpdir(),
-      cacheHome: getAppCacheDir(process.platform, os.homedir()),
-      updaterCacheDir: cacheLocation?.cacheDir ?? null,
-      bundleId,
-      appName: app.getName().toLowerCase()
-    }
+    // Everything that can fail lives inside the try, including reading the app's
+    // own name: this runs from a failure path that is fired and forgotten, so a
+    // rejection here would surface as an unhandled one instead of a swept disk.
     try {
+      const cacheLocation = resolveUpdaterCacheLocation()
+      let bundleId: string | null = null
+      if (process.platform === 'darwin') {
+        bundleId = await readMacBundleIdentifier(process.resourcesPath)
+        if (bundleId === null) {
+          Logger.dev('Updater: no bundle identifier resolved, skipping ShipIt staging sweep')
+        }
+      }
+      const context: StagingSweepContext = {
+        platform: process.platform,
+        tmpDir: os.tmpdir(),
+        cacheHome: getAppCacheDir(process.platform, os.homedir()),
+        updaterCacheDir: cacheLocation?.cacheDir ?? null,
+        bundleId,
+        appName: app.getName().toLowerCase()
+      }
       await purgeAbandonedInstallStaging(context, { dropPendingPayload })
     } catch (error: unknown) {
       Logger.error('Updater: staging sweep failed', error)
@@ -1056,6 +1083,46 @@ export class UpdaterService {
     // applied; `begin` clears that gate and `end` (on failure) restores it.
     this.updateQuitHooks?.begin()
     autoUpdater.quitAndInstall(background, background)
+    // The install is supposed to take this process down with it. If it does not,
+    // nothing else reports back, so bound it here rather than leaving a click
+    // that never finishes on screen.
+    if (this.installDispatched) this.armInstallQuitWatchdog(targetVersion)
+  }
+
+  /**
+   * Bound a dispatched install that has not taken the process down.
+   *
+   * The installer runs outside this process and reports nothing on success, so
+   * "we are still alive" is the only failure signal available on every platform.
+   * Without it, a payload the platform installer rejects silently (ShipIt
+   * validates the staged bundle after we are gone, and has refused a nightly
+   * build for an unmet code requirement) leaves the user watching a spinner for
+   * an install that will never happen. Counted as a failed attempt, so the same
+   * build is not re-armed on every launch.
+   */
+  private armInstallQuitWatchdog(version: string | undefined): void {
+    this.clearInstallQuitWatchdog()
+    const timer = setTimeout(() => {
+      this.installQuitWatchdog = null
+      if (!this.installDispatched) return
+      this.installDispatched = false
+      Logger.error(`Updater: install of ${version ?? 'the update'} did not restart the app`)
+      this.updateQuitHooks?.end()
+      void this.recordInstallFailure(version)
+      this.updateState({
+        state: 'error',
+        errorMessage: `The update to ${version ?? 'the latest version'} did not install. Try again, or download it from the releases page.`
+      })
+    }, INSTALL_QUIT_WATCHDOG_MS)
+    // Never keep the process alive just for this bound.
+    timer.unref()
+    this.installQuitWatchdog = timer
+  }
+
+  private clearInstallQuitWatchdog(): void {
+    if (!this.installQuitWatchdog) return
+    clearTimeout(this.installQuitWatchdog)
+    this.installQuitWatchdog = null
   }
 
   private clearDeferredInstall(): void {

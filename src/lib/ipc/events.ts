@@ -76,6 +76,13 @@ export const IPC_EVENT_CONTRACT = {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
   /**
+   * Terminal sessions the app is ending on purpose (an update install stopping
+   * work, or a kill from the task manager). Sent before the shell is killed so
+   * the renderer stops respawning that session: a shell that exited on its own
+   * is restarted like a desktop terminal, one the app stopped stays stopped.
+   */
+  'pty:sessionsClosed': [] as unknown as [ids: string[]],
+  /**
    * The one-time start-at-login offer, raised right after an assistant gets its
    * first knowledge: the app asks whether it should start at login so a scheduled
    * run can fire after a restart. Sent at most once in an install's life, and

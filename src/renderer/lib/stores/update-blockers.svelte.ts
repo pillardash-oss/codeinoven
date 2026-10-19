@@ -20,8 +20,20 @@ class UpdateBlockersState {
   /** True while the install is being dispatched, so the modal's own action can
    *  report progress and refuse a second click. */
   forcing = $state(false)
+  /** Why an install the user asked for did not happen, or '' while all is well. */
+  failure = $state('')
 
   private cleanups: Array<() => void> = []
+
+  /**
+   * How long a force install may stay unconfirmed before the button must stop
+   * pretending it is working. The main process bounds its own dispatch at 30s
+   * and reports a failure, so this is the backstop for the case where even that
+   * report never arrives (a wedged main process). Without a bound, a click that
+   * the platform installer silently drops leaves this surface spinning forever.
+   */
+  private static readonly FORCE_INSTALL_BACKSTOP_MS = 45_000
+  private backstop: ReturnType<typeof setTimeout> | null = null
 
   init(): void {
     // Only refresh once the modal has asked for something, so a closed modal
@@ -30,13 +42,23 @@ class UpdateBlockersState {
       if (this.payload) void this.refresh()
     })
     this.cleanups.push(unsubWaiting)
+    // An install that failed after it was dispatched ends the wait as surely as
+    // a completed one, so the surface has to stop claiming progress and say what
+    // happened instead of spinning over work that has already been stopped.
+    const unsubStatus = subscribe('updater:status', (status) => {
+      if (status.state !== 'error' || !this.forcing) return
+      this.settleFailure(status.errorMessage ?? 'The update could not be installed.')
+    })
+    this.cleanups.push(unsubStatus)
   }
 
   destroy(): void {
     for (const cleanup of this.cleanups) cleanup()
     this.cleanups = []
+    this.clearBackstop()
     this.payload = null
     this.forcing = false
+    this.failure = ''
   }
 
   /**
@@ -54,19 +76,12 @@ class UpdateBlockersState {
   }
 
   /**
-   * Stop everything the gate is waiting on and install anyway.
-   *
-   * `forcing` is left set once the call returns: a successful call quits the app,
-   * so there is no later state to settle into, and clearing it would briefly
-   * re-enable the button the user already pressed.
-   */
-  /**
    * Load the blockers and report whether there is anything to show.
    *
    * The read is also the decision, which is why both entry points share it rather
    * than each deciding for itself. A click that lands just after the gate opened
    * on its own has nothing left to stop, and opening then would show a modal
-   * about an install that is already on its way   with a destructive button on it.
+   * about an install that is already on its way, with a destructive button on it.
    * Returning false there keeps the surface closed, which is the truthful answer.
    */
   async prepare(): Promise<boolean> {
@@ -84,20 +99,67 @@ class UpdateBlockersState {
    * Called when the modal closes so the next open re-reads rather than showing a
    * snapshot of a gate that has moved on. Without it the modal could reopen
    * listing work that has since finished, or omit work that has since started,
-   * while the rail's count beside it said something else.
+   * while the rail's count beside it said something else. The install state it
+   * reports goes with it: a closed surface cannot be waiting on anything, and the
+   * app being open again is proof the install it was dispatching did not happen.
    */
   close(): void {
     this.payload = null
+    this.clearBackstop()
+    this.forcing = false
+    this.failure = ''
   }
 
+  /**
+   * Stop everything the gate is waiting on and install anyway.
+   *
+   * `forcing` stays set while the call is in flight: a successful install takes
+   * the app down, so there is no later state to settle into. It is only ever
+   * cleared by a real outcome (the updater reporting a failure, this call
+   * rejecting, or the backstop above), because the one thing this surface must
+   * never do is spin for an install that is not coming.
+   */
   async forceInstall(): Promise<void> {
     if (this.forcing) return
     this.forcing = true
+    this.failure = ''
+    this.armBackstop()
     try {
       await invoke('updater:forceInstall')
-    } catch {
-      this.forcing = false
+    } catch (error: unknown) {
+      this.settleFailure(
+        error instanceof Error ? error.message : 'The update could not be installed.'
+      )
     }
+  }
+
+  /**
+   * Stop reporting progress on an install that did not take the app down, and
+   * say why. The list is re-read as well: the work the install stopped is gone
+   * from the gate by now, and a stale list under a failure message would invite
+   * the user to stop it a second time.
+   */
+  private settleFailure(message: string): void {
+    this.clearBackstop()
+    this.forcing = false
+    this.failure = message
+    if (this.payload) void this.refresh()
+  }
+
+  private armBackstop(): void {
+    this.clearBackstop()
+    this.backstop = setTimeout(() => {
+      this.backstop = null
+      this.settleFailure(
+        'The update did not restart the app. Try installing it again, or download it from the releases page.'
+      )
+    }, UpdateBlockersState.FORCE_INSTALL_BACKSTOP_MS)
+  }
+
+  private clearBackstop(): void {
+    if (!this.backstop) return
+    clearTimeout(this.backstop)
+    this.backstop = null
   }
 }
 
