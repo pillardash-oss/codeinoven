@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GitHubAuthService } from '../../src/main/git/github-auth-service'
 import type { SecretVault } from '../../src/main/storage/secret-vault'
+import { Logger } from '../../src/main/system/logger'
 
 const fetchMock = vi.hoisted(() => vi.fn())
 const lockCalls = vi.hoisted(() => [] as Array<'acquire' | 'release'>)
@@ -671,5 +672,33 @@ describe('GitHubAuthService', () => {
 
     // Losing the race must not sign the user out of an account that is healthy.
     expect(vault.remove).not.toHaveBeenCalled()
+  })
+
+  it('reports signed out at dev level when the vault cannot decrypt the stored credential', async () => {
+    process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {})
+    const devSpy = vi.spyOn(Logger, 'dev').mockImplementation(() => {})
+    // A credential written under another build's keyring key: the record is there
+    // and the read fails, which is not proof that the credential is invalid.
+    const vault = mapVault({ github_oauth_accounts: 'written-by-another-build' })
+    vi.mocked(vault.resolve).mockRejectedValue(
+      new Error('Error while decrypting the ciphertext provided to safeStorage.decryptString.')
+    )
+    const service = new GitHubAuthService(vault)
+
+    await expect(service.status()).resolves.toMatchObject({
+      connected: false,
+      configured: true,
+      accounts: []
+    })
+    await expect(service.status()).resolves.toMatchObject({ connected: false, accounts: [] })
+
+    // The vault owns the durable report for an unreadable credential (once per
+    // incident, then at dev level); the sidebar poll must not add an error line
+    // of its own every few seconds.
+    expect(errorSpy).not.toHaveBeenCalled()
+    expect(devSpy).toHaveBeenCalled()
+    expect(vault.remove).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
   })
 })

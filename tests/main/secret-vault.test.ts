@@ -1,19 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { SecretVault } from '../../src/main/storage/secret-vault'
+import { VaultCiphertextUnreadableError } from '../../src/main/storage/secret-vault-errors'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
+import { Logger } from '../../src/main/system/logger'
 
-const { safeStorage } = vi.hoisted(() => ({
-  safeStorage: {
-    isEncryptionAvailable: vi.fn(() => true),
-    encryptString: vi.fn((value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
-    decryptString: vi.fn((buffer: Buffer) => buffer.toString('utf-8').replace(/^enc:/u, ''))
+const { safeStorage, app, keyring } = vi.hoisted(() => {
+  /** Set while the OS keyring refuses every decryption, which is what a record
+   *  written under another key looks like from here. */
+  const state = { decryptionFailure: false }
+  return {
+    keyring: state,
+    app: {
+      getName: () => 'CodeInOven',
+      getVersion: () => '0.0.0-test',
+      isPackaged: false
+    },
+    safeStorage: {
+      isEncryptionAvailable: vi.fn(() => true),
+      encryptString: vi.fn((value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
+      decryptString: vi.fn((buffer: Buffer) => {
+        if (state.decryptionFailure) {
+          throw new Error(
+            'Error while decrypting the ciphertext provided to safeStorage.decryptString.'
+          )
+        }
+        return buffer.toString('utf-8').replace(/^enc:/u, '')
+      })
+    }
   }
-}))
+})
 
-vi.mock('electron', () => ({ safeStorage }))
+vi.mock('electron', () => ({ safeStorage, app }))
 
 let configRoot: string
 let projectRoot: string
@@ -35,6 +55,7 @@ beforeEach(async () => {
   safeStorage.isEncryptionAvailable.mockReturnValue(true)
   safeStorage.encryptString.mockClear()
   safeStorage.decryptString.mockClear()
+  keyring.decryptionFailure = false
 })
 
 afterEach(async () => {
@@ -149,6 +170,122 @@ describe('SecretVault per-account token storage', () => {
     await expect(vault.resolveProviderToken(ACCOUNT_A)).rejects.toThrow(
       'Secure credential storage is unavailable'
     )
+  })
+})
+
+describe('SecretVault keyring identity and failure reporting', () => {
+  const REF = 'github_oauth_accounts'
+  /**
+   * Incidents are process-wide by label and the label carries the ref, so every
+   * case below leaves its credential under a ref of its own: one left failing by
+   * a case must not close itself inside the next one.
+   */
+  const LEGACY_REF = 'github_oauth_token'
+  const FOREIGN_REF = 'stored_by_another_build'
+  const UNREADABLE_REF = 'unreadable_credential'
+  const RECOVERING_REF = 'recovering_credential'
+  const REPAIR_REF = 'repaired_credential'
+  /** What `safeStorage.encryptString` produces in this suite, base64-encoded. */
+  const encode = (value: string): string => Buffer.from(`enc:${value}`, 'utf-8').toString('base64')
+
+  /**
+   * Write a record straight into the vault file, standing in for an older build
+   * (no author) or another build (a different one).
+   */
+  async function writeVaultRecord(ref: string, record: Record<string, unknown>): Promise<void> {
+    await mkdir(join(configRoot, 'secrets'), { recursive: true })
+    await writeFile(
+      join(configRoot, 'secrets', 'vault.json'),
+      JSON.stringify({ [ref]: { createdAt: 1, updatedAt: 2, ...record } })
+    )
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('records which build wrote a record, so a ciphertext can name its author', async () => {
+    await vault.save('token-a', REF)
+
+    const store = JSON.parse(await readVaultFile())
+    expect(store[REF].writer).toEqual({
+      app: 'CodeInOven',
+      version: '0.0.0-test',
+      build: 'development',
+      platform: process.platform
+    })
+  })
+
+  it('still reads a record written before records carried an author', async () => {
+    await writeVaultRecord(LEGACY_REF, { value: encode('legacy-token') })
+
+    await expect(vault.resolve(LEGACY_REF)).resolves.toBe('legacy-token')
+  })
+
+  it('names the build that wrote a credential this launch cannot decrypt', async () => {
+    vi.spyOn(Logger, 'error').mockImplementation(() => {})
+    await writeVaultRecord(FOREIGN_REF, {
+      value: encode('foreign-token'),
+      writer: { app: 'Electron', version: '0.5.0', build: 'development', platform: 'darwin' }
+    })
+    keyring.decryptionFailure = true
+
+    const failure: unknown = await vault.resolve(FOREIGN_REF).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(VaultCiphertextUnreadableError)
+    expect((failure as Error).message).toContain('Electron 0.5.0')
+    expect((failure as Error).message).toContain('Store the credential again')
+  })
+
+  it('reports one error for a credential it cannot decrypt, then dev-level repeats', async () => {
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {})
+    const devSpy = vi.spyOn(Logger, 'dev').mockImplementation(() => {})
+    await vault.save('token-a', UNREADABLE_REF)
+    keyring.decryptionFailure = true
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(vault.resolve(UNREADABLE_REF)).rejects.toBeInstanceOf(
+        VaultCiphertextUnreadableError
+      )
+    }
+
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(String(errorSpy.mock.calls[0]?.[0])).toContain(UNREADABLE_REF)
+    expect(devSpy).toHaveBeenCalledTimes(2)
+    expect(String(devSpy.mock.calls[1]?.[0])).toContain('repeat 2')
+  })
+
+  it('closes the incident once the credential decrypts again', async () => {
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {})
+    const infoSpy = vi.spyOn(Logger, 'info').mockImplementation(() => {})
+    await vault.save('token-a', RECOVERING_REF)
+    keyring.decryptionFailure = true
+    await expect(vault.resolve(RECOVERING_REF)).rejects.toBeInstanceOf(
+      VaultCiphertextUnreadableError
+    )
+
+    keyring.decryptionFailure = false
+    await expect(vault.resolve(RECOVERING_REF)).resolves.toBe('token-a')
+
+    expect(errorSpy).toHaveBeenCalledTimes(1)
+    expect(infoSpy).toHaveBeenCalledTimes(1)
+    expect(String(infoSpy.mock.calls[0]?.[0])).toContain('recovered')
+  })
+
+  it('closes the incident when the credential is stored again, and reports the next one at error level', async () => {
+    const errorSpy = vi.spyOn(Logger, 'error').mockImplementation(() => {})
+    const infoSpy = vi.spyOn(Logger, 'info').mockImplementation(() => {})
+    await vault.save('stale-token', REPAIR_REF)
+    keyring.decryptionFailure = true
+    await expect(vault.resolve(REPAIR_REF)).rejects.toBeInstanceOf(VaultCiphertextUnreadableError)
+
+    // Storing the credential again is the repair the failure message names.
+    await vault.save('fresh-token', REPAIR_REF)
+    expect(infoSpy).toHaveBeenCalledTimes(1)
+
+    keyring.decryptionFailure = true
+    await expect(vault.resolve(REPAIR_REF)).rejects.toBeInstanceOf(VaultCiphertextUnreadableError)
+    expect(errorSpy).toHaveBeenCalledTimes(2)
   })
 })
 

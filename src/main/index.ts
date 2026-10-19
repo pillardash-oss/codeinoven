@@ -71,7 +71,15 @@ declare const __CODEINOVEN_MAC_TEAM_ID__: string | undefined
 
 const mainBundleDirectory = getMainBundleDirectory(import.meta.url)
 
-app.setName(isShippedBuild() ? APP_NAME : 'Electron')
+app.setName(APP_NAME)
+// The name above is also the OS keyring identity: `safeStorage` keeps its key under
+// `<app name> Safe Storage`, and every launch shares one config root and therefore
+// one credential vault (`getConfigRoot` in `src/lib/utils.ts`). Naming a development
+// launch `Electron` gave it a second key, so whichever build wrote a vault record the
+// other could not decrypt it, and a credential written by the installed app read as
+// signed out in `bun dev` (and the reverse). Development and packaged Chromium data
+// are already kept apart by `configureElectronDataRoot`, so the name no longer has to
+// differ for that; the brand name is what keeps the vault readable by every launch.
 // Use a standard Chrome user agent: app/runtime product tokens cause browser
 // compatibility checks to reject supported Chromium versions. Set the fallback
 // before the first window exists so every web contents inherits it.
