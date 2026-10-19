@@ -102,7 +102,7 @@
           "id": "nav-find",
           "keys": ["mod", "f"],
           "label": "Find in focused surface",
-          "description": "Opens find in whatever surface is focused: the file tree filter, the file editor, the git panel, the spec studio, deployment logs, or the conversation.",
+          "description": "Opens find in whatever surface is focused: the file tree filter, the file reader (its source editor and the rendered document it is showing), the git panel, the spec studio, deployment logs, sticky notes, thread notes, or the conversation.",
           "scenario": "Anywhere in the app."
         },
         {

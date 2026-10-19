@@ -36,7 +36,11 @@
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import type { FilesContextTab } from '$lib/stores/context-sidebar.svelte'
-  import { projectFilesWorkspace, type ProjectFileTab } from '$lib/stores/project-files.svelte'
+  import {
+    projectFilesWorkspace,
+    type ProjectFileTab,
+    type ProjectFileView
+  } from '$lib/stores/project-files.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -49,6 +53,7 @@
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
+  import FindInSurface from '../threads/FindInSurface.svelte'
   import GoToLine from './GoToLine.svelte'
   import ProjectFileExplorer from './ProjectFileExplorer.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
@@ -281,6 +286,30 @@
       (activeFileInMergeEditor || (activeSession !== null && dirty))
   )
   const previewFlags = $derived(filePreviewFlags(activeTab?.path ?? null))
+  /**
+   * Which find the reader can offer, and it is never both.
+   *
+   * The source view is an editor: it counts its own matches and owns replace.
+   * Every other readable view (annotate, a Markdown preview, a diff) exists only
+   * as rendered DOM, so its text is found by a document search instead. Asking
+   * the editor for matches in those views answered nothing, which is why find
+   * used to look broken the moment the document was not the raw file.
+   */
+  let editorFindAvailable = $derived(activeTab?.view === 'source')
+  let documentFindAvailable = $derived.by(() => {
+    if (!activeTab) return false
+    if (activeTab.view === 'annotate') return showAnnotateToggle && activeThreadId !== null
+    // An HTML, PDF or converted document preview is a sandboxed frame, so its
+    // text is not reachable from this document at all. Only the Markdown
+    // preview renders into the reader's own DOM.
+    if (activeTab.view === 'preview') return previewFlags.markdown
+    if (activeTab.view === 'diff') return Boolean(checkpointDiff)
+    return false
+  })
+  /** The element the document search reads, and the one the reader marks with
+   *  the surface its find command targets. */
+  let sidebarEditorRegion = $state<HTMLElement | null>(null)
+  let fullscreenEditorRegion = $state<HTMLElement | null>(null)
   let markdown = $derived(previewFlags.markdown)
   let htmlPreview = $derived(previewFlags.html)
   let pdf = $derived(previewFlags.pdf)
@@ -395,6 +424,10 @@
       : null
   )
   let fullscreenOpen = $derived(projectState.fullscreenActive)
+  /** The editor region that is on screen, and therefore the one a document
+   *  search reads. Both regions exist while the reader is up, so the search must
+   *  never be handed the copy behind the modal. */
+  let activeEditorRegion = $derived(fullscreenOpen ? fullscreenEditorRegion : sidebarEditorRegion)
   // The browser's native view floats above every DOM overlay, so a full-window
   // editor must register itself as a fullscreen surface while it is up. The
   // returned cleanup matters here: this panel is unmounted whenever the sidebar
@@ -525,6 +558,7 @@
     const tabId = contextSidebarState.sidebarActiveTabId
     if (fullscreenChatOpen && tabId) fullscreenFileChatTabs.set(projectId, tabId)
     else fullscreenFileChatTabs.delete(projectId)
+    findNavState.closeFileDocumentFind()
     projectFilesWorkspace.setFullscreenActive(projectId, false)
   }
 
@@ -883,6 +917,37 @@
   }
 
   const editorFind = new ProjectFilesPanelFind()
+  /** Whether the reader's own search command asked for replace as well, which
+   *  the find bar honours as its initial state. */
+  let editorFindWithReplace = $state(false)
+
+  /**
+   * Run the reader's find on the surface that is actually on screen.
+   *
+   * Replace belongs to the source editor alone, so it opens the same bar with
+   * its replace row expanded, and it is refused anywhere else: a rendered
+   * document has no draft to rewrite.
+   */
+  function openReaderFind(withReplace: boolean): void {
+    findNavState.closeFileDocumentFind()
+    if (documentFindAvailable && !editorFindAvailable) {
+      findNavState.openFileDocumentFind()
+      return
+    }
+    editorFindWithReplace = withReplace
+    findNavState.openEditorFind()
+  }
+
+  /**
+   * A find belongs to the surface that was searched, so a view change puts it
+   * away instead of leaving a bar aimed at text that is no longer on screen.
+   */
+  function changeView(view: ProjectFileView): void {
+    if (!activeTab) return
+    findNavState.closeFileDocumentFind()
+    findNavState.closeEditorFind()
+    projectFilesWorkspace.setView(projectId, activeTab.id, view)
+  }
 
   /**
    * Clear the one-shot requests and matches the panel hands its editor when the
@@ -978,6 +1043,8 @@
       aria-label="File editor"
       data-region="editor"
       data-find-active={fullscreenOpen ? undefined : 'true'}
+      data-find-surface={documentFindAvailable ? 'document' : 'editor'}
+      bind:this={sidebarEditorRegion}
     >
       <div class="flex h-10 shrink-0 items-center gap-1 border-b border-border px-2">
         <div
@@ -1069,7 +1136,11 @@
             : `Save file (${keymapState.labelFor('files-save')})`}
           saveTitle={activeFileInMergeEditor ? conflictSaveTitle : undefined}
           fullscreen={false}
-          onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+          findDisabled={!editorFindAvailable && !documentFindAvailable}
+          replaceDisabled={!editorFindAvailable}
+          onSearch={() => openReaderFind(false)}
+          onSearchReplace={() => openReaderFind(true)}
+          onSetView={changeView}
           onInfo={() => void showActiveFileInfo()}
           infoDisabled={deletedAtCheckpoint}
           onUndo={() => requestEdit('undo')}
@@ -1095,7 +1166,17 @@
         </div>
       {/if}
 
-      {#if findNavState.editorFindOpen && !fullscreenOpen && activeTab && activeTab.view !== 'diff' && activeTab.view !== 'preview'}
+      {#if findNavState.fileDocumentFindOpen && documentFindAvailable && !fullscreenOpen}
+        <FindInSurface
+          container={activeEditorRegion}
+          focusTrigger={findNavState.fileDocumentFindFocusTrigger}
+          label="Find in document"
+          placeholder="Find in document…"
+          onClose={() => findNavState.closeFileDocumentFind()}
+        />
+      {/if}
+
+      {#if findNavState.editorFindOpen && !fullscreenOpen && activeTab && editorFindAvailable}
         <FindInBar
           query={editorFind.value}
           matches={editorFind.total}
@@ -1105,6 +1186,7 @@
           focusTrigger={findNavState.editorFindFocusTrigger}
           onQueryChange={(query) => editorFind.setQuery(query)}
           enableReplace={!deletedAtCheckpoint}
+          initialReplaceOpen={editorFindWithReplace}
           replaceValue={editorFind.replaceValue}
           onReplaceChange={(value) => (editorFind.replaceValue = value)}
           onReplaceOne={() => editorFind.replaceOne()}
@@ -1312,6 +1394,21 @@
   placement="fullscreen"
   chrome={false}
   panelClass="bg-app"
+  onEscapeKeydown={(event) => {
+    // Escape dismisses the search first. While focus sits in the find bar the bar
+    // claims the press itself, but a press anywhere else in the reader still has
+    // to reach it, and the reader is what would otherwise be thrown away with
+    // the search still open.
+    if (findNavState.editorFindOpen) {
+      event.preventDefault()
+      editorFind.close()
+      return
+    }
+    if (findNavState.fileDocumentFindOpen) {
+      event.preventDefault()
+      findNavState.closeFileDocumentFind()
+    }
+  }}
 >
   <div
     class="titlebar-drag flex h-12 shrink-0 items-center gap-0 border-b border-border"
@@ -1472,7 +1569,11 @@
           saving={false}
           saveLabel=""
           fullscreen
-          onSetView={(view) => projectFilesWorkspace.setView(projectId, activeTab.id, view)}
+          findDisabled={!editorFindAvailable && !documentFindAvailable}
+          replaceDisabled={!editorFindAvailable}
+          onSearch={() => openReaderFind(false)}
+          onSearchReplace={() => openReaderFind(true)}
+          onSetView={changeView}
           onInfo={() => void showActiveFileInfo()}
           infoDisabled={deletedAtCheckpoint}
           onUndo={() => requestEdit('undo')}
@@ -1492,8 +1593,19 @@
         class="relative flex min-h-0 min-w-0 flex-1 flex-col"
         data-region="editor"
         data-find-active={fullscreenOpen ? 'true' : undefined}
+        data-find-surface={documentFindAvailable ? 'document' : 'editor'}
+        bind:this={fullscreenEditorRegion}
       >
-        {#if findNavState.editorFindOpen && fullscreenOpen && activeTab && activeTab.view !== 'diff' && activeTab.view !== 'preview'}
+        {#if findNavState.fileDocumentFindOpen && documentFindAvailable && fullscreenOpen}
+          <FindInSurface
+            container={activeEditorRegion}
+            focusTrigger={findNavState.fileDocumentFindFocusTrigger}
+            label="Find in document"
+            placeholder="Find in document…"
+            onClose={() => findNavState.closeFileDocumentFind()}
+          />
+        {/if}
+        {#if findNavState.editorFindOpen && fullscreenOpen && activeTab && editorFindAvailable}
           <FindInBar
             query={editorFind.value}
             matches={editorFind.total}
@@ -1503,6 +1615,7 @@
             focusTrigger={findNavState.editorFindFocusTrigger}
             onQueryChange={(query) => editorFind.setQuery(query)}
             enableReplace={!deletedAtCheckpoint}
+            initialReplaceOpen={editorFindWithReplace}
             replaceValue={editorFind.replaceValue}
             onReplaceChange={(value) => (editorFind.replaceValue = value)}
             onReplaceOne={() => editorFind.replaceOne()}

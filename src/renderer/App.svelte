@@ -1557,6 +1557,20 @@
     contextSidebarState.openNewTerminal(thread.projectId, thread.id)
   }
 
+  /**
+   * Find in the file reader, on the surface actually on screen. The editor
+   * region names the surface it is showing: the source editor counts and
+   * replaces its own matches, while every rendered view (annotate, document
+   * preview, diff) is plain DOM text that only a document search can read.
+   */
+  function openFilesFind(region: Element): void {
+    if (region.getAttribute('data-find-surface') === 'document') {
+      findNavState.openFileDocumentFind()
+      return
+    }
+    findNavState.openEditorFind()
+  }
+
   function handleFind(): void {
     const browserTabId = browserKeyboardFocus.tabId
     if (browserTabId) {
@@ -1574,8 +1588,17 @@
       findNavState.focusFileTreeFilter++
       return
     }
-    if (active?.closest('[data-region="editor"]')) {
-      findNavState.openEditorFind()
+    if (active?.closest('[data-region="sticky-notes"]')) {
+      findNavState.openStickyNotesFind()
+      return
+    }
+    if (active?.closest('[data-region="thread-notes"]')) {
+      findNavState.openThreadNotesFind()
+      return
+    }
+    const activeEditor = active?.closest('[data-region="editor"]')
+    if (activeEditor) {
+      openFilesFind(activeEditor)
       return
     }
     // The sidebar keeps GitStatusPanel mounted but display:none for every
@@ -1601,8 +1624,9 @@
     }
 
     // Toolbar focus still belongs to the visible regular/fullscreen file surface.
-    if (document.querySelector('[data-region="editor"][data-find-active="true"]')) {
-      findNavState.openEditorFind()
+    const visibleEditor = document.querySelector('[data-region="editor"][data-find-active="true"]')
+    if (visibleEditor) {
+      openFilesFind(visibleEditor)
       return
     }
     if (document.querySelector('[data-region="spec-studio"]')) {
