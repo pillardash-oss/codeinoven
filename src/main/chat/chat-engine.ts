@@ -6679,10 +6679,12 @@ export class ChatEngine {
       threadHarnessId: harnessId,
       projectPath
     })
-    const driver =
-      auxiliary?.driver ?? (await this.driverForAccount(harnessId, thread.settings.accountId))
+    const accountId =
+      auxiliary?.settings.accountId ?? (await this.summaryAccountId(harnessId, thread.settings))
+    const driver = auxiliary?.driver ?? (await this.driverForAccount(harnessId, accountId))
     const settings: ThreadSettings = auxiliary?.settings ?? {
       ...thread.settings,
+      accountId,
       thinkingLevel: 'minimal',
       permissionLevel: 'auto_review',
       assignmentMode: false,
@@ -6724,6 +6726,39 @@ export class ChatEngine {
       )
     }
     return text
+  }
+
+  /**
+   * The account a search summary may authenticate with.
+   *
+   * A thread keeps the account it was created on for its whole conversation, and
+   * that account can stop serving its provider long before the thread is indexed
+   * for search: a lapsed subscription or a rotated key answers every request with
+   * a provider rejection even though the same model answers normally on another
+   * account of the same harness. Summarization is index maintenance rather than
+   * conversation, so it authenticates with a credential that serves that model
+   * today: the account of a live session already running it, then the provider's
+   * default account, and only then the account the thread was created on.
+   */
+  private async summaryAccountId(
+    harnessId: string,
+    threadSettings: ThreadSettings
+  ): Promise<string | undefined> {
+    const providerId = threadSettings.providerId
+    const modelId = threadSettings.modelId
+    if (!providerId || !modelId) return threadSettings.accountId
+    for (const session of this.sessionRegistry.values()) {
+      if (session.driverId !== harnessId || !session.accountId) continue
+      // An Inbox session has no thread row to read the model back from.
+      if (session.projectId === INBOX_PROJECT_ID || !session.threadId) continue
+      const live = await this.threadManager.getThread(session.projectId, session.threadId)
+      if (live?.settings?.providerId === providerId && live.settings.modelId === modelId)
+        return session.accountId
+    }
+    const accounts = await this.accountRegistry.list(harnessId).catch(() => [])
+    const providerAccounts = accounts.filter((account) => account.providerId === providerId)
+    const preferred = providerAccounts.find((account) => account.isDefault) ?? providerAccounts[0]
+    return preferred?.id ?? threadSettings.accountId
   }
 
   /**

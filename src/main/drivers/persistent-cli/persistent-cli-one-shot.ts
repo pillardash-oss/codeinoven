@@ -115,6 +115,45 @@ function rememberQuotaBlock(
   })
 }
 
+/**
+ * A provider answer that describes the model, not the request.
+ *
+ * These are the rejections a retry cannot improve: a model this provider does not
+ * serve in the user's country, one the account's subscription does not include,
+ * or one already retired from the catalog. Transport errors, empty responses and
+ * timeouts are deliberately left out, because the next attempt may well answer.
+ */
+const UNAVAILABLE_CANDIDATE_PATTERN = /^\s*4(?:00|03|04)\b/u
+
+/**
+ * Remember that a provider refuses a candidate outright.
+ *
+ * A rejected model is rejected for every job that names it, and payment is one
+ * disposable harness process per attempt: a search sweep over hundreds of threads
+ * paid the same "not available in your country" and "subscription required"
+ * answers once per thread, which held the sweep below the model that could
+ * actually answer. The verdict is remembered on the same per-account map a usage
+ * reset uses, for the same cap, so a renewed subscription or a widened region is
+ * probed again instead of being ignored forever.
+ */
+function rememberUnavailableCandidate(
+  host: OneShotHost,
+  candidate: TitleModelCandidate,
+  error: string
+): void {
+  if (!UNAVAILABLE_CANDIDATE_PATTERN.test(error)) return
+  const candidateKey = auxiliaryCandidateKey(candidate)
+  host.quotaBlocks.set(candidateKey, {
+    resetAt: Date.now() + AUXILIARY_QUOTA_BLOCK_MAX_MS,
+    reason: `the provider rejected this model (${error.slice(0, 120)})`
+  })
+  Logger.info('Auxiliary candidate held back after a provider rejection', {
+    driverId: host.driverName,
+    candidate: candidateKey,
+    blockedForMs: AUXILIARY_QUOTA_BLOCK_MAX_MS
+  })
+}
+
 /** Run one auxiliary one-shot completion per disposable session, cheapest candidate first. */
 export async function runOneShotWithCandidates(
   host: OneShotHost,
@@ -197,6 +236,7 @@ export async function runOneShotWithCandidates(
         Logger.dev(
           `${host.driverName} one-shot model ${candidate.providerId}/${candidate.modelId} failed: ${response.error}`
         )
+        rememberUnavailableCandidate(host, candidate, response.error)
         accounted.push(buildTitleAttempt(index + 1, candidate, false, response.error, response))
         continue
       }
