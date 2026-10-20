@@ -36,6 +36,9 @@
 
   let metadataEntries = $derived(Object.entries(request.metadata))
   let canSubmitAlternative = $derived(alternative.trim().length > 0 && !working)
+  // The main process refuses a permanent grant for a critical permission, so the
+  // card must not offer one: leaving it clickable only fails after the click.
+  let permanentGrantBlocked = $derived(request.policy?.risk === 'critical')
 
   function alternativeSpeechTarget() {
     return alternativeEditor?.speechEditorTarget(alternativeSpeechTargetId) ?? null
@@ -267,10 +270,12 @@
             />
             <CardButton
               label="Allow always"
-              title="Allow this kind of request always"
+              title={permanentGrantBlocked
+                ? 'Critical permissions cannot be allowed permanently; allow this one once'
+                : 'Allow this kind of request always'}
               icon={CioCheckCheck}
               variant="secondary"
-              disabled={working}
+              disabled={working || permanentGrantBlocked}
               onclick={() => void allowAlways()}
             />
             <CardButton

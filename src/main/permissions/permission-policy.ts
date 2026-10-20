@@ -62,18 +62,49 @@ export interface PermissionPolicyOptions {
    *  inside the project root) requires explicit approval. Used by File-System-
    *  OFF chats so the agent can only touch files the user attached. */
   restrictToAllowed?: boolean
-  /** Absolute directories pre-authorized for this session (e.g. the chat's own
-   *  `chats-cwd/<threadId>` workspace directory). Any non-destructive,
-   *  path-scoped permission inside one of them is auto-approved in every mode,
-   *  File-System-OFF chats included. Simple shell listings of the workspace
-   *  root are also permitted; other shell commands and destructive actions
-   *  are never auto-approved through this carve-out. */
+  /** Absolute directories pre-authorized for this session (the chat's own
+   *  `chats-cwd/<threadId>` workspace directory, and a project's `.cio` agent
+   *  scratch folder). Everything confined to one of them is auto-approved in
+   *  every mode, File-System-OFF chats included: path-scoped operations
+   *  (deletes included) and shell commands the policy can prove stay inside.
+   *  Anything that cannot be proven confined still asks. */
   scratchPaths?: readonly string[]
   now?: () => number
 }
 
 const DEFAULT_APPROVAL_TTL_MS = 5 * 60 * 1000
 const SAFE_AUTO_PERMISSIONS = new Set(['read', 'list', 'search'])
+/** Folders inside a scratch root that the platform owns: feature specs and the
+ *  PR worktrees of `.cio/git`. The rest of scratch is the agent's own space,
+ *  but deleting a spec or a worktree destroys authored work, so those stay
+ *  gated even though their parent folder never prompts. */
+const SCRATCH_RESERVED_DIRECTORIES = ['specs', 'git'] as const
+/** Commands that run another command from a string. A scratch-confined call
+ *  cannot vouch for what these evaluate, so they always ask. */
+const SHELL_INTERPRETERS = new Set([
+  'sh',
+  'bash',
+  'zsh',
+  'dash',
+  'fish',
+  'ksh',
+  'csh',
+  'tcsh',
+  'cmd',
+  'cmd.exe',
+  'powershell',
+  'pwsh',
+  'node',
+  'nodejs',
+  'deno',
+  'python',
+  'python3',
+  'perl',
+  'ruby',
+  'eval',
+  'source',
+  'xargs'
+])
 const CRITICAL_TERMS = [
   'shell',
   'terminal',
@@ -233,6 +264,21 @@ export class PermissionPolicy {
     scope: PermissionScope,
     unclassifiedTool?: string
   ): PermissionDecisionResult {
+    // Scratch is the folder the agent was handed for its own work, so its own
+    // housekeeping there (clearing a staged package, deleting a temp file,
+    // moving artifacts around the scratch tree) never reaches the user. The
+    // check is textual and conservative: a command that cannot be proven to
+    // stay inside scratch falls through to the rules below and asks.
+    if (!unclassifiedTool && this.isScratchScope(paths, commands)) {
+      return this.createDecision(
+        'auto_review',
+        true,
+        "Auto-approved: the operation stays inside this thread's scratch folder.",
+        risk,
+        scope
+      )
+    }
+
     const destructiveReason = this.getDestructiveReason(permission)
     if (destructiveReason) {
       return this.createDecision('ask', false, destructiveReason, risk, scope)
@@ -268,20 +314,6 @@ export class PermissionPolicy {
         'Auto-approved: listing the workspace directory owned by this chat.',
         'low',
         this.createScope(listingPaths.flatMap((targets) => targets ?? []))
-      )
-    }
-
-    // The chat's own artifact directory is pre-authorized: non-destructive,
-    // path-scoped operations inside it never prompt, File-System-OFF chats
-    // included. Other shell commands stay gated; only the literal workspace
-    // listing recognized above can be confined by this policy.
-    if (this.isScratchScope(permission, paths, commands)) {
-      return this.createDecision(
-        'auto_review',
-        true,
-        'Auto-approved: the chat owns this artifact directory and file operations there never prompt.',
-        risk,
-        scope
       )
     }
 
@@ -343,24 +375,79 @@ export class PermissionPolicy {
     )
   }
 
-  /** Whether every requested path sits inside one pre-authorized scratch
-   *  directory and nothing else in the request widens the grant (no shell
-   *  commands, nothing destructive). */
-  private isScratchScope(
-    permission: string,
-    paths: readonly string[],
-    commands: readonly string[]
-  ): boolean {
+  /** Whether the whole request stays inside a pre-authorized scratch directory:
+   *  every requested path, and every shell command, must resolve there. */
+  private isScratchScope(paths: readonly string[], commands: readonly string[]): boolean {
     if (this.scratchPaths.length === 0) return false
-    if (commands.length > 0) return false
-    if (paths.length === 0) return false
-    const terms = normalizePermissionName(permission).split('-').filter(Boolean)
-    if (terms.some((term) => DESTRUCTIVE_TERMS.includes(term))) return false
-    return paths.every((path) => {
-      if (hasTraversal(path)) return false
-      const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
-      return this.scratchPaths.some((scratch) => isWithinDirectory(scratch, resolvedPath))
+    if (paths.length === 0 && commands.length === 0) return false
+    if (!paths.every((path) => this.isScratchPath(this.projectRoot, path))) return false
+    return commands.every((command) => this.isScratchCommand(command))
+  }
+
+  /** Whether one path, resolved against `base` when relative, lands inside a
+   *  scratch root but outside the folders the platform owns. */
+  private isScratchPath(base: string, path: string): boolean {
+    if (!path || path.startsWith('~') || hasTraversal(path)) return false
+    const normalized = normalizeNativePath(path)
+    const resolvedPath = isAbsolute(normalized) ? resolve(normalized) : resolve(base, normalized)
+    return this.isScratchRoot(resolvedPath)
+  }
+
+  private isScratchRoot(resolvedPath: string): boolean {
+    const inScratch = this.scratchPaths.some((scratch) => isWithinDirectory(scratch, resolvedPath))
+    if (!inScratch) return false
+    return !this.scratchPaths.some((scratch) => {
+      return SCRATCH_RESERVED_DIRECTORIES.some((reserved) =>
+        isWithinDirectory(resolve(scratch, reserved), resolvedPath)
+      )
     })
+  }
+
+  /**
+   * Whether a shell command provably runs entirely inside scratch.
+   *
+   * Only a simple command (or a `&&`/`||`/`;`/`|` chain of them) whose every
+   * operand resolves inside a scratch root qualifies. The working directory
+   * starts at the project root, which is outside scratch, so a bare relative
+   * operand or a command with no path operand at all rejects until the chain
+   * `cd`s into scratch. Redirection, substitution, traversal, and anything that
+   * evaluates another command reject: those can reach outside without naming a
+   * path the policy can see.
+   */
+  private isScratchCommand(command: string): boolean {
+    if (!command.trim() || command.length > 8192) return false
+    if (/[`$<>]/u.test(command) || /\n|\r/u.test(command)) return false
+    const segments = shellSegments(command)
+    if (!segments) return false
+    let workingDirectory = this.projectRoot
+    for (const segment of segments) {
+      const [name, ...operands] = segment
+      if (name === undefined) return false
+      if (SHELL_INTERPRETERS.has(basename(name).toLowerCase())) return false
+      if (name === 'cd' || name === 'pushd') {
+        const target = operands.find((operand) => !operand.startsWith('-'))
+        if (target === undefined || operands.length > 1) return false
+        const next = this.resolveScratchTarget(workingDirectory, target)
+        if (next === undefined) return false
+        workingDirectory = next
+        continue
+      }
+      const targets = operands.filter((operand) => !operand.startsWith('-'))
+      if (!targets.every((target) => this.resolveScratchTarget(workingDirectory, target))) {
+        return false
+      }
+      // A segment with no path operand acts on its working directory, so that
+      // directory itself has to be scratch (this is what keeps `git clean -fdx`
+      // run from the project root from being mistaken for scratch work).
+      if (targets.length === 0 && !this.isScratchRoot(workingDirectory)) return false
+    }
+    return true
+  }
+
+  private resolveScratchTarget(base: string, operand: string): string | undefined {
+    if (!this.isScratchPath(base, operand)) return undefined
+    const normalized = normalizeNativePath(operand)
+    return isAbsolute(normalized) ? resolve(normalized) : resolve(base, normalized)
   }
 
   private getDestructiveReason(permission: string): string | undefined {
@@ -486,6 +573,59 @@ export function normalizeNativePath(path: string): string {
 
 function containsTerm(terms: readonly string[], candidates: readonly string[]): boolean {
   return terms.some((term) => candidates.includes(term))
+}
+
+/** Split a shell command into its pipeline/chain segments, honoring quotes so
+ *  an operator inside a quoted argument stays part of that argument. Returns
+ *  undefined when the quotes do not balance. */
+function shellSegments(command: string): string[][] | undefined {
+  const segments: string[][] = []
+  let segment: string[] = []
+  let token = ''
+  let quote: '"' | "'" | null = null
+  const endToken = (): void => {
+    if (token) segment.push(token)
+    token = ''
+  }
+  const endSegment = (): void => {
+    endToken()
+    if (segment.length > 0) segments.push(segment)
+    segment = []
+  }
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!
+    if (quote !== null) {
+      if (character === quote) quote = null
+      else token += character
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (character === ' ' || character === '\t') {
+      endToken()
+      continue
+    }
+    if (character === '&' || character === '|' || character === ';') {
+      if (character === '&' && command[index + 1] === '>') {
+        // `<fd>>&<fd>` duplicates a descriptor without touching the file
+        // system, so its descriptor digits are dropped instead of splitting
+        // the segment.
+        token = token.replace(/\d+$/u, '')
+        index += 1
+        while (/\d/u.test(command[index + 1] ?? '')) index += 1
+        continue
+      }
+      endSegment()
+      if ((character === '&' || character === '|') && command[index + 1] === character) index += 1
+      continue
+    }
+    token += character
+  }
+  if (quote !== null) return undefined
+  endSegment()
+  return segments
 }
 
 /** Recognize only a literal ls of workspace roots. Descendants are excluded

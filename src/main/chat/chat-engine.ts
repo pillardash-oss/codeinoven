@@ -27167,6 +27167,13 @@ export class ChatEngine {
       : info.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? [info.projectPath]
         : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
+    // A thread in a real project also owns that project's `.cio` scratch folder:
+    // it is where the agent stages its own work, so deletes and confined shell
+    // commands there never prompt. `.cio/specs` and `.cio/git` stay gated inside
+    // the policy, because the platform owns those.
+    if (!isChat && !isAssistant) {
+      scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
+    }
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)
