@@ -61,7 +61,11 @@ import { OvenChat } from '../ovens/oven-chat'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import type { SearchSummaryRequest } from '../search/thread-search-summary'
-import { budgetSearchSummaryPrompt, validateSearchSummary } from '../search/thread-search-summary'
+import {
+  budgetSearchSummaryPrompt,
+  SearchSummaryUnavailableError,
+  validateSearchSummary
+} from '../search/thread-search-summary'
 import { formatTime } from '../../lib/date-time-format'
 import { appendPartDelta } from '../../lib/agent-part-merge'
 import { latestAgentTodo } from '../../lib/agent-todos'
@@ -6679,86 +6683,144 @@ export class ChatEngine {
       threadHarnessId: harnessId,
       projectPath
     })
-    const accountId =
-      auxiliary?.settings.accountId ?? (await this.summaryAccountId(harnessId, thread.settings))
-    const driver = auxiliary?.driver ?? (await this.driverForAccount(harnessId, accountId))
-    const settings: ThreadSettings = auxiliary?.settings ?? {
-      ...thread.settings,
-      accountId,
-      thinkingLevel: 'minimal',
-      permissionLevel: 'auto_review',
-      assignmentMode: false,
-      loopMode: false
+    // An assigned auxiliary agent can run on another harness than the thread's,
+    // and then it is that harness whose accounts serve the summary.
+    const routeHarnessId = auxiliary?.harnessId ?? harnessId
+    const accountIds = await this.summaryAccountIds(
+      routeHarnessId,
+      auxiliary?.settings.providerId ?? thread.settings.providerId,
+      auxiliary?.settings.modelId ?? thread.settings.modelId,
+      auxiliary?.settings.accountId ?? thread.settings.accountId
+    )
+    const candidates = auxiliary?.candidates
+    let failure: string | null = null
+    for (const [index, accountId] of accountIds.entries()) {
+      input.signal.throwIfAborted()
+      let driver: HarnessDriver
+      try {
+        driver = await this.driverForAccount(routeHarnessId, accountId)
+      } catch (error) {
+        failure = rawErrorMessage(error)
+        continue
+      }
+      const settings: ThreadSettings = {
+        ...(auxiliary?.settings ?? thread.settings),
+        accountId,
+        thinkingLevel: 'minimal',
+        permissionLevel: 'auto_review',
+        assignmentMode: false,
+        loopMode: false
+      }
+      // The first account keeps the harness's own cheap-candidate discovery, so
+      // a healthy setup still summarizes with the cheapest model it has. A
+      // fallback account is a probe of one credential, so it asks this model
+      // directly instead of paying every candidate again on every account.
+      const attemptCandidates =
+        candidates ??
+        (index === 0
+          ? undefined
+          : settings.providerId && settings.modelId
+            ? [{ providerId: settings.providerId, modelId: settings.modelId }]
+            : [])
+      try {
+        const result = await driver.provideCheapModel(projectPath, {
+          settings,
+          purpose: 'Thread search summary',
+          prompt: input.prompt,
+          timeoutMs: 45_000,
+          preparePrompt: (candidate) => {
+            const reported = this.modelContextWindow(
+              input.projectId,
+              candidate.providerId,
+              candidate.modelId
+            )
+            const selectedWindow =
+              candidate.modelId === settings.modelId && candidate.providerId === settings.providerId
+                ? settings.contextWindow
+                : undefined
+            const window =
+              reported && selectedWindow
+                ? Math.min(reported, selectedWindow)
+                : (reported ?? selectedWindow)
+            // An unknown window gets a conservative small request, never the
+            // application's large default conversation budget.
+            const inputBudget = window && window > 0 ? Math.max(0, window - 4096) : 1024
+            return budgetSearchSummaryPrompt(input.prompt, inputBudget)
+          },
+          validateResponse: validateSearchSummary,
+          ...(attemptCandidates ? { candidates: attemptCandidates } : {})
+        })
+        input.signal.throwIfAborted()
+        const text = result.text?.trim()
+        if (text) return text
+        failure = result.attempts.at(-1)?.failure ?? null
+      } catch (error) {
+        if (input.signal.aborted) throw error
+        failure = rawErrorMessage(error)
+      }
+      Logger.dev('Search summary account could not answer; trying the next one', {
+        harnessId: routeHarnessId,
+        accountId,
+        failure
+      })
     }
-    const result = await driver.provideCheapModel(projectPath, {
-      settings,
-      purpose: 'Thread search summary',
-      prompt: input.prompt,
-      timeoutMs: 45_000,
-      preparePrompt: (candidate) => {
-        const reported = this.modelContextWindow(
-          input.projectId,
-          candidate.providerId,
-          candidate.modelId
-        )
-        const selectedWindow =
-          candidate.modelId === settings.modelId && candidate.providerId === settings.providerId
-            ? settings.contextWindow
-            : undefined
-        const window =
-          reported && selectedWindow
-            ? Math.min(reported, selectedWindow)
-            : (reported ?? selectedWindow)
-        // An unknown window gets a conservative small request, never the
-        // application's large default conversation budget.
-        const inputBudget = window && window > 0 ? Math.max(0, window - 4096) : 1024
-        return budgetSearchSummaryPrompt(input.prompt, inputBudget)
-      },
-      validateResponse: validateSearchSummary,
-      ...(auxiliary ? { candidates: auxiliary.candidates } : {})
-    })
-    input.signal.throwIfAborted()
-    const text = result.text?.trim()
-    if (!text) {
-      const failure = result.attempts.at(-1)?.failure
-      throw new Error(
-        `The provider could not summarize this thread for search.${failure ? ` ${failure}` : ''}`
-      )
-    }
-    return text
+    throw new SearchSummaryUnavailableError(
+      `No account could summarize this thread for search.${failure ? ` ${failure}` : ''}`
+    )
   }
 
   /**
-   * The account a search summary may authenticate with.
+   * Every account that may summarize a thread for search, best credential first.
    *
-   * A thread keeps the account it was created on for its whole conversation, and
-   * that account can stop serving its provider long before the thread is indexed
-   * for search: a lapsed subscription or a rotated key answers every request with
-   * a provider rejection even though the same model answers normally on another
-   * account of the same harness. Summarization is index maintenance rather than
-   * conversation, so it authenticates with a credential that serves that model
-   * today: the account of a live session already running it, then the provider's
-   * default account, and only then the account the thread was created on.
+   * A summary is index maintenance rather than conversation, so it is never
+   * bound to the account its thread was created on: that account can stop
+   * serving its provider (a lapsed subscription, a rotated key) while the model
+   * answers perfectly on another account of the same harness, which otherwise
+   * leaves every thread of the retired account without a summary on every
+   * sweep. The order is the credential the app is using for work right now
+   * first, then the provider's default, then every other account of that
+   * harness and provider (most recently touched first), and the thread's own
+   * account last, so a user with several accounts gets all of them tried.
    */
-  private async summaryAccountId(
+  private async summaryAccountIds(
     harnessId: string,
-    threadSettings: ThreadSettings
-  ): Promise<string | undefined> {
-    const providerId = threadSettings.providerId
-    const modelId = threadSettings.modelId
-    if (!providerId || !modelId) return threadSettings.accountId
-    for (const session of this.sessionRegistry.values()) {
-      if (session.driverId !== harnessId || !session.accountId) continue
-      // An Inbox session has no thread row to read the model back from.
-      if (session.projectId === INBOX_PROJECT_ID || !session.threadId) continue
-      const live = await this.threadManager.getThread(session.projectId, session.threadId)
-      if (live?.settings?.providerId === providerId && live.settings.modelId === modelId)
-        return session.accountId
+    providerId: string | undefined,
+    modelId: string | undefined,
+    threadAccountId: string | undefined
+  ): Promise<string[]> {
+    const ordered: string[] = []
+    const push = (id: string | undefined): void => {
+      if (id && !ordered.includes(id)) ordered.push(id)
+    }
+    if (providerId && modelId) {
+      for (const session of this.sessionRegistry.values()) {
+        if (session.driverId !== harnessId || !session.accountId) continue
+        // An Inbox session has no thread row to read the model back from.
+        if (session.projectId === INBOX_PROJECT_ID || !session.threadId) continue
+        const live = await this.threadManager.getThread(session.projectId, session.threadId)
+        if (live?.settings?.providerId !== providerId || live.settings.modelId !== modelId) continue
+        push(session.accountId)
+      }
     }
     const accounts = await this.accountRegistry.list(harnessId).catch(() => [])
-    const providerAccounts = accounts.filter((account) => account.providerId === providerId)
-    const preferred = providerAccounts.find((account) => account.isDefault) ?? providerAccounts[0]
-    return preferred?.id ?? threadSettings.accountId
+    const providerAccounts = providerId
+      ? accounts.filter((account) => account.providerId === providerId)
+      : []
+    for (const account of providerAccounts) {
+      if (account.isDefault) push(account.id)
+    }
+    for (const account of [...providerAccounts].sort(
+      (left, right) => right.updatedAt - left.updatedAt
+    )) {
+      push(account.id)
+    }
+    // The thread's own account is the last resort, and only while it belongs to
+    // this provider. An account the registry does not know is kept: a virtual
+    // legacy account carries no provider record to compare, and dropping it
+    // would leave a single-account harness with no credential to try.
+    const known = accounts.find((account) => account.id === threadAccountId)
+    if (!known || !providerId || known.providerId === providerId) push(threadAccountId)
+    return ordered
   }
 
   /**
