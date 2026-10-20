@@ -437,7 +437,14 @@
             {#await loadPanelModule(PANEL_KEYS.browser, () => import('$lib/components/browser/BrowserPanel.svelte'))}
               {@render panelLoading('Browser')}
             {:then { default: BrowserPanel }}
-              <BrowserPanel tab={activeContextTab} />
+              <!-- BrowserPanel captures its tab identity at construction. Key
+                   the lazy panel directly to browser selection on every revisit. -->
+              {#key contextSidebarState.activeBrowserTabId}
+                {@const browserTab = contextSidebarState.sidebarActiveTab}
+                {#if browserTab?.kind === 'browser'}
+                  <BrowserPanel tab={browserTab} />
+                {/if}
+              {/key}
             {:catch error}
               {@render panelLoadFailed(PANEL_KEYS.browser, 'Browser', error)}
             {/await}
