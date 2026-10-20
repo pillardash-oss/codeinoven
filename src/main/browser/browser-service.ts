@@ -6829,7 +6829,17 @@ export class BrowserService {
     // to be re-parented, so this re-attaches rather than trusting `displayedTab`
     // alone; skipping here would leave it parked with nothing that ever recovers
     // it.
-    if (displayed !== null && displayed.tabId === tabId && !this.stage.isParked(tab.view)) {
+    if (
+      displayed !== null &&
+      displayed.tabId === tabId &&
+      !this.stage.isParked(tab.view) &&
+      // The window's child list is the authority on what is on screen, never the
+      // bookkeeping alone: a view that left the window without a park (a
+      // window-server teardown, a detach the record did not see) is invisible
+      // while `displayedTab` still names it, and skipping the attach here is what
+      // left the tab dark instead of re-parenting it.
+      this.window.contentView.children.includes(tab.view)
+    ) {
       // Already mounted: only a moved frame needs a native call, so the entry
       // loop's repeats cost one bounds comparison each instead of a re-parent.
       this.forgetParked(tabId)
@@ -6853,6 +6863,13 @@ export class BrowserService {
       this.displayedTab = { tabId, bounds }
       tab.view.setBounds(bounds)
     }
+    // A view that comes back from the stage window lands on a new surface, and
+    // Chromium can keep painting the frame it had in the window it left: the page
+    // reads as blank until something else changes the child list or the document
+    // paints again, which is why closing another tab or reloading brought such a
+    // page back. Asking for a repaint is what makes the returning page draw its
+    // own frame at once.
+    tab.view.webContents.invalidate()
     // A page that has just landed needs the pointer delivered again. Chromium
     // rebuilds hover and the cursor shape only from an input event, and the page
     // may have been told the pointer left while it was off screen: that is true

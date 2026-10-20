@@ -38,6 +38,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import type { Attachment } from 'svelte/attachments'
 import type { BrowserViewBounds } from '$shared/ipc-contract'
+import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from './context-sidebar.svelte'
 
 /** The places the browser can display native content. */
@@ -72,15 +73,34 @@ function intersects(a: BrowserViewBounds, b: BrowserViewBounds): boolean {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
 }
 
+/** One surface's hold on one tab, and how many of its mounted copies hold it. */
+interface BrowserTabClaim {
+  surface: BrowserSurface
+  tabId: string
+  count: number
+}
+
+/** Key a claim by both halves, so one surface's tabs never collide with another's. */
+function claimKey(surface: BrowserSurface, tabId: string): string {
+  return `${surface}\u0000${tabId}`
+}
+
 class BrowserVisibilityState {
   /** Blocks published by DOM surfaces that currently invalidate the native
    *  view, keyed so nested or overlapping surfaces cannot clear each other. */
   private blocks = new SvelteMap<string, BrowserHideBlock>()
 
-  /** The tab each surface is displaying. Published while the surface is
-   *  mounted, so competing surfaces are resolved here rather than through
-   *  suppression props threaded between components. */
-  private claims = new SvelteMap<BrowserSurface, string>()
+  /**
+   * The tab each surface is displaying, counted per surface and tab.
+   *
+   * A count rather than one id per surface, because one tab can be mounted more
+   * than once: the full screen dialog sits over the sidebar copy, and the app
+   * keeps a second sidebar mounted for the other dock placement, so two
+   * components can display the same page at the same time. A single slot made
+   * the first one to unmount erase the claim the other still relied on, which
+   * dropped the surface owner and detached a page that was still on screen.
+   */
+  private claims = new SvelteMap<string, BrowserTabClaim>()
 
   /** On-screen rectangles of floating DOM overlays, in viewport CSS pixels,
    *  which is also the space the browser view is positioned in. */
@@ -104,19 +124,22 @@ class BrowserVisibilityState {
   }
 
   get sourceTabId(): string | null {
-    if (this.claims.has('workspace')) return this.claims.get('workspace') ?? null
+    const workspaceTab = this.claimedTab('workspace')
+    if (workspaceTab !== null) return workspaceTab
     if ([...this.blocks.values()].includes('workspace-inactive')) return null
-    if (this.claims.has('fullscreen')) return this.claims.get('fullscreen') ?? null
-    const tabId = this.claims.get('sidebar')
-    return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId
-      ? (tabId ?? null)
+    const fullscreenTab = this.claimedTab('fullscreen')
+    if (fullscreenTab !== null) return fullscreenTab
+    const sidebarTab = this.claimedTab('sidebar')
+    return contextSidebarState.sidebarVisible &&
+      contextSidebarState.sidebarActiveTab?.id === sidebarTab
+      ? sidebarTab
       : null
   }
 
   pageBoundsFor(tabId: string): BrowserViewBounds | null {
     // The fullscreen frame has precedence over the still-mounted sidebar frame.
     const key =
-      this.claims.get('fullscreen') === tabId && !this.claims.has('workspace')
+      this.claimedTab('fullscreen') === tabId && this.claimedTab('workspace') === null
         ? `native-fullscreen-${tabId}`
         : null
     if (key && this.pageFrames.has(key)) return this.pageFrames.get(key)?.bounds ?? null
@@ -158,10 +181,96 @@ class BrowserVisibilityState {
    * snapshotted at construction, so there is nothing for an effect to track.
    */
   claimTab(tabId: string, surface: BrowserSurface): () => void {
-    this.claims.set(surface, tabId)
+    const key = claimKey(surface, tabId)
+    const held = this.claims.get(key)
+    this.claims.set(key, { surface, tabId, count: (held?.count ?? 0) + 1 })
+    let released = false
     return () => {
-      if (this.claims.get(surface) === tabId) this.claims.delete(surface)
+      if (released) return
+      released = true
+      const current = this.claims.get(key)
+      if (!current) return
+      if (current.count > 1) this.claims.set(key, { surface, tabId, count: current.count - 1 })
+      else this.claims.delete(key)
     }
+  }
+
+  /**
+   * The tab a surface is displaying, or null while it displays none.
+   *
+   * The newest mount wins when one surface holds the same view twice: a second
+   * copy is mounted after the first and is the one the user is looking at.
+   */
+  private claimedTab(surface: BrowserSurface): string | null {
+    let claimed: string | null = null
+    for (const claim of this.claims.values()) {
+      if (claim.surface === surface) claimed = claim.tabId
+    }
+    return claimed
+  }
+
+  /**
+   * Whether any mounted surface still displays `tabId`.
+   *
+   * The question a surface asks after it dropped its own claim: a page that
+   * another surface is still showing must keep its native view, because main
+   * cannot tell a surface hand-off from the user leaving the browser, and a park
+   * it is sent here leaves the page blank until something else re-shows it.
+   */
+  isDisplayedByAnyone(tabId: string): boolean {
+    for (const claim of this.claims.values()) {
+      if (claim.tabId === tabId) return true
+    }
+    return false
+  }
+
+  /**
+   * Whether a surface other than `surface` is displaying `tabId` right now.
+   *
+   * A surface whose frame stops being the one allowed to show the page (a full
+   * screen dialog taking the view, a modal appearing) asks this before it
+   * detaches: the page belongs to the surface that still displays it, and
+   * parking it here would blank that other surface instead.
+   */
+  isDisplayedByAnotherSurface(tabId: string, surface: BrowserSurface): boolean {
+    for (const claim of this.claims.values()) {
+      if (claim.surface !== surface && claim.tabId === tabId) return true
+    }
+    return false
+  }
+
+  /**
+   * Park a tab's page once nothing on screen displays it any more.
+   *
+   * Called from a surface's teardown *after* it released its claim. A tab can be
+   * mounted twice (the full screen dialog over the sidebar, a second copy of the
+   * sidebar), so the first component to unmount must not park the page the other
+   * one is still showing: main cannot tell a surface hand-off from the user
+   * leaving the browser, and the park leaves the page blank until something else
+   * re-shows it, which is the tab that went dark on a switch.
+   */
+  detachReleasedTab(tabId: string): void {
+    if (this.isDisplayedByAnyone(tabId)) return
+    this.hidePage(tabId)
+  }
+
+  /**
+   * Park the page of a tab this surface may no longer display, unless another
+   * surface is displaying it.
+   *
+   * Used by the paths that give the view up while they are still mounted: a full
+   * screen dialog taking the tab over, a modal covering its frame, a stale show
+   * landing after another surface claimed the page. The surface that still
+   * displays the page keeps it; nothing else ever re-shows a page parked here.
+   */
+  detachUnlessAnotherSurfaceDisplays(tabId: string, surface: BrowserSurface): void {
+    if (this.isDisplayedByAnotherSurface(tabId, surface)) return
+    this.hidePage(tabId)
+  }
+
+  /** Ask main to park one tab's view. Main ignores a tab it does not hold. */
+  private hidePage(tabId: string): void {
+    void invoke('browser:hide', tabId).catch(() => {})
   }
 
   /** Publish a floating overlay's on-screen rectangle while it is visible. */
@@ -203,7 +312,7 @@ class BrowserVisibilityState {
 
   /** A tab can be mounted twice; only the winning surface owns its live editor. */
   ownsSurface(tabId: string, surface: BrowserSurface): boolean {
-    return this.owningSurface === surface && this.claims.get(surface) === tabId
+    return this.owningSurface === surface && this.claimedTab(surface) === tabId
   }
 
   /** Every native rectangle currently on screen, in viewport CSS pixels. */
@@ -266,7 +375,7 @@ class BrowserVisibilityState {
       return reason
     }
     if (surface === null) return 'not-placed'
-    if (this.claims.get(surface) !== tabId) return 'owned-elsewhere'
+    if (this.claimedTab(surface) !== tabId) return 'owned-elsewhere'
     return this.isCovered(bounds) ? 'covered-by-overlay' : null
   }
 
@@ -286,7 +395,7 @@ class BrowserVisibilityState {
    * the published blocks plus occlusion, and nothing else.
    */
   popupHideReasonFor(bounds: BrowserViewBounds | null): BrowserHideReason | null {
-    if (this.claims.has('peek') && bounds) {
+    if (this.claimedTab('peek') !== null && bounds) {
       const sourceId = this.sourceTabId
       const sourceBounds = sourceId ? this.pageBoundsFor(sourceId) : null
       if (sourceBounds && intersects(sourceBounds, bounds)) return 'owned-elsewhere'
@@ -314,15 +423,15 @@ class BrowserVisibilityState {
    * Other tabs are not detached any more, they run parked offscreen.
    */
   private get owningSurface(): BrowserSurface | null {
-    if (this.claims.has('peek')) return 'peek'
-    if (this.claims.has('workspace')) return 'workspace'
-    if (this.claims.has('fullscreen')) return 'fullscreen'
+    if (this.claimedTab('peek') !== null) return 'peek'
+    if (this.claimedTab('workspace') !== null) return 'workspace'
+    if (this.claimedTab('fullscreen') !== null) return 'fullscreen'
     // A rail panel that is showing the page (the composition board) outranks the
     // plain sidebar: it displays the tab deliberately, where the sidebar only
     // owns the tab it happens to have active.
-    if (this.claims.has('panel')) return 'panel'
-    const tabId = this.claims.get('sidebar')
-    if (tabId === undefined) return null
+    if (this.claimedTab('panel') !== null) return 'panel'
+    const tabId = this.claimedTab('sidebar')
+    if (tabId === null) return null
     return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId
       ? 'sidebar'
       : null
