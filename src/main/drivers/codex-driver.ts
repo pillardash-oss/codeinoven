@@ -944,8 +944,17 @@ export class CodexDriver extends PersistentCliDriver {
     projectPath: string,
     sessionId: string
   ): Promise<IdleNativeSessionReleaseResult> {
-    const nativeThreadId =
-      (await this.requireSession(projectPath, sessionId)).nativeSessionId ?? null
+    // A session record this process cannot read names no native thread, so there
+    // is no writer here for a hand-off to release. Answering with a thrown error
+    // would instead fail the peer's ordinary prompt with a transfer message it
+    // cannot act on: this method's contract is a result, never an exception.
+    let nativeThreadId: string | null
+    try {
+      nativeThreadId = (await this.requireSession(projectPath, sessionId)).nativeSessionId ?? null
+    } catch (error) {
+      Logger.dev('Codex idle writer release could not read the session:', error)
+      return { owner: false, released: false }
+    }
     const host = this.writerHostFor(projectPath, sessionId, nativeThreadId)
     if (!host || !nativeThreadId) return { owner: false, released: false }
 

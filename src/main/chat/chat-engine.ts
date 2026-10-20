@@ -14106,13 +14106,27 @@ export class ChatEngine {
     await this.settleThreadTurnForTransfer(projectId, threadId)
     instanceRegistry.publishTurnActivity()
     if (writer) {
-      const writerRelease = await writer.driver.releaseIdleSessionForTransfer?.(
-        writer.projectPath,
-        thread.sessionId
-      )
-      if (writerRelease?.owner && !writerRelease.released) {
-        return await this.resumeRunAfterRefusedHandOff(thread, writerRelease.reason)
+      // The run is already stopped at this point, so a driver that throws here
+      // must not strand it: turn the failure into the same refusal path a
+      // delivered refusal uses, which puts the run back on this instance.
+      let refusal: string | null = null
+      try {
+        const writerRelease = await writer.driver.releaseIdleSessionForTransfer?.(
+          writer.projectPath,
+          thread.sessionId
+        )
+        if (writerRelease?.owner && !writerRelease.released) {
+          refusal = writerRelease.reason ?? 'The Codex writer is still held by this instance.'
+        }
+      } catch (error) {
+        Logger.error('The Codex writer could not be released for a thread transfer:', {
+          projectId,
+          threadId,
+          error: rawErrorMessage(error)
+        })
+        refusal = 'This Codex session is no longer available to hand over.'
       }
+      if (refusal !== null) return await this.resumeRunAfterRefusedHandOff(thread, refusal)
     }
     return { released: true }
   }
@@ -14185,7 +14199,20 @@ export class ChatEngine {
       this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
     if (!driver.releaseIdleSessionForTransfer) return { owner: false, released: false }
-    return driver.releaseIdleSessionForTransfer(projectPath, thread.sessionId)
+    try {
+      return await driver.releaseIdleSessionForTransfer(projectPath, thread.sessionId)
+    } catch (error) {
+      // This preflight only clears an idle writer out of a peer's way before a
+      // prompt. A session this process cannot even read holds no writer it can
+      // act on, so the prompt is free to continue here rather than fail on a
+      // hand-off this instance has nothing to hand over.
+      Logger.error('An idle Codex thread could not be released for a prompt:', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+      return { owner: false, released: false }
+    }
   }
 
   /**
