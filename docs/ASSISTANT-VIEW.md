@@ -259,7 +259,11 @@ the app's clock for Assistant View.
   dispatches the run on it, settles the record on success, and returns the run so
   the caller can open it. Neither is automatic. An unattended run recorded in the
   ledger is acknowledged separately by `assistant:dismissBackgroundRun`, which
-  drops the durable entry from every "While you were away" surface.
+  stamps the entry's `acknowledgedAt` so it leaves every "While you were away"
+  surface while the ledger keeps it as run history. `assistant:dismissRuns`
+  acknowledges the missed records and runs a surface is clearing in one call, and
+  is what the notification panel's **Dismiss all** uses on the Assistants tab
+  (together with `notification:clearInbox('assistant')` for the notices).
 
 ## Background mode (menu bar)
 
@@ -388,13 +392,16 @@ default:
 - the **While you were away** section of the same Assistants tab, which lists the
   recent unattended runs straight from the ledger (outcome, why it ran, when it
   settled, any persisted failure, and how many gates it answered for you), with a
-  per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that removes the
-  durable ledger entry, and an assistant profile's **Run history** list in the
+  per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that acknowledges the
+  ledger entry, and an assistant profile's **Run history** list in the
   knowledge panel. A run whose thread was later deleted still shows, as
   non-clickable evidence. These rows name the task or assistant the same way, so
   the section never falls back to the authoring host's fixed title. Dismissing a
-  run is the user acknowledging evidence they no longer need: the row leaves
-  every surface and does not return on the next launch.
+  run is the user acknowledging a row: it leaves every notification surface and
+  does not return on the next launch, while the ledger keeps the entry so the run
+  history still says what ran. The tab's **Dismiss all** retires the missed fires
+  and every unacknowledged run in one `assistant:dismissRuns` call, so the tab
+  cannot be left showing run rows the panel's own clear-all could not reach.
 
 ## Auto-resolved gates (attention rail)
 

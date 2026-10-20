@@ -269,9 +269,18 @@ class AssistantsState {
     return this.backgroundRuns.filter((run) => run.taskId === taskId)
   }
 
-  /** The recent unattended runs a panel renders, newest first. */
+  /**
+   * The unattended runs a notification surface still owes the user, newest first:
+   * the recent past, minus the runs it already acknowledged.
+   *
+   * Acknowledging a run never removes it from the ledger, so an acknowledged entry
+   * is filtered out here rather than deleted, and the run-history surfaces keep
+   * showing it as evidence of what ran.
+   */
   get recentBackgroundRuns(): BackgroundRun[] {
-    return this.backgroundRuns.slice(0, AssistantsState.BACKGROUND_RUN_HISTORY_LIMIT)
+    return this.backgroundRuns
+      .filter((run) => run.acknowledgedAt === undefined)
+      .slice(0, AssistantsState.BACKGROUND_RUN_HISTORY_LIMIT)
   }
 
   /** Ledger-entried unattended runs belonging to any task of one assistant. */
@@ -427,13 +436,48 @@ class AssistantsState {
   }
 
   /**
-   * Acknowledge one unattended run. The ledger removal is durable and main
-   * pushes the fresh list; the local filter makes the row leave the panel at
-   * once, without waiting for the push to land.
+   * Acknowledge one unattended run, marking its ledger entry so the notification
+   * row leaves every surface. The acknowledgement is durable and main pushes the
+   * fresh list; the local mark makes the row leave the panel at once, without
+   * waiting for the push to land. The entry itself stays: it is the run history.
    */
   async dismissBackgroundRun(id: string): Promise<void> {
     await invoke('assistant:dismissBackgroundRun', id)
-    this.backgroundRuns = this.backgroundRuns.filter((run) => run.runThreadId !== id)
+    const acknowledgedAt = Date.now()
+    this.backgroundRuns = this.backgroundRuns.map((run) =>
+      run.runThreadId === id && run.acknowledgedAt === undefined ? { ...run, acknowledgedAt } : run
+    )
+  }
+
+  /**
+   * Acknowledge everything the Assistants tab still owes the user: the pending
+   * missed fires and the unattended runs.
+   *
+   * The panel's clear-all owns the notices; this is the run half of the same tab,
+   * retired in one call so a long list never becomes one IPC round (and one ledger
+   * write) per row. Every unacknowledged run is sent rather than the history
+   * window on screen, so clearing the tab cannot reveal the next window of rows a
+   * moment later. Acknowledgement, not deletion: the tab stays empty while the
+   * assistant run-history surfaces keep every entry as evidence of what ran. Both
+   * lists update locally at once and the scheduler's change broadcast republishes
+   * them.
+   */
+  async dismissRunActivity(): Promise<void> {
+    const missedRunIds = this.missedRuns.map((run) => run.id)
+    const backgroundRunIds = this.backgroundRuns
+      .filter((run) => run.acknowledgedAt === undefined)
+      .map((run) => run.runThreadId)
+    if (missedRunIds.length === 0 && backgroundRunIds.length === 0) return
+    await invoke('assistant:dismissRuns', missedRunIds, backgroundRunIds)
+    const missed = new Set(missedRunIds)
+    const acknowledged = new Set(backgroundRunIds)
+    const acknowledgedAt = Date.now()
+    this.missedRuns = this.missedRuns.filter((run) => !missed.has(run.id))
+    this.backgroundRuns = this.backgroundRuns.map((run) =>
+      acknowledged.has(run.runThreadId) && run.acknowledgedAt === undefined
+        ? { ...run, acknowledgedAt }
+        : run
+    )
   }
 
   async runMissedRunNow(id: string): Promise<Thread | null> {
