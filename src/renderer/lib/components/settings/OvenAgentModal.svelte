@@ -386,36 +386,35 @@
   </div>
 
   {#snippet footer()}
-    <div class="flex items-center justify-between gap-2">
+    <!--
+      The buttons stay direct children of the footer on purpose: the shell sends a
+      leading dismiss action to the far left with `mr-auto`, which only reaches a
+      direct child. Wrapping them in a row put Close back on the right.
+    -->
+    <button
+      type="button"
+      data-modal-dismiss
+      class="h-8 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+      onclick={close}>Close</button
+    >
+    {#if preview}
       <button
         type="button"
-        data-modal-dismiss
-        class="h-8 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
-        onclick={close}>Close</button
+        class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
+        disabled={testing}
+        onclick={() => void testConnection()}
       >
-      <div class="flex items-center gap-2">
-        {#if preview}
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay disabled:opacity-50"
-            disabled={testing}
-            onclick={() => void testConnection()}
-          >
-            {#if testing}<CioSpinner size={14} class="animate-spin" />{:else}<CioCable
-                size={14}
-              />{/if}
-            Test connection
-          </button>
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            disabled={registering || testing}
-            onclick={() => void register()}
-          >
-            {#if registering}<CioSpinner size={14} class="animate-spin" />{/if} Register Oven
-          </button>
-        {/if}
-      </div>
-    </div>
+        {#if testing}<CioSpinner size={14} class="animate-spin" />{:else}<CioCable size={14} />{/if}
+        Test connection
+      </button>
+      <button
+        type="button"
+        class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        disabled={registering || testing}
+        onclick={() => void register()}
+      >
+        {#if registering}<CioSpinner size={14} class="animate-spin" />{/if} Register Oven
+      </button>
+    {/if}
   {/snippet}
 </Modal>
