@@ -18,6 +18,7 @@ const { OvenChannelUnavailable, OvenRequestChannel, OvenServiceOutdated } = awai
   '../../../src/main/ovens/oven-request-channel'
 )
 const { OvenSsh } = await import('../../../src/main/ovens/oven-ssh')
+const { OVEN_PROTOCOL_VERSION } = await import('../../../src/lib/ovens')
 
 function service(): InstanceType<typeof OvenService> {
   return new OvenService({} as OvenRegistry)
@@ -47,7 +48,10 @@ describe('oven root operations', () => {
     expect(JSON.parse(String(payload))).toMatchObject({
       root: '/checkout',
       projectId: 'project-1',
-      channel: 'projectFiles:create'
+      channel: 'projectFiles:create',
+      // The Oven's session refuses file work without this, and the app used to
+      // omit it: every file action then answered "Oven protocol version mismatch".
+      protocolVersion: OVEN_PROTOCOL_VERSION
     })
     // A Git command on a large checkout may legitimately take a minute, so the
     // session must not be judged wedged at the 30 s control-message timeout.
@@ -74,7 +78,8 @@ describe('oven root operations', () => {
     expect(operation?.[5]).toBe(true)
     expect(operation?.[6]).toBe(8 * 1024 * 1024)
     expect(JSON.parse(String(operation?.[2]))).toMatchObject({
-      localIdentityFile: '/oven/.ssh/codeinoven-local-github'
+      localIdentityFile: '/oven/.ssh/codeinoven-local-github',
+      protocolVersion: OVEN_PROTOCOL_VERSION
     })
   })
 

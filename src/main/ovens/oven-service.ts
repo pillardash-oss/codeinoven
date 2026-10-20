@@ -291,7 +291,10 @@ export class OvenService {
         ...(value !== undefined ? { value } : {})
       }))
     }
-    const data = JSON.stringify(input)
+    // The session validates the protocol version before it answers file work, and
+    // an action that arrives without one is refused as a mismatch. Every payload
+    // this app sends therefore names the version it speaks, on both routes.
+    const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > ROOT_OPERATION_LIMIT_BYTES)
       throw new Error('The Oven operation exceeds 8 MiB.')
     if (!network)
