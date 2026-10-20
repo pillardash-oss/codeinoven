@@ -339,7 +339,17 @@ export default defineConfig(({ mode }) => {
           '@codemirror/commands',
           '@codemirror/language',
           '@codemirror/language-data',
-          'jsonc-parser'
+          'jsonc-parser',
+          // `@pdslng/cio-icon` is a Svelte component library whose icons are
+          // reached from markup all over the renderer, including panels that
+          // load lazily. The startup scan cannot see the ones behind those lazy
+          // panels, so without this glob each unseen group made Vite discover
+          // them at runtime, re-optimize the whole library, and full-reload the
+          // renderer   the same icons re-bundled several times on one cold
+          // start. The package's `./*.svelte` export is itself a glob, so this
+          // entry expands to every shipped icon and follows the package as
+          // icons are added, instead of pinning a hand-maintained list.
+          '@pdslng/cio-icon/*.svelte'
         ]
       },
       // Pin the dev origin. The renderer's persisted state (recovery snapshot,
