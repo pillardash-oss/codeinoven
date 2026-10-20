@@ -1,5 +1,5 @@
 /** Standalone Node service. No Electron, desktop paths, or app-owned process markers. */
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer, connect, type Socket } from 'node:net'
 import {
@@ -16,6 +16,7 @@ import {
 } from 'node:fs/promises'
 import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } from 'node:os'
 import { join, isAbsolute } from 'node:path'
+import { launchSpec } from './oven-windows-command'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
@@ -396,10 +397,23 @@ function firstVersionLine(output: string): string | null {
 
 /** Run one harness version command, bounded so a hung binary cannot stall a probe. */
 function harnessVersion(path: string, versionArgs: readonly string[]): Promise<string | null> {
+  const spec = launchSpec(path, versionArgs)
+  let child: ChildProcess
+  try {
+    child = spawn(spec.command, spec.args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      ...(spec.verbatimArguments ? { windowsVerbatimArguments: true } : {})
+    })
+  } catch {
+    // A harness the platform refuses to start is a harness with no version, not a
+    // failed probe: npm shims are `.cmd` files that only `cmd.exe` can launch, and
+    // a refused spawn used to fail the whole inventory with a bare `spawn EINVAL`.
+    return Promise.resolve(null)
+  }
   return new Promise((resolve) => {
     let settled = false
     let output = ''
-    const child = spawn(path, [...versionArgs], { stdio: ['ignore', 'pipe', 'pipe'] })
     const finish = (value: string | null): void => {
       if (settled) return
       settled = true
@@ -654,10 +668,14 @@ async function start(raw: unknown): Promise<OvenRun> {
     const spawnArgs = resolved.distribution
       ? wslRunArgv(resolved.distribution, resolved.path, value.args as string[], run.cwd)
       : (value.args as string[])
-    const child = spawn(resolved.program, spawnArgs, {
+    const spec = resolved.distribution
+      ? { command: resolved.program, args: spawnArgs, verbatimArguments: false }
+      : launchSpec(resolved.program, spawnArgs)
+    const child = spawn(spec.command, spec.args, {
       cwd: run.cwd,
       env,
       detached: process.platform !== 'win32',
+      windowsVerbatimArguments: spec.verbatimArguments,
       stdio: ['pipe', 'pipe', 'pipe']
     })
     job.child = child
