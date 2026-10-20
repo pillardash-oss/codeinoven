@@ -104,6 +104,13 @@ workspace instead of a shared scratch directory:
   accent carry the identity and the full name is the root icon's tooltip (and
   its image `alt`). A project and a chat root keep their name label, and a
   assistant-less task keeps the assistant space's own identity.
+- Because every task of one assistant mounts that same directory, a composer
+  reference chip (an attached file, a doc comment, an inspector comment) can be
+  relocated or copied from one task of the assistant to another:
+  `ThreadView.svelte` allows relocation when the thread has an `assistantId`, and
+  `RelocateThreadPicker.svelte` offers exactly that assistant's tasks. Another
+  assistant's tasks read a different directory and are never destinations, and an
+  assistant-less task owns a directory of its own.
 - Directory constants live in `src/lib/project-artifacts.ts`
   (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
   `src/main/storage/storage-engine.ts`.

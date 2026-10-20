@@ -9,8 +9,8 @@
     /**
      * The noun the item is named by (`media attachment`, `doc comment`,
      * `inspector comment`), or null on a surface that offers no relocation:
-     * a chat, an assistant task or a browser conversation has no project to
-     * relocate into, so its chips stay plain.
+     * a chat, a browser conversation or an assistant-less task has no sibling
+     * conversation that reads the same workspace, so its chips stay plain.
      */
     noun: string | null
     /** The item's own name, shown as the menu's header so the target is never ambiguous. */

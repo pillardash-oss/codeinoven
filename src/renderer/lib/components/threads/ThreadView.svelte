@@ -10264,17 +10264,34 @@
   }
 
   /**
+   * The assistant whose workspace this thread reads, when it is one of the
+   * Assistant tab's threads.
+   *
+   * That workspace is `assistant-cwd/<assistantId>`, shared by every task of the
+   * assistant, so a file, a doc comment and an inspector comment mean the same
+   * thing in all of them. Another assistant's tasks read a different directory,
+   * so they are never a destination, and an assistant-less task owns a directory
+   * of its own with no sibling to carry anything to.
+   */
+  const relocationAssistantId = $derived(
+    thread.projectId === ASSISTANT_SPACE_ID && thread.assistantId ? thread.assistantId : null
+  )
+
+  /**
    * Carrying composer content to another chat.
    *
    * An attached file, a doc comment and an inspector comment all name something
    * the project holds, not something this conversation holds, so any of them can
-   * be moved or copied to another chat of the same project. A chat, an assistant
-   * task or a browser tab conversation lives in a hidden container with no
-   * sibling chat to carry anything to, and a controller-driven conversation (a
-   * temporary chat) keeps its own composer state, so neither offers the action.
+   * be moved or copied to another chat of the same project. In Assistant View
+   * the same holds for another task of the same assistant, because both read one
+   * assistant workspace. A chat or a browser tab conversation lives in a hidden
+   * container with no sibling to carry anything to, and a controller-driven
+   * conversation (a temporary chat) keeps its own composer state, so neither
+   * offers the action.
    */
   const relocationAvailable = $derived(
-    !hasController && !usesThreadWorkspaceMount(thread.projectId)
+    !hasController &&
+      (!usesThreadWorkspaceMount(thread.projectId) || relocationAssistantId !== null)
   )
 
   /** The composer chip a destination is being picked for, and which verb applies. */
@@ -15369,7 +15386,10 @@
   {@const request = relocationRequest}
   <RelocateThreadPicker
     projectId={thread.projectId}
-    projectName={project?.name ?? 'this project'}
+    projectName={relocationAssistantId
+      ? (assistantName ?? 'this assistant')
+      : (project?.name ?? 'this project')}
+    assistantId={relocationAssistantId ?? undefined}
     sourceThreadId={thread.id}
     item={request.item}
     mode={request.mode}

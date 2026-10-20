@@ -16,6 +16,14 @@
     projectId: string
     /** Names the project on every row, so the destination is never in doubt. */
     projectName: string
+    /**
+     * Assistant whose tasks are the destinations, for a carry inside Assistant
+     * View. Every task of one assistant reads the same `assistant-cwd/<id>`
+     * workspace, so a file, a doc comment or an inspector comment means the same
+     * thing in all of them; another assistant's tasks read a different
+     * directory, so they are never offered.
+     */
+    assistantId?: string
     /** The chat the content is coming from: never a destination itself. */
     sourceThreadId: string
     /** What is being carried: a file has a ceiling a row has to be able to report. */
@@ -29,15 +37,30 @@
     onClose: () => void
   }
 
-  let { projectId, projectName, sourceThreadId, item, mode, title, onSelect, onClose }: Props =
-    $props()
+  let {
+    projectId,
+    projectName,
+    assistantId,
+    sourceThreadId,
+    item,
+    mode,
+    title,
+    onSelect,
+    onClose
+  }: Props = $props()
 
   let threads = $state<Thread[]>([])
   let loading = $state(false)
   let requestId = 0
 
   function isDestination(thread: Thread): boolean {
-    return thread.id !== sourceThreadId && !thread.archived && !isOrchestrationChildThread(thread)
+    if (thread.id === sourceThreadId || thread.archived || isOrchestrationChildThread(thread)) {
+      return false
+    }
+    if (assistantId === undefined) return true
+    // Assistant scope: the assistant's own tasks. A run is one execution of a
+    // task rather than a place the user writes, so it is never a destination.
+    return thread.assistantId === assistantId && thread.assistantTaskId === undefined
   }
 
   function rowId(threadId: string): ActionDefinition['id'] {
@@ -69,7 +92,9 @@
    */
   $effect(() => {
     const request = ++requestId
-    logRendererDev(`[relocation] picker mounted for ${projectId} from ${sourceThreadId}`)
+    logRendererDev(
+      `[relocation] picker mounted for ${projectId}${assistantId ? ` (assistant ${assistantId})` : ''} from ${sourceThreadId}`
+    )
     loading = true
     void invoke('thread:list', projectId)
       .then((result) => {
@@ -125,7 +150,11 @@
     {title}
     {actions}
     placeholder={`Search threads to ${mode} into…`}
-    emptyLabel={loading ? 'Loading threads…' : 'No other threads in this project'}
+    emptyLabel={loading
+      ? 'Loading threads…'
+      : assistantId
+        ? 'No other tasks in this assistant'
+        : 'No other threads in this project'}
     headerIcon={CioChat}
     onSelect={selectThread}
     {onClose}
