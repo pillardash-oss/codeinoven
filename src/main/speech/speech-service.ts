@@ -28,6 +28,7 @@ import type {
   SpeechRuntimeAvailability,
   SpeechScope,
   SpeechLearningObservation,
+  SpeechMicrophoneAccess,
   SpeechTranscriptionResult
 } from '../../lib/speech/types'
 import {
@@ -55,6 +56,7 @@ import { SpeechLearningService } from './speech-learning-service'
 import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
 import { TtsPlaybackService } from './tts-playback-service'
 import { NativeSpeechCapture } from './native-speech-capture'
+import { requestMicrophoneAccess } from './microphone-access'
 import { validateSpeechModelPath } from './speech-service/model-path-validation'
 import { SpeechPlaygroundStore } from './speech-service/speech-playground-store'
 import {
@@ -214,11 +216,18 @@ export class SpeechService {
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
     await this.loadInstalledIndex()
-    // Warm the native capture worker in the background so the first voice
-    // recording starts instantly instead of paying process + audio-unit init.
-    void this.nativeCapture.warm().catch((error) => {
-      Logger.dev('Native speech capture warmup failed (non-fatal):', error)
-    })
+  }
+
+  /**
+   * Resolve microphone access for a recording the user just asked for.
+   *
+   * Never called at launch: the macOS prompt is triggered by touching the input
+   * device, so pre-warming the capture worker at startup made a fresh install
+   * demand microphone permission before the user had recorded anything. The
+   * request is issued here, at the gesture that needs it.
+   */
+  ensureMicrophoneAccess(): Promise<SpeechMicrophoneAccess> {
+    return requestMicrophoneAccess()
   }
 
   /** Resolve the discover-or-download llama.cpp runtime for cleanup inference. */
@@ -343,6 +352,11 @@ export class SpeechService {
     if (!(await this.nativeCapture.available())) {
       throw new Error('Native microphone recording is unavailable on this device.')
     }
+    // Access is settled before the worker is spawned, so the first recording of
+    // an install is the one that shows the system prompt and the worker never
+    // opens CoreAudio while the answer is still pending.
+    const access = await requestMicrophoneAccess()
+    if (!access.granted) throw new Error(access.message ?? 'Microphone access is unavailable.')
     const started = await this.storage.beginNativeCapture(scope)
     try {
       await this.nativeCapture.start(started.sessionId, started.stagingPath)

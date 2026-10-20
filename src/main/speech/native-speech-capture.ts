@@ -7,7 +7,7 @@ import { Logger } from '../system/logger'
 
 interface NativeCaptureRequest {
   id: string
-  operation: 'start' | 'stop' | 'prepare'
+  operation: 'start' | 'stop'
   outputPath?: string
 }
 
@@ -56,15 +56,6 @@ export class NativeSpeechCapture {
     } catch {
       return false
     }
-  }
-
-  /** Best-effort startup warmup: spawns the resident worker and lets it
-   *  initialize CoreAudio ahead of the first real recording, so double-press
-   *  (or click) starts capture without paying process and audio-unit init
-   *  latency. Failures are ignored — a cold start still works, just slower. */
-  async warm(): Promise<void> {
-    if (!(await this.available())) return
-    await this.request({ id: randomUUID(), operation: 'prepare' }).catch(() => undefined)
   }
 
   async start(sessionId: string, outputPath: string): Promise<void> {

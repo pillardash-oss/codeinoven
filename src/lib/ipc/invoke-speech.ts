@@ -17,6 +17,10 @@ export const invokeSpeechContract = {
     [scope: import('../speech/types').SpeechScope],
     import('../speech/types').SpeechResult<import('../speech/types').SpeechCaptureSessionInfo>
   >,
+  'speech:ensureMicrophoneAccess': {} as Contract<
+    [],
+    import('../speech/types').SpeechResult<import('../speech/types').SpeechMicrophoneAccess>
+  >,
   'speech:recordPermissionFailure': {} as Contract<
     [scope: import('../speech/types').SpeechScope, message: string],
     import('../speech/types').SpeechResult<import('../speech/types').SpeechRecordingAttempt>
