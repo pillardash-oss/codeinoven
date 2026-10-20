@@ -15,6 +15,7 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } from 'node:os'
+import { createInterface } from 'node:readline'
 import { join, isAbsolute } from 'node:path'
 import { harnessLaunchSpec, launchSpec } from './oven-windows-command'
 import { constants } from 'node:fs'
@@ -1001,8 +1002,38 @@ function request(data: string): Promise<string> {
   })
 }
 
+/**
+ * Answer requests over one long-lived channel instead of one process each.
+ *
+ * Every other request mode is a process per request, which on a Windows Oven
+ * costs seconds before the request is even read, on every screen. This mode keeps
+ * the process alive and answers newline-delimited JSON lines from stdin, so a
+ * request is one round trip to the daemon and the app keeps it open while an Oven
+ * is in use.
+ */
+async function attach(): Promise<void> {
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity })
+  for await (const line of lines) {
+    const payload = line.trim()
+    if (!payload) continue
+    let response: string
+    try {
+      response = await request(payload)
+    } catch (error) {
+      response = JSON.stringify({
+        ok: false,
+        error: error instanceof Error ? error.message : 'Oven request failed.'
+      })
+    }
+    // One line per response: JSON escapes its own newlines, so the client can
+    // split on them and match answers to requests in order.
+    process.stdout.write(`${response.trim()}\n`)
+  }
+}
+
 async function main(): Promise<void> {
   if (process.argv[2] === 'daemon') return daemon()
+  if (process.argv[2] === 'attach') return attach()
   if (process.argv[2] === 'ensure') {
     const data = `${JSON.stringify({ method: 'probe', protocolVersion: PROTOCOL })}\n`
     try {
@@ -1038,7 +1069,7 @@ async function main(): Promise<void> {
     throw new Error('The Oven service could not start.')
   }
   if (!['request', 'workspace', 'root-operation'].includes(process.argv[2]))
-    throw new Error('Use ensure, request, workspace, or daemon.')
+    throw new Error('Use ensure, attach, request, workspace, or daemon.')
   let data = ''
   let bytes = 0
   for await (const chunk of process.stdin) {

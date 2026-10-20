@@ -21,12 +21,42 @@ import { OvenSsh, OvenServiceMissingError } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
 import { beginOvenHarnessRun } from './oven-operation-lock'
 import { remoteShell } from './oven-remote-shell'
+import { OvenChannelUnavailable, OvenRequestChannel } from './oven-request-channel'
 import { remoteInstallServiceCommand, remoteServiceCommand } from './oven-remote-command'
 
 export class OvenService {
   readonly ssh: OvenSsh
+  private readonly channel: OvenRequestChannel
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
+    this.channel = new OvenRequestChannel(this.ssh)
+  }
+
+  /**
+   * Start the Oven's request channel before anything needs it.
+   *
+   * Called wherever the user points the app at an Oven, so the first file tree or
+   * prompt does not pay for the remote process startup the channel exists to
+   * avoid. Resolves either way: a warm-up that fails is retried by the request
+   * that needs it.
+   */
+  async warm(id: string): Promise<void> {
+    await this.channel.warm(id)
+  }
+
+  /** Whether this Oven's channel is already open. */
+  isWarm(id: string): boolean {
+    return this.channel.isWarm(id)
+  }
+
+  /** Close one Oven's channel, e.g. after it was removed or its service replaced. */
+  disposeChannel(id: string): void {
+    this.channel.dispose(id)
+  }
+
+  /** Close every channel, as the app does on quit. */
+  disposeChannels(): void {
+    this.channel.disposeAll()
   }
 
   /** Installing touches only the authenticated user's CodeInOven service directory. */
@@ -39,6 +69,9 @@ export class OvenService {
     const shell = await remoteShell(this.ssh, id)
     const command = remoteInstallServiceCommand(shell, revision, randomUUID())
     const output = await this.ssh.execute(id, command, source, 60_000)
+    // The channel runs the bundle that was installed when it started, so it is
+    // replaced rather than left answering from the old service.
+    this.channel.dispose(id)
     return this.parseProbe(output)
   }
 
@@ -178,6 +211,20 @@ export class OvenService {
   private async request(id: string, input: Record<string, unknown>): Promise<string> {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
+    try {
+      return await this.channel.request(id, data)
+    } catch (error) {
+      // A channel that cannot start is not a failed request: fall back to the
+      // one-request path, which is what every Oven used before the channel.
+      if (error instanceof OvenChannelUnavailable) return await this.oneShot(id, data)
+      if (!(error instanceof OvenServiceMissingError)) throw error
+      await this.install(id)
+      return await this.oneShot(id, data)
+    }
+  }
+
+  /** One request in its own ssh process, the path a cold or broken channel uses. */
+  private async oneShot(id: string, data: string): Promise<string> {
     const shell = await remoteShell(this.ssh, id)
     const command = remoteServiceCommand(shell, ['request'])
     try {
