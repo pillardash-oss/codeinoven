@@ -519,7 +519,7 @@
         wrapping to a second row. Panels that already fit are unaffected.
       -->
         <div
-          class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3"
+          class="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t bg-surface px-4 py-3 [&>[data-modal-dismiss]:first-child]:mr-auto"
           data-modal-footer
         >
           {@render footer()}

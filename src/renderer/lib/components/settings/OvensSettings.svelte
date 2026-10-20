@@ -1450,6 +1450,13 @@
   {#snippet footer()}
     <div class="flex w-full flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2">
+        <button
+          type="button"
+          data-modal-dismiss
+          class="border px-3 py-2 text-sm hover:bg-elevated"
+          disabled={Boolean(busy) && busy !== 'test'}
+          onclick={closeEditor}>Cancel</button
+        >
         {#if hasAppearance}
           <button
             type="button"
@@ -1471,13 +1478,6 @@
         >
       </div>
       <div class="flex items-center gap-2">
-        <button
-          type="button"
-          data-modal-dismiss
-          class="border px-3 py-2 text-sm hover:bg-elevated"
-          disabled={Boolean(busy) && busy !== 'test'}
-          onclick={closeEditor}>Cancel</button
-        >
         <button
           type="submit"
           form="oven-editor"
