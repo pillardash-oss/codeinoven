@@ -34,10 +34,17 @@
      *  transition: a drag has to track the pointer exactly, and a hosted native
      *  page must not chase an easing frame. */
     onWidthChange?: (width: number) => void
+    /** The width this rail actually occupies, when the host caps it to keep room
+     *  for the page. Defaults to the stored preference, for a host that has no
+     *  ceiling of its own. */
+    width?: number
   }
 
-  let { onClose, onWidthChange = (width: number) => contextSidebarState.setWidth(width) }: Props =
-    $props()
+  let {
+    onClose,
+    onWidthChange = (width: number) => contextSidebarState.setWidth(width),
+    width = contextSidebarState.width
+  }: Props = $props()
 
   /**
    * The browser view's right rail.
@@ -545,12 +552,12 @@
     if (agentChat) void browserAssistant.refreshArtifacts(agentChat.threadId)
   }}
   class="min-h-0 min-w-0 shrink-0"
-  style:width="{contextSidebarState.width}px"
+  style:width="{width}px"
 >
   <ContextSidebar
     {tabs}
     {activeTabId}
-    width={contextSidebarState.width}
+    width={width}
     height={contextSidebarState.terminalHeight}
     placement="right"
     content={railContent}
