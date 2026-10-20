@@ -150,6 +150,13 @@ export class SpeechService {
   private readonly playback = new TtsPlaybackService()
   private readonly nativeCapture: NativeSpeechCapture
   private readonly confirmations = new Map<string, SpeechConfirmation>()
+  /**
+   * Capture sessions whose microphone is still open. ASR has no queue job while
+   * the user is speaking, so without this the evictor reads the recorder as
+   * idle and unloads the model the preload just warmed, and the transcription
+   * then pays the whole model load after the user hits send.
+   */
+  private readonly openCaptures = new Set<string>()
   private readonly eviction: SpeechRuntimeEviction
   private readonly playground = new SpeechPlaygroundStore()
 
@@ -319,6 +326,7 @@ export class SpeechService {
 
   async beginCapture(scope: SpeechScope, mimeType: string): Promise<SpeechCaptureSessionInfo> {
     const started = await this.storage.beginCapture(scope, mimeType)
+    this.openCaptures.add(started.sessionId)
     const value = {
       sessionId: started.sessionId,
       attemptId: started.attempt.id,
@@ -345,6 +353,7 @@ export class SpeechService {
       )
       throw cause
     }
+    this.openCaptures.add(started.sessionId)
     const value = {
       sessionId: started.sessionId,
       attemptId: started.attempt.id,
@@ -372,6 +381,7 @@ export class SpeechService {
   }
 
   async finishCapture(sessionId: string, durationMs: number): Promise<SpeechRecordingAttempt> {
+    this.releaseCapture(sessionId)
     const attempt = await this.storage.finalizeCapture(sessionId, durationMs)
     this.emit({
       kind: 'capture',
@@ -384,6 +394,7 @@ export class SpeechService {
     sessionId: string,
     durationMs: number
   ): Promise<SpeechRecordingAttempt> {
+    this.releaseCapture(sessionId)
     await this.nativeCapture.stop(sessionId)
     const attempt = await this.storage.finalizeCapture(sessionId, durationMs)
     this.emit({
@@ -394,6 +405,7 @@ export class SpeechService {
   }
 
   async failCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
+    this.releaseCapture(sessionId)
     const attempt = await this.storage.failCapture(sessionId, message)
     this.emit({ kind: 'history', attemptId: attempt.id, stage: 'failed' })
     return attempt
@@ -542,7 +554,12 @@ export class SpeechService {
     const backend = this.requireBackend(runtime)
     if (backend.warmup) {
       const ac = new AbortController()
-      const timer = setTimeout(() => ac.abort(), 15_000)
+      // Backends kill their worker when the warmup is aborted, so this bound must
+      // sit well above a real model load. Cutting a load short on a slow first
+      // touch threw away the whole warmup and the transcription then reloaded the
+      // model after the user hit send, which is the exact wait this exists for.
+      const timer = setTimeout(() => ac.abort(), 60_000)
+      const startedAt = Date.now()
       try {
         await backend.warmup(
           {
@@ -555,6 +572,11 @@ export class SpeechService {
           ac.signal
         )
         this.touch('asr', runtime)
+        Logger.dev('Speech ASR preload completed', {
+          runtime,
+          artifactId: artifact.id,
+          elapsedMs: Date.now() - startedAt
+        })
         // The GGUF cleanup stack is deliberately NOT warmed here. This runs
         // while the user is still speaking (the renderer calls it ~2s into a
         // recording), so warming it would allocate the cleanup server's memory
@@ -562,8 +584,14 @@ export class SpeechService {
         // ends. It spawns lazily on the first cleanup request instead, inside
         // the detached post-recording transcription job, which overlaps its
         // load with ASR rather than with the microphone being open.
-      } catch {
+      } catch (cause) {
         // Warmup is best-effort; transcription will surface real errors.
+        Logger.dev('Speech ASR preload failed (non-fatal)', {
+          runtime,
+          artifactId: artifact.id,
+          elapsedMs: Date.now() - startedAt,
+          error: cause instanceof Error ? cause.message : String(cause)
+        })
       } finally {
         clearTimeout(timer)
       }
@@ -1166,7 +1194,21 @@ export class SpeechService {
     this.eviction.clearEvict(capability)
   }
 
+  /**
+   * End a capture session's residency protection. The warmed ASR model is still
+   * resident and is about to serve this recording's transcription, so its own
+   * unload window restarts from now rather than staying armed by a session that
+   * no longer exists.
+   */
+  private releaseCapture(sessionId: string): void {
+    if (!this.openCaptures.delete(sessionId)) return
+    this.touch('asr')
+  }
+
   private isCapabilityBusy(capability: SpeechCapability): boolean {
+    // An open microphone is ASR work in progress: the user is about to hand this
+    // capability a recording, so a warmed model must survive the wait.
+    if (capability === 'asr' && this.openCaptures.size > 0) return true
     for (const runtime of CAPABILITY_RUNTIME_MAP[capability]) {
       if (this.queue.hasActive(runtime) || this.queue.hasPending(runtime)) return true
     }
