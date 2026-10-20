@@ -1321,11 +1321,37 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
     const ovenChanged =
-      (existing.settings?.ovenId ?? 'local') !== (settings.ovenId ?? 'local') ||
+      this.ovenIdChanged(existing, settings) ||
       existing.settings?.ovenPath !== settings.ovenPath
     if (ovenChanged && isThreadBusyStatus(existing.status))
       throw new Error('Stop or finish the active turn before changing Ovens.')
+    return this.persistSettings(existing, settings)
+  }
 
+  /**
+   * Record the checkout a running Oven turn resolved for its own thread.
+   *
+   * `OvenChat.send` marks the thread executing before the checkout resolves, so
+   * the write that stores `ovenPath` arrives while the thread is busy and must
+   * not trip the guard above, which protects a user switching Ovens. Only a real
+   * Oven identity change is still refused.
+   */
+  async bindOvenCheckout(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    if (this.ovenIdChanged(existing, settings) && isThreadBusyStatus(existing.status))
+      throw new Error('Stop or finish the active turn before changing Ovens.')
+    return this.persistSettings(existing, settings)
+  }
+
+  private ovenIdChanged(existing: Thread, settings: ThreadSettings): boolean {
+    return (existing.settings?.ovenId ?? 'local') !== (settings.ovenId ?? 'local')
+  }
+
+  private async persistSettings(existing: Thread, settings: ThreadSettings): Promise<Thread> {
     // The independent audit owns the thread's workflow: engineering modes are
     // locked out for the thread's lifetime once it is enabled.
     if (

@@ -421,6 +421,71 @@ describe('ThreadManager', () => {
   })
 })
 
+describe('ThreadManager oven settings guard', () => {
+  const ovenSettings = (ovenId: string, ovenPath?: string): ThreadSettings => ({
+    harnessId: 'opencode',
+    providerId: 'anthropic',
+    modelId: 'claude-sonnet',
+    thinkingLevel: 'medium',
+    permissionLevel: 'auto_review',
+    ovenId,
+    ...(ovenPath ? { ovenPath } : {})
+  })
+
+  it('refuses a checkout change from the settings API while the thread is executing', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'anthropic',
+      title: 'Oven turn',
+      settings: ovenSettings('oven-remote', 'C:\\work\\old')
+    })
+    await manager.setStatus('project1', thread.id, 'executing')
+
+    await expect(
+      manager.updateSettings('project1', thread.id, ovenSettings('oven-remote', 'C:\\work\\new'))
+    ).rejects.toThrow('Stop or finish the active turn before changing Ovens.')
+  })
+
+  it('records the checkout a running turn resolved for its own thread', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'anthropic',
+      title: 'Oven turn',
+      settings: ovenSettings('oven-remote')
+    })
+    await manager.setStatus('project1', thread.id, 'executing')
+
+    const updated = await manager.bindOvenCheckout(
+      'project1',
+      thread.id,
+      ovenSettings('oven-remote', 'C:\\Users\\dev\\.cio\\work\\repo')
+    )
+
+    expect(updated.status).toBe('executing')
+    expect(updated.settings?.ovenPath).toBe('C:\\Users\\dev\\.cio\\work\\repo')
+    expect((await manager.getThread('project1', thread.id))?.settings?.ovenPath).toBe(
+      'C:\\Users\\dev\\.cio\\work\\repo'
+    )
+  })
+
+  it('still refuses a different Oven on a running turn even for a checkout bind', async () => {
+    const { manager } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'anthropic',
+      title: 'Oven turn',
+      settings: ovenSettings('oven-remote')
+    })
+    await manager.setStatus('project1', thread.id, 'executing')
+
+    await expect(
+      manager.bindOvenCheckout('project1', thread.id, ovenSettings('oven-other', 'C:\\work'))
+    ).rejects.toThrow('Stop or finish the active turn before changing Ovens.')
+  })
+})
+
 describe('ThreadManager scope-root propagation', () => {
   it('derives the compatibility working directory from the destination scope on create', async () => {
     const roots = new Map([['project1:scope-a', '/worktrees/feature-a']])
