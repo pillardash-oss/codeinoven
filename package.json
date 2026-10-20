@@ -40,7 +40,7 @@
   },
   "scripts": {
     "postinstall": "bun scripts/ensure-electron-binary.ts && bun scripts/patch-binary-data.ts && bun scripts/patch-mammoth-xmldom.ts && bun scripts/patch-electron-builder-keychain.ts && bun scripts/install-app-deps.ts && bun scripts/ensure-pty-helper.ts",
-    "predev": "bun run --filter @pdslng/cio-icon build && bun scripts/ensure-pty-helper.ts && bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
+    "predev": "bun scripts/ensure-pty-helper.ts && bun scripts/ensure-electron-binary.ts && bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "dev:probe": "bun scripts/dev-probe.ts",
     "probe": "bun scripts/probe.ts",
@@ -77,11 +77,7 @@
     "release:mirror": "bun scripts/publish-release-mirror.ts",
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
-    "msix:build": "bun scripts/msix.ts",
-    "prebuild": "bun run --filter @pdslng/cio-icon build",
-    "prebuild:production": "bun run --filter @pdslng/cio-icon build",
-    "precheck": "bun run --filter @pdslng/cio-icon build",
-    "pretest": "bun run --filter @pdslng/cio-icon build"
+    "msix:build": "bun scripts/msix.ts"
   },
   "dependencies": {
     "@pdslng/cio-icon": "^0.1.1",
