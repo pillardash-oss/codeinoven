@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
+import { OVEN_PROTOCOL_VERSION } from '../../lib/ovens'
 import { Logger } from '../system/logger'
 import { remoteServiceCommand } from './oven-remote-command'
-import { remoteShell, type RemoteShell } from './oven-remote-shell'
+import { remoteShell } from './oven-remote-shell'
 import type { OvenSsh } from './oven-ssh'
 
 /** How long one request may wait for its answer before the channel is replaced. */
@@ -71,7 +72,12 @@ export class OvenRequestChannel {
   /** Send one request and resolve with the Oven's JSON answer. */
   async request(id: string, payload: string): Promise<string> {
     const channel = await this.acquire(id)
-    return await new Promise<string>((resolve, reject) => {
+    return this.send(id, channel, payload)
+  }
+
+  private send(id: string, channel: Channel, payload: string): Promise<string> {
+    if (channel.dead) return Promise.reject(new Error('The Oven channel closed.'))
+    return new Promise<string>((resolve, reject) => {
       const pending: Pending = {
         resolve,
         reject,
@@ -83,18 +89,21 @@ export class OvenRequestChannel {
         }, REQUEST_TIMEOUT_MS)
       }
       channel.pending.push(pending)
-      channel.child.stdin?.write(`${payload.trim()}\n`)
+      channel.child.stdin?.write(`${payload.trim()}\n`, (error) => {
+        if (error) this.drop(id, channel, error.message)
+      })
     })
   }
 
   /** Whether a channel is already open, without starting one. */
   isWarm(id: string): boolean {
     const channel = this.channels.get(id)
-    return Boolean(channel && !channel.dead)
+    return Boolean(channel && !channel.dead && !this.starting.has(id))
   }
 
   /** Close one Oven's channel, e.g. after it was removed or reconfigured. */
   dispose(id: string): void {
+    this.startFailures.delete(id)
     const channel = this.channels.get(id)
     if (channel) this.drop(id, channel, 'The Oven channel closed.')
   }
@@ -107,34 +116,43 @@ export class OvenRequestChannel {
 
   private async acquire(id: string): Promise<Channel> {
     if (this.disposed) throw new OvenChannelUnavailable('The app is closing.')
-    const existing = this.channels.get(id)
-    if (existing && !existing.dead) return existing
     const pending = this.starting.get(id)
     if (pending) return pending
-    const start = this.start(id).finally(() => this.starting.delete(id))
+    const existing = this.channels.get(id)
+    if (existing && !existing.dead) return existing
+    const failures = this.startFailures.get(id) ?? 0
+    if (failures >= START_FAILURES_BEFORE_FALLBACK)
+      throw new OvenChannelUnavailable('The Oven channel could not be started.')
+    const start = this.start(id)
+      .catch((error: unknown) => {
+        this.startFailures.set(id, failures + 1)
+        throw new OvenChannelUnavailable(
+          error instanceof Error ? error.message : 'The Oven did not answer.'
+        )
+      })
+      .finally(() => this.starting.delete(id))
     this.starting.set(id, start)
     return start
   }
 
   private async start(id: string): Promise<Channel> {
-    const failures = this.startFailures.get(id) ?? 0
-    if (failures >= START_FAILURES_BEFORE_FALLBACK)
-      throw new OvenChannelUnavailable('The Oven channel could not be started.')
-    let shell: RemoteShell
-    try {
-      shell = await remoteShell(this.ssh, id)
-    } catch (error) {
-      this.startFailures.set(id, failures + 1)
-      throw new OvenChannelUnavailable(
-        error instanceof Error ? error.message : 'The Oven did not answer.'
-      )
-    }
+    const shell = await remoteShell(this.ssh, id)
     const launch = await this.ssh.prepare(id, remoteServiceCommand(shell, ['attach']), false)
-    const child = spawn(launch.executable, launch.args, {
-      env: launch.env,
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
+    if (this.disposed) {
+      await launch.dispose()
+      throw new Error('The app is closing.')
+    }
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(launch.executable, launch.args, {
+        env: launch.env,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+    } catch (error) {
+      await launch.dispose()
+      throw error
+    }
     const channel: Channel = {
       child,
       buffer: '',
@@ -153,31 +171,37 @@ export class OvenRequestChannel {
       channel.stderr = `${channel.stderr}${text}`.slice(-4000)
     })
     child.on('error', (error: Error) => {
-      this.startFailures.set(id, (this.startFailures.get(id) ?? 0) + 1)
       this.drop(id, channel, error.message)
     })
+    child.stdin?.on('error', (error: Error) => this.drop(id, channel, error.message))
     child.on('exit', (code) => {
       const reason = channel.stderr.trim() || `The Oven channel closed (${code ?? 'no exit code'}).`
       this.drop(id, channel, reason)
     })
-    const ready = await new Promise<Channel>((resolve, reject) => {
-      const failed = (error: Error): void => reject(new OvenChannelUnavailable(error.message))
-      child.once('error', failed)
-      child.once('exit', () =>
-        failed(new OvenChannelUnavailable(channel.stderr.trim() || 'The Oven channel closed.'))
-      )
-      // The channel is ready once the child is running: it answers requests in
-      // order, so no probe round trip is needed to start using it.
-      setImmediate(() => {
-        child.off('error', failed)
-        child.off('exit', failed)
-        if (channel.dead) return
-        resolve(channel)
-      })
-    })
+    // Track startup too, so closing an Oven or quitting cancels its probe.
     this.channels.set(id, channel)
+    try {
+      // Spawning SSH does not prove that the installed bundle supports attach.
+      // Older bundles print an error and exit. Probe before sending user work,
+      // so falling back never repeats a run or another mutating request.
+      const output = await this.send(
+        id,
+        channel,
+        JSON.stringify({ method: 'probe', protocolVersion: OVEN_PROTOCOL_VERSION })
+      )
+      const response = JSON.parse(output.replace(/^\uFEFF/u, '')) as {
+        ok?: boolean
+        error?: string
+      }
+      if (response.ok !== true)
+        throw new Error(response.error || 'The Oven channel did not answer its startup probe.')
+      if (this.disposed || channel.dead) throw new Error('The Oven channel closed.')
+    } catch (error) {
+      this.drop(id, channel, error instanceof Error ? error.message : 'The Oven channel closed.')
+      throw error
+    }
     this.startFailures.set(id, 0)
-    return ready
+    return channel
   }
 
   /** Match one buffered response line to the request waiting for it. */
