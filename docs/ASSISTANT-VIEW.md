@@ -37,6 +37,10 @@ flowchart LR
   `Thread.assistantTaskId` (`isAssistantRunThread`). **Only an assistant's Getting
   started thread hosts the getting-started run** the authoring conversation
   and no task's scheduled run ever executes on a task's own thread.
+- **Forking stays in the assistant.** A fork copies history into a new thread in
+  the same assistant space and carries the parent's `assistantId` (plus its
+  icon and schedule override), so the copy sits under that assistant. It is
+  never a run and never the knowledge thread, so neither link travels.
 - **Hierarchy is always Assistant -> Task -> runs.** A run is never a task: it is
   never scheduled, never counted in an assistant's task count, and never grouped.
   Each task may override its assistant's schedule (`scheduleOverride`), and shows a
