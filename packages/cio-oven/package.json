@@ -1,6 +1,6 @@
 {
   "name": "@pdslng/cio-oven",
-  "version": "0.5.70",
+  "version": "0.5.71",
   "description": "Turn a machine into a CodeInOven Oven: start, inspect, and stop the durable Oven service from one command.",
   "license": "MIT",
   "author": {
