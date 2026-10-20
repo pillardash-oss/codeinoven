@@ -243,7 +243,16 @@ async function completeStartupIfReady(): Promise<void> {
     // smoke. It is recorded, never fatal: a slow machine, a cold cache and a
     // concurrently-running agent build all legitimately boot slowly, and the
     // app must still open. The hard failure lives in the packaged smoke gate.
-    const violation = startupBudgetViolation(startupTelemetry.snapshot())
+    //
+    // The verdict is recorded only for a bundled renderer. A dev-server renderer
+    // fetches every unbundled module over HTTP before it can paint, so it misses
+    // the shipped budget by seconds on a launch that is not slow at all, and an
+    // error on every development start only teaches the reader to ignore this
+    // line. The phase report above still shows a development boot that got
+    // slower, and the packaged smoke gate still fails a real regression.
+    const violation = devServerRendererUrl
+      ? null
+      : startupBudgetViolation(startupTelemetry.snapshot())
     if (violation) {
       Logger.error('Startup exceeded the first-paint budget', {
         phase: violation.phase,
@@ -311,6 +320,18 @@ ipcMain.handle('app:rendererReady', async () => {
 })
 
 const isProduction = isShippedBuild() || process.env['NODE_ENV'] === 'production'
+
+/**
+ * The renderer's Vite dev-server origin, when this launch is served by it.
+ *
+ * A development launch fetches its UI as unbundled ES modules over HTTP instead
+ * of executing the packaged bundle, so its boot timings are not comparable with
+ * the shipped app: the same machine that reaches first paint in ~0.9 s from the
+ * packaged bundle needs ~6.9 s from the dev server. Anything that measures the
+ * shipped boot has to know which renderer it is looking at.
+ */
+const devServerRendererUrl =
+  !isProduction && is.dev ? process.env['ELECTRON_RENDERER_URL'] : undefined
 
 /**
  * Window/session boundary validator. It guards external window creation,
@@ -747,8 +768,8 @@ function createWindow(): BrowserWindow {
     })
   })
 
-  if (!isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void window.loadURL(process.env['ELECTRON_RENDERER_URL']).catch(() => {})
+  if (devServerRendererUrl) {
+    void window.loadURL(devServerRendererUrl).catch(() => {})
   } else {
     void window.loadFile(join(mainBundleDirectory, '../renderer/index.html')).catch(() => {})
   }
@@ -824,6 +845,13 @@ void app
       // macOS starts this process as the bundle's main executable, so the native
       // placeholder has to be spawned from here rather than wrapping the launch.
       startNativeSplashHelper()
+      // A supervisor hands the handoff endpoint over in the environment, so that
+      // launch already recorded this phase at module scope. macOS has no
+      // supervisor: the placeholder exists only once the helper above has been
+      // spawned, so the phase is recorded here. Without it a packaged macOS
+      // launch can never prove the dependency-free splash painted first, and the
+      // packaged smoke gate rejects the proof.
+      if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
       const { visualReady: splashVisualReady } = createSplashWindow(
         mainBundleDirectory,
         isProduction
