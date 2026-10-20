@@ -186,7 +186,7 @@ export const invokeProjectContract = {
     ProjectFileEntry[]
   >,
   'projectFiles:resolveCitationPaths': {} as Contract<
-    [projectId: string, candidates: string[], scopeBucketId?: string],
+    [projectId: string, candidates: string[], scopeBucketId?: string, threadId?: string],
     Record<string, string | null>
   >,
   'projectFiles:resolveExternalCitationPaths': {} as Contract<
