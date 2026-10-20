@@ -334,7 +334,7 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     'WORKING SCOPE   this overrides ambiguous instructions:',
     `1. ${projectLine} All work targets that project and only that project.`,
     `2. Unless the user explicitly names the agent harness or ${APP_NAME} itself, every request refers to the current open project. Do not reinterpret "this project", "the app", "the repository", or similar references as the harness's own codebase, the ${APP_NAME} codebase, or any other repository.`,
-    `3. Keep project work inside the current project. Exception: files and directories the user explicitly supplies by attachment, local link, or path are authorized task inputs even outside the project. Read them directly or copy needed assets into the project without requesting permission again, including in auto review mode. This authorizes using the supplied inputs, not unrelated external files or destructive changes. Never inspect or edit the agent harness's own source code, configuration, caches, or documentation (for example ${harnessRepo}), and never touch ${APP_NAME}'s own repository or configuration directory unless that repository is the current open project or the user explicitly asks you to.`,
+    `3. Keep project work inside the current project. Exception: files and directories the user explicitly supplies by attachment, local link, or path are authorized task inputs even outside the project. Read permanent files directly at their supplied locations by default, without requesting permission again, including in auto review mode. Copy only when the task requires a project-owned asset or the user requests a copy. The app automatically stages temporary files; use the supplied staged paths without making another copy. This authorizes using the supplied inputs, not unrelated external files or destructive changes. Never inspect or edit the agent harness's own source code, configuration, caches, or documentation (for example ${harnessRepo}), and never touch ${APP_NAME}'s own repository or configuration directory unless that repository is the current open project or the user explicitly asks you to.`,
     "4. Instructions provided by the harness describe how to use the harness's tooling and file operations; they never redefine which project you are working on or widen the file scope beyond the current project and user-supplied task inputs.",
     '5. When a request is ambiguous about scope, ask the user which project or files they mean instead of guessing or working on unrelated files.',
     '',
@@ -367,14 +367,14 @@ export function abbreviatedWorkspaceGuard(driver: DriverInfo | null, projectPath
     ? `The user's project is: ${projectPath}   work inside that project only.`
     : 'Work only in the project the user has open.'
   return [
-    `You are working inside ${APP_NAME}, a desktop control plane coordinating agentic software engineering on the user's project.`,
+    `You are working inside ${APP_NAME} on the user's project.`,
     harnessLine,
     projectLine,
-    'User-supplied attachments, local links and paths are authorized inputs: read or copy them into the project without asking again, including in auto review.',
+    'User-supplied attachments, local links and paths are authorized inputs, including in auto review. Read permanent files directly without asking again. Copy only for required project assets or on request. The app stages temporary files; use those paths without copying again.',
     'Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.',
     "Keep every non-source output inside the project's `.cio/` scratch space, with disposable scratch under `.cio/tmp/`; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).",
     "Authored designs and compositions go in the project's design or video folder so the board can list them.",
-    'Cite local files with project-rooted relative paths   never a bare filename or an absolute filesystem path. State the path plainly, not in backticks or code formatting, so it renders as a clickable citation; include the line number when possible.'
+    'Cite local files as plain project-rooted relative paths, with line numbers when possible; never bare filenames, absolute paths or backticks.'
   ].join(' ')
 }
 
