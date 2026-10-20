@@ -180,6 +180,32 @@ export function windowsInstallProgram(revision: string): string {
  * produce (winget, Chocolatey, Scoop, npm) runs as the signed-in user, so a
  * Windows step never carries `sudo`.
  */
+/**
+ * One command line for cmd.exe, to be passed as a single quoted argument.
+ *
+ * cmd.exe is the only host that resolves npm's shims the way a user's shell
+ * does. Windows PowerShell prefers the `.ps1` sitting beside an npm binary, and
+ * the default ExecutionPolicy refuses to run one: a harness update then failed
+ * with "opencode.ps1 cannot be loaded because running scripts is disabled" while
+ * the very same command worked from a terminal. A shell would also reinterpret
+ * the metacharacters rejected here, so the call never depends on that.
+ */
+function cmdCommandLine(argv: readonly string[]): string {
+  return argv
+    .map((value) => {
+      if (/[%&|<>^"\r\n\0]/u.test(value)) throw new TypeError('Invalid remote command argument.')
+      return /\s/u.test(value) || value === '' ? `"${value}"` : value
+    })
+    .join(' ')
+}
+
+/**
+ * One executable with structured arguments, quoted once for the Oven's shell.
+ *
+ * Elevation is POSIX-only on purpose: every Windows setup channel the plan can
+ * produce (winget, Chocolatey, Scoop, npm) runs as the signed-in user, so a
+ * Windows step never carries `sudo`.
+ */
 export function remoteArgvCommand(
   shell: RemoteShell,
   argv: readonly string[],
@@ -191,7 +217,7 @@ export function remoteArgvCommand(
     const words = options.elevated ? ['sudo', '-n', ...argv] : [...argv]
     return `${options.prefix ?? ''}${words.map(sshQuote).join(' ')}`
   }
-  return windowsEncodedCommand(`& ${argv.map(powershellLiteral).join(' ')}`)
+  return windowsEncodedCommand(`& cmd /d /s /c ${powershellLiteral(cmdCommandLine(argv))}`)
 }
 
 /** Read-only connection inspection, one tab-free line per system fact. */

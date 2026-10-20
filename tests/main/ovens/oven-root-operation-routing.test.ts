@@ -128,6 +128,36 @@ describe('oven root operations', () => {
     expect(execute).toHaveBeenCalled()
   })
 
+  it('replaces the Oven service when a file action meets an older protocol', async () => {
+    const oven = service()
+    // This is the answer an Oven still running an older bundle gives a file
+    // action, and it is what the app used to hand to the user as-is.
+    const mismatch = JSON.stringify({ ok: false, error: 'Oven protocol version mismatch.' })
+    const request = vi
+      .spyOn(OvenRequestChannel.prototype, 'request')
+      .mockResolvedValueOnce(mismatch)
+      .mockResolvedValueOnce(JSON.stringify({ ok: true, value: ['notes.md'] }))
+    const install = vi.spyOn(oven, 'install').mockResolvedValue({} as never)
+
+    await expect(
+      oven.rootOperation('oven-a', '/checkout', 'project-1', 'projectFiles:list', [''])
+    ).resolves.toEqual(['notes.md'])
+    expect(install).toHaveBeenCalledOnce()
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it('names the repair a user has to finish when the service cannot be replaced', async () => {
+    const oven = service()
+    vi.spyOn(OvenRequestChannel.prototype, 'request').mockResolvedValue(
+      JSON.stringify({ ok: false, error: 'Oven protocol version mismatch.' })
+    )
+    vi.spyOn(oven, 'install').mockRejectedValue(new Error('Finish active runs before updating.'))
+
+    await expect(
+      oven.rootOperation('oven-a', '/checkout', 'project-1', 'projectFiles:list', [''])
+    ).rejects.toThrow('runs an older service')
+  })
+
   it('reports an outdated service it could not replace instead of a channel failure', async () => {
     const oven = service()
     vi.spyOn(OvenRequestChannel.prototype, 'request').mockRejectedValue(

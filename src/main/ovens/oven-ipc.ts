@@ -222,6 +222,12 @@ export function registerOvenIpc(
     if (id !== LOCAL_OVEN_ID) void service.warm(id)
     return peekService.peek(id, refresh === true)
   })
+  ipcMain.handle('oven:warm', (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    // The session opens in the background: this answers at once, and the caller
+    // is opening a thread rather than waiting for a connection check.
+    if (id !== LOCAL_OVEN_ID) void service.warm(id)
+  })
   ipcMain.handle('oven:workspace', (_event, raw: unknown, input: unknown) => {
     if (!input || typeof input !== 'object' || JSON.stringify(input).length > 512 * 1024)
       throw new Error('Invalid workspace request.')

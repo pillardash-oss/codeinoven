@@ -296,19 +296,26 @@ export class OvenService {
       throw new Error('The Oven operation exceeds 8 MiB.')
     if (!network)
       return this.decode<unknown>(
-        await this.send(id, data, {
-          timeoutMs: ROOT_OPERATION_TIMEOUT_MS,
-          mode: 'root-operation'
-        })
+        await this.withServiceRepair(id, () =>
+          this.send(id, data, {
+            timeoutMs: ROOT_OPERATION_TIMEOUT_MS,
+            mode: 'root-operation'
+          })
+        )
       )
-    const output = await this.ssh.execute(
-      id,
-      remoteServiceCommand(await remoteShell(this.ssh, id), ['root-operation']),
-      `${data}\n`,
-      150_000,
-      undefined,
-      true,
-      ROOT_OPERATION_LIMIT_BYTES
+    // The command is built once, before any repair runs: a second attempt must
+    // repeat the same call, never re-resolve the shell in the middle of it.
+    const command = remoteServiceCommand(await remoteShell(this.ssh, id), ['root-operation'])
+    const output = await this.withServiceRepair(id, () =>
+      this.ssh.execute(
+        id,
+        command,
+        `${data}\n`,
+        150_000,
+        undefined,
+        true,
+        ROOT_OPERATION_LIMIT_BYTES
+      )
     )
     return this.decode<unknown>(output)
   }
@@ -332,7 +339,20 @@ export class OvenService {
   private async request(id: string, input: Record<string, unknown>): Promise<string> {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
-    const first = await attempt(() => this.send(id, data))
+    return await this.withServiceRepair(id, () => this.send(id, data))
+  }
+
+  /**
+   * Run one Oven call, replacing the service first if it answers as an older one.
+   *
+   * File and Git actions used to bypass this, so an Oven still running an older
+   * bundle answered its file work with its own protocol error ("Oven protocol
+   * version mismatch") and the app reported that instead of updating the service
+   * it owns. Every call now goes through the same repair: a stale answer is
+   * replaced once, then the same call runs again.
+   */
+  private async withServiceRepair(id: string, run: () => Promise<string>): Promise<string> {
+    const first = await attempt(run)
     const fault = this.serviceFaultOf(first)
     if (!fault) {
       if (!first.ok) throw first.error
@@ -340,8 +360,12 @@ export class OvenService {
     }
     // The answer came from a service this app did not install, and this app owns
     // that file on the Oven. Replace it once, then send the same request again.
-    if (!(await this.refreshService(id, fault.message))) throw fault
-    const second = await attempt(() => this.send(id, data))
+    if (!(await this.refreshService(id, fault.message)))
+      throw new Error(
+        'This Oven runs an older service than this app. Finish its active runs, then install the service again from its settings.',
+        { cause: fault }
+      )
+    const second = await attempt(run)
     if (!second.ok) throw second.error
     return second.value
   }

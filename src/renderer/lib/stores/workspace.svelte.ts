@@ -20,6 +20,7 @@ import { relativeTimeClock } from '$lib/relative-time.svelte'
 import { threadMessages } from './thread-messages.svelte'
 import { scopeState } from './scope.svelte'
 import { invoke } from '$lib/ipc.svelte'
+import { prewarmThreadOven } from '$lib/ovens/oven-prewarm'
 import { recentVisits, threadVisitKey } from './recent-visits.svelte'
 import type { WorkspaceTourView } from '$lib/guide/guide-stops'
 
@@ -262,6 +263,10 @@ class WorkspaceState {
     // is measured against this moment instead of the last shared tick.
     relativeTimeClock.refresh()
     this.selectedThread = thread
+    // A thread attached to an Oven opens that Oven's session now, before the
+    // user touches anything: the file tree, Git status and composer all read
+    // through it on mount.
+    prewarmThreadOven(thread)
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
     this.rememberContentViewThread(thread)

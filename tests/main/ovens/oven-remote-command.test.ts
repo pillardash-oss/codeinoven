@@ -82,9 +82,28 @@ describe('oven remote commands', () => {
     expect(remoteArgvCommand('posix', ['apt-get', 'update'], { elevated: true })).toContain(
       "'sudo' '-n' 'apt-get'"
     )
+    // Windows runs structured argv through cmd.exe: PowerShell prefers the
+    // `.ps1` beside an npm binary and the default ExecutionPolicy refuses it, so
+    // a harness update failed for a shim the user's own shell could run.
     expect(decode(remoteArgvCommand('powershell', ['winget', 'install', "O'Brien"]))).toBe(
-      "& 'winget' 'install' 'O''Brien'"
+      "& cmd /d /s /c 'winget install O''Brien'"
     )
+    expect(decode(remoteArgvCommand('cmd', ['opencode', 'upgrade']))).toBe(
+      "& cmd /d /s /c 'opencode upgrade'"
+    )
+    expect(decode(remoteArgvCommand('cmd', ['winget', 'install', '--id', 'Git.Git']))).toBe(
+      "& cmd /d /s /c 'winget install --id Git.Git'"
+    )
+  })
+
+  it('refuses an argument a cmd.exe command line would reinterpret', () => {
+    // cmd would expand or split on these, so the call reports the bad argument
+    // instead of running something else than what was asked.
+    expect(() => remoteArgvCommand('cmd', ['opencode', 'a&calc'])).toThrow('Invalid remote')
+    expect(() => remoteArgvCommand('powershell', ['npm', 'install', '%PATH%'])).toThrow(
+      'Invalid remote'
+    )
+    expect(() => remoteArgvCommand('cmd', ['node', 'a>b'])).toThrow('Invalid remote')
   })
 
   it('quotes PowerShell literals with doubled single quotes', () => {

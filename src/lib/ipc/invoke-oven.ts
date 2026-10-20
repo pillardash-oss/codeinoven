@@ -55,6 +55,14 @@ export const invokeOvenContract = {
   'oven:probe': {} as Contract<[id: string, refresh?: boolean], OvenProbe>,
   /** The unified, cached check for one Oven: device, harnesses, and packages. */
   'oven:peek': {} as Contract<[id: string, refresh?: boolean], OvenPeek>,
+  /**
+   * Start one Oven's long-lived session before anything needs it.
+   *
+   * Opening a thread that is attached to an Oven sends this, so the first file
+   * tree, Git status, or prompt costs a round trip instead of a remote process
+   * start. It answers immediately: the session keeps opening in the background.
+   */
+  'oven:warm': {} as Contract<[id: string], void>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,
   'oven:workspace': {} as Contract<[id: string, input: OvenWorkspaceRequest], OvenWorkspaceResult>,
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,
