@@ -16,7 +16,7 @@ import {
 } from 'node:fs/promises'
 import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } from 'node:os'
 import { join, isAbsolute } from 'node:path'
-import { launchSpec } from './oven-windows-command'
+import { harnessLaunchSpec, launchSpec } from './oven-windows-command'
 import { constants } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
@@ -670,7 +670,7 @@ async function start(raw: unknown): Promise<OvenRun> {
       : (value.args as string[])
     const spec = resolved.distribution
       ? { command: resolved.program, args: spawnArgs, verbatimArguments: false }
-      : launchSpec(resolved.program, spawnArgs)
+      : await harnessLaunchSpec(resolved.program, spawnArgs)
     const child = spawn(spec.command, spec.args, {
       cwd: run.cwd,
       env,
