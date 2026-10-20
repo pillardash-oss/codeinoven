@@ -100,6 +100,10 @@ function remoteCommandIssue(stderr: string): string {
     return `The Oven runs Node.js ${nodeVersion[1]}, but version 22 or later is required. Install or select a newer Node.js on the Oven, then retry this step.`
   if (/Node\.js 22 or later is required on this Oven/u.test(stderr))
     return 'Node.js was not found on the Oven\u2019s non-interactive SSH PATH. Confirm Node.js 22 or later is installed and reachable there, then retry this step.'
+  // A Windows request runs through cmd.exe, which reports a missing runtime this
+  // way instead of with the POSIX shell's "command not found".
+  if (/is not recognized as an internal or external command/iu.test(stderr))
+    return 'Node.js was not found on the Oven\u2019s non-interactive SSH PATH. Confirm Node.js 22 or later is installed and reachable there, then retry this step.'
   if (isMissingService(stderr))
     return "The Oven's CodeInOven service file is missing, so no request can run. Reinstalling it repairs this Oven."
   if (/npm (?:ERR!|error).*EACCES/iu.test(stderr))

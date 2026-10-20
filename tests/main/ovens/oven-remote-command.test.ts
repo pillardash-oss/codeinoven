@@ -33,19 +33,21 @@ describe('oven remote commands', () => {
     expect(command).toContain("CODEINOVEN_OVEN_REVISION='abc' node ")
   })
 
-  it('envelopes every Windows command as encoded PowerShell', () => {
+  it('keeps the Windows service request out of PowerShell', () => {
+    // PowerShell startup dominated every request on a Windows Oven, and every
+    // screen made several of them; the request runs through cmd.exe instead.
     for (const shell of ['cmd', 'powershell'] as const) {
-      expect(remoteServiceCommand(shell, ['request'])).toMatch(
-        /^powershell -NoProfile -NonInteractive -EncodedCommand [A-Za-z0-9+/=]+$/u
+      expect(remoteServiceCommand(shell, ['request'])).toBe(
+        'cmd /d /s /c node "%USERPROFILE%\\.config\\pillardash\\codeinoven\\ovens\\service.mjs" request'
       )
     }
   })
 
   it('forwards stdin into the Windows service process', () => {
-    const script = decode(remoteServiceCommand('cmd', ['request']))
-    expect(script).toContain("Join-Path $env:USERPROFILE '.config\\pillardash\\codeinoven\\ovens'")
-    expect(script).toContain("$data | & node $service 'request'")
-    expect(script).toContain('exit $LASTEXITCODE')
+    const command = remoteServiceCommand('cmd', ['request'])
+    // Nothing reads stdin on the way: ssh hands it straight to node.
+    expect(command).not.toContain('OpenStandardInput')
+    expect(command.startsWith('cmd /d /s /c node ')).toBe(true)
   })
 
   it('verifies the bundle revision before installing on POSIX', () => {
@@ -145,13 +147,14 @@ describe('oven remote commands', () => {
     expect(decode(command)).toContain('& { echo hi }')
   })
 
-  it('joins the Windows service root once, not twice', () => {
-    // `Join-Path Join-Path ...` is not valid PowerShell: it failed every Windows
-    // request with "A positional parameter cannot be found".
-    const script = decode(remoteServiceCommand('cmd', ['request']))
-    expect(script).toContain('$root = (Join-Path $env:USERPROFILE ')
-    expect(script).toContain("$service = Join-Path $root 'service.mjs'")
-    expect(script).not.toContain('Join-Path Join-Path')
+  it('names the Windows service root once', () => {
+    // It used to be composed by `Join-Path` in PowerShell, where nesting produced
+    // `Join-Path Join-Path ...` and failed every Windows request. The cmd line
+    // expands `%USERPROFILE%` itself, so the path is spelled once.
+    const command = remoteServiceCommand('cmd', ['request'])
+    expect(command).not.toContain('Join-Path')
+    expect(command.match(/service\.mjs/gu)?.length).toBe(1)
+    expect(command).toContain('%USERPROFILE%')
   })
 
   it('carries a Windows install through Node, not a PowerShell stdin read', () => {

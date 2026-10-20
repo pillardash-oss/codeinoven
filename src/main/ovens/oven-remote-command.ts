@@ -25,6 +25,15 @@ const POSIX_SERVICE = `"$HOME/${OVEN_DATA_DIRECTORY}/service.mjs"`
 const WINDOWS_ROOT_SEGMENT = OVEN_DATA_DIRECTORY.split('/').join('\\')
 
 /**
+ * The service file as `cmd.exe` expands it.
+ *
+ * Written with `%USERPROFILE%` rather than a resolved path so the command line
+ * works whether the SSH shell is cmd or PowerShell: cmd expands the variable, and
+ * PowerShell passes the literal through to the cmd.exe this command runs in.
+ */
+const WINDOWS_SERVICE = `"%USERPROFILE%\\${WINDOWS_ROOT_SEGMENT}\\service.mjs"`
+
+/**
  * The Node runtime check every POSIX runtime command starts from.
  *
  * The managed npm prefix is on PATH first, so a harness-bootstrapped Node is
@@ -68,8 +77,15 @@ function posixEnvironment(environment: Record<string, string>): string {
 /**
  * Run the Oven service with one request payload on stdin.
  *
- * POSIX pipes SSH stdin straight into `node`; Windows reads the same stdin inside
- * PowerShell and forwards it, so the JSON framing is identical on both.
+ * POSIX pipes SSH stdin straight into `node`.
+ *
+ * Windows goes through `cmd.exe` instead of PowerShell, and that choice is the
+ * difference between an Oven that feels instant and one that does not: every
+ * request used to start Windows PowerShell first, which costs well over a second
+ * on a virtual machine before `node` even runs. One file-tree read, one probe and
+ * one run poll each paid that price, and they are serialized per Oven, so the app
+ * felt slow on every screen. `cmd.exe /d /s /c` is already present, starts in
+ * milliseconds, and hands stdin to `node` unchanged.
  */
 export function remoteServiceCommand(
   shell: RemoteShell,
@@ -81,21 +97,24 @@ export function remoteServiceCommand(
     const prefix = posixEnvironment(environment)
     return `${POSIX_NODE_CHECK}; ${prefix}node ${POSIX_SERVICE} ${args.map(sshQuote).join(' ')}`
   }
-  // The root is joined once into a variable: composing `Join-Path` calls inline
-  // produced `Join-Path Join-Path $env:USERPROFILE ...`, which PowerShell rejects
-  // with "A positional parameter cannot be found", failing every Windows request.
-  const windowsRoot = `(Join-Path $env:USERPROFILE ${powershellLiteral(WINDOWS_ROOT_SEGMENT)})`
-  const script = [
-    `$root = ${windowsRoot}`,
-    `$service = Join-Path $root 'service.mjs'`,
-    `if (-not (Get-Command node -ErrorAction SilentlyContinue)) { [Console]::Error.WriteLine('Node.js 22 or later is required on this Oven (node was not found)'); exit 1 }`,
-    ...environmentAssignments(environment),
-    `$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), [System.Text.Encoding]::UTF8)`,
-    `$data = $reader.ReadToEnd()`,
-    `$data | & node $service ${args.map(powershellLiteral).join(' ')}`,
-    `exit $LASTEXITCODE`
-  ].join('\n')
-  return windowsEncodedCommand(script)
+  const assignments = Object.entries(environment).map(([name, value]) => {
+    if (!isEnvironmentName(name) || value.includes('\0') || value.includes('"'))
+      throw new TypeError('Invalid remote environment assignment.')
+    return `set "${name}=${value}"`
+  })
+  const inner = [
+    ...assignments,
+    `node ${WINDOWS_SERVICE} ${args.map(cmdArgument).join(' ')}`.trim()
+  ].join(' && ')
+  // `&&` has to belong to the cmd.exe that runs the request, never to the SSH
+  // shell: PowerShell 5.1 rejects it outright. `/s` strips these outer quotes.
+  return assignments.length ? `cmd /d /s /c "${inner}"` : `cmd /d /s /c ${inner}`
+}
+
+/** One argument for a cmd.exe command line, quoted only when it needs it. */
+function cmdArgument(value: string): string {
+  if (!/\s/u.test(value)) return value
+  return `"${value}"`
 }
 
 /**
