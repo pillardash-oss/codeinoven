@@ -10,6 +10,15 @@ import type { OvenPeek } from '$shared/ovens'
  * component: a check that starts while the Ovens page is open still lands after
  * the user leaves it, and the next visit reads the cache and refreshes again.
  */
+/**
+ * The longest a surface shows progress for one read.
+ *
+ * Main answers a check within its own deadline, so this is the backstop for a
+ * bridge reply that never arrives at all: a badge that says "Checking…" forever
+ * tells the user nothing and blocks the actions next to it.
+ */
+const CHECK_DEADLINE_MS = 165_000
+
 class OvenPeekStore {
   #peeks = $state.raw<Record<string, OvenPeek>>({})
   #active = $state.raw<Record<string, boolean>>({})
@@ -59,6 +68,12 @@ class OvenPeekStore {
     })
     this.#running.set(ovenId, task)
     this.#setActive(ovenId, true)
+    const watchdog = setTimeout(() => {
+      if (this.#running.get(ovenId) !== task) return
+      this.#running.delete(ovenId)
+      this.#setActive(ovenId, false)
+    }, CHECK_DEADLINE_MS)
+    void task.finally(() => clearTimeout(watchdog))
     return task
   }
 

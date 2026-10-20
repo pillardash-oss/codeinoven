@@ -20,6 +20,16 @@ const CONCURRENCY = 5
 const PEEK_STORE_PATH = 'ovens/peeks.json'
 /** A peek this old is not a safe authorization for a mutating setup. */
 const SETUP_REUSE_MS = 5 * 60_000
+/**
+ * How long one Oven's check may run before it is reported as unfinished.
+ *
+ * The SSH layer bounds every command, but a check is a probe, a preflight read
+ * and a harness resolution, and it holds one of the five slots while it runs. A
+ * check that never finished used to hold its slot and leave every surface showing
+ * "Checking…" with nothing behind it, while direct requests to the same Oven kept
+ * working.
+ */
+const PEEK_DEADLINE_MS = 150_000
 
 interface StoredPeeks {
   version: 1
@@ -124,6 +134,37 @@ export class OvenPeekService {
   private async run(ovenId: string, refresh: boolean): Promise<OvenPeek> {
     await this.acquire()
     const started = Date.now()
+    let deadline: NodeJS.Timeout | undefined
+    try {
+      return await Promise.race([
+        this.inspect(ovenId, refresh, started),
+        new Promise<OvenPeek>((resolve) => {
+          deadline = setTimeout(() => resolve(this.unfinished(ovenId, started)), PEEK_DEADLINE_MS)
+        })
+      ])
+    } finally {
+      if (deadline) clearTimeout(deadline)
+      this.release()
+    }
+  }
+
+  /** The answer a check that ran past its deadline leaves behind. */
+  private unfinished(ovenId: string, started: number): OvenPeek {
+    const cached = this.cache.get(ovenId)
+    Logger.dev('Oven check did not finish in time', { ovenId, durationMs: Date.now() - started })
+    return {
+      ovenId,
+      checkedAt: Date.now(),
+      durationMs: Date.now() - started,
+      probe: null,
+      inventory: this.harness.cachedInventory(ovenId),
+      preflight: cached?.preflight ?? null,
+      error: 'The check did not finish. Press Check Oven to try again.',
+      stale: false
+    }
+  }
+
+  private async inspect(ovenId: string, refresh: boolean, started: number): Promise<OvenPeek> {
     try {
       // The service probe and the shell preflight are independent reads, so they
       // run together; each fails on its own without discarding the other.
@@ -173,7 +214,7 @@ export class OvenPeekService {
       })
       return peek
     } finally {
-      this.release()
+      // The slot is released by `run`, which owns the deadline too.
     }
   }
 
