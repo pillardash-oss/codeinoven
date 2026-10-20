@@ -141,10 +141,11 @@ export function inspectorInstallScript(key: string): string {
       '.cio-marked[data-active="1"]{outline:2px solid var(--cio-accent,#d4af37)}',
       '.cio-label{position:fixed;pointer-events:none;max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px 10px;background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:400 12px/1.33 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 12px 28px rgba(0,0,0,.22),0 2px 6px rgba(0,0,0,.14)}',
       '.cio-label .d{opacity:.66}',
-      '.cio-pin{position:fixed;pointer-events:auto;cursor:pointer;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--cio-foreground,#081825);background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:600 11px/1 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 2px 10px rgba(0,0,0,.28);transition:border-color .12s ease,color .12s ease}',
+      '.cio-pin{position:fixed;pointer-events:auto;cursor:grab;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 8px;border:1px solid var(--cio-foreground,#081825);background:var(--cio-surface,#ffffff);color:var(--cio-foreground,#081825);font:600 11px/1 var(--cio-font,ui-monospace,SFMono-Regular,Menlo,monospace);box-shadow:0 2px 10px rgba(0,0,0,.28);transition:border-color .12s ease,color .12s ease}',
       '.cio-pin svg{width:12px;height:12px;flex:none}',
       '.cio-pin[data-comment="1"]{border-color:var(--cio-accent,#d4af37);color:var(--cio-accent,#d4af37)}',
-      '.cio-pin[data-active="1"]{outline:2px solid var(--cio-accent,#d4af37);outline-offset:1px}'
+      '.cio-pin[data-active="1"]{outline:2px solid var(--cio-accent,#d4af37);outline-offset:1px}',
+      '.cio-pin[data-dragging="1"]{cursor:grabbing}'
     ].join('');
 
     const host = document.createElement('div');
@@ -381,11 +382,22 @@ export function inspectorInstallScript(key: string): string {
         // at the element and hidden once that part is off screen, rather than
         // being clamped to the viewport edge for something the reader cannot
         // see. Sticky header offsets are left alone, because a pin that follows
-        // its element is the point.
+        // its element is the point, and the reader's own drag is added to that
+        // place rather than replacing it, so a pin follows its element until it
+        // is dragged somewhere and stays there after that.
         if (shown) {
+          const maxLeft = Math.max(2, innerWidth - 52);
+          const maxTop = Math.max(2, innerHeight - 26);
+          // A drag is kept inside the viewport by folding the clamp back into the
+          // offset, so letting go at an edge leaves the pin where it was dropped
+          // and dragging back answers at once instead of undoing an overshoot.
+          marker.offset = {
+            x: clamp(rect.x + marker.offset.x, 2, maxLeft) - rect.x,
+            y: clamp(rect.y - 26 + marker.offset.y, 2, maxTop) - (rect.y - 26)
+          };
           marker.pin.style.display = 'inline-flex';
-          marker.pin.style.left = clamp(rect.x, 2, Math.max(2, innerWidth - 52)) + 'px';
-          marker.pin.style.top = clamp(rect.y - 26, 2, Math.max(2, innerHeight - 26)) + 'px';
+          marker.pin.style.left = rect.x + marker.offset.x + 'px';
+          marker.pin.style.top = rect.y - 26 + marker.offset.y + 'px';
         } else {
           marker.pin.style.display = 'none';
         }
@@ -587,10 +599,71 @@ export function inspectorInstallScript(key: string): string {
     function renderPin(marker) {
       const hasComment = Boolean(marker.comment);
       marker.pin.setAttribute('data-comment', hasComment ? '1' : '0');
-      marker.pin.title = hasComment ? 'Edit comment on ' + marker.label : 'Comment on ' + marker.label;
+      marker.pin.title = hasComment
+        ? 'Comment on ' + marker.label + '. Drag to move it, click to edit the comment.'
+        : 'Comment on ' + marker.label + '. Drag to move it, click to write a comment.';
+      marker.pin.setAttribute('aria-label', marker.pin.title);
       marker.pinLabel.textContent = String(marker.number);
     }
 
+
+    /**
+     * Let the reader drag a pin away from the corner it is drawn on.
+     *
+     * A pin sits on its element's top-left corner, which is often exactly what the
+     * reader is trying to read, so moving it is how a comment stays reachable
+     * without covering the work. One press serves both gestures: a press that
+     * travels moves the pin, a press that does not is a click that opens its
+     * comment, and the distance between them is what tells the two apart.
+     */
+    function attachPinDrag(marker, pin) {
+      const DRAG_THRESHOLD = 3;
+      let drag = null;
+
+      function endDrag(event) {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const moved = drag.moved;
+        drag = null;
+        pin.removeAttribute('data-dragging');
+        if (pin.hasPointerCapture(event.pointerId)) pin.releasePointerCapture(event.pointerId);
+        // The click the browser sends on release belongs to the drag, so it is
+        // swallowed once. The next press clears the flag, which means a real
+        // click always works even when a dragged pin never produced a click.
+        if (moved) marker.dragged = true;
+      }
+
+      pin.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || !event.isPrimary) return;
+        event.preventDefault();
+        event.stopPropagation();
+        marker.dragged = false;
+        drag = {
+          pointerId: event.pointerId,
+          startX: event.screenX,
+          startY: event.screenY,
+          originX: marker.offset.x,
+          originY: marker.offset.y,
+          moved: false
+        };
+        pin.setPointerCapture(event.pointerId);
+        pin.setAttribute('data-dragging', '1');
+      });
+
+      pin.addEventListener('pointermove', (event) => {
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        const dx = event.screenX - drag.startX;
+        const dy = event.screenY - drag.startY;
+        if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+        drag.moved = true;
+        marker.offset = { x: drag.originX + dx, y: drag.originY + dy };
+        layout();
+        event.preventDefault();
+      });
+
+      pin.addEventListener('pointerup', endDrag);
+      pin.addEventListener('pointercancel', endDrag);
+      pin.addEventListener('lostpointercapture', endDrag);
+    }
 
     function addMarker(input, element, selector) {
       let marker = state.markers.get(input.id);
@@ -614,14 +687,24 @@ export function inspectorInstallScript(key: string): string {
           label: (element && shortName(element)) || 'element',
           element: element || null,
           selector: selector || '',
+          /** Where the reader dragged this pin, relative to the element. */
+          offset: { x: 0, y: 0 },
           box: box,
           pin: pin,
           pinLabel: pinLabel
         };
+        attachPinDrag(marker, pin);
         pin.addEventListener('click', (event) => {
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
+          // A drag that ended on this pin is not a click: it moved the pin, and
+          // opening the comment on top of that would undo what the reader just
+          // did. The press itself already reported the drag.
+          if (marker.dragged) {
+            marker.dragged = false;
+            return;
+          }
           // The app owns the bubble, so a pin click tells it which element the
           // reader asked about, and where that element is, and the app opens
           // that comment next to it.
