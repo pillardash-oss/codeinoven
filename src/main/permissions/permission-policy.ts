@@ -326,7 +326,6 @@ export class PermissionPolicy {
         isSafeAutoPermission(permission) &&
         paths.length > 0 &&
         paths.every((path) => {
-          if (hasTraversal(path)) return false
           const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
           return this.isAllowedPath(resolvedPath)
         })
@@ -474,15 +473,16 @@ export class PermissionPolicy {
 
   private getAutoReviewPathReason(paths: readonly string[]): string | undefined {
     for (const path of paths) {
-      if (hasTraversal(path)) {
-        return `Path traversal is not permitted: ${path}`
-      }
-
       const resolvedPath = isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
 
-      // Files the user explicitly attached are always in scope.
+      // Match the normalized user-supplied input before rejecting traversal:
+      // a supplied ../reference.png is as authorized as its absolute path.
       if (this.isAllowedPath(resolvedPath)) {
         continue
+      }
+
+      if (hasTraversal(path)) {
+        return `Path traversal is not permitted: ${path}`
       }
 
       // File-System-OFF chats are restricted to the provided attachments.

@@ -8,7 +8,7 @@ import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
 import { homedir } from 'os'
-import { fileURLToPath } from 'url'
+import { userSuppliedPaths } from './user-supplied-paths'
 import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
@@ -27253,8 +27253,9 @@ export class ChatEngine {
    * file operations inside it never prompt, regardless of permission level or
    * File System mode.
    *
-   * Chats (inbox threads) additionally get a read allowlist containing every
-   * user attachment plus the shared and active-harness skill roots. When File
+   * All threads retain an allowlist of user-supplied attachments and local
+   * paths, including inputs outside the project. Inbox threads additionally
+   * get the shared and active-harness skill roots. When File
    * System mode is off, safe read/list/search operations are restricted to
    * those paths. Skill access never grants writes or shell commands.
    * File-System-on chats keep the normal project-root + protected-path rules
@@ -27291,30 +27292,26 @@ export class ChatEngine {
     if (!isChat && !isAssistant) {
       scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
     }
+    // Reuse the allowlist until a user message invalidates it; permission
+    // requests must not rescan the conversation for every file operation.
+    const cached = this.chatAttachmentAllowlists.get(info.threadId)
+    const attachmentPaths = cached ?? (await this.collectChatAttachmentPaths(info))
+    if (cached === undefined) this.chatAttachmentAllowlists.set(info.threadId, attachmentPaths)
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)
         : []
-      return { allowedPaths: skillPaths, scratchPaths, restrictToAllowed: false }
+      return {
+        allowedPaths: [...attachmentPaths, ...skillPaths],
+        scratchPaths,
+        restrictToAllowed: false
+      }
     }
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
-    // Read the cached allowlist when present; otherwise build it once from the
-    // message records and memoize it. New user messages invalidate the entry, so
-    // this stays correct without re-scanning on every permission request.
-    const cached = this.chatAttachmentAllowlists.get(info.threadId)
-    if (cached === undefined) {
-      const attachmentPaths = await this.collectChatAttachmentPaths(info)
-      this.chatAttachmentAllowlists.set(info.threadId, attachmentPaths)
-      return {
-        allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
-        scratchPaths,
-        restrictToAllowed: !fileSystemMode
-      }
-    }
     return {
-      allowedPaths: [...cached, ...chatSkillPaths(info.driverId)],
+      allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
       scratchPaths,
       restrictToAllowed: !fileSystemMode
     }
@@ -27335,16 +27332,16 @@ export class ChatEngine {
     return undefined
   }
 
-  /** Absolute local paths of every file the user attached to a chat thread. */
+  /** Local inputs explicitly supplied by the user, never paths from agent output. */
   private async collectChatAttachmentPaths(info: SessionInfo): Promise<string[]> {
     const records = await this.threadManager.loadMessageRecords(info.projectId, info.threadId)
     const paths = new Set<string>()
-    for (const message of records) {
-      for (const part of message.parts) {
-        if (part.type !== 'file' || !part.url) continue
-        const raw = part.url.startsWith('file:') ? fileURLToPath(part.url) : part.url
-        paths.add(isAbsolute(raw) ? raw : resolve(info.projectPath, raw))
-      }
+    for (let index = 0; index < records.length; index++) {
+      // Long project transcripts must yield rather than monopolize the main process.
+      if (index > 0 && index % 64 === 0) await new Promise<void>((done) => setImmediate(done))
+      const message = records[index]
+      if (message.role !== 'user' || message.origin === 'orchestrator') continue
+      for (const path of userSuppliedPaths(message.parts, info.projectPath)) paths.add(path)
     }
     return [...paths]
   }
