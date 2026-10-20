@@ -166,14 +166,36 @@ export class OvenPeekService {
 
   private async inspect(ovenId: string, refresh: boolean, started: number): Promise<OvenPeek> {
     try {
-      // The service probe and the shell preflight are independent reads, so they
-      // run together; each fails on its own without discarding the other.
-      const [probeOutcome, preflightOutcome] = await Promise.allSettled([
-        this.service.probe(ovenId, refresh),
-        this.preflight(ovenId)
-      ])
-      const probe = probeOutcome.status === 'fulfilled' ? probeOutcome.value : null
-      const report = preflightOutcome.status === 'fulfilled' ? preflightOutcome.value : null
+      // Both reads start together, but only the probe decides the answer. The
+      // package read is the slow half (WMI on Windows costs tens of seconds), and
+      // waiting for it is what kept a connected Oven on "Checking…"; it fills the
+      // cache the moment it lands instead.
+      const probeTask = this.service.probe(ovenId, refresh)
+      const preflightTask = this.preflight(ovenId)
+      const probeOutcome = await probeTask.then(
+        (value) => ({ ok: true as const, value }),
+        (reason: unknown) => ({ ok: false as const, reason })
+      )
+      const probe = probeOutcome.ok ? probeOutcome.value : null
+      const cachedPreflight = this.cache.get(ovenId)?.preflight ?? null
+      const report: OvenPreflightReport | null = cachedPreflight?.report ?? null
+      void preflightTask.then(
+        (value) => {
+          const current = this.cache.get(ovenId)
+          if (!current) return
+          const filled: OvenPeek = {
+            ...current,
+            preflight: { report: value, assessment: assessPreflight(value) }
+          }
+          this.cache.set(ovenId, filled)
+          if (filled.probe) void this.persist(ovenId, filled)
+        },
+        (reason: unknown) =>
+          Logger.dev('Oven package check did not complete', {
+            ovenId,
+            error: messageOf(reason)
+          })
+      )
       let inventory: OvenHarnessInventoryItem[] = this.harness.cachedInventory(ovenId)
       if (probe) {
         try {
@@ -185,12 +207,7 @@ export class OvenPeekService {
           })
         }
       }
-      const error =
-        probeOutcome.status === 'rejected'
-          ? messageOf(probeOutcome.reason)
-          : preflightOutcome.status === 'rejected'
-            ? `The package check did not complete: ${messageOf(preflightOutcome.reason)}`
-            : undefined
+      const error = probeOutcome.ok ? undefined : messageOf(probeOutcome.reason)
       const peek: OvenPeek = {
         ovenId,
         checkedAt: Date.now(),
