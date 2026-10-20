@@ -157,12 +157,13 @@ export class SearchService {
       this.host.subscribeCorpus?.({
         updated: (thread) => this.updateCorpusThread(thread),
         deleted: (thread) => this.removeCorpusThread(thread.id),
-        draftUpdated: (projectId, threadId, drafting) => {
-          if (drafting) this.removeCorpusThread(threadId)
-          else
-            void this.reloadCorpusThread(projectId, threadId).catch((error) => {
-              Logger.error('Search corpus draft update failed:', error)
-            })
+        // A composer draft never changes what a thread means, so it never
+        // changes corpus membership either. The flag is only refreshed here so
+        // membership follows the thread row, not the keystrokes in it.
+        draftUpdated: (projectId, threadId) => {
+          void this.reloadCorpusThread(projectId, threadId).catch((error) => {
+            Logger.error('Search corpus draft update failed:', error)
+          })
         }
       }) ?? null
     await this.storage.initialize()
@@ -210,7 +211,11 @@ export class SearchService {
   private updateCorpusThread(thread: Thread): void {
     const previousStatus = this.threadStatuses.get(thread.id)
     this.threadStatuses.set(thread.id, thread.status)
-    if (thread.drafting || thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+    // `drafting` means the composer holds unsent text, not that the thread is an
+    // unfinished draft: an old conversation with a saved draft is still a
+    // conversation, and dropping it made it unfindable by meaning until the
+    // draft was cleared. Only the browser project stays out of the corpus.
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       this.removeCorpusThread(thread.id)
       return
     }
@@ -344,7 +349,7 @@ export class SearchService {
 
   private async reloadCorpusThread(projectId: string, id: string): Promise<void> {
     const result = await this.db.queryViaWorker(
-      'SELECT title, last_activity, updated_at FROM threads WHERE id = ? AND project_id = ? AND drafting = 0',
+      'SELECT title, last_activity, updated_at FROM threads WHERE id = ? AND project_id = ?',
       [id, projectId],
       1
     )

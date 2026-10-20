@@ -369,6 +369,16 @@ export class ThreadEmbeddingIndex {
       return false
     }
     const plan = await this.summaries.plan(candidate, options.signal)
+    if (plan.total === 0) {
+      // Nothing to describe yet: a thread whose conversation has no indexed text
+      // is not searchable by meaning, and a vector of the empty document would
+      // only add noise to every result. Membership is re-established by the next
+      // corpus update, which is the moment the thread gains a message.
+      this.records.delete(candidate.id)
+      this.pendingIds.delete(candidate.id)
+      this.candidates.delete(candidate.id)
+      return false
+    }
     const count = threadWindowCount(plan.total, options.windowChars, options.maxWindows)
     const existing = this.records.get(candidate.id)
     const windows: (ThreadEmbeddingWindow | undefined)[] = new Array(count)
@@ -433,10 +443,15 @@ export class ThreadEmbeddingIndex {
     let cursor = ''
     while (true) {
       const result = await this.db.queryViaWorker(
-        `SELECT id, project_id, title,
-            MAX(COALESCE(last_activity, 0), COALESCE(updated_at, 0)) AS stamp
-          FROM threads WHERE drafting = 0 AND project_id != ? AND id > ?
-          ORDER BY id LIMIT ?`,
+        `SELECT t.id, t.project_id, t.title,
+            MAX(COALESCE(t.last_activity, 0), COALESCE(t.updated_at, 0)) AS stamp
+          FROM threads t WHERE t.project_id != ? AND t.id > ?
+            AND EXISTS (
+              SELECT 1 FROM agent_messages m
+               WHERE m.thread_id = t.id AND m.visibility = 'conversation'
+                 AND m.session_id IS NULL AND m.search_text != ''
+            )
+          ORDER BY t.id LIMIT ?`,
         [GLOBAL_BROWSER_PROJECT_ID, cursor, CATALOG_PAGE_SIZE],
         CATALOG_PAGE_SIZE
       )
