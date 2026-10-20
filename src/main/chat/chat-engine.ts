@@ -169,6 +169,7 @@ import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-
 import type { ConnectivitySource } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
+import { instanceEventBus } from '../system/instance-event-bus'
 import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
@@ -2279,6 +2280,14 @@ export class ChatEngine {
   }
 
   register(): void {
+    // The cross-instance bus ships render-only stream events to sibling
+    // instances. Resolving the conversation here is what lets a sibling window
+    // bind a session it has never seen and render the turn from its first frame
+    // instead of waiting for the shared row to catch up.
+    instanceEventBus.setSessionOwnerResolver((sessionId) => {
+      const info = this.sessionRegistry.get(sessionId)
+      return info ? { projectId: info.projectId, threadId: info.threadId } : null
+    })
     ipcMain.handle(
       'harnessRuntime:restart',
       (_, harnessId: unknown, options?: { force?: boolean }) =>

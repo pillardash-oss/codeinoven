@@ -38,6 +38,7 @@ import {
   setPowerWakeService
 } from '../chat/thread-events'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
+import { instanceEventBus } from '../system/instance-event-bus'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -856,6 +857,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.foreignRuns = new ForeignRunService(database)
   state.foreignRuns.registerIpc()
   state.foreignRuns.start()
+  // The cross-instance stream bus: it serves this process and dials its live
+  // peers so a sibling window renders the same run this one renders. It arms its
+  // listener only while the registry proves another instance is running.
+  instanceEventBus.start()
   // Shared rows and transcripts a sibling writes into: the writer announces the
   // threads it touched, and this instance re-reads and pushes them.
   state.crossInstanceThreads = new CrossInstanceThreadService(database)

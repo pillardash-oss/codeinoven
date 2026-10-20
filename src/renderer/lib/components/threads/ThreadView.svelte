@@ -145,7 +145,7 @@
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import { getAgentIcon } from '$lib/agent-icons/registry'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { classifyProviderIssue, isUsageResetWaitIssue } from '$shared/provider-issue'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
@@ -328,7 +328,8 @@
     EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState,
     EngineeringLifecycleStage,
-    HarnessAccount
+    HarnessAccount,
+    RemoteAgentEventPayload
   } from '$shared/types'
   import {
     hasSelectedStage,
@@ -592,10 +593,12 @@
     const assistantId = reference.slice('assistant:'.length)
     const owned = assistantSpaceThreads.filter((entry) => entry.assistantId === assistantId)
     const setup = owned.find((entry) => entry.assistantGettingStarted)
-    const target = setup ?? owned.reduce<Thread | null>(
-      (newest, entry) => (!newest || entry.lastActivity > newest.lastActivity ? entry : newest),
-      null
-    )
+    const target =
+      setup ??
+      owned.reduce<Thread | null>(
+        (newest, entry) => (!newest || entry.lastActivity > newest.lastActivity ? entry : newest),
+        null
+      )
     if (target) onOpenAssistantThread(target)
   }
 
@@ -5264,6 +5267,7 @@
 
   let unsubscribe: (() => void) | null = null
   let unsubscribeThreadUpdated: (() => void) | null = null
+  let unsubscribeRemoteEvents: (() => void) | null = null
   let unsubscribeLifecycleInheritance: (() => void) | null = null
 
   /** Resolves as soon as the session id exists; transcript and attention
@@ -5495,6 +5499,26 @@
         scheduleIdleAttention()
       }
     })
+    // Another instance is running this thread's turn, so its stream arrives over
+    // the cross-instance bus instead of this process's event channel. The trace
+    // and the answer are shared on disk as well, so the boundary of that run is
+    // when this window must re-read both: the durable log holds the last entries
+    // and the mirror holds the answer row, and neither would be picked up once
+    // the stream stops.
+    unsubscribeRemoteEvents = subscribeGuarded(
+      'agent:remoteEvent',
+      (payload: RemoteAgentEventPayload) => {
+        if (payload.projectId !== thread.projectId || payload.threadId !== thread.id) return
+        const type = payload.event.type
+        if (type === 'message.completed') {
+          void refreshStreamTailAfterTurn()
+          return
+        }
+        if (type !== 'session.idle' && type !== 'session.error' && type !== 'thread.error') return
+        void refreshMessages()
+        void refreshStreamTailAfterTurn()
+      }
+    )
     // Task mount restores app-owned state only. Native harness transport stays
     // cold until user sends a message.
     // Warm cache: the bounded window is already in memory (hover preloads or a
@@ -5529,6 +5553,7 @@
       }
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
+      unsubscribeRemoteEvents?.()
       unsubscribeLifecycleInheritance?.()
       unsubscribeVoiceSend()
       window.removeEventListener('resize', onResize)
@@ -12841,6 +12866,29 @@
     streamTotalSteps = page.totalSteps
     if (streamParts.length === mountedBefore) streamHasOlder = false
   }
+
+  /** Thread whose foreign run this view marked working, so the same view clears
+   *  it and never clears a run this instance's own session owns. */
+  let foreignRunMarkedKey = ''
+  // A thread another instance is running is genuinely working, and this window
+  // has to know it: every live reader below (the durable trace poll, the trace
+  // itself, the elapsed timer) is gated on the run state, and this process
+  // receives none of the sibling's session events for it. The persisted
+  // `planning`/`executing` row is deliberately not trusted for this (it can be a
+  // leftover), but the foreign-run notice is proof the owner is alive and running
+  // that turn right now, which is exactly what the row cannot tell us.
+  $effect(() => {
+    const key = `${thread.projectId}:${thread.id}`
+    if (foreignRunActive) {
+      if (foreignRunMarkedKey === key) return
+      foreignRunMarkedKey = key
+      agentRuns.setBusy(thread.projectId, thread.id, true)
+      return
+    }
+    if (foreignRunMarkedKey !== key) return
+    foreignRunMarkedKey = ''
+    agentRuns.completeSession(thread.projectId, thread.id)
+  })
 
   // While a run is streaming on screen, re-read the durable SSE log every second
   // so the trace stays fresh even when live 'agent:event' broadcasts are not the

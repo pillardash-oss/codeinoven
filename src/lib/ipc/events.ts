@@ -95,6 +95,17 @@ export const IPC_EVENT_CONTRACT = {
   'agent:processesChanged': [] as unknown as [projectId: string, threadId: string],
   /** Live agent lifecycle/stream event broadcast to every window. */
   'agent:event': [] as unknown as [event: import('../types').AgentEvent],
+  /**
+   * A stream event another CodeInOven instance produced for a shared thread.
+   *
+   * The owning process forwards the observations of its run over the
+   * cross-instance bus, so a window here renders the same conversation the
+   * owning window renders instead of polling the shared durable log for it.
+   * Separate from `agent:event` on purpose: only the process that owns the
+   * harness process can act on a run, and every action wired to the local
+   * channel is therefore out of reach for this one.
+   */
+  'agent:remoteEvent': [] as unknown as [payload: import('../types').RemoteAgentEventPayload],
   'taskManager:processesChanged': [] as [],
   'agent:temporaryChatExpired': [] as unknown as [temporaryChatId: string],
   'thread:deleted': [] as unknown as [projectId: string, threadId: string],

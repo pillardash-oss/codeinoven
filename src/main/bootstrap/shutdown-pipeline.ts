@@ -20,6 +20,7 @@ import {
   setPowerWakeService
 } from '../chat/thread-events'
 import { instanceRegistry } from '../system/instance-registry'
+import { instanceEventBus } from '../system/instance-event-bus'
 import { Logger } from '../system/logger'
 import type { WindowStateService } from '../system/window-state'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -236,6 +237,11 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
 
   state.threadTransfer?.dispose()
   state.threadTransfer = null
+
+  // Close the cross-instance stream sockets and retire this process's endpoint
+  // before the registry entry disappears, so a sibling drops a peer it can no
+  // longer reach instead of writing into a closed socket.
+  instanceEventBus.stop()
 
   // Persist the final window geometry so the next launch restores size, position,
   // and maximized state exactly as the user left them.
