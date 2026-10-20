@@ -21,6 +21,7 @@ import {
 } from '$shared/types'
 import { normalizePlanDelivery, normalizePlanPriority } from '$shared/assistant-reporting'
 import type { ComposerAssistantTag } from '../chats/composer-mentions'
+import { assistantTagIconHtml } from './assistant-tag-badge'
 import {
   parseAssistantPlanJson,
   type AssistantPlan,
@@ -1333,6 +1334,8 @@ export interface AssistantTagCandidateInput {
   threads: readonly Thread[]
   /** The composer's own thread, which has nothing to tell itself. */
   excludeThreadId?: string
+  /** Stored icon images by assistant id, so a tag draws the assistant's own icon. */
+  assistantIcons?: ReadonlyMap<string, string>
 }
 
 /**
@@ -1351,7 +1354,8 @@ export interface AssistantTagCandidateInput {
 export function buildAssistantTagCandidates({
   assistants,
   threads,
-  excludeThreadId
+  excludeThreadId,
+  assistantIcons
 }: AssistantTagCandidateInput): ComposerAssistantTag[] {
   const assistantById = new Map(assistants.map((assistant) => [assistant.id, assistant]))
   const candidates: ComposerAssistantTag[] = []
@@ -1363,7 +1367,7 @@ export function buildAssistantTagCandidates({
       id: assistant.id,
       name: assistant.name,
       detail: threadCount === 1 ? 'Assistant · 1 thread' : `Assistant · ${threadCount} threads`,
-      mark: 'mark',
+      iconHtml: assistantTagIconHtml(assistant, assistantIcons?.get(assistant.id)),
       keywords: ['assistant', 'assistants']
     })
   }
@@ -1382,7 +1386,9 @@ export function buildAssistantTagCandidates({
       id: thread.id,
       name: thread.title.trim() || 'Untitled thread',
       detail: assistant ? `${kindLabel} · ${assistant.name}` : kindLabel,
-      mark: thread.assistantTaskId ? 'run' : isAssistantSetupThread(thread) ? 'knowledge' : 'task',
+      // A thread is identified by the assistant it belongs to, not by the work
+      // item: an assistant-less task has no icon of its own to draw.
+      iconHtml: assistantTagIconHtml(assistant ?? {}, assistantIcons?.get(assistant?.id ?? '')),
       run: thread.assistantTaskId !== undefined,
       keywords: [
         'thread',

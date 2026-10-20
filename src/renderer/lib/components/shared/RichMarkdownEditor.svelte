@@ -65,6 +65,13 @@
     onSubmit?: (direct?: boolean) => void
     onPaste?: (event: ClipboardEvent) => void
     inlineBadges?: readonly RichInlineBadge[]
+    /**
+     * Fired when an inline badge is clicked. A badge is a reference, so a host
+     * that can open what it names (an assistant tag names a thread) returns `true`
+     * from here and owns the click; a host that returns nothing leaves it a
+     * plain caret move.
+     */
+    onInlineBadgeActivate?: (value: string) => boolean
     onCaretTextChange?: (textBeforeCaret: string, supportsCommands: boolean) => void
     onHistoryControllerChange?: (controller: HistoryController | null) => void
     onHistoryStateChange?: (state: HistoryState) => void
@@ -84,6 +91,7 @@
     onSubmit,
     onPaste,
     inlineBadges = [],
+    onInlineBadgeActivate,
     onCaretTextChange,
     onHistoryControllerChange,
     onHistoryStateChange
@@ -786,6 +794,13 @@
     }
     // Links render for recognition but must never navigate while editing.
     if (target?.closest('a[data-editor-link]')) {
+      event.preventDefault()
+      publishCaretText()
+      return
+    }
+    const badge = target?.closest<HTMLElement>('[data-editor-inline-badge]')
+    const badgeValue = badge?.dataset.editorValue
+    if (badgeValue !== undefined && onInlineBadgeActivate?.(badgeValue) === true) {
       event.preventDefault()
       publishCaretText()
       return

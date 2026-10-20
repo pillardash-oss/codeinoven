@@ -6,7 +6,7 @@ import {
   type ComposerAssistantTag,
   type ComposerBuiltInTag
 } from '../chats/composer-mentions'
-import { assistantTagBadgeSvg } from '$lib/components/assistant/assistant-tag-badge'
+import { assistantTagIconHtml } from '$lib/components/assistant/assistant-tag-badge'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -163,17 +163,19 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
 }
 
 function inlineAssistantTagChipHtml(tag: ComposerAssistantTag, title: string): string {
-  const safeTitle = escapeHtmlForChip(`${tag.detail}: ${title}`)
-  // The same mark the composer badge wears, so a tagged thread reads the same
-  // before the send and after it.
-  const icon = assistantTagBadgeSvg(tag.mark)
-  return `<span class="inline-flex max-w-full items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(tag.id)}">${icon}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
+  const safeTitle = escapeHtmlForChip(`Open ${tag.detail}: ${title}`)
+  // The same assistant icon the composer badge wears, so a tagged thread reads
+  // the same before the send and after it. The chip is a control: it carries the
+  // tag it names, and the conversation opens that thread from it.
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(`${tag.kind}:${tag.id}`)}">${tag.iconHtml}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
 }
 
 /** The assistant-space names a sent tag can render with. */
 export interface AssistantTagLookup {
   threads: readonly Thread[]
   assistants: readonly Assistant[]
+  /** Stored icon images by assistant id, so a chip draws the assistant's own icon. */
+  assistantIcons?: ReadonlyMap<string, string>
 }
 
 /**
@@ -189,6 +191,7 @@ function assistantTagChips(
   lookup: AssistantTagLookup
 ): Array<{ token: string; html: string }> {
   const chips: Array<{ token: string; html: string }> = []
+  const assistantById = new Map(lookup.assistants.map((assistant) => [assistant.id, assistant]))
   for (const thread of lookup.threads) {
     const token = composerAssistantTagToken({ kind: 'thread', id: thread.id })
     if (!text.includes(token)) continue
@@ -202,7 +205,10 @@ function assistantTagChips(
         : thread.assistantGettingStarted
           ? 'Getting started'
           : 'Assistant task',
-      mark: thread.assistantTaskId ? 'run' : thread.assistantGettingStarted ? 'knowledge' : 'task',
+      iconHtml: assistantTagIconHtml(
+        (thread.assistantId ? assistantById.get(thread.assistantId) : undefined) ?? {},
+        thread.assistantId ? lookup.assistantIcons?.get(thread.assistantId) : undefined
+      ),
       keywords: []
     }
     chips.push({ token, html: inlineAssistantTagChipHtml(tag, title) })
@@ -215,7 +221,7 @@ function assistantTagChips(
       id: assistant.id,
       name: assistant.name,
       detail: 'Assistant',
-      mark: 'mark',
+      iconHtml: assistantTagIconHtml(assistant, lookup.assistantIcons?.get(assistant.id)),
       keywords: []
     }
     chips.push({ token, html: inlineAssistantTagChipHtml(tag, assistant.name) })

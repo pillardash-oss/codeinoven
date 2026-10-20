@@ -26,7 +26,6 @@
   import { applyModelProfile } from '$shared/model-profiles'
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
-  import { assistantTagBadgeSvg } from '../assistant/assistant-tag-badge'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { fileUrlToPath, mimeFromPath, pathToFileUrl, attachmentPreviewKind } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
@@ -184,6 +183,11 @@
      * only offers them where the Assistant tab is open.
      */
     assistantTags?: readonly ComposerAssistantTag[]
+    /**
+     * Opens the assistant thread a tag names. A tag in the draft is a link to
+     * that thread, so clicking its badge opens it.
+     */
+    onOpenAssistantTag?: (tag: ComposerAssistantTag) => void
     /** Restart-safe draft restored by the owning thread/view. */
     initialValue?: string
     onValueChange?: (value: string) => void
@@ -332,6 +336,7 @@
     assignmentId,
     assignmentTasks = [],
     assistantTags = [],
+    onOpenAssistantTag,
     initialValue = '',
     onValueChange,
     initialAttachments = [],
@@ -512,9 +517,9 @@
     ...assistantTags
       .filter((tag) => value.includes(composerAssistantTagToken(tag)))
       .map((tag) => ({
-        iconSvg: assistantTagBadgeSvg(tag.mark),
+        iconSvg: tag.iconHtml,
         label: abbreviatedTaskTitle(tag.name),
-        title: `${tag.detail}: ${tag.name}`,
+        title: `Open ${tag.detail}: ${tag.name}`,
         value: composerAssistantTagToken(tag)
       }))
   ])
@@ -2177,6 +2182,15 @@
       onSubmit={submit}
       onPaste={handlePaste}
       inlineBadges={projectReferenceBadges}
+      onInlineBadgeActivate={(value) => {
+        // Only an assistant tag opens something on click; a file or task badge
+        // stays the inert reference it has always been, and the click falls
+        // through to the caret.
+        const tag = assistantTags.find((entry) => composerAssistantTagToken(entry) === value)
+        if (!tag) return false
+        onOpenAssistantTag?.(tag)
+        return true
+      }}
       onCaretTextChange={handleCaretTextChange}
     />
   </div>

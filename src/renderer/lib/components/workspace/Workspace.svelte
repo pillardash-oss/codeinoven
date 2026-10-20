@@ -5251,6 +5251,7 @@
         onContinueInProject={handleContinuedInProject}
         onProjectCreated={handleChatProjectCreated}
         onOpenScopeView={(thread) => void openThreadScopeView(thread)}
+        onOpenAssistantThread={openAssistantTask}
         onSendChat={createStandaloneChat}
         onStartChatDraft={startChatDraft}
         onRequestAddProject={(kind) => {

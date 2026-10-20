@@ -36,6 +36,8 @@
     onContinueInProject: (forked: Thread) => void
     onProjectCreated: (project: Project) => Promise<void>
     onOpenScopeView: (thread: Thread) => void
+    /** Opens another Assistant tab thread from a tagged thread in the conversation. */
+    onOpenAssistantThread: (thread: Thread) => void
     onSendChat: (msg: string, files: PromptAttachment[]) => Promise<void>
     /** Hand the welcome composer's unsent draft to a real inbox thread so it
      *  shows in the Chats sidebar as a draft. */
@@ -57,6 +59,7 @@
     onContinueInProject,
     onProjectCreated,
     onOpenScopeView,
+    onOpenAssistantThread,
     onRequestAddProject
   }: Props = $props()
 
@@ -117,6 +120,7 @@
             assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
             {assistantForeignRunThreadId}
             {assistantSpaceThreads}
+            {onOpenAssistantThread}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
                 ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||

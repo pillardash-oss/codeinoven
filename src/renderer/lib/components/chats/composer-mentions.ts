@@ -89,11 +89,12 @@ export interface ComposerAssistantTag {
   /** What the row names, under the name in the menu. */
   detail: string
   /**
-   * Which assistant mark the tag wears, so the composer badge and the menu row
-   * draw the same thing the tab draws for that assistant, task, run or
-   * knowledge conversation.
+   * Inline markup of the icon this tag wears: the assistant's own icon (image
+   * or tinted svg), or the assistant default mark when it has none. Resolved by
+   * `assistantTagIconHtml`, so the menu row, the composer badge and the sent
+   * chip draw the same assistant.
    */
-  mark: 'mark' | 'assistant' | 'task' | 'run' | 'knowledge'
+  iconHtml: string
   /** Whether a thread row is a run (one execution) rather than a task. */
   run?: boolean
   /** Lower-cased words a mention query may match beyond the name. */

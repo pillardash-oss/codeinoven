@@ -6,7 +6,6 @@
   import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
   import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
   import { composerMentionKey, type ComposerMentionEntry } from './composer-mentions'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import { cioSearchVisibility } from '$lib/stores/cio-search-visibility.svelte'
   import Switch from '../ui/Switch.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
@@ -127,7 +126,12 @@
           {:else if mention.type === 'task'}
             <CioListTodo size={13} class="shrink-0 text-info" />
           {:else if mention.type === 'assistant'}
-            <AssistantIcon mark={mention.entry.mark} size={13} class="shrink-0 text-info" />
+            <!-- The assistant's own icon: a tag is identified by the assistant it
+                 belongs to, never by a generic work mark. -->
+            <span class="flex h-[13px] w-[13px] shrink-0 items-center justify-center">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              {@html mention.entry.iconHtml}
+            </span>
           {:else if mention.entry.kind === 'directory'}
             <FolderTypeIcon name={mention.entry.name} size={13} />
           {:else}

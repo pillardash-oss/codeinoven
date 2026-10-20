@@ -459,6 +459,11 @@
      * what names those tags once a message is sent.
      */
     assistantSpaceThreads?: Thread[]
+    /**
+     * Opens another Assistant tab thread, when a tagged thread in this
+     * conversation is clicked.
+     */
+    onOpenAssistantThread?: (thread: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
     projects?: Project[]
     /** Data URLs of custom project icons, keyed by project id. */
@@ -524,6 +529,7 @@
     assistantForeignRunThreadId = null,
     onForked,
     assistantSpaceThreads,
+    onOpenAssistantThread,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
     onContinueInProject,
@@ -561,10 +567,37 @@
       ? buildAssistantTagCandidates({
           assistants: assistants.assistants,
           threads: assistantSpaceThreads,
-          excludeThreadId: thread.id
+          excludeThreadId: thread.id,
+          // The assistant's own icon is what identifies it on a tag, exactly as
+          // it identifies the assistant in the tab.
+          assistantIcons: assistants.iconUrls
         })
       : []
   )
+
+  /**
+   * Open the thread a tag chip or badge names: `thread:<id>` is that thread,
+   * `assistant:<id>` is its Getting started conversation, or its newest thread
+   * when the assistant has no authoring conversation left.
+   */
+  function openAssistantTag(reference: string): void {
+    if (!assistantSpaceThreads || !onOpenAssistantThread) return
+    if (reference.startsWith('thread:')) {
+      const id = reference.slice('thread:'.length)
+      const target = assistantSpaceThreads.find((entry) => entry.id === id)
+      if (target) onOpenAssistantThread(target)
+      return
+    }
+    if (!reference.startsWith('assistant:')) return
+    const assistantId = reference.slice('assistant:'.length)
+    const owned = assistantSpaceThreads.filter((entry) => entry.assistantId === assistantId)
+    const setup = owned.find((entry) => entry.assistantGettingStarted)
+    const target = setup ?? owned.reduce<Thread | null>(
+      (newest, entry) => (!newest || entry.lastActivity > newest.lastActivity ? entry : newest),
+      null
+    )
+    if (target) onOpenAssistantThread(target)
+  }
 
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   let hasController = $derived(controller !== undefined)
@@ -13571,7 +13604,11 @@
                     {@const inlineTags = inlineFileTagsForMessage(
                       msg,
                       assistantSpaceThreads
-                        ? { threads: assistantSpaceThreads, assistants: assistants.assistants }
+                        ? {
+                            threads: assistantSpaceThreads,
+                            assistants: assistants.assistants,
+                            assistantIcons: assistants.iconUrls
+                          }
                         : undefined
                     )}
                     {@const inlinedPaths = new Set(inlineTags.map((tag) => tag.token.slice(1)))}
@@ -13648,6 +13685,7 @@
                             citationThread={citationThreadContext}
                             annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                             inlineFileTags={explicitPresentation ? undefined : inlineTags}
+                            onOpenAssistantTag={openAssistantTag}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
@@ -15116,6 +15154,7 @@
                       assignmentId={assignment?.id}
                       assignmentTasks={assignment?.content.tasks ?? []}
                       assistantTags={assistantTagCandidates}
+                      onOpenAssistantTag={(tag) => openAssistantTag(`${tag.kind}:${tag.id}`)}
                       initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
                       initialAttachments={rendererRecovery.attachmentsFor(
                         thread.projectId,
