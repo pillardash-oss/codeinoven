@@ -63,6 +63,7 @@
     "speech:build-native-capture": "bun scripts/build-native-speech-capture.ts",
     "harness:build-pi": "bun scripts/build-pi-harness.ts",
     "oven:cli:build": "bun scripts/build-oven-cli.ts",
+    "oven:cli:publish": "bun scripts/publish-oven-cli.ts",
     "oven:version:bump": "bun scripts/bump-oven-cli-version.ts",
     "ci:local": "bun scripts/ci-local.ts",
     "audit": "bun audit --ignore=GHSA-ch52-4w7c-c8xp --ignore=GHSA-hp3w-g68c-fv3c --ignore=GHSA-2p57-rm9w-gvfp",
