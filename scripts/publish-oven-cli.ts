@@ -47,8 +47,8 @@ const RELEASE_PATHS = [
   'src/lib/ovens.ts',
   'src/main/ovens'
 ]
-/** How long to wait for the registry to serve the version before reporting staging. */
-const VERIFY_ATTEMPTS = 24
+/** How long to wait for the registry to serve the version before reporting the delay. */
+const VERIFY_ATTEMPTS = 60
 const VERIFY_INTERVAL_MS = 5_000
 
 const repoRoot = join(import.meta.dirname, '..')
@@ -345,6 +345,31 @@ function stagedVersions(): StagedVersion[] {
   })
 }
 
+/**
+ * Report a release the registry accepted but has not served yet.
+ *
+ * Staging is a different state and is reported by `publish` itself, from npm's
+ * own refusal. This is the ordinary case of npm still processing a release, so
+ * it does not fail the run: the version bump and the release are real, and the
+ * command to confirm it is printed here.
+ */
+function reportServingDelay(version: string): void {
+  const staged = stagedVersions().find(
+    (entry) => entry.name === PACKAGE_NAME && entry.version === version
+  )
+  process.stderr.write(
+    `\nThe registry has not served ${PACKAGE_NAME}@${version} yet. npm accepted the publish, so this is usually its own processing delay.\n`
+  )
+  if (staged)
+    process.stderr.write(
+      `It is staged for a two-factor proof:\n\n  npm stage approve ${staged.id} --otp <code>\n`
+    )
+  else
+    process.stderr.write(
+      `Confirm it with:\n\n  npm view ${PACKAGE_NAME}@${version} version\n\nIf that stays empty, the release is waiting for approval at https://www.npmjs.com/package/${PACKAGE_NAME}.\n`
+    )
+}
+
 function reportStaged(version: string): never {
   const match = stagedVersions().find(
     (entry) => entry.name === PACKAGE_NAME && entry.version === version
@@ -435,7 +460,11 @@ async function main(): Promise<void> {
   }
 
   publish(version, options.otp)
-  if (!(await waitForVersion(version))) reportStaged(version)
+  // npm returning 0 means the registry accepted the release; serving it is a
+  // separate, slower step and is not part of whether this release exists. A
+  // 120 s window reported a finished publish as a staged one, which sent the
+  // release into a search for an approval that was never needed.
+  if (!(await waitForVersion(version))) reportServingDelay(version)
   if (options.commit) commitVersion(version)
   step(`Published ${PACKAGE_NAME}@${version}: npx ${PACKAGE_NAME}@${version} start`)
 }
