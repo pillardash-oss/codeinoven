@@ -80,7 +80,6 @@
     "msix:build": "bun scripts/msix.ts"
   },
   "dependencies": {
-    "@pdslng/cio-icon": "^0.1.1",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
@@ -120,9 +119,9 @@
     "@lobehub/icons-static-svg": "^1.95.1",
     "@mediabunny/server": "1.61.3",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@pdslng/cio-icon": "^0.1.1",
     "@remotion/video-matting": "4.0.535",
     "@resvg/resvg-js": "^2.6.2",
-    "sharp": "0.35.5",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/better-sqlite3": "^9.6.0",
@@ -148,6 +147,7 @@
     "png-to-ico": "^3.0.2",
     "prettier": "^3.9.9",
     "prettier-plugin-svelte": "^4.1.1",
+    "sharp": "0.35.5",
     "simple-git": "^4.0.2",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
