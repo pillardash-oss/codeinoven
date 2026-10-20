@@ -100,11 +100,14 @@ export interface QueuedResponseReference extends PromptReference {
   selector?: string
   /** Design references: the browser tab the element was picked from. */
   tabId?: string
+  /** Design references: the page's entry file inside that design folder, so a
+   *  comment whose page was closed reopens on the screen it was made on. */
+  designEntry?: string
   /** Document annotations: the project-relative path of the document. */
   filePath?: string
   /** Video notes: the second on the composition the note was written at. */
   seconds?: number
-  /** Video notes: the project-relative composition folder the moment belongs to. */
+  /** Video notes and design references: the project-relative folder of the work. */
   directory?: string
   /** Media marks: the artifact part the stroke was drawn on, a still or a video. */
   mediaUrl?: string
@@ -326,6 +329,7 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.endOffset !== undefined && typeof value.endOffset !== 'number') return false
   if (value.selector !== undefined && typeof value.selector !== 'string') return false
   if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
+  if (value.designEntry !== undefined && typeof value.designEntry !== 'string') return false
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
   if (value.seconds !== undefined && typeof value.seconds !== 'number') return false
   if (value.directory !== undefined && typeof value.directory !== 'string') return false

@@ -3281,30 +3281,22 @@
   }
 
   /**
-   * Bring a commented design element back in front of the reader: reveal the
-   * browser tab it was picked from, then highlight the element, scroll it into
-   * view and open its comment. A tab the user has since closed has nothing to
-   * show, so it is reported rather than silently doing nothing.
+   * Bring a commented design element back in front of the reader.
+   *
+   * The comment outlives the page it was written on, so the edit action hands the
+   * reference to the browser's inspection session, which reopens the screen it was
+   * picked from when that page is closed and reveals the element again. A folder or
+   * page that has since been deleted has nothing to show, and the session reports
+   * that instead of opening a substitute.
    */
   function editDesignAnnotation(reference: ResponseReferenceAnchor): void {
-    const tabId = reference.tabId
-    const open = tabId
-      ? contextSidebarState.tabs.some((tab) => tab.id === tabId && tab.kind === 'browser')
-      : false
-    if (!tabId || !open) {
-      toast.error('The design this comment was made on is no longer open.', {
-        description: reference.label
-      })
-      return
-    }
-    contextSidebarState.focus(tabId)
     // The design inspector is the browser's own session and is not part of the
     // conversation this view owns. Importing it statically would carry the browser
     // inspector into the first-paint chunk through the thread view, so it is
     // loaded on demand; by the time a comment needs focusing the browser is open
     // and the module is already in memory.
     void import('$lib/stores/browser-inspector.svelte').then((module) =>
-      module.browserInspector.focusComment(tabId, reference.id)
+      module.browserInspector.revealComment(thread.projectId, thread.id, reference)
     )
   }
 

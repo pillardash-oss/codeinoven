@@ -52,18 +52,46 @@ export function designElementDescriptor(
 }
 
 /**
+ * The entry file one served page is showing, relative to its design folder.
+ *
+ * A design folder is served on a loopback origin and each screen inside it is a
+ * file on that origin (see `servedFileUrl`), so the page's own URL is what names
+ * the screen: reopening a comment uses this to come back to the page the element
+ * was picked from rather than to whatever the folder defaults to. No path at
+ * all is the folder listing, which no entry describes.
+ */
+export function designEntryFromUrl(url: string, origin: string): string | undefined {
+  if (!url.startsWith(origin)) return undefined
+  const path = url.slice(origin.length).split(/[?#]/u)[0]
+  const segments = path.split('/').filter((segment) => segment.length > 0)
+  if (segments.length === 0) return undefined
+  try {
+    return segments.map((segment) => decodeURIComponent(segment)).join('/')
+  } catch {
+    // A URL the browser left with an unescaped `%` cannot be turned back into the
+    // file name it came from, and a guessed name would reopen the wrong screen.
+    return undefined
+  }
+}
+
+/**
  * Build the composer reference for one pick.
  *
  * The reference id is the page marker's id, so the panel, the page pin and the
  * composer chip all name the same element with one identifier, and a comment
  * reported by the page can update the exact reference it belongs to.
+ *
+ * The design folder and the page's entry travel with it so the comment can bring
+ * its page back after the tab is closed: the folder says where to serve, the
+ * entry says which screen of it to load.
  */
 export function designElementReference(
   id: string,
   target: BrowserInspectorTarget,
   design: BrowserDesignTab | null,
-  tabId: string
+  tab: { id: string; url: string }
 ): ResponseReferenceAnchor {
+  const entry = design ? designEntryFromUrl(tab.url, design.origin) : undefined
   return {
     id,
     kind: 'design',
@@ -71,6 +99,8 @@ export function designElementReference(
     label: 'Design element',
     text: designElementDescriptor(target, design),
     selector: target.selector,
-    tabId
+    tabId: tab.id,
+    ...(design ? { directory: design.directory } : {}),
+    ...(entry ? { designEntry: entry } : {})
   }
 }

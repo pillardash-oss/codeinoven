@@ -9,9 +9,13 @@ import type {
   BrowserInspectorTheme
 } from '$shared/ipc-contract'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { designElementReference } from '$lib/design-element-reference'
+import { designElementReference, designEntryFromUrl } from '$lib/design-element-reference'
 import { contextSidebarState } from './context-sidebar.svelte'
-import { mergeReferenceById, responseReferencesState } from './response-references.svelte'
+import {
+  mergeReferenceById,
+  responseReferencesState,
+  type ResponseReferenceAnchor
+} from './response-references.svelte'
 
 /**
  * The in-app browser's design inspection session.
@@ -124,6 +128,11 @@ class BrowserInspectorSession {
   markersFor(tabId: string): BrowserInspectorMarker[] {
     const owner = this.ownerOf(tabId)
     if (!owner) return []
+    return this.markersForOwner(owner, tabId)
+  }
+
+  /** The pins one conversation's references draw on one tab. */
+  private markersForOwner(owner: TabOwner, tabId: string): BrowserInspectorMarker[] {
     return responseReferencesState
       .forThread(owner.projectId, owner.threadId)
       .flatMap((reference, index) =>
@@ -185,17 +194,157 @@ class BrowserInspectorSession {
    * does, and it is the mirror of the document annotation's jump to its passage.
    */
   focusComment(tabId: string, referenceId: string): void {
-    void this.restoreAndFocus(tabId, referenceId).catch((failure: unknown) => {
-      logRendererError('The design annotation could not be focused.', failure)
-      toast.error('Could not focus this design annotation. Try opening its browser tab again.')
-    })
+    void this.restoreAndFocus(tabId, referenceId, this.ownerOf(tabId)).catch(
+      (failure: unknown) => {
+        logRendererError('The design annotation could not be focused.', failure)
+        toast.error('Could not focus this design annotation. Try opening its browser tab again.')
+      }
+    )
   }
 
-  private async restoreAndFocus(tabId: string, referenceId: string): Promise<void> {
+  /**
+   * Bring a commented design element back in front of the reader, reopening the
+   * page it was picked from when that page is no longer open.
+   *
+   * A comment outlives the tab it was written in: the page is closed, the comment
+   * stays in the composer, and the comment is the reason the page can be brought
+   * back at all. So the edit action reopens that screen in the thread's browser
+   * and reveals the element again, instead of reporting a page the reader is
+   * expected to go and find. A screen whose folder or entry is gone from the
+   * project cannot be reopened, and that is reported rather than opened onto a
+   * different page.
+   */
+  revealComment(
+    projectId: string,
+    threadId: string,
+    reference: ResponseReferenceAnchor
+  ): void {
+    const tabId = reference.tabId
+    if (tabId && this.isOpenDesignTab(tabId)) {
+      this.focusComment(tabId, reference.id)
+      return
+    }
+    const directory = reference.directory
+    if (!directory) {
+      // A reference written before a design comment carried its folder cannot be
+      // reopened, and its page is not open, so the report is the only honest
+      // answer.
+      toast.error('The design this comment was made on is no longer open.', {
+        description: reference.label
+      })
+      return
+    }
+    // The same screen can already be open in another tab (the reader reopened it
+    // themselves, or the thread's own tab is showing it), and a second copy of one
+    // page would be a page the comment is not drawn on.
+    const shown = this.openTabShowing(reference, directory)
+    if (shown) {
+      if (tabId && tabId !== shown) this.rebindReferences(projectId, threadId, tabId, shown)
+      contextSidebarState.focus(shown)
+      this.focusComment(shown, reference.id)
+      return
+    }
+    void this.reopenAndFocus(projectId, threadId, reference, directory, tabId).catch(
+      (failure: unknown) => {
+        logRendererError('The design a comment was made on could not be reopened.', failure)
+        toast.error('The design this comment was made on is no longer in this project.', {
+          description: directory
+        })
+      }
+    )
+  }
+
+  /**
+   * An open tab already showing the page a comment was made on, if there is one.
+   *
+   * A comment names its screen by folder and entry file, so a tab serving that
+   * folder and showing that entry is the same page even though it is a different
+   * tab: the element is on it, and focusing it is what the reader asked for.
+   */
+  private openTabShowing(reference: ResponseReferenceAnchor, directory: string): string | null {
+    for (const tab of contextSidebarState.browserTabs) {
+      const design = this.designs.get(tab.id)
+      if (!design || design.directory !== directory) continue
+      if (!reference.designEntry) return tab.id
+      if (designEntryFromUrl(tab.url, design.origin) === reference.designEntry) return tab.id
+    }
+    return null
+  }
+
+  /** Whether a tab is open and still serving the design a comment was made on. */
+  private isOpenDesignTab(tabId: string): boolean {
+    if (!this.designs.has(tabId)) return false
+    return contextSidebarState.browserTabs.some((tab) => tab.id === tabId)
+  }
+
+  /**
+   * Show the commented page again and land the comment on its element.
+   *
+   * The page is opened through the app's own route for a design screen, so the
+   * folder is served and the tab is marked as a design before it loads: the
+   * reopened tab has to be inspectable, or the comment would arrive on a page
+   * that cannot be picked from. Reopening is also what asks the question the
+   * user cares about, because a folder or entry that no longer exists fails here
+   * rather than loading a substitute.
+   */
+  private async reopenAndFocus(
+    projectId: string,
+    threadId: string,
+    reference: ResponseReferenceAnchor,
+    directory: string,
+    closedTabId: string | undefined
+  ): Promise<void> {
+    const opened = await invoke(
+      'design:open',
+      projectId,
+      threadId,
+      directory,
+      reference.designEntry ?? null,
+      true,
+      'design'
+    )
+    contextSidebarState.focus(opened.tabId)
+    // A pin is drawn for the tab its reference names, and the reopened page can be
+    // a different tab from the closed one (a screen tab of its own only when the
+    // pick came from a board-opened screen), so the comments pinned to the closed
+    // tab move onto this one before the pins are published.
+    if (closedTabId && closedTabId !== opened.tabId) {
+      this.rebindReferences(projectId, threadId, closedTabId, opened.tabId)
+    }
+    await this.restoreAndFocus(opened.tabId, reference.id, { projectId, threadId })
+  }
+
+  /** Move every comment pinned to a closed tab onto the tab that reopened it. */
+  private rebindReferences(
+    projectId: string,
+    threadId: string,
+    fromTabId: string,
+    toTabId: string
+  ): void {
+    const references = responseReferencesState.forThread(projectId, threadId)
+    if (!references.some((reference) => reference.tabId === fromTabId)) return
+    responseReferencesState.setForThread(
+      projectId,
+      threadId,
+      references.map((reference) =>
+        reference.tabId === fromTabId ? { ...reference, tabId: toTabId } : reference
+      )
+    )
+  }
+
+  private async restoreAndFocus(
+    tabId: string,
+    referenceId: string,
+    owner: TabOwner | null
+  ): Promise<void> {
     this.armed.add(tabId)
     const theme = this.themeTokens()
     await invoke('browser:inspectSetArmed', tabId, true, theme ?? undefined)
-    await invoke('browser:inspectMarkers', tabId, this.markersFor(tabId))
+    // A reopened page's tab can be newer than the sidebar's own tab list, so the
+    // pins come from the conversation the caller named rather than from a lookup
+    // of the tab. Without an owner there is nothing to publish and the pins arrive
+    // with the page's own state report.
+    if (owner) await invoke('browser:inspectMarkers', tabId, this.markersForOwner(owner, tabId))
     await invoke('browser:inspectFocus', tabId, referenceId, true)
   }
 
@@ -250,7 +399,10 @@ class BrowserInspectorSession {
       event.id,
       event.target,
       this.designs.get(tabId) ?? null,
-      tabId
+      {
+        id: tabId,
+        url: contextSidebarState.browserTabs.find((tab) => tab.id === tabId)?.url ?? ''
+      }
     )
     // A pick's id is the id of the page marker it created, so the same pick can
     // only ever name one reference. Folding it in by id keeps a repeated report
