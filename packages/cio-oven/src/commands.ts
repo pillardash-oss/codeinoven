@@ -54,7 +54,9 @@ async function detectSshPort(): Promise<number | null> {
   const candidates =
     process.platform === 'win32'
       ? [`${process.env['ProgramData'] ?? 'C:\\ProgramData'}\\ssh\\sshd_config`]
-      : ['/etc/ssh/sshd_config']
+      : process.platform === 'android'
+        ? [`${process.env['PREFIX'] ?? '/data/data/com.termux/files/usr'}/etc/ssh/sshd_config`]
+        : ['/etc/ssh/sshd_config']
   for (const file of candidates) {
     try {
       const match = /^\s*Port\s+(\d+)\s*$/mu.exec(await readFile(file, 'utf8'))
@@ -158,6 +160,14 @@ export async function settleSshPort(
 
 /** What to do when the machine is not serving SSH on the port that was chosen. */
 function sshUnavailable(port: number): string {
+  if (process.platform === 'android') {
+    const prefix = process.env['PREFIX'] ?? '/data/data/com.termux/files/usr'
+    return [
+      `Nothing is serving SSH on port ${port} on this machine, so a registration code now would only time out later.`,
+      `Install OpenSSH with "pkg install openssh" if it is missing, set "Port ${port}" in ${prefix}/etc/ssh/sshd_config, then start the server with: sshd`,
+      'Then run this command again.'
+    ].join(' ')
+  }
   const config =
     process.platform === 'win32' ? 'C:\\ProgramData\\ssh\\sshd_config' : '/etc/ssh/sshd_config'
   const restart =

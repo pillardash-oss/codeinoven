@@ -140,6 +140,17 @@ function posixSocketPath(): string {
   )
 }
 const lockPath = join(root, 'service.pid')
+/**
+ * The platform this Oven reports to the app.
+ *
+ * Termux on Android is a Linux userspace with an ordinary POSIX shell, npm, and
+ * the same command set as any other Oven; only the runtime's own name differs.
+ * The app plans and quotes every command from this value, so reporting the Linux
+ * family it actually is keeps the Oven out of the unsupported-platform path
+ * without a separate Android branch in every setup rule. Behaviour elsewhere in
+ * this file still reads `process.platform`, which stays the runtime's own truth.
+ */
+const reportedPlatform = process.platform === 'android' ? 'linux' : process.platform
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -640,7 +651,7 @@ async function probe(refresh = false): Promise<OvenProbe> {
   return {
     protocolVersion: PROTOCOL,
     serviceRevision: revision,
-    platform: process.platform,
+    platform: reportedPlatform,
     architecture: process.arch,
     home,
     nodeVersion: process.versions.node,
@@ -649,7 +660,7 @@ async function probe(refresh = false): Promise<OvenProbe> {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     specs: {
       hostname: hostname(),
-      platform: process.platform,
+      platform: reportedPlatform,
       architecture: process.arch,
       cpuCount: availableParallelism(),
       memoryBytes: totalmem(),
