@@ -34,7 +34,11 @@ import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/t
 import { registerAppControlHandlers } from './app-control/app-control-ipc'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
-import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
+import {
+  hasNativeSplashHandoff,
+  signalNativeSplashReady,
+  startNativeSplashHelper
+} from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
 import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
@@ -817,6 +821,9 @@ void app
     // barrier, so low-end devices always get visual feedback first.
     let splashOutcome = 'skipped'
     if (!startHidden) {
+      // macOS starts this process as the bundle's main executable, so the native
+      // placeholder has to be spawned from here rather than wrapping the launch.
+      startNativeSplashHelper()
       const { visualReady: splashVisualReady } = createSplashWindow(
         mainBundleDirectory,
         isProduction
