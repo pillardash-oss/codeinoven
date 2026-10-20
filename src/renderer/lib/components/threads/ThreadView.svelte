@@ -134,11 +134,8 @@
   import { actionContext } from '$lib/stores/action-context.svelte'
   import { permissionLevelActions, permissionLevelForAction } from '$lib/actions'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
-  import SpecStudio from '../specs/SpecStudio.svelte'
-  import BrainstormStudio from '../specs/BrainstormStudio.svelte'
-  import PrdStudio from '../specs/PrdStudio.svelte'
-  import AssignmentStudio from '../specs/AssignmentStudio.svelte'
-  import AuditStudio from '../specs/AuditStudio.svelte'
+  import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -2753,6 +2750,18 @@
   let lastCheckpointThreadId = ''
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
+  /**
+   * Bumped by a studio's Retry to rebuild its `{#key}` and re-run its `{#await}`.
+   * The studio documents are Engineering-only surfaces, so their chunks load on
+   * the first open instead of with the first screen, and a chunk that failed to
+   * load must be retryable rather than leaving the studio blank.
+   */
+  let studioReloadNonce = $state(0)
+
+  function retryStudio(key: string): void {
+    resetPanelModule(key)
+    studioReloadNonce += 1
+  }
   let threadViewElement = $state<HTMLDivElement | null>(null)
   let imageUrls = new FileBlobUrlManager()
   /** One file part of a message the fullscreen preview can render, and whether
@@ -12991,6 +13000,36 @@
   })
 </script>
 
+{#snippet studioModuleLoading(label: string)}
+  <div
+    class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed"
+    role="status"
+    aria-label={`Loading ${label}`}
+  >
+    <CioSpinner size={14} class="animate-spin" />
+    Loading {label}
+  </div>
+{/snippet}
+
+{#snippet studioModuleFailed(key: string, label: string, error: unknown)}
+  {logRendererError(`The ${label} studio could not be loaded`, error)}
+  <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+    <p class="text-xs font-medium text-foreground">{label} could not load</p>
+    <p class="max-w-[34ch] text-[0.625rem] leading-relaxed text-muted">
+      Loading it was interrupted. Try again.
+    </p>
+    <button
+      type="button"
+      class="mt-1 bg-primary px-2 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+      title={`Try loading the ${label} studio again`}
+      aria-label={`Try loading the ${label} studio again`}
+      onclick={() => retryStudio(key)}
+    >
+      Retry
+    </button>
+  </div>
+{/snippet}
+
 {#snippet ovenPicker()}
   {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
     <OvenControlsComponent
@@ -13164,235 +13203,265 @@
       />
     {/if}
     {#if studioDocument === 'brainstorm' && studioBrainstorm}
-      {#key `${studioBrainstorm.id}:${studioBrainstorm.version}`}
-        <BrainstormStudio
-          brainstorm={studioBrainstorm}
-          versions={brainstormVersions}
-          history={brainstormStudioHistories.forDocument(
-            `${studioBrainstorm.id}:${studioBrainstorm.version}`
-          )}
-          busy={brainstormBusy || busy}
-          error={brainstormError}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          specAvailable={spec !== null}
-          prdAvailable={prd !== null}
-          assignmentAvailable={assignment !== null}
-          auditAvailable={auditReport !== null}
-          onBack={closeSpecStudio}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onOpenPrd={openPrdStudio}
-          onOpenAssignment={openAssignmentStudio}
-          onOpenAudit={openAuditStudio}
-          onSelectVersion={selectBrainstormVersion}
-          onSave={saveBrainstorm}
-          onAddAnnotation={addBrainstormAnnotation}
-          onUpdateAnnotation={updateBrainstormAnnotation}
-          onResolveAnnotation={resolveBrainstormAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('brainstorm', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('brainstorm', 'quick', selection, documentContext)}
-          onSubmit={submitBrainstormDecision}
-          onNextStep={brainstormNextStep}
-          onOpenInEditor={openBrainstormInEditor}
-          onRevealInAppFile={revealBrainstormInAppFile}
-          onOpenPrototype={openPrototypePreview}
-          onGenerateHifi={selectLofiPrototype}
-        />
+      {#key `${studioBrainstorm.id}:${studioBrainstorm.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.brainstormStudio, () => import('../specs/BrainstormStudio.svelte'))}
+          {@render studioModuleLoading('Brainstorm')}
+        {:then { default: BrainstormStudio }}
+          <BrainstormStudio
+            brainstorm={studioBrainstorm}
+            versions={brainstormVersions}
+            history={brainstormStudioHistories.forDocument(
+              `${studioBrainstorm.id}:${studioBrainstorm.version}`
+            )}
+            busy={brainstormBusy || busy}
+            error={brainstormError}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            specAvailable={spec !== null}
+            prdAvailable={prd !== null}
+            assignmentAvailable={assignment !== null}
+            auditAvailable={auditReport !== null}
+            onBack={closeSpecStudio}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onOpenPrd={openPrdStudio}
+            onOpenAssignment={openAssignmentStudio}
+            onOpenAudit={openAuditStudio}
+            onSelectVersion={selectBrainstormVersion}
+            onSave={saveBrainstorm}
+            onAddAnnotation={addBrainstormAnnotation}
+            onUpdateAnnotation={updateBrainstormAnnotation}
+            onResolveAnnotation={resolveBrainstormAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('brainstorm', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('brainstorm', 'quick', selection, documentContext)}
+            onSubmit={submitBrainstormDecision}
+            onNextStep={brainstormNextStep}
+            onOpenInEditor={openBrainstormInEditor}
+            onRevealInAppFile={revealBrainstormInAppFile}
+            onOpenPrototype={openPrototypePreview}
+            onGenerateHifi={selectLofiPrototype}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.brainstormStudio, 'Brainstorm', error)}
+        {/await}
       {/key}
     {:else if studioDocument === 'prd' && studioPrd}
-      {#key `${studioPrd.id}:${studioPrd.version}:${studioPrd.updatedAt}`}
-        <PrdStudio
-          prd={studioPrd}
-          versions={prdVersions}
-          busy={prdBusy || busy}
-          error={prdError}
-          brainstormAvailable={brainstorm !== null}
-          specAvailable={spec !== null}
-          assignmentAvailable={assignment !== null}
-          auditAvailable={auditReport !== null}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          onBack={closeSpecStudio}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onOpenAssignment={openAssignmentStudio}
-          onOpenAudit={openAuditStudio}
-          onSelectVersion={selectPrdVersion}
-          onSave={savePrd}
-          onAddAnnotation={addPrdAnnotation}
-          onUpdateAnnotation={updatePrdAnnotation}
-          onResolveAnnotation={resolvePrdAnnotation}
-          onFinalize={finalizePrd}
-          onNextStep={prd?.status === 'finalized' ? nextStepFromPrd : undefined}
-          onOpenInEditor={openPrdInEditor}
-          onRevealInFiles={revealPrdInFiles}
-        />
+      {#key `${studioPrd.id}:${studioPrd.version}:${studioPrd.updatedAt}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.prdStudio, () => import('../specs/PrdStudio.svelte'))}
+          {@render studioModuleLoading('PRD')}
+        {:then { default: PrdStudio }}
+          <PrdStudio
+            prd={studioPrd}
+            versions={prdVersions}
+            busy={prdBusy || busy}
+            error={prdError}
+            brainstormAvailable={brainstorm !== null}
+            specAvailable={spec !== null}
+            assignmentAvailable={assignment !== null}
+            auditAvailable={auditReport !== null}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            onBack={closeSpecStudio}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onOpenAssignment={openAssignmentStudio}
+            onOpenAudit={openAuditStudio}
+            onSelectVersion={selectPrdVersion}
+            onSave={savePrd}
+            onAddAnnotation={addPrdAnnotation}
+            onUpdateAnnotation={updatePrdAnnotation}
+            onResolveAnnotation={resolvePrdAnnotation}
+            onFinalize={finalizePrd}
+            onNextStep={prd?.status === 'finalized' ? nextStepFromPrd : undefined}
+            onOpenInEditor={openPrdInEditor}
+            onRevealInFiles={revealPrdInFiles}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.prdStudio, 'PRD', error)}
+        {/await}
       {/key}
     {:else if studioDocument === 'audit' && auditReport}
-      {#key `${auditReport.id}:${auditReport.version}`}
-        <AuditStudio
-          report={auditReport}
-          versions={auditVersions}
-          history={auditStudioHistories.forDocument(`${auditReport.id}:${auditReport.version}`)}
-          busy={auditBusy || busy}
-          error={auditError}
-          assignmentAvailable={assignment !== null}
-          brainstormAvailable={brainstorm !== null}
-          prdAvailable={prd !== null}
-          specAvailable={spec !== null}
-          actionsAvailable={auditReportActionsAvailable}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          onBack={closeSpecStudio}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenPrd={openPrdStudio}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onOpenAssignment={openAssignmentStudio}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onSelectVersion={selectAuditVersion}
-          onSave={saveAudit}
-          onAddAnnotation={addAuditAnnotation}
-          onUpdateAnnotation={updateAuditAnnotation}
-          onResolveAnnotation={resolveAuditAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('audit', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('audit', 'quick', selection, documentContext)}
-          onReview={reviewAudit}
-          onComplete={completeAudit}
-          onOpenInEditor={openAuditInEditor}
-          onRevealInAppFile={revealAuditInAppFile}
-        />
+      {#key `${auditReport.id}:${auditReport.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.auditStudio, () => import('../specs/AuditStudio.svelte'))}
+          {@render studioModuleLoading('Audit')}
+        {:then { default: AuditStudio }}
+          <AuditStudio
+            report={auditReport}
+            versions={auditVersions}
+            history={auditStudioHistories.forDocument(`${auditReport.id}:${auditReport.version}`)}
+            busy={auditBusy || busy}
+            error={auditError}
+            assignmentAvailable={assignment !== null}
+            brainstormAvailable={brainstorm !== null}
+            prdAvailable={prd !== null}
+            specAvailable={spec !== null}
+            actionsAvailable={auditReportActionsAvailable}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            onBack={closeSpecStudio}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenPrd={openPrdStudio}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onOpenAssignment={openAssignmentStudio}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onSelectVersion={selectAuditVersion}
+            onSave={saveAudit}
+            onAddAnnotation={addAuditAnnotation}
+            onUpdateAnnotation={updateAuditAnnotation}
+            onResolveAnnotation={resolveAuditAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('audit', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('audit', 'quick', selection, documentContext)}
+            onReview={reviewAudit}
+            onComplete={completeAudit}
+            onOpenInEditor={openAuditInEditor}
+            onRevealInAppFile={revealAuditInAppFile}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.auditStudio, 'Audit', error)}
+        {/await}
       {/key}
     {:else if studioDocument === 'assignment' && assignment && studioAssignment}
-      {#key `${studioAssignment.id}:${studioAssignment.version}`}
-        <AssignmentStudio
-          assignment={studioAssignment}
-          threadId={thread.id}
-          projectId={thread.projectId}
-          versions={assignmentVersions}
-          history={assignmentStudioHistories.forDocument(
-            `${studioAssignment.id}:${studioAssignment.version}`
-          )}
-          {providers}
-          harnessId={settings.harnessId}
-          fallbackModel={workerModelForThread()}
-          seniorModel={seniorModelForThread()}
-          favoriteModels={rendererRecovery.favoriteModels}
-          recentModels={rendererRecovery.recentModels}
-          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-          busy={assignmentBusy || busy}
-          error={assignmentError}
-          readOnly={studioAssignment.status !== 'draft' ||
-            studioAssignment.version !== assignment.version}
-          focusTaskId={assignmentFocusTaskId}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          auditAvailable={auditReport !== null}
-          brainstormAvailable={brainstorm !== null}
-          prdAvailable={prd !== null}
-          specAvailable={spec !== null}
-          auditActive={studioAssignment.version === assignment.version &&
-            assignmentAuditState === 'offered'}
-          finalComplete={assignmentFinalComplete}
-          onBack={closeSpecStudio}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenPrd={openPrdStudio}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenAudit={openAuditStudio}
-          onOpenAuditWork={openAssignmentAuditWork}
-          onSelectVersion={selectAssignmentVersion}
-          onSave={saveAssignment}
-          onApprove={approveAssignment}
-          onOpenInEditor={openAssignmentInEditor}
-          onRevealInAppFile={revealAssignmentInAppFile}
-          onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
-          onSeniorModelChange={updateAssignmentSeniorModel}
-          onTaskModelChange={updateAssignmentTaskModel}
-          onTaskScopeChange={updateAssignmentTaskScope}
-          onWorkerScopeChange={updateAssignmentWorkerScope}
-          {assignmentScopeBucketId}
-          onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
-          resolveTaskThread={resolveAssignmentTaskThread}
-          onToggleFavorite={(providerId, modelId, harnessId) =>
-            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-          onReorderFavorite={(draggedKey, targetKey, position) =>
-            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          onAddAnnotation={addAssignmentAnnotation}
-          onUpdateAnnotation={updateAssignmentAnnotation}
-          onResolveAnnotation={resolveAssignmentAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('assignment', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('assignment', 'quick', selection, documentContext)}
-        />
+      {#key `${studioAssignment.id}:${studioAssignment.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.assignmentStudio, () => import('../specs/AssignmentStudio.svelte'))}
+          {@render studioModuleLoading('Assignment')}
+        {:then { default: AssignmentStudio }}
+          <AssignmentStudio
+            assignment={studioAssignment}
+            threadId={thread.id}
+            projectId={thread.projectId}
+            versions={assignmentVersions}
+            history={assignmentStudioHistories.forDocument(
+              `${studioAssignment.id}:${studioAssignment.version}`
+            )}
+            {providers}
+            harnessId={settings.harnessId}
+            fallbackModel={workerModelForThread()}
+            seniorModel={seniorModelForThread()}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            busy={assignmentBusy || busy}
+            error={assignmentError}
+            readOnly={studioAssignment.status !== 'draft' ||
+              studioAssignment.version !== assignment.version}
+            focusTaskId={assignmentFocusTaskId}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            auditAvailable={auditReport !== null}
+            brainstormAvailable={brainstorm !== null}
+            prdAvailable={prd !== null}
+            specAvailable={spec !== null}
+            auditActive={studioAssignment.version === assignment.version &&
+              assignmentAuditState === 'offered'}
+            finalComplete={assignmentFinalComplete}
+            onBack={closeSpecStudio}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenPrd={openPrdStudio}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenAudit={openAuditStudio}
+            onOpenAuditWork={openAssignmentAuditWork}
+            onSelectVersion={selectAssignmentVersion}
+            onSave={saveAssignment}
+            onApprove={approveAssignment}
+            onOpenInEditor={openAssignmentInEditor}
+            onRevealInAppFile={revealAssignmentInAppFile}
+            onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
+            onSeniorModelChange={updateAssignmentSeniorModel}
+            onTaskModelChange={updateAssignmentTaskModel}
+            onTaskScopeChange={updateAssignmentTaskScope}
+            onWorkerScopeChange={updateAssignmentWorkerScope}
+            {assignmentScopeBucketId}
+            onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+            resolveTaskThread={resolveAssignmentTaskThread}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onAddAnnotation={addAssignmentAnnotation}
+            onUpdateAnnotation={updateAssignmentAnnotation}
+            onResolveAnnotation={resolveAssignmentAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('assignment', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('assignment', 'quick', selection, documentContext)}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.assignmentStudio, 'Assignment', error)}
+        {/await}
       {/key}
     {:else if spec}
-      {#key `${spec.id}:${spec.version}`}
-        <SpecStudio
-          {spec}
-          {providers}
-          projectId={thread.projectId}
-          {auditSettings}
-          favoriteModels={rendererRecovery.favoriteModels}
-          recentModels={rendererRecovery.recentModels}
-          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-          history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
-          validation={specValidation}
-          versions={specVersions}
-          busy={specBusy || busy}
-          error={specError}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          assignmentAvailable={assignment !== null}
-          assignmentMode={settings.assignmentMode === true}
-          auditAvailable={auditReport !== null}
-          implementationAuditAvailable={plainEngineeringAuditAvailable}
-          implementationAuditReady={plainEngineeringAuditReady}
-          implementationAuditRunning={plainEngineeringAuditRunning}
-          brainstormAvailable={brainstorm !== null}
-          prdAvailable={prd !== null}
-          onBack={closeSpecStudio}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenPrd={openPrdStudio}
-          onOpenInEditor={openSpecInEditor}
-          onRevealInAppFile={revealSpecInAppFile}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenAssignment={openAssignmentStudio}
-          onGenerateAssignment={() => generateAssignmentDraft()}
-          onOpenAudit={openAuditStudio}
-          onRunImplementationAudit={() =>
-            plainEngineeringAuditReady
-              ? openAuditStudio()
-              : plainEngineeringAuditRunning
-                ? openDurableAuditWork()
-                : generateAudit(auditSettings)}
-          onAuditModelChange={changeAuditModel}
-          onToggleFavorite={(providerId, modelId, harnessId) =>
-            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-          onReorderFavorite={(draggedKey, targetKey, position) =>
-            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          onMarkImplementationComplete={completeAudit}
-          onSave={saveSpec}
-          onSelectVersion={selectSpecVersion}
-          onAddAnnotation={addSpecAnnotation}
-          onUpdateAnnotation={updateSpecAnnotation}
-          onResolveAnnotation={resolveSpecAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('spec', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('spec', 'quick', selection, documentContext)}
-          onDismissValidationIssue={dismissSpecValidationIssue}
-          onSearchContext={searchSpecContext}
-          onAddContext={addSpecContext}
-          onRemoveContext={removeSpecContext}
-          onSubmit={submitSpecDecision}
-        />
+      {#key `${spec.id}:${spec.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.specStudio, () => import('../specs/SpecStudio.svelte'))}
+          {@render studioModuleLoading('Spec')}
+        {:then { default: SpecStudio }}
+          <SpecStudio
+            {spec}
+            {providers}
+            projectId={thread.projectId}
+            {auditSettings}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
+            validation={specValidation}
+            versions={specVersions}
+            busy={specBusy || busy}
+            error={specError}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            assignmentAvailable={assignment !== null}
+            assignmentMode={settings.assignmentMode === true}
+            auditAvailable={auditReport !== null}
+            implementationAuditAvailable={plainEngineeringAuditAvailable}
+            implementationAuditReady={plainEngineeringAuditReady}
+            implementationAuditRunning={plainEngineeringAuditRunning}
+            brainstormAvailable={brainstorm !== null}
+            prdAvailable={prd !== null}
+            onBack={closeSpecStudio}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenPrd={openPrdStudio}
+            onOpenInEditor={openSpecInEditor}
+            onRevealInAppFile={revealSpecInAppFile}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenAssignment={openAssignmentStudio}
+            onGenerateAssignment={() => generateAssignmentDraft()}
+            onOpenAudit={openAuditStudio}
+            onRunImplementationAudit={() =>
+              plainEngineeringAuditReady
+                ? openAuditStudio()
+                : plainEngineeringAuditRunning
+                  ? openDurableAuditWork()
+                  : generateAudit(auditSettings)}
+            onAuditModelChange={changeAuditModel}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onMarkImplementationComplete={completeAudit}
+            onSave={saveSpec}
+            onSelectVersion={selectSpecVersion}
+            onAddAnnotation={addSpecAnnotation}
+            onUpdateAnnotation={updateSpecAnnotation}
+            onResolveAnnotation={resolveSpecAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('spec', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('spec', 'quick', selection, documentContext)}
+            onDismissValidationIssue={dismissSpecValidationIssue}
+            onSearchContext={searchSpecContext}
+            onAddContext={addSpecContext}
+            onRemoveContext={removeSpecContext}
+            onSubmit={submitSpecDecision}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.specStudio, 'Spec', error)}
+        {/await}
       {/key}
     {:else}
       <div class="flex flex-1 items-center justify-center text-sm text-dimmed">

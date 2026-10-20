@@ -824,6 +824,11 @@ void app
       // macOS starts this process as the bundle's main executable, so the native
       // placeholder has to be spawned from here rather than wrapping the launch.
       startNativeSplashHelper()
+      // The supervisor records this phase from the environment it hands over at
+      // process entry. macOS only knows once the helper is spawned, and a check
+      // taken before that spawn can never be true, so the phase is recorded here
+      // too; `mark` keeps it to a single record either way.
+      if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
       const { visualReady: splashVisualReady } = createSplashWindow(
         mainBundleDirectory,
         isProduction

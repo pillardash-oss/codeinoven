@@ -1,5 +1,18 @@
 import type { ChangeCardMessage, ChangeCardSummary } from './run-changes-summary'
 
+/**
+ * This module executes inside a dedicated worker, but the app's tsconfig loads
+ * the DOM library, where `self` is a Window whose `postMessage` has no
+ * transfer-list overload (its second argument is a target origin). Declaring
+ * the worker-side surface the module actually uses keeps the transferred
+ * bitmap buffer type-checked instead of casting the call to `never`.
+ */
+interface ChangeSummaryWorkerScope {
+  onmessage: ((event: MessageEvent<ChangeCardMessage>) => void) | null
+  postMessage(message: unknown, transfer?: Transferable[]): void
+}
+const workerScope = self as unknown as ChangeSummaryWorkerScope
+
 const restored = new Set<string>()
 const summary: ChangeCardSummary = {
   additions: 0,
@@ -11,7 +24,7 @@ const summary: ChangeCardSummary = {
 }
 let changeIndex = 0
 let restoredChars = 0
-self.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
+workerScope.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
   try {
     const message = event.data
     if ('totalChanges' in message) {
@@ -41,11 +54,13 @@ self.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
         changeIndex += 1
       }
     } else {
-      self.postMessage({ summary }, [summary.restored.buffer])
+      workerScope.postMessage({ summary }, [summary.restored.buffer])
       return
     }
-    self.postMessage({})
+    workerScope.postMessage({})
   } catch (reason) {
-    self.postMessage({ error: reason instanceof Error ? reason.message : 'Change summary failed.' })
+    workerScope.postMessage({
+      error: reason instanceof Error ? reason.message : 'Change summary failed.'
+    })
   }
 }
