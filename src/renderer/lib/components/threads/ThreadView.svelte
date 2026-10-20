@@ -160,9 +160,13 @@
     clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
   import type OvenControls from './OvenControls.svelte'
-  import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
+  import {
+    onEngineeringLifecycleInherited,
+    withProjectOven
+  } from '$lib/thread-settings-inheritance'
   import {
     initialSettingsFor,
+    normalizeChatSettings,
     settingsStoreFor,
     type ModelScope
   } from '$lib/stores/thread-settings.svelte'
@@ -1573,15 +1577,6 @@
   /** Reactive provider catalog for this thread's project   seeded from the
    *  cache and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
-
-  /** Chats are for questions and research: they never inject the Engineering
-   *  workflow and stay pinned to auto permission review while File System is
-   *  off. Once File System is enabled the permission picker unlocks up to Full
-   *  Access, so the user's chosen level is carried through instead of being
-   *  clobbered back to auto review. */
-  function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
-    return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
-  }
 
   /** Commit to the model memory of this conversation's family, so a model picked
    *  for a chat or an assistant task never changes what another kind starts on. */
@@ -6022,7 +6017,12 @@
 
     const oldTitle = thread.title
     const providerId = thread.providerId
+    // The destination project decides the machine: a thread moved into a local
+    // project runs here, and one moved into a project bound to an Oven runs on
+    // that Oven, exactly as a thread created there would.
     const settings = thread.settings
+      ? withProjectOven(thread.settings, targetProject, false)
+      : thread.settings
     const draft = rendererRecovery.draftFor(oldProjectId, oldThreadId)
     const attachments = rendererRecovery.attachmentsFor(oldProjectId, oldThreadId)
     const references = rendererRecovery.projectReferencesFor(oldProjectId, oldThreadId)

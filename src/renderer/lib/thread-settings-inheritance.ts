@@ -1,10 +1,14 @@
-import type { Project, Thread, ThreadSettings } from '$shared/types'
+import type { AssistantExecution, Project, Thread, ThreadSettings } from '$shared/types'
+import { settingsWithAssistantTarget } from '$shared/assistant-execution'
 import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { invoke } from '$lib/ipc.svelte'
 import { loadLifecycleIntent } from '$lib/stores/lifecycle-intent'
 import {
   assistantEffectiveSettings,
   assistantSettings,
+  chatEffectiveSettings,
+  chatSettings,
+  normalizeChatSettings,
   threadSettings
 } from '$lib/stores/thread-settings.svelte'
 
@@ -35,28 +39,53 @@ export function settingsForNewThread(
 }
 
 /**
- * Seed a new thread's Oven binding from its project's remote location.
+ * Where a minted thread runs.
  *
- * A project created from the Add Project flow records the Oven and workspace it
- * runs in, so a chat started in it runs where the user pointed the project.
- * When the new chat inherits its settings from a sibling thread in the same
- * project, that sibling's own Oven choice is deliberate and kept; otherwise the
- * project's Oven applies, so a stale last-used Oven from another project can
- * never drag a chat into the wrong machine.
+ * A thread is minted from another thread, and where that thread ran is part of
+ * what the user configured: a sibling in this project hands its Oven and its
+ * workspace over, so "New thread" keeps the machine the conversation was on.
+ *
+ * The destination project decides in every other case. A project created from
+ * the Add Project flow records the Oven and workspace it runs in, so a chat
+ * started in it runs where the user pointed the project; a local project runs
+ * here. That else-branch is what keeps a remembered or foreign Oven from
+ * following a thread into the wrong machine.
  */
 export function withProjectOven(
   settings: ThreadSettings,
   project: Project,
   inheritedFromSameProject: boolean
 ): ThreadSettings {
-  const ovenId = project.ovenId
-  if (!ovenId || ovenId === LOCAL_OVEN_ID) return settings
   if (inheritedFromSameProject) return settings
-  return {
-    ...settings,
-    ovenId,
-    ...(project.path ? { ovenPath: project.path } : {})
+  const ovenId = project.ovenId
+  if (ovenId && ovenId !== LOCAL_OVEN_ID) {
+    return {
+      ...settings,
+      ovenId,
+      ...(project.path ? { ovenPath: project.path } : { ovenPath: undefined })
+    }
   }
+  return { ...settings, ovenId: LOCAL_OVEN_ID, ovenPath: undefined }
+}
+
+/**
+ * Settings for a new chat: the chat in focus, else the chat family's memory.
+ *
+ * A chat is a project-less thread, so it has no project Oven to answer "which
+ * machine?" from. The chat it was minted from is the authority, and failing one
+ * the last chat is, so a new chat keeps running where the conversation it came
+ * out of ran instead of silently dropping back to this computer.
+ */
+export function settingsForNewChat(
+  focusedChat: Thread | null,
+  projectFallback: ThreadSettings
+): ThreadSettings {
+  const source = focusedChat?.settings
+  const settings = normalizeChatSettings(
+    source ? cloneSettings(source) : chatEffectiveSettings(projectFallback)
+  )
+  chatSettings.commit(settings)
+  return settings
 }
 
 /**
@@ -68,14 +97,22 @@ export function withProjectOven(
  * another view is not a source here, and the borrowed project model is never
  * written back as the assistant's memory, so an assistant that never picked a
  * model keeps following what project work uses instead of freezing a copy of it.
+ *
+ * The assistant's own execution target is applied last because it is what every
+ * dispatched run actually uses (`settingsWithAssistantTarget` in the main
+ * process): a task starts showing the machine its run will happen on instead of
+ * this computer while the work runs elsewhere.
  */
 export function settingsForNewAssistantTask(
   focusedTask: Thread | null,
-  projectFallback: ThreadSettings
+  projectFallback: ThreadSettings,
+  execution?: AssistantExecution
 ): ThreadSettings {
   const focused = focusedTask?.settings
-  if (!focused) return assistantEffectiveSettings(projectFallback)
-  const settings = cloneSettings(focused)
+  const settings = settingsWithAssistantTarget(
+    focused ? cloneSettings(focused) : assistantEffectiveSettings(projectFallback),
+    execution
+  )
   assistantSettings.commit(settings)
   return settings
 }

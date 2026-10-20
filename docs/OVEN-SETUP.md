@@ -92,6 +92,17 @@ A dedicated key for that Oven always takes precedence over the mirror. Removing 
 
 Git failures are reported as the situation that caused them, and never as a bare exit code such as `128`: missing repository access, a rejected identity, GitHub host trust, DNS or network reachability, disk space, or uncommitted local changes.
 
+## Which Oven a thread runs on
+
+A conversation runs on one Oven: the composer's Oven control names it, and the choice belongs to the thread rather than to the app. A new thread therefore inherits the machine of the conversation it was started from, in every family:
+
+- A **project thread** inherits the Oven and workspace of a sibling thread in the same project. Minted with no sibling open, it runs where its project runs: a project added from a remote folder runs on that Oven, and a local project runs on this computer.
+- A **chat** inherits the chat it was started from, and failing one, the last chat, because a chat has no project to answer for it.
+- An **assistant task** inherits the task in focus, else the assistant's own execution target (the Oven every unattended run of that assistant uses), else the last task.
+- A thread **moved to another project** follows that project's Oven, exactly as a thread created there would.
+
+An Oven is never inherited across a project boundary: a machine remembered from other work cannot follow a thread into a local project.
+
 ## Oven checkouts
 
 A remote thread reads and writes one directory on its Oven. Files, Git, the file tree, previews, directory previews, transfers, and the Oven shell all resolve to that same checkout, so no panel can disagree about where the work lives.

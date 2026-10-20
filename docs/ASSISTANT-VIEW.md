@@ -172,9 +172,14 @@ the engineering agent behavior:
   permission level: a task stays pinned to auto review until File System is
   turned on for the assistant itself, exactly like a chat. Changing a model in a
   task commits to the assistant store, so an assistant task never reshapes the
-  model a chat or a project thread starts on. The model pickers in a task and in
-  an assistant's **Agents** tab read the assistant's own favorites and recently
-  used models (`assistantFavoriteModels` / `assistantRecentModels` in
+  model a chat or a project thread starts on. Where the task runs follows a
+  different order: the task in focus, else the assistant's own execution target,
+  else the last task's Oven (`settingsForNewAssistantTask` applies
+  `settingsWithAssistantTarget` in `src/lib/assistant-execution.ts`, the same
+  overlay the dispatch path runs), so a new task's Oven control already names the
+  machine its runs will use. The model pickers in a task and in an assistant's
+  **Agents** tab read the assistant's own favorites and recently used models
+  (`assistantFavoriteModels` / `assistantRecentModels` in
   `src/renderer/lib/stores/renderer-recovery.svelte.ts`).
 
 ## Scheduler contract
