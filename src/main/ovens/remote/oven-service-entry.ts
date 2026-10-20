@@ -1101,9 +1101,16 @@ async function main(): Promise<void> {
   process.stdout.write(await request(data))
 }
 
-void main().catch(() => {
+void main().catch((error: unknown) => {
+  // Name the real reason. This used to print a fixed "install the service again",
+  // which sent users to reinstall a healthy service instead of showing them what
+  // actually failed (an unknown mode, a permission problem, a bad data root).
+  const reason = error instanceof Error ? error.message : String(error)
   process.stdout.write(
-    '{"ok":false,"error":"The Oven service is unavailable. Check its Node runtime and install the service again."}\n'
+    `${JSON.stringify({
+      ok: false,
+      error: `The Oven service could not handle this request: ${reason}`
+    })}\n`
   )
   process.exitCode = 1
 })
