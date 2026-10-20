@@ -127,15 +127,7 @@
           {:else if mention.type === 'task'}
             <CioListTodo size={13} class="shrink-0 text-info" />
           {:else if mention.type === 'assistant'}
-            <AssistantIcon
-              mark={mention.entry.kind === 'assistant'
-                ? 'assistant'
-                : mention.entry.run
-                  ? 'run'
-                  : 'task'}
-              size={13}
-              class="shrink-0 text-info"
-            />
+            <AssistantIcon mark={mention.entry.mark} size={13} class="shrink-0 text-info" />
           {:else if mention.entry.kind === 'directory'}
             <FolderTypeIcon name={mention.entry.name} size={13} />
           {:else}

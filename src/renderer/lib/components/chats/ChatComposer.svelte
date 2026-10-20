@@ -26,6 +26,7 @@
   import { applyModelProfile } from '$shared/model-profiles'
   import { modelKey } from '$lib/model-keys'
   import { getInlineFileTypeIconSvg, getInlineFolderTypeIconSvg } from '../files/file-type-icons'
+  import { assistantTagBadgeSvg } from '../assistant/assistant-tag-badge'
   import { visionModels } from '$lib/stores/vision-models.svelte'
   import { fileUrlToPath, mimeFromPath, pathToFileUrl, attachmentPreviewKind } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
@@ -504,7 +505,18 @@
       label: abbreviatedTaskTitle(reference.title),
       title: `Task: ${reference.title} · Worker: ${reference.workerName ?? 'Unassigned'}`,
       value: taskReferenceToken(reference)
-    }))
+    })),
+    // A tagged assistant or thread reads as its mark plus its name, never as the
+    // id the token carries: the id is what the agent needs, not what the writer
+    // should have to look at.
+    ...assistantTags
+      .filter((tag) => value.includes(composerAssistantTagToken(tag)))
+      .map((tag) => ({
+        iconSvg: assistantTagBadgeSvg(tag.mark),
+        label: abbreviatedTaskTitle(tag.name),
+        title: `${tag.detail}: ${tag.name}`,
+        value: composerAssistantTagToken(tag)
+      }))
   ])
   let isDragging = $state(false)
   /** Root element of the composer, used to find the conversation region it sits in. */

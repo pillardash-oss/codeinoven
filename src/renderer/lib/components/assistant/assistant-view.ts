@@ -1327,10 +1327,6 @@ export function connectionsFromPlan(
   return merged
 }
 
-/** How many assistant tag rows a composer menu may draw from, so the list stays
- *  bounded on a workspace with hundreds of runs. */
-const MAX_ASSISTANT_TAG_CANDIDATES = 60
-
 export interface AssistantTagCandidateInput {
   assistants: readonly Assistant[]
   /** The Assistant tab's threads: tasks, runs and Getting started conversations. */
@@ -1344,8 +1340,13 @@ export interface AssistantTagCandidateInput {
  *
  * Assistants come first, then their threads newest-first, because a message
  * usually points at a thread and the assistant beside it is the group that
- * thread belongs to. A candidate carries only ids and names: the token a pick
- * inserts is the id, and the agent tails the thread for the content.
+ * thread belongs to. A candidate carries only ids, names and the mark it wears:
+ * the token a pick inserts is the id, and the agent tails the thread for the
+ * content.
+ *
+ * The list is unbounded on purpose. It is both what the menu filters and what
+ * the composer resolves a badge through, so a tag restored from a draft keeps
+ * its thread's title instead of falling back to a raw id.
  */
 export function buildAssistantTagCandidates({
   assistants,
@@ -1362,6 +1363,7 @@ export function buildAssistantTagCandidates({
       id: assistant.id,
       name: assistant.name,
       detail: threadCount === 1 ? 'Assistant · 1 thread' : `Assistant · ${threadCount} threads`,
+      mark: 'mark',
       keywords: ['assistant', 'assistants']
     })
   }
@@ -1380,6 +1382,7 @@ export function buildAssistantTagCandidates({
       id: thread.id,
       name: thread.title.trim() || 'Untitled thread',
       detail: assistant ? `${kindLabel} · ${assistant.name}` : kindLabel,
+      mark: thread.assistantTaskId ? 'run' : isAssistantSetupThread(thread) ? 'knowledge' : 'task',
       run: thread.assistantTaskId !== undefined,
       keywords: [
         'thread',
@@ -1391,5 +1394,5 @@ export function buildAssistantTagCandidates({
     })
   }
 
-  return candidates.slice(0, MAX_ASSISTANT_TAG_CANDIDATES)
+  return candidates
 }

@@ -6,6 +6,7 @@ import {
   type ComposerAssistantTag,
   type ComposerBuiltInTag
 } from '../chats/composer-mentions'
+import { assistantTagBadgeSvg } from '$lib/components/assistant/assistant-tag-badge'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -163,10 +164,9 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
 
 function inlineAssistantTagChipHtml(tag: ComposerAssistantTag, title: string): string {
   const safeTitle = escapeHtmlForChip(`${tag.detail}: ${title}`)
-  // The assistant mark, so a tagged thread reads as an assistant-space thread
-  // and not as another file path.
-  const icon =
-    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v9a2.5 2.5 0 0 1-2.5 2.5H10l-4 4v-4H6.5A2.5 2.5 0 0 1 4 14.5z"/></svg>'
+  // The same mark the composer badge wears, so a tagged thread reads the same
+  // before the send and after it.
+  const icon = assistantTagBadgeSvg(tag.mark)
   return `<span class="inline-flex max-w-full items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(tag.id)}">${icon}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
 }
 
@@ -202,6 +202,7 @@ function assistantTagChips(
         : thread.assistantGettingStarted
           ? 'Getting started'
           : 'Assistant task',
+      mark: thread.assistantTaskId ? 'run' : thread.assistantGettingStarted ? 'knowledge' : 'task',
       keywords: []
     }
     chips.push({ token, html: inlineAssistantTagChipHtml(tag, title) })
@@ -214,6 +215,7 @@ function assistantTagChips(
       id: assistant.id,
       name: assistant.name,
       detail: 'Assistant',
+      mark: 'mark',
       keywords: []
     }
     chips.push({ token, html: inlineAssistantTagChipHtml(tag, assistant.name) })

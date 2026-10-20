@@ -1294,6 +1294,12 @@ space (`ComposerAssistantTag`, `src/lib/components/chats/composer-mentions.ts`).
 - A pick inserts an id and nothing else: `@thread:<threadId>` for a thread,
   `@assistant:<assistantId>` for an assistant. No transcript is copied into the
   prompt, so a tag costs one line no matter how long the thread is.
+- The writer never sees that id. The composer renders the token as an inline
+  badge carrying the assistant mark and the thread title
+  (`assistant-tag-badge.ts`, `projectReferenceBadges` in `ChatComposer.svelte`),
+  and a sent message renders the same mark plus the title
+  (`thread-message-presentation.ts`). The id stays in the stored text, which is
+  what the agent reads.
 - The assistant prompt (`src/lib/cio-prompts.ts`, id `assistant`) tells the agent
   what a tag is and to read it before answering: `cio_util_diagnose` with
   `read_messages` returns a tagged thread's newest messages.
@@ -1301,5 +1307,3 @@ space (`ComposerAssistantTag`, `src/lib/components/chats/composer-mentions.ts`).
   shut until the caret leaves that `@` (`composerMentionStart`,
   `ChatComposer.svelte`), so a typed tag stays exactly as typed instead of
   springing back open.
-- A sent tag renders as a chip named by the live thread title or assistant name
-  (`thread-message-presentation.ts`), never as a raw id.
