@@ -79,9 +79,16 @@ export function remoteShell(ssh: OvenSsh, id: string): Promise<RemoteShell> {
  * and bundle payloads the caller sends. PowerShell 5.1 ships with every
  * supported Windows, so no PowerShell 7 is assumed.
  */
-export function windowsEncodedCommand(script: string, options: { interactive?: boolean } = {}): string {
-  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+export function windowsEncodedCommand(
+  script: string,
+  options: { interactive?: boolean } = {}
+): string {
   const flags = options.interactive ? '-NoProfile -NoExit' : '-NoProfile -NonInteractive'
+  // An empty script is a request for a shell, not for a command. Emitting the
+  // flag with nothing after it made PowerShell print its own help and exit, so
+  // opening a Windows Oven's shell produced a page of usage instead of a prompt.
+  if (!script.trim()) return `powershell ${flags}`
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
   return `powershell ${flags} -EncodedCommand ${encoded}`
 }
 

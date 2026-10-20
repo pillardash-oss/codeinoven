@@ -118,6 +118,22 @@ describe('oven remote commands', () => {
     expect(script).toContain("Set-Location -LiteralPath 'C:\\work'")
   })
 
+  it('opens a bare Windows shell without an empty encoded command', () => {
+    // The Oven's own shell passes no root, no environment and no script, so there
+    // is nothing to encode. `-EncodedCommand` with no value made PowerShell print
+    // its help and exit instead of opening a prompt.
+    for (const shell of ['cmd', 'powershell'] as const) {
+      const command = remoteTerminalCommand({
+        shell,
+        root: undefined,
+        environment: {},
+        script: undefined
+      })
+      expect(command).toBe('powershell -NoProfile -NoExit')
+      expect(command).not.toContain('-EncodedCommand')
+    }
+  })
+
   it('runs an action script as a Windows child program', () => {
     const command = remoteTerminalCommand({
       shell: 'powershell',
