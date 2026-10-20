@@ -56,7 +56,7 @@ import { SpeechLearningService } from './speech-learning-service'
 import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
 import { TtsPlaybackService } from './tts-playback-service'
 import { NativeSpeechCapture } from './native-speech-capture'
-import { requestMicrophoneAccess } from './microphone-access'
+import { microphoneAccessGranted, requestMicrophoneAccess } from './microphone-access'
 import { validateSpeechModelPath } from './speech-service/model-path-validation'
 import { SpeechPlaygroundStore } from './speech-service/speech-playground-store'
 import {
@@ -216,15 +216,26 @@ export class SpeechService {
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
     await this.loadInstalledIndex()
+    // Warm the native capture worker so the first recording after a launch does
+    // not pay process and audio-unit init. The warmup opens CoreAudio's input
+    // path, which is exactly what makes macOS show its microphone prompt, so it
+    // is gated on a decision that already exists: a user who has recorded before
+    // starts instantly, while a fresh install is left untouched until the first
+    // recording asks for access.
+    if (microphoneAccessGranted()) {
+      void this.nativeCapture.warm().catch((error) => {
+        Logger.dev('Native speech capture warmup failed (non-fatal):', error)
+      })
+    }
   }
 
   /**
    * Resolve microphone access for a recording the user just asked for.
    *
-   * Never called at launch: the macOS prompt is triggered by touching the input
-   * device, so pre-warming the capture worker at startup made a fresh install
-   * demand microphone permission before the user had recorded anything. The
-   * request is issued here, at the gesture that needs it.
+   * The only place the permission is ever requested: a fresh install is asked
+   * when the user presses the mic, never while the application boots. Warming
+   * the capture worker is separate and only runs once this answer already
+   * exists (see `initialize`).
    */
   ensureMicrophoneAccess(): Promise<SpeechMicrophoneAccess> {
     return requestMicrophoneAccess()

@@ -6,9 +6,33 @@ import { Logger } from '../system/logger'
  * macOS states that will never show a prompt again, so the only honest answer
  * left is where the user has to go to change their mind.
  */
+/** macOS states that will never show a prompt again, so the only honest answer
+ * left is where the user has to go to change their mind. */
 const BLOCKED_MESSAGE =
   'Microphone access is blocked. Allow it in System Settings > Privacy & Security > Microphone.'
 const DECLINED_MESSAGE = 'Microphone access was not granted.'
+
+/**
+ * Whether microphone access is already granted, without asking for it.
+ *
+ * Warming the capture worker means opening CoreAudio's input path, so it is
+ * only safe once the TCC decision exists: `granted` never prompts, while
+ * `not-determined` would turn a background warmup into the permission dialog
+ * the user has not asked for. A user who has recorded before gets an instant
+ * first start after a relaunch; a fresh install stays silent until the
+ * recording gesture asks.
+ */
+export function microphoneAccessGranted(): boolean {
+  // Only macOS gates capture behind a TCC decision, and only macOS has a native
+  // capture worker to warm in the first place.
+  if (process.platform !== 'darwin') return false
+  try {
+    return systemPreferences.getMediaAccessStatus('microphone') === 'granted'
+  } catch (error) {
+    Logger.error('Could not read the microphone access status:', error)
+    return false
+  }
+}
 
 /**
  * Resolve microphone access at the moment the user asks to record.

@@ -94,7 +94,7 @@ Every Apple Silicon checkout resolves the three Swift speech workers (`mlx-worke
 
 Recording begins and ends only through the microphone control unless permission is revoked, the capture device disappears, the application shuts down, storage fails, or disk space becomes insufficient. There is no duration cutoff.
 
-Microphone permission is requested at the recording gesture, never at launch. macOS shows its prompt to a process that touches the input device, so nothing in the application opens an input device while it boots: the capture worker is spawned on the first recording, and the access request (`speech:ensureMicrophoneAccess`) is issued from the button press that starts it. A fresh install is therefore only asked once the user actually records, and a refusal settles that recording as a permission failure with the System Settings path in the message rather than silently falling back.
+Microphone permission is requested at the recording gesture, never at launch. macOS shows its prompt to a process that touches the input device, so the capture worker is only pre-warmed when the TCC decision already exists (`microphoneAccessGranted`): a user who has recorded before gets an instant first start after a relaunch, while a fresh install stays silent until a recording asks for access (`speech:ensureMicrophoneAccess`). A refusal settles that recording as a permission failure with the System Settings path in the message rather than silently falling back.
 
 Media chunks are fixed-size and backpressured. Main writes them into a staging file beneath the CodeInOven configuration directory, finalizes that file atomically, and records an opaque audio ID. Audio, transcripts, model state, history, and learned rules never go into the user's repository.
 
