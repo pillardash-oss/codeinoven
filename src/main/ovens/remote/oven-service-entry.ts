@@ -1103,6 +1103,43 @@ function request(data: string): Promise<string> {
 }
 
 /**
+ * Answer one line that arrived on the long-lived channel.
+ *
+ * File and local-Git work is answered here, in this process, instead of being
+ * forwarded to the daemon socket. The socket is sized for control messages: it
+ * rejects a body over 1 MiB and a response over 2 MiB, and it times out at 30 s,
+ * while a `root-operation` carries a file's contents. Answering in process also
+ * means the action costs one round trip and never starts a second Node, which is
+ * what made opening a folder take seconds on a Windows Oven.
+ *
+ * A forwarded line is sent to the daemon with its newline restored, because the
+ * daemon dispatches on that newline and nothing else. Dropping it here is what
+ * made this whole mode useless in its first release: every forwarded request sat
+ * in the daemon's buffer until the 30 s socket timeout, so each one failed and
+ * the app fell back to a fresh SSH and Node process for every single action.
+ */
+async function attachLine(payload: string): Promise<string> {
+  let parsed: Record<string, unknown> | undefined
+  try {
+    parsed = record(JSON.parse(payload))
+  } catch {
+    // Not an object envelope: let the daemon answer it exactly as before.
+    return await request(`${payload}\n`)
+  }
+  if (parsed['method'] !== 'root-operation') return await request(`${payload}\n`)
+  if (parsed['protocolVersion'] !== PROTOCOL)
+    return JSON.stringify({ ok: false, error: 'Oven protocol version mismatch.' })
+  try {
+    return JSON.stringify({ ok: true, value: await ovenRootOperation(parsed['input']) })
+  } catch (error) {
+    return JSON.stringify({
+      ok: false,
+      error: error instanceof Error ? error.message : 'The remote operation failed.'
+    })
+  }
+}
+
+/**
  * Answer requests over one long-lived channel instead of one process each.
  *
  * Every other request mode is a process per request, which on a Windows Oven
@@ -1118,7 +1155,7 @@ async function attach(): Promise<void> {
     if (!payload) continue
     let response: string
     try {
-      response = await request(payload)
+      response = await attachLine(payload)
     } catch (error) {
       response = JSON.stringify({
         ok: false,

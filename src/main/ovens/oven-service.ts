@@ -26,8 +26,32 @@ import { OvenServiceMissingError, OvenSsh } from './oven-ssh'
 import type { OvenRegistry } from './oven-registry'
 import { beginOvenHarnessRun } from './oven-operation-lock'
 import { remoteShell } from './oven-remote-shell'
-import { OvenChannelUnavailable, OvenRequestChannel } from './oven-request-channel'
+import {
+  OvenChannelUnavailable,
+  OvenRequestChannel,
+  OvenServiceOutdated
+} from './oven-request-channel'
 import { remoteInstallServiceCommand, remoteServiceCommand } from './oven-remote-command'
+
+/**
+ * How long one file, Git, or repository action may run on the Oven.
+ *
+ * The work happens over the warm channel, so this is the point at which a
+ * channel is judged wedged rather than a normal wait: a Git command on a large
+ * checkout can legitimately take a minute, and it must not restart the session.
+ */
+const ROOT_OPERATION_TIMEOUT_MS = 120_000
+
+/** The largest request one root operation may carry. */
+const ROOT_OPERATION_LIMIT_BYTES = 8 * 1024 * 1024
+
+/** How one request should travel when the warm channel cannot carry it. */
+interface SendOptions {
+  /** How long the warm channel waits before it is judged wedged. */
+  timeoutMs?: number
+  /** The service mode the one-request fallback has to run. */
+  mode?: 'request' | 'root-operation'
+}
 
 /**
  * How long an Oven keeps the service it has before this app replaces it again.
@@ -68,7 +92,7 @@ export class OvenService {
 
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
-    this.channel = new OvenRequestChannel(this.ssh)
+    this.channel = new OvenRequestChannel(this.ssh, async () => (await this.ownBundle()).revision)
   }
 
   /**
@@ -78,9 +102,16 @@ export class OvenService {
    * prompt does not pay for the remote process startup the channel exists to
    * avoid. Resolves either way: a warm-up that fails is retried by the request
    * that needs it.
+   *
+   * An Oven still running an older service is updated here, at the moment the
+   * user reaches for it, instead of waiting for the first action to fail.
    */
   async warm(id: string): Promise<void> {
-    await this.channel.warm(id)
+    try {
+      await this.channel.warm(id)
+    } catch (error) {
+      if (error instanceof OvenServiceOutdated) await this.refreshService(id, error.message)
+    }
   }
 
   /** Whether this Oven's channel is already open. */
@@ -208,6 +239,17 @@ export class OvenService {
    *
    * Network Git channels mirror the local identity and its host trust first;
    * every other channel runs with the checkout as it stands.
+   *
+   * A file, Git, or repository action is ordinary work, so it travels over the
+   * warm channel: one round trip to a process that is already reading requests.
+   * It used to run as its own `ssh` invocation that started a second Node and
+   * loaded the whole service before the action began, and it queued behind every
+   * other action on that machine. That is why opening a folder, listing a
+   * directory and reading the first file each took a visible pause.
+   *
+   * Network Git stays on its own invocation because it needs agent forwarding,
+   * which the shared session does not open, and the user already expects to wait
+   * for a push or a pull.
    */
   async rootOperation(
     id: string,
@@ -236,16 +278,23 @@ export class OvenService {
       }))
     }
     const data = JSON.stringify(input)
-    if (Buffer.byteLength(data) > 8 * 1024 * 1024)
+    if (Buffer.byteLength(data) > ROOT_OPERATION_LIMIT_BYTES)
       throw new Error('The Oven operation exceeds 8 MiB.')
+    if (!network)
+      return this.decode<unknown>(
+        await this.send(id, data, {
+          timeoutMs: ROOT_OPERATION_TIMEOUT_MS,
+          mode: 'root-operation'
+        })
+      )
     const output = await this.ssh.execute(
       id,
       remoteServiceCommand(await remoteShell(this.ssh, id), ['root-operation']),
       `${data}\n`,
       150_000,
       undefined,
-      network,
-      8 * 1024 * 1024
+      true,
+      ROOT_OPERATION_LIMIT_BYTES
     )
     return this.decode<unknown>(output)
   }
@@ -330,23 +379,38 @@ export class OvenService {
    * One request through the channel, falling back to a process per request.
    *
    * A channel that cannot start is not a failed request, and a missing service
-   * file is this app's own artifact to restore, so both are repaired here.
+   * file is this app's own artifact to restore, so both are repaired here. An
+   * Oven answering from an older bundle is replaced once before its work is
+   * retried: the channel carries operations that bundle does not know.
    */
-  private async send(id: string, data: string): Promise<string> {
+  private async send(id: string, data: string, options: SendOptions = {}): Promise<string> {
+    const mode = options.mode ?? 'request'
     try {
-      return await this.channel.request(id, data)
+      return await this.channel.request(id, data, options.timeoutMs)
     } catch (error) {
-      if (error instanceof OvenChannelUnavailable) return await this.oneShot(id, data)
+      if (error instanceof OvenServiceOutdated) {
+        if (!(await this.refreshService(id, error.message)))
+          throw new Error(
+            'This Oven runs an older service. Finish its active runs, then install the service again from its settings.',
+            { cause: error }
+          )
+        return await this.channel.request(id, data, options.timeoutMs)
+      }
+      if (error instanceof OvenChannelUnavailable) return await this.oneShot(id, data, mode)
       if (!(error instanceof OvenServiceMissingError)) throw error
       await this.install(id)
-      return await this.oneShot(id, data)
+      return await this.oneShot(id, data, mode)
     }
   }
 
   /** One request in its own ssh process, the path a cold or broken channel uses. */
-  private async oneShot(id: string, data: string): Promise<string> {
+  private async oneShot(
+    id: string,
+    data: string,
+    mode: 'request' | 'root-operation' = 'request'
+  ): Promise<string> {
     const shell = await remoteShell(this.ssh, id)
-    const command = remoteServiceCommand(shell, ['request'])
+    const command = remoteServiceCommand(shell, [mode])
     try {
       return await this.ssh.execute(id, command, `${data}\n`)
     } catch (error) {
