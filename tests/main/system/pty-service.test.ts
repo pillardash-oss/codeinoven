@@ -9,7 +9,7 @@ vi.mock('node-pty', () => ({
 }))
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), on: vi.fn() },
-  safeStorage: { isEncryptionAvailable: () => false }
+  safeStorage: { isAsyncEncryptionAvailable: async () => false }
 }))
 
 import { PtyService } from '../../../src/main/system/pty-service'

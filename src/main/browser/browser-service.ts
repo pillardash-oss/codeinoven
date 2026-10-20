@@ -470,6 +470,19 @@ function isWebContents(value: unknown): value is WebContents {
 }
 
 /**
+ * Copy text from a menu action.
+ *
+ * The clipboard module returns a promise for every write since Electron 44, and a
+ * menu action cannot await it, so the write is fired and a failure is logged instead
+ * of becoming an unhandled rejection that would take the main process down.
+ */
+function copyTextToClipboard(text: string): void {
+  clipboard.writeText(text).catch((error: unknown) => {
+    Logger.error('Browser context menu could not copy to the clipboard:', error)
+  })
+}
+
+/**
  * URL of the frame that logged a console message, or null when there is none to
  * name.
  *
@@ -6221,7 +6234,7 @@ export class BrowserService {
       viewSource: () => this.openViewSourceInNewTab(page),
       copyPageAddress: () => {
         const current = live()
-        if (current) clipboard.writeText(current.getURL())
+        if (current) copyTextToClipboard(current.getURL())
       },
       inspectElement: (x, y) => live()?.inspectElement(x, y),
       selectAll: () => live()?.selectAll(),
@@ -6255,8 +6268,8 @@ export class BrowserService {
       openMediaInNewTab: openInNewTab,
       saveMediaAs: saveAs,
       copyImage: (x, y) => live()?.copyImageAt(x, y),
-      copyAddress: (url) => clipboard.writeText(url),
-      copyText: (text) => clipboard.writeText(text),
+      copyAddress: (url) => copyTextToClipboard(url),
+      copyText: (text) => copyTextToClipboard(text),
       searchFor: (text) => this.searchSelectionInNewTab(owner, text),
       undo: () => live()?.undo(),
       redo: () => live()?.redo(),

@@ -14,11 +14,15 @@ interface CookieSession {
 const sessions = new Map<Session, CookieSession>()
 const MAX_SNAPSHOT_BYTES = 1024 * 1024
 
-function encryptionAvailable(): boolean {
-  return (
-    safeStorage.isEncryptionAvailable() &&
-    (process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text')
-  )
+/**
+ * Whether the snapshot may be written, asked through the async API because
+ * `safeStorage`'s synchronous checks are deprecated in Electron 45 and removed in 46.
+ * The Linux `basic_text` backend is a plaintext password store, so a session cookie
+ * jar is never written to it.
+ */
+async function encryptionAvailable(): Promise<boolean> {
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) return false
+  return process.platform !== 'linux' || safeStorage.getSelectedStorageBackend() !== 'basic_text'
 }
 
 function isCookie(value: unknown): value is Cookie {
@@ -51,7 +55,7 @@ export function restoreBrowserSessionCookies(browserSession: Session): Promise<v
   }
   sessions.set(browserSession, state)
   state.ready = (async () => {
-    if (!encryptionAvailable()) return
+    if (!(await encryptionAvailable())) return
     try {
       if ((await stat(state.path)).size > MAX_SNAPSHOT_BYTES) {
         throw new Error('Cookie snapshot exceeds size limit')
@@ -59,7 +63,7 @@ export function restoreBrowserSessionCookies(browserSession: Session): Promise<v
       const encrypted = await readFile(state.path)
       if (encrypted.length > MAX_SNAPSHOT_BYTES)
         throw new Error('Cookie snapshot exceeds size limit')
-      const parsed: unknown = JSON.parse(safeStorage.decryptString(encrypted))
+      const parsed: unknown = JSON.parse((await safeStorage.decryptStringAsync(encrypted)).result)
       if (!Array.isArray(parsed) || !parsed.every(isCookie))
         throw new Error('Invalid cookie snapshot')
       const current = await browserSession.cookies.get({})
@@ -109,12 +113,13 @@ export function restoreBrowserSessionCookies(browserSession: Session): Promise<v
 function persist(browserSession: Session, state: CookieSession): Promise<void> {
   state.tail = state.tail
     .then(async () => {
-      if (!encryptionAvailable()) return
+      if (!(await encryptionAvailable())) return
       const cookies = await browserSession.cookies.get({ session: true })
       const payload = JSON.stringify(cookies)
       if (Buffer.byteLength(payload) > MAX_SNAPSHOT_BYTES - 64)
         throw new Error('Cookie snapshot exceeds size limit')
-      await writeFile(`${state.path}.tmp`, safeStorage.encryptString(payload), { mode: 0o600 })
+      const encrypted = await safeStorage.encryptStringAsync(payload)
+      await writeFile(`${state.path}.tmp`, encrypted, { mode: 0o600 })
       await rename(`${state.path}.tmp`, state.path)
     })
     .catch((error: unknown) => Logger.error('Browser session cookies could not be saved:', error))
