@@ -69,9 +69,9 @@ export interface TerminalSession {
   kind: 'shell' | 'action'
   /**
    * The app ended this shell on purpose (an update install stopping work, or a
-   * kill from the task manager). Read at respawn time: a shell that exited on
-   * its own is restarted like a desktop terminal, one the app stopped stays
-   * stopped, and only a new terminal brings a shell back here.
+   * kill from the task manager). Read at respawn time: a shell the app stopped, or
+   * one the user closed with `exit`, stays stopped, and only a new terminal brings
+   * a shell back here.
    */
   stoppedByApp: boolean
 }
@@ -458,10 +458,13 @@ class TerminalSessionManager {
       })
     )
 
-    // Restart the shell after it exits (Ctrl-D / `exit` / crash), like a
-    // desktop terminal. The live Ghostty buffer and this session are reused —
-    // only the PTY is respawned. A broken shell that exits immediately is
-    // backoff-guarded so we don't respawn forever.
+    // Reconnect a shell that died on its own (ssh dropped, the process crashed),
+    // so a dropped connection heals without the user reopening the surface. A
+    // shell the user ended with `exit` or Ctrl-D stays ended: reopening it under
+    // them is what made an exited Oven shell look like a restarted Oven. The live
+    // Ghostty buffer and this session are reused when a respawn does happen, so
+    // only the PTY is created again, and an immediately failing shell is
+    // backoff-guarded so it cannot reconnect forever.
     let respawnTimer: ReturnType<typeof setTimeout> | undefined
     const respawn = async (): Promise<void> => {
       if (!session.projectId && !session.ovenShellId) {
@@ -512,10 +515,13 @@ class TerminalSessionManager {
     )
 
     subs.push(
-      subscribe(`pty:exit:${id}`, () => {
+      subscribe(`pty:exit:${id}`, (exitCode: unknown) => {
         term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
         session.exited = true
-        if (session.kind === 'shell') void respawn()
+        // A clean exit is the user typing `exit` in a live shell, so it stays
+        // closed; anything else is the session failing and reconnects.
+        const clean = exitCode === 0
+        if (session.kind === 'shell' && !clean) void respawn()
       })
     )
     subs.push(() => {
