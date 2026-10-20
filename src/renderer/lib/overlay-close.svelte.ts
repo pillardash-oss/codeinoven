@@ -71,6 +71,42 @@ export function requestCloseTopOverlay(): boolean {
   return true
 }
 
+/**
+ * Step every surface that owns the window aside, top down.
+ *
+ * A navigation the user asked for from outside the shell (a notification's
+ * "Open thread") has to leave nothing in front of the workspace. A modal that
+ * owns the window still honoured such a navigation: the thread opened behind a
+ * full screen reader or a confirm sheet, and the surface the user had just left
+ * kept the window. Overlays that registered as not owning the window are left
+ * alone; a floating dockable panel registers as owning it, so the notification
+ * panel closes behind the card that was clicked.
+ *
+ * A closed overlay does not leave the stack until Svelte flushes its unmount, so
+ * the handlers already asked to close are tracked here: re-reading the stack
+ * would call the same overlay on every pass.
+ */
+export function closeBlockingSurfaces(limit = 6): void {
+  const called: CloseHandler[] = []
+  for (let step = 0; step < limit; step++) {
+    let handler: CloseHandler | undefined
+    for (let index = closeHandlers.length - 1; index >= 0; index--) {
+      const candidate = closeHandlers[index]
+      if (nonBlockingHandlers.has(candidate) || called.includes(candidate)) continue
+      handler = candidate
+      break
+    }
+    if (handler) {
+      called.push(handler)
+      handler()
+      continue
+    }
+    // Registered overlays are gone; anything still in front is a bits-ui dialog
+    // or an element-level Escape handler, which answers the synthetic Escape.
+    if (!closeTopVisibleDialog()) return
+  }
+}
+
 const DIALOG_SELECTOR = '[aria-modal="true"], [role="alertdialog"]'
 
 function isVisible(element: Element): boolean {

@@ -27,7 +27,11 @@
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
   import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
-  import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
+  import {
+    closeBlockingSurfaces,
+    closeTopVisibleDialog,
+    requestCloseTopOverlay
+  } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
@@ -1313,6 +1317,11 @@
     project: Project | null,
     temporaryChatId?: string
   ): Promise<void> {
+    // The click is a decision to go somewhere, so whatever owns the window steps
+    // aside first. Without this a full screen reader (or a confirm sheet) stayed
+    // up over the workspace and the thread opened behind it, which read as a
+    // button that navigated to nothing.
+    closeBlockingSurfaces()
     const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
