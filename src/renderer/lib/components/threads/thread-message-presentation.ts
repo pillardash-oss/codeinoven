@@ -7,6 +7,7 @@ import {
   type ComposerBuiltInTag
 } from '../chats/composer-mentions'
 import { assistantTagIconHtml } from '$lib/components/assistant/assistant-tag-badge'
+import { assistantAccentColor } from '$lib/assistant-icons'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -167,7 +168,10 @@ function inlineAssistantTagChipHtml(tag: ComposerAssistantTag, title: string): s
   // The same assistant icon the composer badge wears, so a tagged thread reads
   // the same before the send and after it. The chip is a control: it carries the
   // tag it names, and the conversation opens that thread from it.
-  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(`${tag.kind}:${tag.id}`)}">${tag.iconHtml}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
+  // The assistant's accent edges the chip, exactly like the badge in the
+  // composer and the assistant's own rows, so the same tag reads the same
+  // before and after the send.
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" style="border-left:2px solid ${escapeHtmlForChip(tag.color)}" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(`${tag.kind}:${tag.id}`)}">${tag.iconHtml}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
 }
 
 /** The assistant-space names a sent tag can render with. */
@@ -209,6 +213,9 @@ function assistantTagChips(
         (thread.assistantId ? assistantById.get(thread.assistantId) : undefined) ?? {},
         thread.assistantId ? lookup.assistantIcons?.get(thread.assistantId) : undefined
       ),
+      color: assistantAccentColor(
+        (thread.assistantId ? assistantById.get(thread.assistantId) : undefined) ?? {}
+      ),
       keywords: []
     }
     chips.push({ token, html: inlineAssistantTagChipHtml(tag, title) })
@@ -222,6 +229,7 @@ function assistantTagChips(
       name: assistant.name,
       detail: 'Assistant',
       iconHtml: assistantTagIconHtml(assistant, lookup.assistantIcons?.get(assistant.id)),
+      color: assistantAccentColor(assistant),
       keywords: []
     }
     chips.push({ token, html: inlineAssistantTagChipHtml(tag, assistant.name) })

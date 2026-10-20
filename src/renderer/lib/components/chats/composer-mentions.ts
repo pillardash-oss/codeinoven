@@ -95,6 +95,12 @@ export interface ComposerAssistantTag {
    * chip draw the same assistant.
    */
   iconHtml: string
+  /**
+   * The assistant's accent colour, drawn as the tag's inset left edge the way
+   * the assistant's own colour edges its rows, so a tag carries the same
+   * identity the tab does.
+   */
+  color: string
   /** Whether a thread row is a run (one execution) rather than a task. */
   run?: boolean
   /** Lower-cased words a mention query may match beyond the name. */

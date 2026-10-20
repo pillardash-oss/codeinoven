@@ -518,6 +518,7 @@
       .filter((tag) => value.includes(composerAssistantTagToken(tag)))
       .map((tag) => ({
         iconSvg: tag.iconHtml,
+        accentColor: tag.color,
         label: abbreviatedTaskTitle(tag.name),
         title: `Open ${tag.detail}: ${tag.name}`,
         value: composerAssistantTagToken(tag)

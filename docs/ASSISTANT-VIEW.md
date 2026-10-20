@@ -1298,8 +1298,10 @@ space (`ComposerAssistantTag`, `src/lib/components/chats/composer-mentions.ts`).
   badge carrying the assistant's own icon and the thread title
   (`assistantTagIconHtml` in `assistant-tag-badge.ts`,
   `projectReferenceBadges` in `ChatComposer.svelte`), and a sent message renders
-  the same icon plus the title (`thread-message-presentation.ts`). The id stays
-  in the stored text, which is what the agent reads.
+  the same icon plus the title (`thread-message-presentation.ts`). The tag also
+  wears the assistant's accent colour as its inset left edge
+  (`RichInlineBadge.accentColor`), the same way the assistant's rows do. The id
+  stays in the stored text, which is what the agent reads.
 - A tag is a link: clicking its badge or its chip opens that thread
   (`onInlineBadgeActivate` in `RichMarkdownEditor.svelte`, `onOpenAssistantTag`
   in `MarkdownView.svelte`). An assistant tag opens its Getting started

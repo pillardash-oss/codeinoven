@@ -21,6 +21,7 @@ import {
 } from '$shared/types'
 import { normalizePlanDelivery, normalizePlanPriority } from '$shared/assistant-reporting'
 import type { ComposerAssistantTag } from '../chats/composer-mentions'
+import { assistantAccentColor } from '../../assistant-icons'
 import { assistantTagIconHtml } from './assistant-tag-badge'
 import {
   parseAssistantPlanJson,
@@ -1368,6 +1369,7 @@ export function buildAssistantTagCandidates({
       name: assistant.name,
       detail: threadCount === 1 ? 'Assistant · 1 thread' : `Assistant · ${threadCount} threads`,
       iconHtml: assistantTagIconHtml(assistant, assistantIcons?.get(assistant.id)),
+      color: assistantAccentColor(assistant),
       keywords: ['assistant', 'assistants']
     })
   }
@@ -1389,6 +1391,7 @@ export function buildAssistantTagCandidates({
       // A thread is identified by the assistant it belongs to, not by the work
       // item: an assistant-less task has no icon of its own to draw.
       iconHtml: assistantTagIconHtml(assistant ?? {}, assistantIcons?.get(assistant?.id ?? '')),
+      color: assistantAccentColor(assistant ?? {}),
       run: thread.assistantTaskId !== undefined,
       keywords: [
         'thread',
