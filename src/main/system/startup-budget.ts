@@ -36,12 +36,6 @@ import type { StartupPhase, StartupTelemetrySnapshot } from './startup-telemetry
  * JavaScript closure is what the first paint actually waits on, and it is
  * measured independently by `bun run check:bundle`; this is the runtime half of
  * the same promise.
- *
- * The budget describes a renderer that executes the packaged bundle. A launch
- * whose renderer is served by the Vite dev server fetches every unbundled module
- * over HTTP before it can paint, so it misses the budget by seconds while
- * booting no slower than the shipped app; the caller must not measure that
- * renderer against this number.
  */
 export const STARTUP_BUDGET_MS = 5_000
 
