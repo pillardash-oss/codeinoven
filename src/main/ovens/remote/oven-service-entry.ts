@@ -1060,13 +1060,26 @@ async function main(): Promise<void> {
     for (let attempt = 0; attempt < 50; attempt++) {
       await new Promise<void>((resolve) => setTimeout(resolve, 100))
       try {
-        process.stdout.write(await request(data))
-        return
+        const answer = await request(data)
+        const parsed = JSON.parse(answer) as { ok?: boolean; value?: OvenProbe }
+        // A service that is still shutting down keeps answering for a moment,
+        // and its failure is not this update's result. Reporting that answer
+        // made a finished install look like a failed one: the app showed the
+        // old service's error (on Windows, `spawn EINVAL` from a bundle that
+        // could not start npm's `.cmd` shims) and left the Oven on the old
+        // file it had just replaced. Only a healthy answer from the revision
+        // that was just installed is the result of this call.
+        if (parsed.ok === true && parsed.value?.serviceRevision === revision) {
+          process.stdout.write(`${JSON.stringify(parsed)}\n`)
+          return
+        }
       } catch {
         /* Wait for socket startup. */
       }
     }
-    throw new Error('The Oven service could not start.')
+    throw new Error(
+      'The Oven service did not come back after it was installed. Check that no other Oven service process is still running, then install it again.'
+    )
   }
   if (!['request', 'workspace', 'root-operation'].includes(process.argv[2]))
     throw new Error('Use ensure, attach, request, workspace, or daemon.')

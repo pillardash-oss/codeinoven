@@ -177,7 +177,15 @@ export function registerOvenIpc(
     return state
   })
   ipcMain.handle('oven:reorder', (_event, raw: unknown) => registry.reorder(ovenOrder(raw)))
-  ipcMain.handle('oven:install', (_event, raw: unknown) => service.install(ovenId(raw)))
+  ipcMain.handle('oven:install', async (_event, raw: unknown) => {
+    const id = ovenId(raw)
+    const probe = await service.install(id)
+    // The Oven now runs a new service, so the check that described the old one
+    // is no longer true: the next surface reads the Oven again instead of
+    // repeating the failure the replaced service produced.
+    peekService.invalidate(id)
+    return probe
+  })
   ipcMain.handle('oven:probe', async (_event, raw: unknown, refresh: unknown) => {
     const id = ovenId(raw)
     const forceRefresh = refresh === true
