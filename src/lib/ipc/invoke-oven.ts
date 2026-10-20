@@ -18,7 +18,6 @@ import type {
   OvenAgentScript,
   OvenAgentScriptRequest,
   OvenAgentPreview,
-  OvenEndpointProbe,
   OvenAgentRegistrationInput,
   OvenAgentRegistration
 } from '../ovens'
@@ -92,6 +91,5 @@ export const invokeOvenContract = {
     [input: OvenAgentRegistrationInput, requestId: string],
     OvenConnectionStatus
   >,
-  'oven:agent:reachable': {} as Contract<[code: string], OvenEndpointProbe>,
   'oven:agent:register': {} as Contract<[input: OvenAgentRegistrationInput], OvenAgentRegistration>
 }

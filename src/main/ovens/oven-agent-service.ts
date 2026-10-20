@@ -10,13 +10,11 @@ import {
   type OvenAgentScript,
   type OvenAgentScriptRequest,
   type OvenConnectionStatus,
-  type OvenEndpointProbe,
   type SaveOvenInput
 } from '../../lib/ovens'
 import type { OvenRegistry } from './oven-registry'
 import { testDraftConnection } from './oven-connection'
 import { buildOvenAgentScript, normalizeServiceBundle } from './oven-agent-script'
-import { probeEndpoint } from './oven-agent-address'
 import { fingerprint } from './oven-agent-descriptor'
 import { serviceBundleRevision } from './oven-service-bundle'
 import { decodeOvenAgentDescriptor, descriptorHasIdentity } from './oven-agent-descriptor'
@@ -25,8 +23,6 @@ import { Logger } from '../system/logger'
 /** Default appearance for an Oven the app learned about from an agent. */
 const AGENT_ICON = 'server'
 const AGENT_COLOR = '#22c55e'
-/** The port SSH answers on unless the machine says otherwise. */
-const STANDARD_SSH_PORT = 22
 
 /**
  * Generate the standalone Oven agent installer and register machines that ran it.
@@ -58,22 +54,6 @@ export class OvenAgentService {
     const descriptor = decodeOvenAgentDescriptor(code)
     const { revision } = await this.loadBundle()
     return this.previewOf(descriptor, revision)
-  }
-
-  /**
-   * Name the endpoint from a code that this computer can actually reach.
-   *
-   * Registration codes carry every address the machine answers on and the port
-   * it believes its SSH server is on, because only the machine can enumerate
-   * them and only this computer can decide which one works. The reported port is
-   * tried first, then the standard one, so a wrong port is corrected instead of
-   * being saved as truth and timing out on every later connection. Every
-   * candidate that failed keeps its reason, so the app can say what is actually
-   * in the way instead of calling the machine unreachable.
-   */
-  async probeEndpoint(code: string): Promise<OvenEndpointProbe> {
-    const descriptor = decodeOvenAgentDescriptor(code)
-    return probeEndpoint(descriptor.addresses ?? [], [descriptor.port, STANDARD_SSH_PORT])
   }
 
   /**

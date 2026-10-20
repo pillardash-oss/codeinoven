@@ -9,9 +9,8 @@
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import type { OvenAgentPreview, OvenConnectionStatus, OvenEndpointProbe } from '$shared/ovens'
+  import type { OvenAgentPreview, OvenConnectionStatus } from '$shared/ovens'
   import StatusPill from '../ui/StatusPill.svelte'
-  import { reachabilityOf } from './oven-reachability'
 
   interface Props {
     open: boolean
@@ -41,10 +40,6 @@
   /** The address this computer reaches the machine on, editable before saving. */
   let host = $state('')
   let port = $state(22)
-  /** True while the machine's own candidates are being dialed. */
-  let detecting = $state(false)
-  /** What dialling the machine's own candidates reported, when it has run. */
-  let probe = $state<OvenEndpointProbe | null>(null)
   /** True while a full SSH probe is running against the machine. */
   let testing = $state(false)
   let connectionTestId: string | undefined
@@ -74,7 +69,6 @@
     // A preview belongs to the code it was read from. Editing the code
     // invalidates it rather than letting a stale machine be registered.
     if (preview) preview = null
-    probe = null
     testResult = null
   }
 
@@ -123,48 +117,17 @@
     previewing = true
     error = ''
     preview = null
-    probe = null
     try {
       const checked = await invoke('oven:agent:preview', code)
       preview = checked
       // The code carries every address the machine answers on. Show the first
-      // one immediately so the field is never empty, then replace it with the
-      // one that actually answers here.
+      // one so the field is never empty; the user can pick another below.
       host = checked.addresses[0] ?? checked.host
       port = checked.port
-      previewing = false
-      void detectAddress()
     } catch (cause) {
       error = message(cause)
-      previewing = false
-    }
-  }
-
-  /**
-   * Dial the machine's own candidates and keep the endpoint that answers.
-   *
-   * A machine reports its interface addresses but cannot know which one this
-   * computer can reach, and the port it was told is an answer the machine cannot
-   * verify from the outside. Both are settled here: the address and port that
-   * answered are written back into the fields, so a wrong port is corrected
-   * rather than saved and timed out on later. When nothing answers, the field
-   * keeps the machine's own first choice and the probe names what stopped it.
-   */
-  async function detectAddress(): Promise<void> {
-    if (detecting) return
-    detecting = true
-    try {
-      probe = await invoke('oven:agent:reachable', code)
-      const endpoint = probe.endpoint
-      if (endpoint) {
-        host = endpoint.host
-        port = endpoint.port
-      }
-    } catch {
-      // A probe that cannot run is not a registration failure: the field already
-      // holds a usable candidate from the machine itself.
     } finally {
-      detecting = false
+      previewing = false
     }
   }
 
@@ -204,9 +167,7 @@
     cancelConnectionTest()
     code = ''
     preview = null
-    probe = null
     host = ''
-    detecting = false
     testResult = null
     error = ''
     onClose()
@@ -306,8 +267,7 @@
       </button>
 
       {#if preview}
-        {@const reach = probe ? reachabilityOf(probe) : null}
-        {@const verified = testResult?.state === 'connected' || reach?.reachable === true}
+        {@const verified = testResult?.state === 'connected'}
         <div class="space-y-3 border bg-elevated/40 p-3 text-xs">
           <div class="flex items-center gap-2">
             {#if verified}
@@ -367,46 +327,17 @@
             </label>
           </div>
 
-          {#if detecting}
-            <span class="flex items-center gap-1.5 text-muted" role="status">
-              <CioSpinner size={12} class="animate-spin" /> Dialling the addresses and port the machine
-              reported…
-            </span>
-          {:else if reach}
-            <p
-              class="flex items-start gap-1.5 {reach.reachable ? 'text-success' : 'text-warning'}"
-              role={reach.reachable ? 'status' : 'alert'}
-            >
-              {#if reach.reachable}
-                <CioCheckCircle size={12} class="mt-0.5 shrink-0" />
-              {:else}
-                <CioAttention size={12} class="mt-0.5 shrink-0" />
-              {/if}
-              <span>{reach.text}</span>
+          {#if testResult?.state === 'connected'}
+            <p class="px-2 py-1 bg-success/10 text-success" role="status">
+              Connection works: SSH, the key, and the remote shell all answered on {host}:{port}{testResult.specs
+                ? ` (${testResult.specs.hostname})`
+                : ''}{preview.serviceCurrent
+                ? ', and the machine runs the same service as this app'
+                : ''}.
             </p>
-            {#if probe?.endpoint && probe.endpoint.port !== preview.port}
-              <p class="text-warning">
-                The command on the machine reported port {preview.port}, but SSH is not answering
-                there. This computer uses {probe.endpoint.port}. Update the machine's SSH port if
-                that is wrong.
-              </p>
-            {/if}
-          {/if}
-
-          {#if testResult}
-            <p
-              class="px-2 py-1 {testResult.state === 'connected'
-                ? 'bg-success/10 text-success'
-                : 'bg-danger/10 text-danger'}"
-              role={testResult.state === 'connected' ? 'status' : 'alert'}
-            >
-              {#if testResult.state === 'connected'}
-                Connection works: SSH, the key, and the remote shell all answered on {host}:{port}{testResult.specs
-                  ? ` (${testResult.specs.hostname})`
-                  : ''}.
-              {:else}
-                {testResult.error ?? 'The connection failed.'}
-              {/if}
+          {:else if testResult}
+            <p class="px-2 py-1 bg-danger/10 text-danger" role="alert">
+              {testResult.error ?? 'The connection failed.'}
             </p>
           {/if}
 
@@ -432,28 +363,17 @@
           {/if}
 
           <p class="text-muted">
-            The machine reports every address it answers on. This computer dials them and uses the
-            first that connects; the machine's host name (<span class="text-foreground"
-              >{preview.hostname}</span
-            >) is only a fallback, since it often does not resolve here.
+            The machine reports the addresses it answers on. Pick the one this computer reaches; its
+            host name (<span class="text-foreground">{preview.hostname}</span>) is only a fallback,
+            since it often does not resolve here.
           </p>
 
-          <p
-            class={preview.serviceCurrent
-              ? verified
-                ? 'text-success'
-                : 'text-muted'
-              : 'text-warning'}
-          >
-            {#if preview.serviceCurrent}
-              {verified
-                ? 'The machine runs the same service as this app.'
-                : 'The code reports the machine runs the same service as this app.'}
-            {:else}
+          {#if !preview.serviceCurrent}
+            <p class="text-warning">
               The machine runs a different service. Register it, then update the Oven service from
               its row.
-            {/if}
-          </p>
+            </p>
+          {/if}
           {#if !preview.identityPresent}
             <p class="text-warning">
               No key was included. The Oven is saved against your SSH agent; edit it if it needs
@@ -467,7 +387,13 @@
 
   {#snippet footer()}
     <div class="flex items-center justify-between gap-2">
-      <div>
+      <button
+        type="button"
+        data-modal-dismiss
+        class="h-8 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
+        onclick={close}>Close</button
+      >
+      <div class="flex items-center gap-2">
         {#if preview}
           <button
             type="button"
@@ -480,16 +406,6 @@
               />{/if}
             Test connection
           </button>
-        {/if}
-      </div>
-      <div class="flex items-center gap-2">
-        <button
-          type="button"
-          data-modal-dismiss
-          class="h-8 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
-          onclick={close}>Close</button
-        >
-        {#if preview}
           <button
             type="button"
             class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
