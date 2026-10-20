@@ -661,6 +661,31 @@ export interface OvenEndpoint {
   port: number
 }
 
+/** Why one candidate address and port did not answer. */
+export type OvenEndpointFailure = 'refused' | 'timeout' | 'unreachable' | 'unresolved' | 'blocked'
+
+/** What dialling one candidate from the registration code reported. */
+export interface OvenEndpointAttempt {
+  host: string
+  port: number
+  outcome: 'answered' | OvenEndpointFailure
+}
+
+/**
+ * The result of dialling every endpoint a registration code carries.
+ *
+ * The endpoint alone cannot explain a failure: "nothing is serving SSH" is four
+ * different situations (no route to the machine, a name that does not resolve, a
+ * port with no listener, a firewall dropping the attempt) and each one has a
+ * different fix, so every attempt is reported with its own reason.
+ */
+export interface OvenEndpointProbe {
+  /** The address and port that answered, when one did. */
+  endpoint: OvenEndpoint | null
+  /** Every candidate dialled, in the order the code listed it. */
+  attempts: OvenEndpointAttempt[]
+}
+
 /** What the app shows about a descriptor before saving it. Never includes the key. */
 export interface OvenAgentPreview {
   host: string

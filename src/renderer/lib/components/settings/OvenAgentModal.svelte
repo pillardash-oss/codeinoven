@@ -9,7 +9,9 @@
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
-  import type { OvenAgentPreview, OvenConnectionStatus, OvenEndpoint } from '$shared/ovens'
+  import type { OvenAgentPreview, OvenConnectionStatus, OvenEndpointProbe } from '$shared/ovens'
+  import StatusPill from '../ui/StatusPill.svelte'
+  import { reachabilityOf } from './oven-reachability'
 
   interface Props {
     open: boolean
@@ -41,8 +43,8 @@
   let port = $state(22)
   /** True while the machine's own candidates are being dialed. */
   let detecting = $state(false)
-  /** The endpoint that answered, when one did. */
-  let detected = $state<OvenEndpoint | null>(null)
+  /** What dialling the machine's own candidates reported, when it has run. */
+  let probe = $state<OvenEndpointProbe | null>(null)
   /** True while a full SSH probe is running against the machine. */
   let testing = $state(false)
   let connectionTestId: string | undefined
@@ -72,7 +74,7 @@
     // A preview belongs to the code it was read from. Editing the code
     // invalidates it rather than letting a stale machine be registered.
     if (preview) preview = null
-    detected = null
+    probe = null
     testResult = null
   }
 
@@ -121,7 +123,7 @@
     previewing = true
     error = ''
     preview = null
-    detected = null
+    probe = null
     try {
       const checked = await invoke('oven:agent:preview', code)
       preview = checked
@@ -146,17 +148,17 @@
    * verify from the outside. Both are settled here: the address and port that
    * answered are written back into the fields, so a wrong port is corrected
    * rather than saved and timed out on later. When nothing answers, the field
-   * keeps the machine's own first choice and the user can still edit it.
+   * keeps the machine's own first choice and the probe names what stopped it.
    */
   async function detectAddress(): Promise<void> {
     if (detecting) return
     detecting = true
     try {
-      const reachable = await invoke('oven:agent:reachable', code)
-      if (reachable) {
-        detected = reachable
-        host = reachable.host
-        port = reachable.port
+      probe = await invoke('oven:agent:reachable', code)
+      const endpoint = probe.endpoint
+      if (endpoint) {
+        host = endpoint.host
+        port = endpoint.port
       }
     } catch {
       // A probe that cannot run is not a registration failure: the field already
@@ -202,8 +204,8 @@
     cancelConnectionTest()
     code = ''
     preview = null
+    probe = null
     host = ''
-    detected = null
     detecting = false
     testResult = null
     error = ''
@@ -304,14 +306,24 @@
       </button>
 
       {#if preview}
+        {@const reach = probe ? reachabilityOf(probe) : null}
+        {@const verified = testResult?.state === 'connected' || reach?.reachable === true}
         <div class="space-y-3 border bg-elevated/40 p-3 text-xs">
           <div class="flex items-center gap-2">
-            {#if preview.identityPresent}
+            {#if verified}
               <CioCheckCircle size={14} class="text-success" />
             {:else}
-              <CioAttention size={14} class="text-warning" />
+              <CioCable size={14} class="text-muted" aria-hidden="true" />
             {/if}
             <span class="font-medium">{preview.name}</span>
+            <StatusPill
+              tone={verified ? 'success' : 'neutral'}
+              title={verified
+                ? 'This computer reached the machine'
+                : 'Read from the pasted code. The machine has not been contacted yet.'}
+            >
+              {verified ? 'Verified' : 'From the code'}
+            </StatusPill>
           </div>
 
           <dl class="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-muted">
@@ -357,27 +369,28 @@
 
           {#if detecting}
             <span class="flex items-center gap-1.5 text-muted" role="status">
-              <CioSpinner size={12} class="animate-spin" /> Reaching the machine on the addresses and
-              port it reported…
+              <CioSpinner size={12} class="animate-spin" /> Dialling the addresses and port the machine
+              reported…
             </span>
-          {:else if detected}
-            <span class="flex items-center gap-1.5 text-success">
-              <CioCheckCircle size={12} />
-              SSH answered on {detected.host}:{detected.port}, so that is where the Oven will
-              connect.
-            </span>
-            {#if detected.port !== preview.port}
-              <span class="text-warning">
+          {:else if reach}
+            <p
+              class="flex items-start gap-1.5 {reach.reachable ? 'text-success' : 'text-warning'}"
+              role={reach.reachable ? 'status' : 'alert'}
+            >
+              {#if reach.reachable}
+                <CioCheckCircle size={12} class="mt-0.5 shrink-0" />
+              {:else}
+                <CioAttention size={12} class="mt-0.5 shrink-0" />
+              {/if}
+              <span>{reach.text}</span>
+            </p>
+            {#if probe?.endpoint && probe.endpoint.port !== preview.port}
+              <p class="text-warning">
                 The command on the machine reported port {preview.port}, but SSH is not answering
-                there. This computer uses {detected.port}. Update the machine's SSH port if that is
-                wrong.
-              </span>
+                there. This computer uses {probe.endpoint.port}. Update the machine's SSH port if
+                that is wrong.
+              </p>
             {/if}
-          {:else}
-            <span class="text-warning">
-              Nothing is serving SSH on the machine's own addresses and port from this computer.
-              Check the machine's SSH port and firewall, or enter the address you reach it on.
-            </span>
           {/if}
 
           {#if testResult}
@@ -425,10 +438,21 @@
             >) is only a fallback, since it often does not resolve here.
           </p>
 
-          <p class={preview.serviceCurrent ? 'text-success' : 'text-warning'}>
-            {preview.serviceCurrent
-              ? 'The machine runs the same service as this app.'
-              : 'The machine runs a different service. Register it, then update the Oven service from its row.'}
+          <p
+            class={preview.serviceCurrent
+              ? verified
+                ? 'text-success'
+                : 'text-muted'
+              : 'text-warning'}
+          >
+            {#if preview.serviceCurrent}
+              {verified
+                ? 'The machine runs the same service as this app.'
+                : 'The code reports the machine runs the same service as this app.'}
+            {:else}
+              The machine runs a different service. Register it, then update the Oven service from
+              its row.
+            {/if}
           </p>
           {#if !preview.identityPresent}
             <p class="text-warning">

@@ -301,7 +301,7 @@ export function registerOvenIpc(
   })
   ipcMain.handle('oven:agent:reachable', (_event, raw: unknown) => {
     if (typeof raw !== 'string') throw new TypeError('A registration code is required.')
-    return agentService.reachableEndpoint(raw)
+    return agentService.probeEndpoint(raw)
   })
   ipcMain.handle('oven:agent:test', (event, raw: unknown, requestId: unknown) =>
     runConnectionTest(event.sender.id, requestId, (signal) =>

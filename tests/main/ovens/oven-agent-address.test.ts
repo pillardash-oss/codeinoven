@@ -5,7 +5,7 @@ import {
   rankAddresses,
   type AddressCandidate
 } from '../../../packages/cio-oven/src/addresses'
-import { firstReachableEndpoint } from '../../../src/main/ovens/oven-agent-address'
+import { probeEndpoint } from '../../../src/main/ovens/oven-agent-address'
 
 /** Build one interface entry the way `os.networkInterfaces()` reports it. */
 function entry(address: string, family = 'IPv4', internal = false): AddressCandidate {
@@ -94,17 +94,17 @@ describe('oven agent reachability probe', () => {
 
   it('keeps the machine’s own order among the addresses that answer', async () => {
     const port = await listen()
-    expect(await firstReachableEndpoint(['127.0.0.1'], [port])).toEqual({
+    expect((await probeEndpoint(['127.0.0.1'], [port])).endpoint).toEqual({
       host: '127.0.0.1',
       port
     })
     // Only meaningful where IPv6 loopback exists; the probe itself decides.
-    if ((await firstReachableEndpoint(['::1'], [port])) === null) return
-    expect(await firstReachableEndpoint(['::1', '127.0.0.1'], [port])).toEqual({
+    if ((await probeEndpoint(['::1'], [port])).endpoint === null) return
+    expect((await probeEndpoint(['::1', '127.0.0.1'], [port])).endpoint).toEqual({
       host: '::1',
       port
     })
-    expect(await firstReachableEndpoint(['127.0.0.1', '::1'], [port])).toEqual({
+    expect((await probeEndpoint(['127.0.0.1', '::1'], [port])).endpoint).toEqual({
       host: '127.0.0.1',
       port
     })
@@ -114,7 +114,7 @@ describe('oven agent reachability probe', () => {
     const live = await listen()
     const dead = await closedPort()
     // The machine reported `dead`; SSH is really on `live`.
-    expect(await firstReachableEndpoint(['127.0.0.1'], [dead, live])).toEqual({
+    expect((await probeEndpoint(['127.0.0.1'], [dead, live])).endpoint).toEqual({
       host: '127.0.0.1',
       port: live
     })
@@ -123,11 +123,11 @@ describe('oven agent reachability probe', () => {
   it('prefers the machine’s own port over the fallback', async () => {
     const first = await listen()
     const second = await listen()
-    expect(await firstReachableEndpoint(['127.0.0.1'], [first, second])).toEqual({
+    expect((await probeEndpoint(['127.0.0.1'], [first, second])).endpoint).toEqual({
       host: '127.0.0.1',
       port: first
     })
-    expect(await firstReachableEndpoint(['127.0.0.1'], [second, first])).toEqual({
+    expect((await probeEndpoint(['127.0.0.1'], [second, first])).endpoint).toEqual({
       host: '127.0.0.1',
       port: second
     })
@@ -136,17 +136,40 @@ describe('oven agent reachability probe', () => {
   it('skips an address that does not answer instead of failing', async () => {
     const port = await listen()
     // 192.0.2.0/24 is reserved for documentation, so nothing ever answers there.
-    expect(await firstReachableEndpoint(['192.0.2.1', '127.0.0.1'], [port])).toEqual({
+    expect((await probeEndpoint(['192.0.2.1', '127.0.0.1'], [port])).endpoint).toEqual({
       host: '127.0.0.1',
       port
     })
   })
 
-  it('answers null when nothing is listening, so the caller can fall back', async () => {
+  it('answers no endpoint when nothing is listening, so the caller can fall back', async () => {
     // Bind then release, so the port is known to be closed on this machine.
     const port = await closedPort()
-    expect(await firstReachableEndpoint(['127.0.0.1'], [port])).toBeNull()
-    expect(await firstReachableEndpoint([], [port])).toBeNull()
-    expect(await firstReachableEndpoint(['127.0.0.1'], [])).toBeNull()
+    expect((await probeEndpoint(['127.0.0.1'], [port])).endpoint).toBeNull()
+    expect((await probeEndpoint([], [port])).endpoint).toBeNull()
+    expect((await probeEndpoint(['127.0.0.1'], [])).endpoint).toBeNull()
+  })
+
+  it('reports a closed port as refused instead of as an unreachable machine', async () => {
+    const port = await closedPort()
+    const probe = await probeEndpoint(['127.0.0.1'], [port])
+    expect(probe.attempts).toEqual([{ host: '127.0.0.1', port, outcome: 'refused' }])
+  })
+
+  it('reports a name that does not resolve as unresolved', async () => {
+    // .invalid is reserved by RFC 2606 and never resolves.
+    const probe = await probeEndpoint(['oven-agent.invalid'], [22])
+    expect(probe.attempts).toEqual([
+      { host: 'oven-agent.invalid', port: 22, outcome: 'unresolved' }
+    ])
+  })
+
+  it('reports every candidate with its own reason', async () => {
+    const port = await listen()
+    const probe = await probeEndpoint(['192.0.2.1'], [port])
+    expect(probe.endpoint).toBeNull()
+    // A reserved documentation address either has no route or swallows the
+    // attempt; both mean the machine itself cannot be reached.
+    expect(['unreachable', 'timeout']).toContain(probe.attempts[0]?.outcome)
   })
 })
