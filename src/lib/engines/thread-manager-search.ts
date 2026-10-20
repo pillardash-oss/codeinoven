@@ -108,35 +108,86 @@ export class ThreadSearchService {
     onIntentReady: (results: ThreadSearchResult[]) => void
   ): Promise<void> {
     try {
-      const [matches, evidence] = await Promise.all([
-        provider(raw, options),
-        this.conversationEvidence(raw, options, limit)
-      ])
-      // All-term conversation evidence outranks similarity to only one concept.
-      // Keep exact keyword evidence ahead of typo-tolerant evidence.
-      const grounded = [...keyword.filter((result) => result.kind === 'message'), ...evidence]
-      if (matches.length === 0) {
-        if (evidence.length > 0) {
-          onIntentReady(mergeHybridThreadSearchResults(keyword, grounded, limit))
-        }
-        return
-      }
-      const threads = await this.threadRepo.listByIdsViaWorker(
-        matches.map((match) => match.threadId)
-      )
-      const byId = new Map(threads.map((thread) => [thread.id, thread]))
-      const intent: ThreadSearchResult[] = []
-      for (const match of matches) {
-        const thread = byId.get(match.threadId)
-        if (!thread) continue
-        if (!threadMatchesSearchScope(thread, options)) continue
-        intent.push({ thread, kind: 'intent', score: match.score })
-      }
-      if (intent.length === 0 && evidence.length === 0) return
-      onIntentReady(mergeHybridThreadSearchResults(keyword, [...grounded, ...intent], limit))
-    } catch (error) {
+      const merged = await this.mergedWithIntent(raw, options, keyword, limit, provider)
+      if (merged) onIntentReady(merged)
+    } catch (error: unknown) {
       Logger.dev('Intent search enrichment failed; keeping keyword results.', error)
     }
+  }
+
+  /**
+   * Search that waits for the semantic half.
+   *
+   * An agent gathering context has nothing on screen yet, so it can afford to
+   * wait for the embedding model where the spotlight cannot: this resolves with
+   * the merged hybrid ranking instead of handing it to a callback. The wait is
+   * bounded, because a cold local model can take tens of seconds and a tool call
+   * must not hang on it; a timeout, an unready model and a failure all fall back
+   * to the keyword answer, flagged as such.
+   */
+  async searchWithIntent(
+    query: string,
+    options: ThreadSearchOptions = {},
+    timeoutMs = 12_000
+  ): Promise<{ results: ThreadSearchResult[]; semantic: boolean }> {
+    const raw = query.trim()
+    if (!raw) return { results: [], semantic: false }
+    const { results: keyword, limit } = await this.keywordSearch(raw, options)
+    const provider = this.intentProvider
+    if (!provider) return { results: keyword, semantic: false }
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timedOut = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), Math.max(0, timeoutMs))
+    })
+    try {
+      const merged = await Promise.race([
+        this.mergedWithIntent(raw, options, keyword, limit, provider).catch((error: unknown) => {
+          Logger.dev('Semantic thread search failed; keeping keyword results.', error)
+          return null
+        }),
+        timedOut
+      ])
+      if (merged) return { results: merged, semantic: true }
+      return { results: keyword, semantic: false }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * The keyword rows merged with the semantic half, or null when the semantic
+   * half found nothing to add.
+   *
+   * All-term conversation evidence outranks similarity to only one concept, and
+   * exact keyword evidence stays ahead of typo-tolerant evidence.
+   */
+  private async mergedWithIntent(
+    raw: string,
+    options: ThreadSearchOptions,
+    keyword: readonly ThreadSearchResult[],
+    limit: number,
+    provider: IntentSearchProvider
+  ): Promise<ThreadSearchResult[] | null> {
+    const [matches, evidence] = await Promise.all([
+      provider(raw, options),
+      this.conversationEvidence(raw, options, limit)
+    ])
+    const grounded = [...keyword.filter((result) => result.kind === 'message'), ...evidence]
+    if (matches.length === 0) {
+      return evidence.length > 0 ? mergeHybridThreadSearchResults(keyword, grounded, limit) : null
+    }
+    const threads = await this.threadRepo.listByIdsViaWorker(matches.map((match) => match.threadId))
+    const byId = new Map(threads.map((thread) => [thread.id, thread]))
+    const intent: ThreadSearchResult[] = []
+    for (const match of matches) {
+      const thread = byId.get(match.threadId)
+      if (!thread) continue
+      if (!threadMatchesSearchScope(thread, options)) continue
+      intent.push({ thread, kind: 'intent', score: match.score })
+    }
+    if (intent.length === 0 && evidence.length === 0) return null
+    return mergeHybridThreadSearchResults(keyword, [...grounded, ...intent], limit)
   }
 
   private async conversationEvidence(

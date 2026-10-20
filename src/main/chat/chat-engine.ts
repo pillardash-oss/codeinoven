@@ -1838,6 +1838,17 @@ export class ChatEngine {
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
+    // The diagnostics tool is the one app capability every turn carries, so the
+    // hybrid thread search hangs off it: an agent gathering context searches the
+    // user's conversation history by meaning, not only by the words it guessed.
+    this.utilityOrchestration.setThreadSearchProvider(async (query) => {
+      const { results } = await this.threadManager.searchThreadsWithIntent(
+        query,
+        { limit: 20 },
+        12_000
+      )
+      return results
+    })
     // An agent can enter a design or a video session without the user typing the
     // tag for it, by picking up the capability itself, and the session that opens
     // is the same session: the memo the tag sets is set here, and the thread's row

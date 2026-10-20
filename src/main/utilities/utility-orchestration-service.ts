@@ -11,7 +11,8 @@ import type {
   UtilityKind,
   PermissionLevel,
   AgentUtilitySuggestionEntry,
-  UtilityDefinitionInput
+  UtilityDefinitionInput,
+  ThreadSearchResult
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -650,6 +651,22 @@ export class UtilityOrchestrationService {
     this.vault = new SecretVault(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
     this.structuredRoutes = this.buildStructuredRoutes()
+  }
+
+  /**
+   * Hybrid thread search, wired by the engine that owns the thread manager.
+   *
+   * The diagnostics tool is the one app capability every turn carries, so this
+   * is how an agent reaches the user's other conversations: keyword and semantic
+   * matching over titles and content, bounded by the caller's own timeout.
+   */
+  private threadSearch: ((query: string) => Promise<ThreadSearchResult[]>) | null = null
+
+  /** Attach the hybrid thread search used by the diagnostics `search_threads` action. */
+  setThreadSearchProvider(
+    provider: ((query: string) => Promise<ThreadSearchResult[]>) | null
+  ): void {
+    this.threadSearch = provider
   }
 
   /**
@@ -1838,8 +1855,10 @@ export class UtilityOrchestrationService {
 
   /** Read-only app diagnostics, granted on every turn that carries the gateway. */
   private async runDiagnostics(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
-    state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
-      this.projectNames()
+    state.diagnostics ??= new CioDiagnosticsService(
+      requiredDatabase(this.database),
+      () => this.projectNames(),
+      this.threadSearch ?? undefined
     )
     const diagnostics = state.diagnostics
     const action = input['action']

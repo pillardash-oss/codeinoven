@@ -1321,8 +1321,7 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
     const ovenChanged =
-      this.ovenIdChanged(existing, settings) ||
-      existing.settings?.ovenPath !== settings.ovenPath
+      this.ovenIdChanged(existing, settings) || existing.settings?.ovenPath !== settings.ovenPath
     if (ovenChanged && isThreadBusyStatus(existing.status))
       throw new Error('Stop or finish the active turn before changing Ovens.')
     return this.persistSettings(existing, settings)
@@ -1738,6 +1737,22 @@ export class ThreadManager {
     options: ThreadSearchOptions = {}
   ): Promise<import('../types').ThreadSearchResult[]> {
     return this.searchService.search(query, options)
+  }
+
+  /**
+   * Hybrid search that waits for the semantic half, bounded by `timeoutMs`.
+   *
+   * Used by the app-diagnostics tool so an agent gathering context can search
+   * the user's threads by meaning, not only by the words they happen to share.
+   * A cold or unready embedding model, a timeout and a failure all fall back to
+   * the keyword answer, and `semantic` says which one the caller got.
+   */
+  async searchThreadsWithIntent(
+    query: string,
+    options: ThreadSearchOptions = {},
+    timeoutMs = 12_000
+  ): Promise<{ results: import('../types').ThreadSearchResult[]; semantic: boolean }> {
+    return this.searchService.searchWithIntent(query, options, timeoutMs)
   }
 
   /**

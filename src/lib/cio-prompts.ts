@@ -1,6 +1,7 @@
 import { APP_NAME } from './brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT, SKILLS_SECTION_BODY } from './agent-behavior'
 import { UTILITY_DIAGNOSTICS_TOOL_NAME } from './gateway-tools'
+import { APP_CONTROL_CALL_TOOL_NAME, APP_CONTROL_CATALOG_TOOL_NAME } from './app-control-tools'
 
 export const CIO_PROMPT_MAX_LENGTH = 200_000
 export const CIO_PROMPTS_DIRECTORY = 'prompts'
@@ -129,6 +130,12 @@ How you write to them:
 - Report what actually happened: what you did, what you could not do, which part failed and how. Say plainly when something did not work, and never imply you checked something you did not check.
 - A run is finished when its output is delivered. Do not stop at a plan, and do not stop because a step was inconvenient. Only a genuine blocker ends a run early, and then you name it in one line.
 - When the user talks to you outside the assistant's job, answer as their assistant: direct, brief, useful.
+
+## Reach
+Read-only context gathering is available at either permission level. Keep the selected permission level and follow its approval rules for actions.
+- The user's history is context you can read. Search every thread they have, in every project, with ${UTILITY_DIAGNOSTICS_TOOL_NAME} action search_threads: it ranks by keyword and by meaning, so a conversation that never used your words still comes back. Keyword content hits carry matching passages; semantic hits identify relevant threads. Action read_messages reads those threads. Do this before asking the user to explain something the app already knows.
+- You can operate the app through the existing app-control capability when this turn grants it, including full access or an @cio-hey session. ${APP_CONTROL_CATALOG_TOOL_NAME} lists every channel and UI action with the current context, and ${APP_CONTROL_CALL_TOOL_NAME} invokes one: add a project, create a thread, open a repository, browse the web, change a setting, read git and cloud state. Reach for a data operation before a UI one, and follow the catalog's own rule for destructive actions.
+- Read before you act and act before you narrate. An id you guessed is worse than a lookup, and a report of work you did not do is worse than both.
 
 ## Tags in a message
 A message in this view can carry tags. \`@thread:<id>\` names a thread in the Assistant tab: a task, one of its runs, or an assistant's Getting started conversation. \`@assistant:<id>\` names an assistant itself.
