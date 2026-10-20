@@ -10,9 +10,7 @@
   },
   "main": "out/main/index.js",
   "type": "module",
-  "workspaces": [
-    "packages/cio-icons"
-  ],
+  "workspaces": [],
   "author": {
     "name": "Pillardash Solutions Limited",
     "email": "hey@pillardash.com"
@@ -56,7 +54,6 @@
     "check:bundle": "bun scripts/check-bundle-budgets.ts",
     "verify:packaged-app": "bun run scripts/verify-packaged-app.ts",
     "smoke:packaged": "bun run scripts/smoke-packaged-app.ts",
-    "icons:build": "bun scripts/icons/build-icons.ts",
     "speech:catalog": "bun scripts/benchmark-speech-models.ts",
     "speech:build-mlx": "bun scripts/build-mlx-speech-worker.ts",
     "speech:build-coreml": "bun scripts/build-coreml-speech-worker.ts",
@@ -87,7 +84,7 @@
     "pretest": "bun run --filter @pdslng/cio-icon build"
   },
   "dependencies": {
-    "@pdslng/cio-icon": "workspace:*",
+    "@pdslng/cio-icon": "^0.1.1",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
     "@codemirror/language-data": "^6.5.2",
