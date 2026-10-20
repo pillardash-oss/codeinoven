@@ -5066,18 +5066,19 @@
       thread.id,
       `${thread.title} (fork)`
     )
-    upsertThreadInList(forked)
     scopeState.updateThread(forked)
     if (scopeState.sidebarContext?.projectId === forked.projectId) {
       scopeState.showSidebarForThread(forked, scopeState.sidebarContext.bucketId)
     }
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    // Land the fork in the view that owns it, exactly like every other created
+    // thread: an assistant fork belongs in Assistant View, not in whatever view
+    // happened to be on screen when it was made.
+    openCreatedThread(forked)
   }
 
   /** A message-level fork succeeded inside the thread view   surface and open it. */
   function handleForkedThread(forked: Thread): void {
-    upsertThreadInList(forked)
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    openCreatedThread(forked)
   }
 
   /** Register a thread that arrived from another view, then hand it to the shell
