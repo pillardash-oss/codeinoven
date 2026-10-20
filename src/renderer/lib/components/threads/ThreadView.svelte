@@ -183,6 +183,7 @@
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import {
     assistantDisplayText,
+    buildAssistantTagCandidates,
     connectionsFromPlan,
     isAssistantConfirmation,
     type AssistantPlanDraft
@@ -451,6 +452,13 @@
     assistantForeignRunThreadId?: string | null
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
+    /**
+     * The Assistant tab's threads (tasks, runs and Getting started conversations),
+     * when this thread is one of them. Present only in Assistant View: it is what
+     * puts assistants and assistant threads behind the composer's `@` menu, and
+     * what names those tags once a message is sent.
+     */
+    assistantSpaceThreads?: Thread[]
     /** Projects the chat can be continued into (visible projects only). */
     projects?: Project[]
     /** Data URLs of custom project icons, keyed by project id. */
@@ -515,6 +523,7 @@
     assistantKnowledgeComplete = false,
     assistantForeignRunThreadId = null,
     onForked,
+    assistantSpaceThreads,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
     onContinueInProject,
@@ -541,6 +550,21 @@
     threadId: thread.id,
     scopeBucketId: thread.scopeBucketId
   })
+
+  /**
+   * What the Assistant tab's composer offers behind an `@`: its assistants and
+   * their threads. Every other view has no assistant space to point at, so the
+   * list stays empty there and the menu is exactly what it always was.
+   */
+  let assistantTagCandidates = $derived(
+    assistantSpaceThreads
+      ? buildAssistantTagCandidates({
+          assistants: assistants.assistants,
+          threads: assistantSpaceThreads,
+          excludeThreadId: thread.id
+        })
+      : []
+  )
 
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   let hasController = $derived(controller !== undefined)
@@ -13544,7 +13568,12 @@
                         <MessageTimestamp at={previousTurnAudit.endTime} />
                       </div>
                     {/if}
-                    {@const inlineTags = inlineFileTagsForMessage(msg)}
+                    {@const inlineTags = inlineFileTagsForMessage(
+                      msg,
+                      assistantSpaceThreads
+                        ? { threads: assistantSpaceThreads, assistants: assistants.assistants }
+                        : undefined
+                    )}
                     {@const inlinedPaths = new Set(inlineTags.map((tag) => tag.token.slice(1)))}
                     {@const leftoverReferences = (msg.projectReferences ?? []).filter(
                       (reference) => !inlinedPaths.has(reference.path)
@@ -15086,6 +15115,7 @@
                         : undefined}
                       assignmentId={assignment?.id}
                       assignmentTasks={assignment?.content.tasks ?? []}
+                      assistantTags={assistantTagCandidates}
                       initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
                       initialAttachments={rendererRecovery.attachmentsFor(
                         thread.projectId,

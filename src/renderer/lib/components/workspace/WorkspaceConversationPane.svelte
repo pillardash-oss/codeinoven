@@ -11,6 +11,7 @@
   import { assistants } from '$lib/stores/assistants.svelte'
   import { assistantKnowledgeComplete, type Project, type Thread } from '$shared/types'
   import type { AppConfig, AppConfigPatch, PromptAttachment } from '$shared/types'
+  import { ASSISTANT_SPACE_ID } from '$shared/types'
 
   interface Props {
     mode: 'projects' | 'chats' | 'threads' | 'assistant'
@@ -67,6 +68,16 @@
       ? (assistants.assistants.find((assistant) => assistant.id === assistantId) ?? null)
       : null
   )
+  /**
+   * The Assistant tab's threads, when one of them is open: what the composer's
+   * `@` menu can tag, and what names a tagged thread in the conversation. No
+   * other view has an assistant space to point at.
+   */
+  let assistantSpaceThreads = $derived(
+    mode === 'assistant'
+      ? (threadsByProject.get(ASSISTANT_SPACE_ID) ?? []).filter((thread) => !thread.archived)
+      : undefined
+  )
 
   function handleConversationRenderError(error: unknown): void {
     const thread = workspaceState.selectedThread
@@ -105,6 +116,7 @@
             assistantName={assistant?.name ?? null}
             assistantKnowledgeComplete={assistant ? assistantKnowledgeComplete(assistant) : false}
             {assistantForeignRunThreadId}
+            {assistantSpaceThreads}
             allowCenteredComposer={mode === 'chats' ||
               (!workspaceState.headStartUsedThreadIds.has(selectedThread.id) &&
                 ((threadsByProject.get(selectedThread.projectId)?.length ?? 0) === 1 ||

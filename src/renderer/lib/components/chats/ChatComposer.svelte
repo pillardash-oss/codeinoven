@@ -69,6 +69,9 @@
   import {
     normalizeComposerMessage,
     COMPOSER_BUILT_IN_TAGS,
+    composerAssistantTagToken,
+    composerMentionStart,
+    type ComposerAssistantTag,
     type ComposerMentionEntry
   } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
@@ -174,6 +177,12 @@
     /** Active Assignment tasks available through the composer @ picker. */
     assignmentId?: string
     assignmentTasks?: AssignmentTask[]
+    /**
+     * Assistants and assistant threads this composer may tag. Assistant View
+     * supplies them; every other composer leaves the list empty, so the @ menu
+     * only offers them where the Assistant tab is open.
+     */
+    assistantTags?: readonly ComposerAssistantTag[]
     /** Restart-safe draft restored by the owning thread/view. */
     initialValue?: string
     onValueChange?: (value: string) => void
@@ -321,6 +330,7 @@
     fileTagProjectId,
     assignmentId,
     assignmentTasks = [],
+    assistantTags = [],
     initialValue = '',
     onValueChange,
     initialAttachments = [],
@@ -595,8 +605,16 @@
   const sendModifierLabel = isMacPlatform() ? '⌘' : 'Ctrl+'
   const mentions = createComposerMentionSearch({
     getAssignmentTasks: () => assignmentTasks,
-    getFileTagProjectId: () => fileTagProjectId
+    getFileTagProjectId: () => fileTagProjectId,
+    getAssistantTags: () => assistantTags
   })
+  /**
+   * The `@` the user dismissed with Escape. While the caret stays inside that
+   * one token the menu stays shut, so a dismissed suggestion list cannot pop
+   * back on the next keystroke; another `@`, or leaving the token, clears it and
+   * suggestions resume.
+   */
+  let dismissedMentionStart: number | null = null
   let slashOpen = $state(false)
   let slashQuery = $state('')
   let slashIndex = $state(0)
@@ -1519,7 +1537,15 @@
     }
     lastCaretText = textBeforeCaret
     lastCaretSupportsCommands = supportsCommands
-    mentions.schedule(supportsCommands ? textBeforeCaret : '')
+    const mentionStart = supportsCommands ? composerMentionStart(textBeforeCaret) : null
+    if (mentionStart === null || mentionStart !== dismissedMentionStart) {
+      dismissedMentionStart = null
+    }
+    if (dismissedMentionStart === null) {
+      mentions.schedule(supportsCommands ? textBeforeCaret : '')
+    } else {
+      mentions.open = false
+    }
     const slashMatch = supportsCommands ? /(^|\s)\/([^\s/]*)$/u.exec(textBeforeCaret) : null
     slashOpen = Boolean(slashMatch)
     slashQuery = slashMatch?.[2] ?? ''
@@ -1572,6 +1598,20 @@
     }
     if (mention.type === 'task') {
       selectTaskMention(mention.entry)
+      return
+    }
+    if (mention.type === 'assistant') {
+      const token = `${composerAssistantTagToken(mention.entry)} `
+      const inserted = richEditor.replaceTextBeforeCaret(
+        /(^|\s)@[^\s@]*$/u,
+        (_match, prefix) => `${prefix}${token}`
+      )
+      if (!inserted) {
+        value = value.replace(/(^|\s)@[^\s@]*$/u, (_, prefix: string) => {
+          return `${prefix}${token}`
+        })
+        onValueChange?.(value)
+      }
       return
     }
     const entry = mention.entry
@@ -1905,7 +1945,12 @@
     getMentionEntries: () => mentions.entries,
     getMentionIndex: () => mentions.index,
     setMentionIndex: (index) => (mentions.index = index),
-    closeMentions: () => (mentions.open = false),
+    closeMentions: () => {
+      // Escape dismisses the suggestions for the token being typed, so the
+      // menu does not spring back while the user finishes that tag by hand.
+      dismissedMentionStart = lastCaretText === null ? null : composerMentionStart(lastCaretText)
+      mentions.open = false
+    },
     selectMention,
     isSlashOpen: () => slashOpen,
     closeSlash: () => (slashOpen = false),

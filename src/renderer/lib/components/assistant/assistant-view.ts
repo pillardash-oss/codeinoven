@@ -20,6 +20,7 @@ import {
   type UtilityDefinition
 } from '$shared/types'
 import { normalizePlanDelivery, normalizePlanPriority } from '$shared/assistant-reporting'
+import type { ComposerAssistantTag } from '../chats/composer-mentions'
 import {
   parseAssistantPlanJson,
   type AssistantPlan,
@@ -1324,4 +1325,71 @@ export function connectionsFromPlan(
     )
   }
   return merged
+}
+
+/** How many assistant tag rows a composer menu may draw from, so the list stays
+ *  bounded on a workspace with hundreds of runs. */
+const MAX_ASSISTANT_TAG_CANDIDATES = 60
+
+export interface AssistantTagCandidateInput {
+  assistants: readonly Assistant[]
+  /** The Assistant tab's threads: tasks, runs and Getting started conversations. */
+  threads: readonly Thread[]
+  /** The composer's own thread, which has nothing to tell itself. */
+  excludeThreadId?: string
+}
+
+/**
+ * What the Assistant tab's composers offer behind an `@`.
+ *
+ * Assistants come first, then their threads newest-first, because a message
+ * usually points at a thread and the assistant beside it is the group that
+ * thread belongs to. A candidate carries only ids and names: the token a pick
+ * inserts is the id, and the agent tails the thread for the content.
+ */
+export function buildAssistantTagCandidates({
+  assistants,
+  threads,
+  excludeThreadId
+}: AssistantTagCandidateInput): ComposerAssistantTag[] {
+  const assistantById = new Map(assistants.map((assistant) => [assistant.id, assistant]))
+  const candidates: ComposerAssistantTag[] = []
+
+  for (const assistant of assistants) {
+    const threadCount = threads.filter((thread) => thread.assistantId === assistant.id).length
+    candidates.push({
+      kind: 'assistant',
+      id: assistant.id,
+      name: assistant.name,
+      detail: threadCount === 1 ? 'Assistant · 1 thread' : `Assistant · ${threadCount} threads`,
+      keywords: ['assistant', 'assistants']
+    })
+  }
+
+  const orderedThreads = [...threads].sort((left, right) => right.lastActivity - left.lastActivity)
+  for (const thread of orderedThreads) {
+    if (thread.id === excludeThreadId) continue
+    const assistant = thread.assistantId ? assistantById.get(thread.assistantId) : undefined
+    const kindLabel = thread.assistantTaskId
+      ? 'Run'
+      : isAssistantSetupThread(thread)
+        ? 'Getting started'
+        : 'Task'
+    candidates.push({
+      kind: 'thread',
+      id: thread.id,
+      name: thread.title.trim() || 'Untitled thread',
+      detail: assistant ? `${kindLabel} · ${assistant.name}` : kindLabel,
+      run: thread.assistantTaskId !== undefined,
+      keywords: [
+        'thread',
+        'threads',
+        'assistant',
+        kindLabel.toLocaleLowerCase(),
+        ...(assistant ? [assistant.name.toLocaleLowerCase()] : [])
+      ]
+    })
+  }
+
+  return candidates.slice(0, MAX_ASSISTANT_TAG_CANDIDATES)
 }

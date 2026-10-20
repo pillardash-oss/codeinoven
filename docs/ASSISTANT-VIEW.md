@@ -1282,3 +1282,24 @@ confirmation. The fork is seeded with `handoffSummary` (recorded with
 `history:append`), and the original task thread and its schedule stay intact.
 Handing off while the task is mid-run always passes a confirmation dialog first,
 so a concurrent write cannot corrupt the thread session.
+
+## Tagging assistants and threads
+
+An Assistant View composer tags what a message is about. Typing `@` offers the
+assistants in the tab and their threads (tasks, runs, and Getting started
+conversations) beside the usual built-in tags and Assignment tasks; a project or
+chat composer never sees them, because they only exist inside the assistant
+space (`ComposerAssistantTag`, `src/lib/components/chats/composer-mentions.ts`).
+
+- A pick inserts an id and nothing else: `@thread:<threadId>` for a thread,
+  `@assistant:<assistantId>` for an assistant. No transcript is copied into the
+  prompt, so a tag costs one line no matter how long the thread is.
+- The assistant prompt (`src/lib/cio-prompts.ts`, id `assistant`) tells the agent
+  what a tag is and to read it before answering: `cio_util_diagnose` with
+  `read_messages` returns a tagged thread's newest messages.
+- Escape dismisses the suggestion list for the token being typed and keeps it
+  shut until the caret leaves that `@` (`composerMentionStart`,
+  `ChatComposer.svelte`), so a typed tag stays exactly as typed instead of
+  springing back open.
+- A sent tag renders as a chip named by the live thread title or assistant name
+  (`thread-message-presentation.ts`), never as a raw id.

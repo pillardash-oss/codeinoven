@@ -71,30 +71,80 @@ export const COMPOSER_BUILT_IN_TAGS: readonly ComposerBuiltInTag[] = [
   }
 ]
 
+/**
+ * An assistant or one of its threads, as a composer tag.
+ *
+ * Assistant View tags what a message is about, not what it should read: the
+ * token carries the entity's id and nothing else, and the assistant prompt
+ * tells the agent to tail that thread (or that assistant's threads) itself. A
+ * transcript is never copied into the prompt by the composer.
+ */
+export interface ComposerAssistantTag {
+  /** `assistant` names an assistant, `thread` names one of its threads. */
+  kind: 'assistant' | 'thread'
+  /** Assistant id (`assistant`) or thread id (`thread`). */
+  id: string
+  /** The assistant's name, or the thread's title. */
+  name: string
+  /** What the row names, under the name in the menu. */
+  detail: string
+  /** Whether a thread row is a run (one execution) rather than a task. */
+  run?: boolean
+  /** Lower-cased words a mention query may match beyond the name. */
+  keywords: readonly string[]
+}
+
 export type ComposerMentionEntry =
   | { type: 'project'; entry: ProjectFileEntry }
   | { type: 'task'; entry: AssignmentTask }
   | { type: 'utility'; entry: ComposerBuiltInTag }
+  | { type: 'assistant'; entry: ComposerAssistantTag }
 
 const COMPOSER_MENTION_PATTERN = /(^|\s)@([^\s@]*)$/u
 
-export function composerMentionQuery(textBeforeCaret: string): string | null {
+/** The mention at the caret, or null when the caret is not in one. */
+function composerMentionMatch(textBeforeCaret: string): { query: string; start: number } | null {
   const match = COMPOSER_MENTION_PATTERN.exec(textBeforeCaret)
   if (!match || match.index === undefined) return null
 
-  const mentionStart = match.index + (match[1]?.length ?? 0)
+  const start = match.index + (match[1]?.length ?? 0)
   // No mention menu inside a block quote, an open double-quoted passage, or an
   // unclosed inline code span   the @ stays literal there. (Fenced code blocks
   // and closed inline code never reach this check: the caret-tracking layer
   // already reports them as command-unsupported.)
   if (
-    isQuotedMentionPosition(textBeforeCaret, mentionStart) ||
-    isInsideUnclosedInlineCode(textBeforeCaret.slice(0, mentionStart))
+    isQuotedMentionPosition(textBeforeCaret, start) ||
+    isInsideUnclosedInlineCode(textBeforeCaret.slice(0, start))
   ) {
     return null
   }
 
-  return match[2] ?? ''
+  return { query: match[2] ?? '', start }
+}
+
+/**
+ * Where the `@` of the mention at the caret starts, once it is a real mention.
+ *
+ * A dismissed suggestion list is remembered by this index, so the composer can
+ * keep the menu shut for exactly one token: moving on to another `@` (or out of
+ * the token) is a new mention and opens it again.
+ */
+export function composerMentionStart(textBeforeCaret: string): number | null {
+  return composerMentionMatch(textBeforeCaret)?.start ?? null
+}
+
+export function composerMentionQuery(textBeforeCaret: string): string | null {
+  return composerMentionMatch(textBeforeCaret)?.query ?? null
+}
+
+/**
+ * The token a picked assistant or thread inserts. The id is the whole payload:
+ * the agent reads the thread itself, so nothing else has to travel with it.
+ */
+export function composerAssistantTagToken(
+  tag: Pick<ComposerAssistantTag, 'kind' | 'id'>
+): string {
+  return tag.kind === 'assistant' ? `@assistant:${tag.id}` : `@thread:${tag.id}`
 }
 
 /**
@@ -111,6 +161,9 @@ export function composerBuiltInTag(id: ComposerBuiltInTag['id']): ComposerBuiltI
 export function composerMentionKey(mention: ComposerMentionEntry): string {
   if (mention.type === 'project') return `project:${mention.entry.path}`
   if (mention.type === 'task') return `task:${mention.entry.id}`
+  if (mention.type === 'assistant') {
+    return `assistant:${mention.entry.kind}:${mention.entry.id}`
+  }
   return `utility:${mention.entry.id}`
 }
 
