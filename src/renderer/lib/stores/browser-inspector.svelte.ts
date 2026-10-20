@@ -165,10 +165,10 @@ class BrowserInspectorSession {
   setArmed(tabId: string, armed: boolean): void {
     if (armed) this.armed.add(tabId)
     else this.armed.delete(tabId)
-    // Leaving inspect mode takes the bubble with it: the mode is what the bubble
-    // belongs to, and a bubble left behind would float over a page that is no
-    // longer being inspected.
-    if (!armed) this.editing.delete(tabId)
+    // Turning the mode off leaves the open comment and its element's border
+    // alone on purpose: the reader switches the mode off to stop the page
+    // answering the pointer, not to lose the comment they were writing. The
+    // bubble has its own close, and a page that stops serving a design closes it.
     const theme = this.themeTokens()
     void invoke('browser:inspectSetArmed', tabId, armed, theme ?? undefined)
       .then(() => {
@@ -207,6 +207,10 @@ class BrowserInspectorSession {
       return
     }
     if (!this.designs.delete(tabId)) return
+    // The tab left its design folder, so the element a comment was pinned to is
+    // gone with the document that held it: the border has nothing left to outline
+    // and the bubble has nothing left to sit beside.
+    this.editing.delete(tabId)
     // A tab that navigated away from its design folder is no longer inspectable,
     // so the session cannot stay armed for a page that no longer offers it.
     if (this.armed.has(tabId)) this.setArmed(tabId, false)
@@ -218,13 +222,13 @@ class BrowserInspectorSession {
    * `pick` is a fresh element, which becomes a composer reference and opens its
    * comment bubble; `open` is a click on an existing pin, or a jump to one from
    * the composer, which reopens that element's bubble. `closed` is inspect mode
-   * ending on the page's own terms. The bubble is the app's own component, so the
-   * comment text never travels through the page at all.
+   * ending on the page's own terms, which ends the mode and leaves the open
+   * comment where it is. The bubble is the app's own component, so the comment
+   * text never travels through the page at all.
    */
   private onPageEvent(tabId: string, event: BrowserInspectorEvent): void {
     if (event.kind === 'closed') {
       this.armed.delete(tabId)
-      this.editing.delete(tabId)
       return
     }
     const owner = this.ownerOf(tabId)
