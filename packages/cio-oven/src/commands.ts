@@ -288,17 +288,29 @@ export async function start(options: StartOptions): Promise<void> {
   inputs.port = settled.port
 
   const before = await serviceState(layout)
+  // A service that cannot answer a probe, or answers with another revision, is
+  // out of date by definition. Treating it as "already running" is what left
+  // machines on a bundle that could not serve requests while the release that
+  // fixes it was already published, so this is the case that replaces it by
+  // default rather than with a warning.
+  const outdated =
+    before.running && (before.probe === null || before.probe.serviceRevision !== bundle.revision)
 
   if (before.running && !options.force) {
-    const restart =
-      promptsAvailable() && !options.yes
-        ? await askConfirm('An Oven service is already running here. Restart it?', false)
-        : false
-    if (!restart) {
+    const replace =
+      !promptsAvailable() || options.yes
+        ? outdated
+        : await askConfirm(
+            outdated
+              ? 'This machine runs a different Oven service release. Replace it with this one?'
+              : 'An Oven service is already running here. Restart it?',
+            outdated
+          )
+    if (!replace) {
       const revision = before.probe?.serviceRevision ?? bundle.revision
-      if (revision !== bundle.revision)
+      if (outdated)
         warn(
-          'The running Oven service was installed by a different release. Run start with --force to replace it.'
+          'This machine still runs the Oven service it had, which is not this release. Run start with --force to replace it.'
         )
       const existing = inputs.identity ? await readIdentity(identityKeyPath()) : null
       for (const message of existing?.warnings ?? []) warn(message)
@@ -336,6 +348,14 @@ export async function start(options: StartOptions): Promise<void> {
 
   step('Starting the Oven service in the background.')
   const probe = await ensureService(layout, bundle)
+  // The install is only finished when this release is the one answering. The
+  // bundle's own `ensure` already replaces a service it finds in the way;
+  // this makes a machine that still would not switch over say so plainly
+  // instead of reporting the old service's behaviour as success.
+  if (probe.serviceRevision !== bundle.revision)
+    fail(
+      'This machine kept the Oven service it was running instead of the one this release installs. Run cio-oven stop, then cio-oven start again.'
+    )
 
   await publish(
     layout,

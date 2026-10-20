@@ -26,6 +26,7 @@ import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
 import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
 import { OVEN_DATA_DIRECTORY, OVEN_LEGACY_DATA_DIRECTORY } from './oven-root-paths'
+import { isCurrentServiceAnswer } from '../oven-service-bundle'
 import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
 import {
   NON_INTERACTIVE_WSL_DISTRIBUTIONS,
@@ -139,6 +140,94 @@ function posixSocketPath(): string {
   )
 }
 const lockPath = join(root, 'service.pid')
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Ask the service one question, treating "nothing is listening" as an answer too. */
+async function answerOrNull(data: string): Promise<string | null> {
+  try {
+    return await request(data)
+  } catch {
+    return null
+  }
+}
+
+/** How many runs a service says it is working on, from any answer it gave. */
+function activeRunsIn(answer: string | null): number {
+  if (!answer) return 0
+  try {
+    const parsed = JSON.parse(answer.replace(/^\uFEFF/u, '')) as {
+      value?: { activeRuns?: unknown }
+    }
+    return typeof parsed.value?.activeRuns === 'number' ? parsed.value.activeRuns : 0
+  } catch {
+    return 0
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Wait until nothing answers on this data root, so a new daemon can bind. */
+async function waitForNoAnswer(): Promise<void> {
+  const data = `${JSON.stringify({ method: 'probe', protocolVersion: PROTOCOL })}\n`
+  for (let attempt = 0; attempt < 40; attempt++) {
+    await sleep(100)
+    if ((await answerOrNull(data)) === null) return
+  }
+}
+
+/** Wait for a healthy answer from the revision that was just installed. */
+async function waitForCurrentService(data: string): Promise<string | null> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await sleep(100)
+    const answer = await answerOrNull(data)
+    if (answer && isCurrentServiceAnswer(answer, revision)) return answer
+  }
+  return null
+}
+
+/**
+ * Remove the service process that is standing in the way, with its leftovers.
+ *
+ * The lock and the socket belong to the daemon that is gone, so they are
+ * removed with it instead of being left for the next start to trip over. This
+ * is the escape hatch a replacement needs when the previous install cannot be
+ * asked to leave: a bundle that predates the shutdown request, or one whose
+ * process outlived it.
+ */
+async function forceStopDaemon(): Promise<void> {
+  const pid = Number(await readFile(lockPath, 'utf8').catch(() => ''))
+  if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      /* It exited between the read and the signal. */
+    }
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(100)
+      if (!processAlive(pid)) break
+    }
+    if (processAlive(pid)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        /* It exited between the check and the signal. */
+      }
+      await sleep(250)
+    }
+  }
+  await unlink(lockPath).catch(() => undefined)
+  await unlink(socketPath).catch(() => undefined)
+}
 const jobs = new Map<string, Job>()
 let shutDownServer: (() => void) | undefined
 let requestTail: Promise<unknown> = Promise.resolve()
@@ -1036,49 +1125,37 @@ async function main(): Promise<void> {
   if (process.argv[2] === 'attach') return attach()
   if (process.argv[2] === 'ensure') {
     const data = `${JSON.stringify({ method: 'probe', protocolVersion: PROTOCOL })}\n`
-    try {
-      const output = await request(data)
-      const response = JSON.parse(output) as { ok: boolean; value?: OvenProbe }
-      if (response.ok && response.value?.serviceRevision === revision) {
-        process.stdout.write(output)
+    const current = await answerOrNull(data)
+    if (current && isCurrentServiceAnswer(current, revision)) {
+      process.stdout.write(current)
+      return
+    }
+    // A service that is still working for someone is never pulled out from
+    // under it. Everything else is replaced, however it was left behind.
+    if (activeRunsIn(current) > 0)
+      throw new Error('Finish active runs before updating the Oven service.')
+    // Ask the service that is in the way to leave. An older bundle may not know
+    // the request at all, which is exactly why the process itself is also
+    // removed below instead of being trusted to exit.
+    await answerOrNull(`${JSON.stringify({ method: 'shutdown', protocolVersion: PROTOCOL })}\n`)
+    await waitForNoAnswer()
+    // Two attempts, each a complete replacement: start the installed bundle,
+    // and if it cannot bind because the previous install is still standing,
+    // remove that process with its lock and socket, then start again. One
+    // attempt alone is what left an Oven on an old bundle after an update that
+    // had already been written to disk.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Same normalized remote environment as the Node client; no desktop marker.
+      await startDaemon()
+      const healthy = await waitForCurrentService(data)
+      if (healthy) {
+        process.stdout.write(healthy)
         return
       }
-      if (response.value?.activeRuns)
-        throw new Error('Finish active runs before updating the Oven service.')
-      const stopped = JSON.parse(
-        await request(`${JSON.stringify({ method: 'shutdown', protocolVersion: PROTOCOL })}\n`)
-      ) as { ok: boolean; error?: string }
-      if (!stopped.ok) throw new Error(stopped.error || 'The existing Oven service could not stop.')
-      await new Promise<void>((resolve) => setTimeout(resolve, 250))
-    } catch (error) {
-      if (!['ECONNREFUSED', 'ENOENT'].includes((error as NodeJS.ErrnoException).code ?? ''))
-        throw error
-      /* Start an absent service. */
-    }
-    // Same normalized remote environment as the Node client; no desktop ownership marker.
-    await startDaemon()
-    for (let attempt = 0; attempt < 50; attempt++) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 100))
-      try {
-        const answer = await request(data)
-        const parsed = JSON.parse(answer) as { ok?: boolean; value?: OvenProbe }
-        // A service that is still shutting down keeps answering for a moment,
-        // and its failure is not this update's result. Reporting that answer
-        // made a finished install look like a failed one: the app showed the
-        // old service's error (on Windows, `spawn EINVAL` from a bundle that
-        // could not start npm's `.cmd` shims) and left the Oven on the old
-        // file it had just replaced. Only a healthy answer from the revision
-        // that was just installed is the result of this call.
-        if (parsed.ok === true && parsed.value?.serviceRevision === revision) {
-          process.stdout.write(`${JSON.stringify(parsed)}\n`)
-          return
-        }
-      } catch {
-        /* Wait for socket startup. */
-      }
+      await forceStopDaemon()
     }
     throw new Error(
-      'The Oven service did not come back after it was installed. Check that no other Oven service process is still running, then install it again.'
+      'The Oven service was installed but the previous service could not be replaced. Stop it with `cio-oven stop`, then install the service again.'
     )
   }
   if (!['request', 'workspace', 'root-operation'].includes(process.argv[2]))

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   failedAnswerError,
+  isCurrentServiceAnswer,
   isStaleServiceFault,
   normalizeServiceBundle,
   serviceBundleRevision
@@ -53,5 +54,22 @@ describe('oven service answers', () => {
     expect(failedAnswerError('{"ok":true,"value":{"serviceRevision":"a"}}')).toBeNull()
     expect(failedAnswerError('{"ok":false,"error":{"nested":true}}')).toBeNull()
     expect(failedAnswerError('not json')).toBeNull()
+  })
+})
+
+describe('oven service replacement', () => {
+  it('accepts only a healthy answer from the revision that was installed', () => {
+    const healthy = '{"ok":true,"value":{"serviceRevision":"abc"}}'
+    expect(isCurrentServiceAnswer(healthy, 'abc')).toBe(true)
+    // The same Oven one revision earlier is not this install finishing.
+    expect(isCurrentServiceAnswer(healthy, 'def')).toBe(false)
+  })
+
+  it('never accepts the old bundle error as a finished install', () => {
+    // Exactly what the Windows Oven answered while a new bundle was already on
+    // disk; reading it as success is what made an update look like a failure.
+    expect(isCurrentServiceAnswer('{"ok":false,"error":"spawn EINVAL"}', 'abc')).toBe(false)
+    expect(isCurrentServiceAnswer('The Oven service is unavailable.', 'abc')).toBe(false)
+    expect(isCurrentServiceAnswer('', 'abc')).toBe(false)
   })
 })

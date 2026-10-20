@@ -48,6 +48,28 @@ export function isStaleServiceFault(message: string): boolean {
 }
 
 /**
+ * True when an answer is a healthy probe from the revision that must be running.
+ *
+ * A service that is still shutting down keeps answering for a moment, and its
+ * answer is not the result of an install. Reporting it made a finished update
+ * look like a failed one: the app showed the old bundle's error (on Windows,
+ * `spawn EINVAL` from a bundle that could not start npm's `.cmd` shims) while
+ * the new file was already on disk. Only this shape counts as done, so the
+ * caller can tell "replaced" from "still the old one" without guessing.
+ */
+export function isCurrentServiceAnswer(answer: string, revision: string): boolean {
+  try {
+    const parsed = JSON.parse(answer.replace(/^\uFEFF/u, '')) as {
+      ok?: boolean
+      value?: { serviceRevision?: unknown }
+    }
+    return parsed.ok === true && parsed.value?.serviceRevision === revision
+  } catch {
+    return false
+  }
+}
+
+/**
  * The error a service answer carries, when it carries one.
  *
  * Read from the raw answer because a failed request is still a successful SSH
