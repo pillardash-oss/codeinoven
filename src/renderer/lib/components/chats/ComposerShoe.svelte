@@ -384,7 +384,7 @@
     <div class="relative min-w-0">
       <button
         type="button"
-        class="group flex h-6 min-w-0 shrink cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="group flex h-6 min-w-0 max-w-full shrink cursor-pointer items-center gap-1.5 px-1.5 text-[0.6875rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
         aria-haspopup="menu"
         aria-expanded={menuOpen}
         title={isNewThread
@@ -822,13 +822,14 @@
 
   /* Out of room, as measured: the rate and the context percent go down to their own
      marks, each of which still says what it is, and each of which states its figure
-     under a tap or a hover. Nothing else in the row gives up a figure this early.
+     under a tap or a hover. The keyboard tips also yield room to the names.
 
      These rules are global on purpose: the class they key off is put on the row by
      the measurement below, not written in this template where the compiler could
      find it, and the measuring rule has to be able to win over the hiding one. */
   :global(.shoe-tight .shoe-generation-label),
-  :global(.shoe-tight .context-usage-label) {
+  :global(.shoe-tight .context-usage-label),
+  :global(.shoe-tight .shoe-tips) {
     display: none;
   }
 
@@ -842,6 +843,10 @@
   :global(.shoe-measuring .shoe-generation-label),
   :global(.shoe-measuring .context-usage-label) {
     display: inline;
+  }
+
+  :global(.shoe-measuring .shoe-tips) {
+    display: flex;
   }
 
   @container (max-width: 610px) {
