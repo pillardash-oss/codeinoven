@@ -1,4 +1,8 @@
-import type { BrowserDesignTab, BrowserInspectorTarget } from '$shared/ipc-contract'
+import type {
+  BrowserDesignTab,
+  BrowserInspectorTarget,
+  BrowserInspectorViewport
+} from '$shared/ipc-contract'
 import type { ResponseReferenceAnchor } from './stores/response-references.svelte'
 
 /**
@@ -27,6 +31,21 @@ export function describeInspectorTarget(target: BrowserInspectorTarget): string 
 }
 
 /**
+ * The layout a width describes, in the words a reader already uses.
+ *
+ * A raw number is what the model needs, but the name is what makes the comment
+ * legible beside the width: "narrow column" under `390x844 (mobile)` reads as a
+ * phone layout rather than a desktop one that happens to be squeezed. The
+ * breakpoints are the common ones, ordered widest last.
+ */
+export function viewportLabel(width: number): string {
+  if (width < 768) return 'mobile'
+  if (width < 1024) return 'tablet'
+  if (width < 1440) return 'desktop'
+  return 'wide desktop'
+}
+
+/**
  * The descriptor the model reads inside `<element>`.
  *
  * Deliberately plain `key: value` lines rather than JSON: the same text is
@@ -44,11 +63,18 @@ export function designElementDescriptor(
     `selector: ${target.selector}`,
     context ? `context: ${context}` : null,
     `size: ${target.rect.width}x${target.rect.height}`,
+    `viewport: ${formatViewport(target.viewport)}`,
     design ? `design: ${design.directory}` : null,
     target.text ? `text: ${JSON.stringify(target.text)}` : null,
     target.html ? `markup: ${target.html}` : null
   ].filter((line): line is string => line !== null)
   return lines.join('\n').slice(0, MAX_DESCRIPTOR_LENGTH)
+}
+
+/** `390x844 CSS px (mobile)`, the layout the element was measured inside. */
+export function formatViewport(viewport: BrowserInspectorViewport): string {
+  const label = viewportLabel(viewport.width)
+  return `${viewport.width}x${viewport.height} CSS px (${label})`
 }
 
 /**

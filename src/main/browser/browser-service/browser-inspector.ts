@@ -275,6 +275,21 @@ export function inspectorInstallScript(key: string): string {
       };
     }
 
+    /**
+     * The page's viewport, rounded, in the page's CSS pixels.
+     *
+     * Read at pick time from the live window rather than from a rectangle: the
+     * element's own size says nothing about the layout that sized it, and a
+     * comment about a narrow column only makes sense next to the width it was
+     * narrow at.
+     */
+    function pageViewport() {
+      return {
+        width: Math.round(globalThis.innerWidth || 0),
+        height: Math.round(globalThis.innerHeight || 0)
+      };
+    }
+
     function describe(element) {
       const ancestors = [];
       let parent = element.parentElement;
@@ -291,7 +306,8 @@ export function inspectorInstallScript(key: string): string {
         text: text(element.innerText || element.textContent, config.maxText),
         html: text(element.outerHTML, config.maxHtml),
         ancestors: ancestors,
-        rect: elementRect(element)
+        rect: elementRect(element),
+        viewport: pageViewport()
       };
     }
 
