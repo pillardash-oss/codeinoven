@@ -159,6 +159,17 @@ export function inspectorInstallScript(key: string): string {
     root.appendChild(layer);
     document.documentElement.appendChild(host);
 
+    // The overlay cannot carry the pointer cursor itself: it is one layer with
+    // pointer-events off, so a cursor set on it never applies to what is under
+    // it. Inspect mode therefore stamps the document with one attribute and this
+    // stylesheet hands every element the pick cursor while the attribute is
+    // there, which is what makes the whole page answer as one pickable surface
+    // and goes away in a single attribute removal.
+    const cursorStyle = document.createElement('style');
+    cursorStyle.setAttribute('data-cio-inspector-cursor', '');
+    cursorStyle.textContent = 'html[data-cio-inspecting] *{cursor:pointer !important}';
+    (document.head || document.documentElement).appendChild(cursorStyle);
+
     const hoverBox = document.createElement('div');
     hoverBox.className = 'cio-box cio-hover';
     hoverBox.style.display = 'none';
@@ -381,6 +392,18 @@ export function inspectorInstallScript(key: string): string {
       }
     }
 
+    /**
+     * Hand the page the pick cursor, or take it back.
+     *
+     * Inspect mode is the only time the page answers as one pickable surface, so
+     * the cursor is claimed and released with the mode and never left behind on
+     * a page the reader is browsing normally again.
+     */
+    function setPickCursor(on) {
+      if (on) document.documentElement.setAttribute('data-cio-inspecting', '');
+      else document.documentElement.removeAttribute('data-cio-inspecting');
+    }
+
     function syncCursor() {
       if (!state.armed) {
         hoverBox.style.display = 'none';
@@ -505,6 +528,7 @@ export function inspectorInstallScript(key: string): string {
       state.armed = false;
       state.hovered = null;
       state.hoverId = null;
+      setPickCursor(false);
       syncCursor();
       layout();
       emit({ kind: 'closed' });
@@ -658,6 +682,7 @@ export function inspectorInstallScript(key: string): string {
       if (command.type === 'arm') {
         if (!state.armed) {
           state.armed = true;
+          setPickCursor(true);
           syncListeners();
         }
         return true;
@@ -667,6 +692,7 @@ export function inspectorInstallScript(key: string): string {
         state.hovered = null;
         state.hoverId = null;
         state.activeId = null;
+        setPickCursor(false);
         syncCursor();
         layout();
         syncListeners();
@@ -700,6 +726,8 @@ export function inspectorInstallScript(key: string): string {
       if (command.type === 'cease') {
         state.armed = false;
         state.hovered = null;
+        setPickCursor(false);
+        cursorStyle.remove();
         removeListener();
         const waiters = state.waiters.splice(0, state.waiters.length);
         for (const resolve of waiters) resolve({ kind: 'closed' });
