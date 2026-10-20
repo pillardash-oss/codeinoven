@@ -56,7 +56,7 @@
     type ComposerRelocationMode
   } from '../chats/composer-relocation'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
-  import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
@@ -13115,16 +13115,20 @@
 {#each annotationReferences as reference, referenceIndex (reference.id)}
   {@const position = responseBubblePositions[reference.id]}
   {#if position?.visible}
-    <ResponseAnnotationBubble
-      x={position.x}
-      y={position.y}
+    <AnnotationIndicator
+      id={reference.id}
+      surface="conversation"
+      left={`${position.x}px`}
+      top={`${position.y}px`}
+      fixed
       number={referenceIndex + 1}
       hasComment={Boolean(reference.comment)}
       active={commentEditorReferenceId === reference.id}
       title={reference.comment
-        ? `Edit comment on "${reference.label}"`
-        : `Comment on "${reference.label}"`}
-      onClick={() => (commentEditorReferenceId = reference.id)}
+        ? `Edit comment on "${reference.label}". Drag to move it, click to edit.`
+        : `Comment on "${reference.label}". Drag to move it, click to write.`}
+      class="z-40"
+      onOpen={() => (commentEditorReferenceId = reference.id)}
     />
   {/if}
 {/each}

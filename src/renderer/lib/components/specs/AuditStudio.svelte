@@ -1,7 +1,6 @@
 <script lang="ts">
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
@@ -18,6 +17,7 @@
     auditEvidenceIssueDetail
   } from '$shared/audit/audit-evidence-status'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -763,20 +763,24 @@
   {/snippet}
 
   {#snippet markers()}
-    {#each annotationMarkers as marker (marker.annotation.id)}
-      <button
-        data-audit-annotation-marker={marker.annotation.id}
-        class="absolute z-10 grid h-7 w-7 place-items-center border bg-surface text-info shadow-sm hover:bg-elevated"
-        style:left={compactViewport.matches
-          ? undefined
+    {#each annotationMarkers as marker, index (marker.annotation.id)}
+      <AnnotationIndicator
+        id={marker.annotation.id}
+        surface={`audit:${draft.id}`}
+        left={compactViewport.matches
+          ? 'auto'
           : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
-        style:top={`${marker.y}px`}
+        top={`${marker.y}px`}
+        number={index + 1}
+        hasComment={Boolean(marker.annotation.body)}
+        active={editingAnnotation?.id === marker.annotation.id}
         title={`Open annotation: ${marker.annotation.body}`}
-        aria-label={`Open annotation: ${marker.annotation.body}`}
-        onclick={() => void openAnnotation(marker.annotation)}
-      >
-        <CioMessage size={13} />
-      </button>
+        class="z-10"
+        attach={(node) => {
+          node.setAttribute('data-audit-annotation-marker', marker.annotation.id)
+        }}
+        onOpen={() => void openAnnotation(marker.annotation)}
+      />
     {/each}
   {/snippet}
 

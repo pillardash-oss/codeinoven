@@ -2,7 +2,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { onDestroy, tick } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
-  import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
   import {
@@ -443,16 +443,20 @@
 {#each annotations as reference (reference.id)}
   {@const position = bubblePositions[reference.id]}
   {#if position?.visible}
-    <ResponseAnnotationBubble
-      x={position.x}
-      y={position.y}
+    <AnnotationIndicator
+      id={reference.id}
+      surface={`file:${path}`}
+      left={`${position.x}px`}
+      top={`${position.y}px`}
+      fixed
       number={annotationNumber(reference.id)}
       hasComment={Boolean(reference.comment)}
       active={editingId === reference.id}
       title={reference.comment
-        ? `Edit the note on this passage of ${path}`
-        : `Add a note to this passage of ${path}`}
-      onClick={() => (editingId = reference.id)}
+        ? `Edit the note on this passage of ${path}. Drag to move it, click to edit.`
+        : `Add a note to this passage of ${path}. Drag to move it, click to write.`}
+      class="z-40"
+      onOpen={() => (editingId = reference.id)}
     />
   {/if}
 {/each}
