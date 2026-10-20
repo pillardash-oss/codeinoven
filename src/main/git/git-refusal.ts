@@ -69,7 +69,6 @@ const PUSH_REFUSALS = [
   'non-fast-forward',
   'fetch first',
   'updates were rejected',
-  'failed to push some refs',
   'has no upstream branch'
 ] as const
 
@@ -130,9 +129,11 @@ export async function gitInvocation<Value>(
   try {
     return { ok: true, value: await run() }
   } catch (failure) {
-    if (isGitStateRefusal(failure)) return { ok: false, refusal: failureMessage(failure) }
+    // A permission denial can also contain Git's generic push-rejection text.
+    // Preserve the remote verdict so the panel renders its existing access notice.
     const issue = classifyGitRemoteFailure(failure)
     if (issue) return { ok: false, issue }
+    if (isGitStateRefusal(failure)) return { ok: false, refusal: failureMessage(failure) }
     throw failure
   }
 }
