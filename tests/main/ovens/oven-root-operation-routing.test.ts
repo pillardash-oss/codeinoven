@@ -14,7 +14,7 @@ vi.mock('../../../src/main/ovens/oven-local-git-identity', () => ({
 }))
 
 const { OvenService } = await import('../../../src/main/ovens/oven-service')
-const { OvenRequestChannel, OvenServiceOutdated } = await import(
+const { OvenChannelUnavailable, OvenRequestChannel, OvenServiceOutdated } = await import(
   '../../../src/main/ovens/oven-request-channel'
 )
 const { OvenSsh } = await import('../../../src/main/ovens/oven-ssh')
@@ -91,6 +91,41 @@ describe('oven root operations', () => {
     ).resolves.toBe(true)
     expect(install).toHaveBeenCalledOnce()
     expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts the service the Oven already has when nothing is listening', async () => {
+    const oven = service()
+    const notListening = new OvenChannelUnavailable(
+      'connect ENOENT /home/dev/.config/pillardash/codeinoven/ovens/service.sock'
+    )
+    vi.spyOn(OvenRequestChannel.prototype, 'request')
+      .mockRejectedValueOnce(notListening)
+      .mockResolvedValueOnce(JSON.stringify({ ok: true, value: ['notes.md'] }))
+    const install = vi.spyOn(oven, 'install').mockResolvedValue({} as never)
+
+    // A POSIX Oven loses its daemon on reboot. That is the app's own service to
+    // start again, not a request failure to hand the user.
+    await expect(
+      oven.rootOperation('oven-a', '/checkout', 'project-1', 'projectFiles:list', [''])
+    ).resolves.toEqual(['notes.md'])
+    expect(install).toHaveBeenCalledOnce()
+  })
+
+  it('does not mistake an unreachable Oven for a stopped service', async () => {
+    const oven = service()
+    vi.spyOn(OvenRequestChannel.prototype, 'request').mockRejectedValue(
+      new OvenChannelUnavailable('ssh: connect to host 192.168.64.10 port 22: Connection timed out')
+    )
+    const install = vi.spyOn(oven, 'install').mockResolvedValue({} as never)
+    const execute = vi
+      .spyOn(OvenSsh.prototype, 'execute')
+      .mockRejectedValue(new Error('ssh: connect to host 192.168.64.10 port 22: Connection timed out'))
+
+    await expect(
+      oven.rootOperation('oven-a', '/checkout', 'project-1', 'projectFiles:list', [''])
+    ).rejects.toThrow('Connection timed out')
+    expect(install).not.toHaveBeenCalled()
+    expect(execute).toHaveBeenCalled()
   })
 
   it('reports an outdated service it could not replace instead of a channel failure', async () => {

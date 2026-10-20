@@ -124,6 +124,39 @@ describe('oven request channel', () => {
     expect(prepare).toHaveBeenCalledOnce()
   })
 
+  it('retries a session that failed to start once the outage is over', async () => {
+    let asleep = true
+    const prepare = vi.fn(async () => {
+      if (asleep) throw new Error('The Oven is asleep.')
+      return {
+        executable: process.execPath,
+        args: ['-e', ATTACH],
+        env: { ...process.env },
+        dispose: async () => undefined
+      }
+    })
+    const ssh = { prepare, execute: vi.fn(async () => 'Linux') } as unknown as OvenSsh
+    const channel = new OvenRequestChannel(ssh, async () => 'current')
+    opened.push(channel)
+    const attempt = () =>
+      channel.request('oven-a', JSON.stringify({ method: 'echo', value: 1 }))
+
+    await expect(attempt()).rejects.toThrow('The Oven is asleep.')
+    await expect(attempt()).rejects.toThrow('The Oven is asleep.')
+    // Inside the cooldown the app uses the one-request path instead of paying for
+    // another start that is known to fail.
+    await expect(attempt()).rejects.toThrow('could not be started')
+    expect(prepare).toHaveBeenCalledTimes(2)
+
+    // The fallback is temporary: a machine that comes back gets its session back
+    // instead of staying slow for the rest of the app's life.
+    asleep = false
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31_000)
+    await expect(attempt()).resolves.toContain('1')
+    expect(prepare).toHaveBeenCalledTimes(3)
+    clock.mockRestore()
+  })
+
   it('keeps one session per Oven and never shares one across machines', async () => {
     const { channel, prepare } = open()
     await channel.request('oven-a', JSON.stringify({ method: 'echo', value: 'a' }))

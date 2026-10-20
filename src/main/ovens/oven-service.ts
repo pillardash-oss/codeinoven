@@ -45,6 +45,20 @@ const ROOT_OPERATION_TIMEOUT_MS = 120_000
 /** The largest request one root operation may carry. */
 const ROOT_OPERATION_LIMIT_BYTES = 8 * 1024 * 1024
 
+/**
+ * True when an Oven has no service listening at all.
+ *
+ * The socket is a file on a POSIX Oven and a named pipe on Windows, and both
+ * report `ENOENT` when nothing is bound. That is not a failed request: the
+ * service simply is not running (a reboot on a POSIX Oven ends the daemon, and a
+ * Windows machine can lose its scheduled task), and this app owns the file that
+ * starts it.
+ */
+function serviceNotRunning(message: string): boolean {
+  if (!/connect (?:ENOENT|ECONNREFUSED)/u.test(message)) return false
+  return /service\.sock/u.test(message) || /codeinoven-oven-/u.test(message)
+}
+
 /** How one request should travel when the warm channel cannot carry it. */
 interface SendOptions {
   /** How long the warm channel waits before it is judged wedged. */
@@ -396,7 +410,17 @@ export class OvenService {
           )
         return await this.channel.request(id, data, options.timeoutMs)
       }
-      if (error instanceof OvenChannelUnavailable) return await this.oneShot(id, data, mode)
+      if (error instanceof OvenChannelUnavailable) {
+        // Nothing is listening on the Oven: start the service it already has
+        // instead of reporting a failure the user would read as "install it
+        // again" for a machine that only needs its daemon back.
+        if (
+          serviceNotRunning(error.message) &&
+          (await this.refreshService(id, 'The Oven service is not running.'))
+        )
+          return await this.channel.request(id, data, options.timeoutMs)
+        return await this.oneShot(id, data, mode)
+      }
       if (!(error instanceof OvenServiceMissingError)) throw error
       await this.install(id)
       return await this.oneShot(id, data, mode)

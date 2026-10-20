@@ -8,6 +8,8 @@ import type { OvenSsh } from './oven-ssh'
 
 /** How long one request may wait for its answer before the channel is replaced. */
 const REQUEST_TIMEOUT_MS = 30_000
+/** How long the startup probe may take on an Oven that is still scanning itself. */
+const STARTUP_PROBE_TIMEOUT_MS = 60_000
 /**
  * The largest single answer the channel accepts.
  *
@@ -18,6 +20,16 @@ const REQUEST_TIMEOUT_MS = 30_000
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 /** Consecutive start failures after which this Oven uses the one-request path. */
 const START_FAILURES_BEFORE_FALLBACK = 2
+/**
+ * How long a channel that failed to start waits before it is tried again.
+ *
+ * Without this the fallback was permanent: two failures anywhere in the app's
+ * life (a sleeping Oven, a network that was down) sent every later action down
+ * the one-process-per-request path for the rest of the session, which is exactly
+ * the slowness this channel exists to remove. After this wait the session is
+ * attempted again, so a machine that comes back gets its warm channel back.
+ */
+const START_RETRY_COOLDOWN_MS = 30_000
 
 /** Raised when the channel could not be started, so the caller can fall back. */
 export class OvenChannelUnavailable extends Error {}
@@ -68,7 +80,8 @@ interface Channel {
 export class OvenRequestChannel {
   private readonly channels = new Map<string, Channel>()
   private readonly starting = new Map<string, Promise<Channel>>()
-  private readonly startFailures = new Map<string, number>()
+  /** Per Oven: how many starts failed in a row, and when the last one did. */
+  private readonly startFailures = new Map<string, { count: number; at: number }>()
   private disposed = false
 
   /**
@@ -156,15 +169,20 @@ export class OvenRequestChannel {
     if (pending) return pending
     const existing = this.channels.get(id)
     if (existing && !existing.dead) return existing
-    const failures = this.startFailures.get(id) ?? 0
-    if (failures >= START_FAILURES_BEFORE_FALLBACK)
+    const failures = this.startFailures.get(id)
+    if (
+      failures &&
+      failures.count >= START_FAILURES_BEFORE_FALLBACK &&
+      Date.now() - failures.at < START_RETRY_COOLDOWN_MS
+    )
       throw new OvenChannelUnavailable('The Oven channel could not be started.')
     const start = this.start(id)
       .catch((error: unknown) => {
         // An outdated bundle is not a broken channel: counting it would retire a
         // connection that works and is about to be replaced.
         if (error instanceof OvenServiceOutdated) throw error
-        this.startFailures.set(id, failures + 1)
+        const previous = this.startFailures.get(id)?.count ?? 0
+        this.startFailures.set(id, { count: previous + 1, at: Date.now() })
         throw new OvenChannelUnavailable(
           error instanceof Error ? error.message : 'The Oven did not answer.'
         )
@@ -227,7 +245,7 @@ export class OvenRequestChannel {
         id,
         channel,
         JSON.stringify({ method: 'probe', protocolVersion: OVEN_PROTOCOL_VERSION }),
-        REQUEST_TIMEOUT_MS
+        STARTUP_PROBE_TIMEOUT_MS
       )
       const response = JSON.parse(output.replace(/^\uFEFF/u, '')) as {
         ok?: boolean
@@ -247,7 +265,7 @@ export class OvenRequestChannel {
       this.drop(id, channel, error instanceof Error ? error.message : 'The Oven channel closed.')
       throw error
     }
-    this.startFailures.set(id, 0)
+    this.startFailures.delete(id)
     return channel
   }
 
