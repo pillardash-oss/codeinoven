@@ -27,14 +27,6 @@ interface OffsetPopoverOptions {
   /** Resolved on every drag and nudge, already clamped to the viewport. */
   onMove: (position: { x: number; y: number }) => void
   viewportPadding?: number
-  /**
-   * Let a press anywhere on the element start a drag, not only its handle.
-   *
-   * A bubble that covers part of the page it comments on has to be movable out
-   * of the way without finding a small target first. Fields, buttons and links
-   * keep their own presses, so the body is scenery while the controls work.
-   */
-  surface?: boolean
 }
 
 interface ViewportBounds {
@@ -50,23 +42,6 @@ interface Size {
 }
 
 const DRAG_HANDLE_SELECTOR = '[data-popover-drag-handle]'
-/**
- * What keeps its own press when the whole element is a drag surface.
- *
- * A comment bubble is mostly a text field with a couple of buttons, and a drag
- * that started inside any of them would fight the caret, the selection and the
- * click the reader meant to make.
- */
-const PRESS_OWNER_SELECTOR = [
-  DRAG_HANDLE_SELECTOR,
-  'input',
-  'textarea',
-  'select',
-  'button',
-  'a[href]',
-  '[contenteditable]:not([contenteditable="false"])',
-  '[data-popover-no-drag]'
-].join(',')
 const KEYBOARD_STEP = 12
 
 function measure(element: HTMLElement): Size {
@@ -118,14 +93,11 @@ function attachDrag(options: {
   padding: number
   read: () => { x: number; y: number }
   apply: (position: { x: number; y: number }) => void
-  surface?: boolean
 }): () => void {
-  const { node, padding, read, apply, surface = false } = options
+  const { node, padding, read, apply } = options
   const candidate = node.querySelector<HTMLElement>(DRAG_HANDLE_SELECTOR)
-  if (!candidate && !surface) return () => {}
-  const handle: HTMLElement | null = candidate
-  /** What holds the pointer for the drag in flight: the handle, or the element. */
-  let grabber: HTMLElement = handle ?? node
+  if (!candidate) return () => {}
+  const handle: HTMLElement = candidate
 
   let dragPointerId: number | null = null
   let dragStart = { x: 0, y: 0 }
@@ -135,34 +107,21 @@ function attachDrag(options: {
     apply(clampPopoverPosition(nextX, nextY, measure(node), padding))
   }
 
-  function restCursor(): void {
-    if (surface) node.style.cursor = 'grab'
-    else grabber.style.removeProperty('cursor')
-  }
-
   function finishDrag(event: PointerEvent): void {
     if (dragPointerId !== event.pointerId) return
     dragPointerId = null
-    if (grabber.hasPointerCapture(event.pointerId)) grabber.releasePointerCapture(event.pointerId)
-    grabber.style.removeProperty('cursor')
-    restCursor()
-    grabber = handle ?? node
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId)
+    handle.style.removeProperty('cursor')
   }
 
-  function beginDrag(event: PointerEvent, from: HTMLElement): void {
+  function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0 || !event.isPrimary) return
     dragPointerId = event.pointerId
     dragStart = { x: event.screenX, y: event.screenY }
     dragOrigin = read()
-    grabber = from
-    grabber.setPointerCapture(event.pointerId)
-    grabber.style.cursor = 'grabbing'
+    handle.setPointerCapture(event.pointerId)
+    handle.style.cursor = 'grabbing'
     event.preventDefault()
-  }
-
-  function onPointerDown(event: PointerEvent): void {
-    if (!handle) return
-    beginDrag(event, handle)
   }
 
   function onPointerMove(event: PointerEvent): void {
@@ -173,22 +132,6 @@ function attachDrag(options: {
     }
     place(dragOrigin.x + event.screenX - dragStart.x, dragOrigin.y + event.screenY - dragStart.y)
     event.preventDefault()
-  }
-
-  /** A press on the bubble's own body, which leaves every control alone. */
-  function onSurfacePointerDown(event: PointerEvent): void {
-    if (event.target instanceof Element && event.target.closest(PRESS_OWNER_SELECTOR)) return
-    beginDrag(event, node)
-  }
-
-  function onSurfacePointerMove(event: PointerEvent): void {
-    if (grabber !== node) return
-    onPointerMove(event)
-  }
-
-  function onSurfaceFinish(event: PointerEvent): void {
-    if (grabber !== node) return
-    finishDrag(event)
   }
 
   function onKeyDown(event: KeyboardEvent): void {
@@ -206,67 +149,24 @@ function attachDrag(options: {
     event.stopPropagation()
   }
 
-  /**
-   * The bubble's own controls keep a cursor that names what they do.
-   *
-   * The grab cursor is inherited by everything inside the bubble, so a close or
-   * done button would advertise a drag it does not start. Their cursors are
-   * written here and handed back untouched when the bubble goes.
-   */
-  const controlCursors: Array<{ element: HTMLElement; cursor: string }> = []
-  function claimControlCursors(): void {
-    for (const element of Array.from(
-      node.querySelectorAll<HTMLElement>(
-        'button:not([data-popover-drag-handle]), a[href], select, summary'
-      )
-    )) {
-      if (controlCursors.some((claim) => claim.element === element)) continue
-      controlCursors.push({ element, cursor: element.style.getPropertyValue('cursor') })
-      element.style.cursor = 'pointer'
-    }
-  }
-
-  handle?.addEventListener('pointerdown', onPointerDown)
-  handle?.addEventListener('pointermove', onPointerMove)
-  handle?.addEventListener('pointerup', finishDrag)
-  handle?.addEventListener('pointercancel', finishDrag)
-  handle?.addEventListener('lostpointercapture', finishDrag)
-  handle?.addEventListener('keydown', onKeyDown)
-  if (surface) {
-    node.style.cursor = 'grab'
-    // The bubble's own controls mount with the bubble, and the attachment can
-    // run before the nested field does: one pass now and one after the flush
-    // catches every one of them either way.
-    claimControlCursors()
-    queueMicrotask(claimControlCursors)
-    node.addEventListener('pointerdown', onSurfacePointerDown)
-    node.addEventListener('pointermove', onSurfacePointerMove)
-    node.addEventListener('pointerup', onSurfaceFinish)
-    node.addEventListener('pointercancel', onSurfaceFinish)
-    node.addEventListener('lostpointercapture', onSurfaceFinish)
-  }
+  handle.addEventListener('pointerdown', onPointerDown)
+  handle.addEventListener('pointermove', onPointerMove)
+  handle.addEventListener('pointerup', finishDrag)
+  handle.addEventListener('pointercancel', finishDrag)
+  handle.addEventListener('lostpointercapture', finishDrag)
+  handle.addEventListener('keydown', onKeyDown)
 
   return () => {
-    handle?.removeEventListener('pointerdown', onPointerDown)
-    handle?.removeEventListener('pointermove', onPointerMove)
-    handle?.removeEventListener('pointerup', finishDrag)
-    handle?.removeEventListener('pointercancel', finishDrag)
-    handle?.removeEventListener('lostpointercapture', finishDrag)
-    if (dragPointerId !== null && grabber.hasPointerCapture(dragPointerId)) {
-      grabber.releasePointerCapture(dragPointerId)
+    handle.removeEventListener('pointerdown', onPointerDown)
+    handle.removeEventListener('pointermove', onPointerMove)
+    handle.removeEventListener('pointerup', finishDrag)
+    handle.removeEventListener('pointercancel', finishDrag)
+    handle.removeEventListener('lostpointercapture', finishDrag)
+    if (dragPointerId !== null && handle.hasPointerCapture(dragPointerId)) {
+      handle.releasePointerCapture(dragPointerId)
     }
-    handle?.removeEventListener('keydown', onKeyDown)
-    grabber.style.removeProperty('cursor')
-    node.style.removeProperty('cursor')
-    for (const claimed of controlCursors) {
-      if (claimed.cursor) claimed.element.style.setProperty('cursor', claimed.cursor)
-      else claimed.element.style.removeProperty('cursor')
-    }
-    node.removeEventListener('pointerdown', onSurfacePointerDown)
-    node.removeEventListener('pointermove', onSurfacePointerMove)
-    node.removeEventListener('pointerup', onSurfaceFinish)
-    node.removeEventListener('pointercancel', onSurfaceFinish)
-    node.removeEventListener('lostpointercapture', onSurfaceFinish)
+    handle.removeEventListener('keydown', onKeyDown)
+    handle.style.removeProperty('cursor')
   }
 }
 
@@ -352,7 +252,6 @@ export function draggablePopoverOffset(options: OffsetPopoverOptions): Attachmen
       node,
       padding: options.viewportPadding ?? 12,
       read: options.position,
-      apply: options.onMove,
-      surface: options.surface
+      apply: options.onMove
     })
 }

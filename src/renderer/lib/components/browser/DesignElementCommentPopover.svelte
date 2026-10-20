@@ -100,11 +100,7 @@
     onMove: (next) => {
       if (comment) dragged = { referenceId: comment.referenceId, x: next.x, y: next.y }
     },
-    viewportPadding: VIEWPORT_PADDING,
-    // The bubble floats over the part of the design it describes, so it must be
-    // movable off that element from anywhere on the bubble and not only from the
-    // one small handle that is easy to miss while a page is being read.
-    surface: true
+    viewportPadding: VIEWPORT_PADDING
   })
 
   // Attach to the rendered bubble, where its handle exists. Rebind measurement
