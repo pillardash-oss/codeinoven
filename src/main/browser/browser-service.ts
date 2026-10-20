@@ -747,6 +747,8 @@ export class BrowserService {
    *  window-server commit, and doing that sixty times a second for a frame that
    *  never moved is the difference between an instant switch and a hitch. */
   private displayedTab: { tabId: string; bounds: BrowserViewBounds } | null = null
+  /** Only the latest show may attach after asynchronous extension preparation. */
+  private pendingShow: { tabId: string } | null = null
   /**
    * Hides the renderer asked for, with the handle waiting out their grace window.
    *
@@ -1219,13 +1221,27 @@ export class BrowserService {
             ? ''
             : this.validateTabNavigationUrl(projectId, boxId, rawInitialUrl)
         const bounds = validateBounds(rawBounds)
+        const request = { tabId }
+        this.pendingShow = request
+        // Remove the outgoing page before waiting: native views cover the new
+        // tab's DOM, including its loading and blank states.
+        if (this.activeTabId && this.activeTabId !== tabId) {
+          this.parkTab(this.activeTabId)
+        }
         // The first document must not outrun extensions in its jar. If a page
         // navigates before Chromium has loaded an extension, its manifest content
         // scripts never get a receiver in that document, and later calls such as
         // Bitwarden's tabs.sendMessage fail until the page is reloaded. ensureTab
         // remains synchronous; this IPC path waits for the same single-flight load
         // before it creates and navigates a page.
-        await this.extensions.ensureJarLoaded(projectId, boxId)
+        // Existing pages already have their jar prepared. Frame/bounds reports
+        // must not reconcile extensions again on every animation frame.
+        if (!this.tabs.get(tabId)?.initialNavigationStarted) {
+          await this.extensions.ensureJarLoaded(projectId, boxId)
+        }
+        // A hide or a newer show may have arrived while the jar was loading.
+        // Never let that old continuation recreate or display a departed tab.
+        if (this.pendingShow !== request) throw new Error('Browser show was superseded')
         const tab = this.ensureTab(tabId, projectId, threadId, boxId)
 
         // A show that lands inside the grace window of a hide is a surface switch
@@ -1289,6 +1305,7 @@ export class BrowserService {
 
     replaceHandler('browser:hide', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
+      if (this.pendingShow?.tabId === tabId) this.pendingShow = null
       // Leaving a tab right after an agent revealed it is the signal that the
       // agent's reveal was not welcome; it stops being counted after a while.
       this.noteDepartedReveal(tabId)
@@ -1873,6 +1890,7 @@ export class BrowserService {
   }
 
   dispose(): void {
+    this.pendingShow = null
     this.popupWindows.closeAll('the browser was torn down')
     this.mountedPopupViews.clear()
     this.popupViewFrames.clear()
@@ -7188,6 +7206,7 @@ export class BrowserService {
   }
 
   private destroy(tabId: string, reason: BrowserTabDestroyReason): void {
+    if (this.pendingShow?.tabId === tabId) this.pendingShow = null
     // A hide that is still inside its grace window must not park a tab that is
     // about to be gone: the view would be handed to the stage window only to be
     // destroyed.
