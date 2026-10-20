@@ -26,6 +26,19 @@ import { blank, code as copyBlock, fail, field, note, out, section, step, warn }
 const MINIMUM_NODE = 22
 /** The port SSH uses unless the machine is configured otherwise. */
 const DEFAULT_SSH_PORT = 22
+/**
+ * The port Termux serves SSH on.
+ *
+ * Android refuses ports below 1024 to an unprivileged process, and a Termux
+ * session is exactly that, so its OpenSSH package is built to use 8022. Offering
+ * 22 on a phone is an endpoint no `sshd` there can ever bind.
+ */
+const TERMUX_SSH_PORT = 8022
+
+/** The SSH port to offer when nothing on the machine says otherwise. */
+export function defaultSshPortFor(platform: string): number {
+  return platform === 'android' ? TERMUX_SSH_PORT : DEFAULT_SSH_PORT
+}
 
 export interface CommonOptions {
   dataRoot: string
@@ -101,10 +114,13 @@ async function sshServing(port: number): Promise<boolean> {
  * The ports worth dialling for SSH, most specific claim first.
  *
  * The reported port leads because it is the more specific claim, and the
- * standard one follows so a wrong answer still finds the live server.
+ * platform's standard one follows so a wrong answer still finds the live server.
  */
-export function sshPortCandidates(preferred: number | null): number[] {
-  return [...new Set([preferred, DEFAULT_SSH_PORT])].filter(
+export function sshPortCandidates(
+  preferred: number | null,
+  fallback: number = DEFAULT_SSH_PORT
+): number[] {
+  return [...new Set([preferred, fallback])].filter(
     (port): port is number =>
       port !== null && Number.isSafeInteger(port) && port >= 1 && port <= 65535
   )
@@ -121,15 +137,16 @@ export function sshPortCandidates(preferred: number | null): number[] {
  */
 export async function resolveServingSshPort(
   preferred: number | null,
-  serving: (port: number) => Promise<boolean>
+  serving: (port: number) => Promise<boolean>,
+  fallback: number = DEFAULT_SSH_PORT
 ): Promise<number | null> {
-  for (const port of sshPortCandidates(preferred)) if (await serving(port)) return port
+  for (const port of sshPortCandidates(preferred, fallback)) if (await serving(port)) return port
   return null
 }
 
 /** The port SSH is really served on, among the ports worth trying. */
-async function servingSshPort(preferred: number | null): Promise<number | null> {
-  return resolveServingSshPort(preferred, sshServing)
+async function servingSshPort(preferred: number | null, fallback: number): Promise<number | null> {
+  return resolveServingSshPort(preferred, sshServing, fallback)
 }
 
 export interface SettledSshPort {
@@ -150,10 +167,11 @@ export interface SettledSshPort {
 export async function settleSshPort(
   port: number,
   explicit: boolean,
-  serving: (port: number) => Promise<boolean>
+  serving: (port: number) => Promise<boolean>,
+  fallback: number = DEFAULT_SSH_PORT
 ): Promise<SettledSshPort | null> {
   if (explicit) return (await serving(port)) ? { port } : null
-  const resolved = await resolveServingSshPort(port, serving)
+  const resolved = await resolveServingSshPort(port, serving, fallback)
   if (resolved === null) return null
   return resolved === port ? { port } : { port: resolved, correctedFrom: port }
 }
@@ -164,8 +182,8 @@ function sshUnavailable(port: number): string {
     const prefix = process.env['PREFIX'] ?? '/data/data/com.termux/files/usr'
     return [
       `Nothing is serving SSH on port ${port} on this machine, so a registration code now would only time out later.`,
-      `Install OpenSSH with "pkg install openssh" if it is missing, set "Port ${port}" in ${prefix}/etc/ssh/sshd_config, then start the server with: sshd`,
-      'Then run this command again.'
+      `Install OpenSSH with "pkg install openssh" if it is missing, start the server with "sshd", then run this command again.`,
+      `Termux serves SSH on port ${TERMUX_SSH_PORT} by default, because Android does not let an unprivileged process bind a port below 1024; if you changed it, pass --port with the port in ${prefix}/etc/ssh/sshd_config.`
     ].join(' ')
   }
   const config =
@@ -197,15 +215,18 @@ async function resolveInputs(options: StartOptions): Promise<ResolvedInputs> {
     options.name ?? (attachable ? await askText('Oven name', defaultName()) : defaultName())
   let port = options.port
   let portExplicit = options.port !== undefined
+  const fallbackPort = defaultSshPortFor(process.platform)
   if (port === undefined) {
     const configured = await detectSshPort()
     // Offer the port something is really serving on. The sshd configuration is
     // the machine's own claim; a live listener is the fact, and the fact wins.
-    const offered = (await servingSshPort(configured)) ?? configured ?? DEFAULT_SSH_PORT
+    const offered = (await servingSshPort(configured, fallbackPort)) ?? configured ?? fallbackPort
     if (attachable) {
-      if (offered === DEFAULT_SSH_PORT && configured === null)
+      if (offered === fallbackPort && configured === null)
         note(
-          'No SSH server or configuration was found, so port 22 is offered. Change it if needed.'
+          process.platform === 'android'
+            ? `No SSH server or configuration was found, so port ${fallbackPort} is offered, which is the port Termux serves SSH on. Change it if needed.`
+            : `No SSH server or configuration was found, so port ${fallbackPort} is offered. Change it if needed.`
         )
       const answer = await askPort('SSH port the app should connect on', offered)
       port = answer.port
@@ -289,7 +310,12 @@ export async function start(options: StartOptions): Promise<void> {
   // Settle the port against what the machine actually serves before anything is
   // installed or published. A code for a port that was not honoured is worse
   // than no code: it registers an Oven that can only time out.
-  const settled = await settleSshPort(inputs.port, inputs.portExplicit, sshServing)
+  const settled = await settleSshPort(
+    inputs.port,
+    inputs.portExplicit,
+    sshServing,
+    defaultSshPortFor(process.platform)
+  )
   if (settled === null) fail(sshUnavailable(inputs.port))
   if (settled.correctedFrom !== undefined)
     warn(
