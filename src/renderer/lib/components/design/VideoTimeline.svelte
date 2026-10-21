@@ -1,13 +1,14 @@
 <script lang="ts">
+  import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
-  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
+  import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import { onMount, tick, type Snippet } from 'svelte'
   import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
   import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
-  import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
+  import { videoNoteReference } from '$lib/video-note-reference'
   import {
     videoAudioLanes,
     videoBandGeometry,
@@ -22,10 +23,30 @@
   /** The three things a composition editor shows, as the board's one tab strip. */
   type EditorSection = 'timeline' | 'audio' | 'exports'
 
-  const SECTIONS: { id: EditorSection; label: string; title: string }[] = [
-    { id: 'timeline', label: 'Timeline', title: 'Read the composition as a timeline' },
-    { id: 'audio', label: 'Audio', title: 'Manage the audio this composition plays' },
-    { id: 'exports', label: 'Exports', title: 'Render the composition and follow its jobs' }
+  const SECTIONS: {
+    id: EditorSection
+    label: string
+    title: string
+    icon: typeof CioClapper
+  }[] = [
+    {
+      id: 'timeline',
+      label: 'Timeline',
+      title: 'Read the composition as a timeline',
+      icon: CioClapper
+    },
+    {
+      id: 'audio',
+      label: 'Audio',
+      title: 'Manage the audio this composition plays',
+      icon: CioAudioLines
+    },
+    {
+      id: 'exports',
+      label: 'Exports',
+      title: 'Render the composition and follow its jobs',
+      icon: CioDownload
+    }
   ]
 
   interface Props {
@@ -77,6 +98,8 @@
   let zoom = $state(1)
   /** Where the scrolled window starts, as a fraction of the composition. */
   let scrollFraction = $state(0)
+  /** The same offset in pixels, which is what slides the pinned ruler. */
+  let scrollLeft = $state(0)
   let viewportWidth = $state(600)
   let viewport = $state<HTMLDivElement | undefined>()
 
@@ -270,7 +293,11 @@
     zoom = next
     await tick()
     element.scrollLeft = Math.max(0, anchor * ratio - pointer)
-    if (element.scrollLeft === 0) scrollFraction = 0
+    scrollLeft = element.scrollLeft
+    // Written here rather than waiting for the scroll event a programmatic
+    // `scrollLeft` fires: the ruler's ticks are computed from this fraction, and
+    // one frame of the old window under the new zoom reads as a wrong ruler.
+    scrollFraction = scrollLeft / Math.max(1, viewportWidth * scale)
   }
 
   /**
@@ -372,20 +399,6 @@
     void goTo(seconds)
     anchor = anchorAt(seconds)
     editing = { id, seconds }
-  }
-
-  /**
-   * Comment on the moment the playhead is on.
-   *
-   * This is the only way into a note from here, and it sits beside the timecode
-   * for that reason: the note names the second the strip is showing, so the model
-   * reads a timecode, a frame and the caption under it rather than a picture.
-   */
-  function startNote(): void {
-    const seconds = shown
-    const id = newVideoNoteId()
-    writeNote(id, seconds, '')
-    openNote(id, seconds)
   }
 
   /** Close the bubble, dropping a note the user left without a comment. */
@@ -498,10 +511,10 @@
 >
   <!--
     One row of chrome. The tabs say which half of the editor is open, and the
-    strip on the right says where the playhead is and offers the one action the
-    timeline has that the stage above does not: commenting on this moment. The
-    transport is deliberately absent, because the stage above already carries a
-    play button, a stop and a frame step for the same composition.
+    strip on the right says where the playhead is. Commenting on a moment is the
+    transport's job, not this row's: the transport carries the playhead, so it
+    carries the button that names it, and the note it writes lists itself here as
+    a row the reader can reopen.
   -->
   <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 pb-1.5">
     {#if controls}
@@ -511,18 +524,30 @@
         aria-label="Video editor sections"
       >
         {#each SECTIONS as entry (entry.id)}
+          {@const Icon = entry.icon}
+          <!--
+            The open tab names itself and its neighbours do not. The strip shares
+            one row with the timecode, the frame and the comment button, and a row
+            of words for the three tabs pushes those off the panel at its default
+            width. An icon still says which half of the editor is closed, and its
+            title says the word when the pointer rests on it.
+          -->
           <button
             type="button"
-            class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {section ===
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {section ===
             entry.id
               ? 'bg-surface text-foreground'
               : 'text-muted hover:text-foreground'}"
             role="tab"
             aria-selected={section === entry.id}
+            aria-label={entry.label}
             title={entry.title}
             onclick={() => (section = entry.id)}
           >
-            {entry.label}
+            <Icon size={12} aria-hidden="true" class="shrink-0" />
+            {#if section === entry.id}
+              <span class="whitespace-nowrap">{entry.label}</span>
+            {/if}
           </button>
         {/each}
       </div>
@@ -536,16 +561,6 @@
       <span class="text-[0.6875rem] whitespace-nowrap text-dimmed tabular-nums">
         Frame {frame} · {fps} fps
       </span>
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-        title="Comment on the moment the playhead is on"
-        aria-label="Comment on the moment the playhead is on"
-        disabled={!manifest}
-        onclick={startNote}
-      >
-        <CioMessagePlus size={13} />
-      </button>
     </div>
   </div>
 
@@ -564,12 +579,39 @@
           </p>
         {/if}
         <div class="select-none">
+          <!--
+            The ruler is pinned to the top of the editor's scroller rather than
+            living inside the track, so scrolling down to the captions, the lanes
+            and the controls never costs the reader the time. It is not scrollable
+            itself: it slides by the track's own offset, which keeps the two in one
+            coordinate system without a second scroller to keep in sync.
+          -->
+          <div
+            class="sticky top-0 z-20 h-4 overflow-hidden bg-surface"
+            style:width={`${viewportWidth}px`}
+            aria-hidden="true"
+          >
+            <div
+              class="relative h-4"
+              style:width={`${scale * viewportWidth}px`}
+              style:transform={`translateX(${-scrollLeft}px)`}
+            >
+              {#each ticks as tick (tick.seconds)}
+                <span
+                  class="absolute top-0 text-[0.625rem] whitespace-nowrap text-dimmed tabular-nums"
+                  style={`left: ${tick.fraction * 100}%; transform: translateX(${tick.seconds === 0 ? 0 : tick.seconds === duration ? -100 : -50}%)`}
+                  >{tick.label}</span
+                >
+              {/each}
+            </div>
+          </div>
           <div
             bind:this={viewport}
             class="overflow-x-auto pb-1"
             onwheel={zoomOnWheel}
             onscroll={(event) => {
-              scrollFraction = event.currentTarget.scrollLeft / (viewportWidth * scale)
+              scrollLeft = event.currentTarget.scrollLeft
+              scrollFraction = scrollLeft / (viewportWidth * scale)
             }}
             {@attach (node) => {
               const observer = new ResizeObserver(([entry]) => {
@@ -580,16 +622,6 @@
             }}
           >
             <div style:width={`${scale * 100}%`}>
-              <div class="relative h-4">
-                {#each ticks as tick (tick.seconds)}
-                  <span
-                    class="absolute top-0 text-[0.625rem] whitespace-nowrap text-dimmed tabular-nums"
-                    style={`left: ${tick.fraction * 100}%; transform: translateX(${tick.seconds === 0 ? 0 : tick.seconds === duration ? -100 : -50}%)`}
-                    >{tick.label}</span
-                  >
-                {/each}
-              </div>
-
               <!--
                 The tracks, without a rule between them. A caption strip, a lane
                 per track and the notes all sit on the one raised band, and the

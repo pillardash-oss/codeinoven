@@ -8,7 +8,11 @@
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import CompositionFrameNote from './CompositionFrameNote.svelte'
+  import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
+  import type { VideoStudioDocument } from '$shared/video/studio'
   import type {
     BrowserCompositionPlayback,
     BrowserCompositionTab,
@@ -28,7 +32,7 @@
     /** Board playback must stop when its surface goes away. */
     pauseWhenHidden?: boolean
     /**
-     * The conversation a frame note belongs to.
+     * The conversation a note belongs to.
      *
      * A note is a composer reference, so it needs the thread it is written for.
      * The transport drives a tab rather than a conversation, and the board's
@@ -60,6 +64,12 @@
   let capturing = $state(false)
   /** Why the last frame capture did not produce a picture. */
   let captureError = $state<string | null>(null)
+  /** The moment note whose comment bubble is open, and where it is anchored. */
+  let editing = $state<{ id: string; seconds: number } | null>(null)
+  let anchor = $state<{ x: number; y: number } | null>(null)
+  /** The composition's saved edits, read once per note so its descriptor can
+   *  quote the caption and name the controls the moment falls inside. */
+  let studio = $state<VideoStudioDocument | null>(null)
 
   /** A composition always runs for something, and a zero-length timeline would
    *  make every fraction below divide by it. */
@@ -119,7 +129,7 @@
   }
 
   /**
-   * Keep the frame on screen and open it for a note.
+   * Open the frame on screen as an annotatable picture.
    *
    * The playhead is stopped before the capture, because the picture has to be the
    * frame the user is looking at: a capture taken while the timeline moves can
@@ -127,20 +137,127 @@
    * The second that travels with the picture is the playhead the panel is
    * showing, to the millisecond, so a note about a frame is unambiguous.
    */
-  async function noteFrame(armed: boolean): Promise<void> {
+  async function annotateFrame(): Promise<void> {
     if (!canNote || capturing) return
     capturing = true
     captureError = null
     try {
       await send('pause')
       const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
-      if (snapshot) frameNote = { snapshot, armed }
+      if (snapshot) frameNote = { snapshot, armed: true }
       else captureError = 'That frame could not be captured. Try again.'
     } catch {
       // The tab can be closed between the click and the capture.
       captureError = 'That frame could not be captured. Try again.'
     } finally {
       capturing = false
+    }
+  }
+
+  /** The comment the open bubble starts with, read from the note it edits. */
+  const momentComment = $derived(
+    editing && projectId && threadId
+      ? (responseReferencesState
+          .forThread(projectId, threadId)
+          .find((entry) => entry.id === editing?.id)?.comment ?? '')
+      : ''
+  )
+
+  /**
+   * Write one note on the conversation at a second.
+   *
+   * The reference is a `PromptReference` like a quoted selection, so it shows in
+   * the composer the moment it is stored and travels with the next prompt. Its
+   * text is the descriptor the model reads, built from the second the note sits
+   * at rather than from the playhead, so a note written here and a note edited a
+   * minute later describe the same moment.
+   */
+  function writeNote(
+    project: string,
+    thread: string,
+    id: string,
+    seconds: number,
+    comment: string,
+    document: VideoStudioDocument | null
+  ): void {
+    const existing = responseReferencesState.forThread(project, thread)
+    const previous = existing.find((candidate) => candidate.id === id)
+    const reference = {
+      ...videoNoteReference(id, seconds, {
+        directory: composition.directory,
+        composition,
+        document,
+        tabId
+      }),
+      comment
+    }
+    const merged = previous
+      ? existing.map((candidate) => (candidate.id === id ? reference : candidate))
+      : [...existing, reference]
+    responseReferencesState.setForThread(project, thread, merged)
+  }
+
+  /**
+   * Comment on the moment the playhead is on, without leaving the panel.
+   *
+   * This is the note the timeline used to offer, moved to the transport so it is
+   * beside the playhead it describes: the note names the second on screen, so the
+   * model reads a timecode, a frame and the caption under it rather than a
+   * picture, and the full screen pen is left to the notes that do want one.
+   */
+  async function commentOnMoment(button: HTMLElement): Promise<void> {
+    const project = projectId
+    const thread = threadId
+    if (!project || !thread) return
+    const seconds = shown
+    try {
+      studio = (await invoke('video:studio', project, composition.directory)).document
+    } catch {
+      // A composition whose document cannot be read still gets its note: the
+      // timecode, the frame and the rate are the parts that place it.
+      studio = null
+    }
+    const id = newVideoNoteId()
+    writeNote(project, thread, id, seconds, '', studio)
+    const rect = button.getBoundingClientRect()
+    anchor = { x: rect.left + rect.width / 2, y: rect.bottom }
+    editing = { id, seconds }
+  }
+
+  /** Close the bubble, dropping a note the user left without a comment. */
+  function closeEditor(): void {
+    const current = editing
+    editing = null
+    anchor = null
+    if (!current || !projectId || !threadId) return
+    const note = responseReferencesState
+      .forThread(projectId, threadId)
+      .find((entry) => entry.id === current.id)
+    if (note && (note.comment ?? '').trim() === '') removeNote(current.id)
+  }
+
+  function saveComment(id: string, comment: string): void {
+    if (!projectId || !threadId) return
+    writeNote(projectId, threadId, id, editing?.seconds ?? shown, comment, studio)
+    editing = null
+    anchor = null
+  }
+
+  function draftComment(id: string, comment: string): void {
+    if (!projectId || !threadId) return
+    responseReferencesState.updateCommentDraft(projectId, threadId, id, comment)
+  }
+
+  function removeNote(id: string): void {
+    if (!projectId || !threadId) return
+    responseReferencesState.setForThread(
+      projectId,
+      threadId,
+      responseReferencesState.forThread(projectId, threadId).filter((entry) => entry.id !== id)
+    )
+    if (editing?.id === id) {
+      editing = null
+      anchor = null
     }
   }
 
@@ -257,12 +374,12 @@
   <button
     type="button"
     class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-    aria-label="Copy this frame as a note"
+    aria-label="Comment on the moment the playhead is on"
     title={canNote
-      ? 'Open this frame to comment on it'
-      : 'Open a frame to comment on it from the video panel'}
-    disabled={!canNote || capturing}
-    onclick={() => void noteFrame(false)}
+      ? 'Comment on the moment the playhead is on'
+      : 'Comment on a moment from the video panel'}
+    disabled={!canNote}
+    onclick={(event) => void commentOnMoment(event.currentTarget)}
   >
     <CioMessagePlus size={13} />
   </button>
@@ -274,7 +391,7 @@
       ? 'Annotate this frame: circle an area and write why'
       : 'Annotate a frame from the video panel'}
     disabled={!canNote || capturing}
-    onclick={() => void noteFrame(true)}
+    onclick={() => void annotateFrame()}
   >
     <CioPencil size={13} />
   </button>
@@ -286,6 +403,28 @@
     snapshot={frameNote.snapshot}
     armed={frameNote.armed}
     onClose={() => (frameNote = null)}
+  />
+{/if}
+{#if editing && anchor && projectId && threadId}
+  <!--
+    A moment is commented on the way every other annotation is: the one comment
+    bubble the app draws, anchored to the control the user pressed. It is a fixed
+    overlay, so it takes no space in the bar and the transport stays one row.
+  -->
+  <ResponseAnnotationComment
+    x={anchor.x}
+    y={anchor.y}
+    title="Comment on this moment"
+    dragHandleTitle="Move moment comment"
+    closeLabel="Close moment comment"
+    removeTitle="Remove this note and its comment"
+    initialComment={momentComment}
+    targetId={`video-note-comment-${threadId}-${editing.id}`}
+    scope={{ kind: 'project', projectId }}
+    onDraftChange={(comment) => draftComment(editing?.id ?? '', comment)}
+    onDone={(comment) => saveComment(editing?.id ?? '', comment)}
+    onRemove={() => removeNote(editing?.id ?? '')}
+    onClose={closeEditor}
   />
 {/if}
 {#if captureError}
