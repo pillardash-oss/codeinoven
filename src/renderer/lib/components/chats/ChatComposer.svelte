@@ -2140,13 +2140,14 @@
         }}
       />
     {/if}
-    <!-- Maximize   floats at the top right of the typing surface so the control
-         is out of the writing line; the editor reserves its corner with `pr-10`.
-         It appears on the third rendered line and stays available while expanded. -->
+    <!-- Maximize   sits in the gutter beneath the console prompt, so it never
+         eats into the writing surface and the editor's lines can run all the way
+         to the composer's right edge. It appears on the third rendered line and
+         stays available while expanded. -->
     {#if showExpandControl}
       <button
         type="button"
-        class="absolute top-2 right-3 z-20 flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        class="absolute top-9 left-2 z-20 flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         transition:scale={{ duration: motionDuration(150), start: 0.85 }}
         aria-label={expansion.maximized ? 'Collapse the composer' : 'Expand the composer'}
         aria-pressed={expansion.maximized}
@@ -2173,7 +2174,7 @@
     <RichMarkdownEditor
       bind:this={richEditor}
       id={composerEditorId}
-      class="composer-editor w-full overflow-y-auto pt-3 pr-10 pb-1 pl-9 text-sm leading-5 text-foreground outline-none"
+      class="composer-editor w-full overflow-y-auto pt-3 pr-4 pb-1 pl-9 text-sm leading-5 text-foreground outline-none"
       bind:value
       {placeholder}
       {autofocus}
@@ -2490,12 +2491,9 @@
   :global(.composer-editor) {
     min-height: 2.5rem;
     max-height: 10rem;
-    /* The right padding only grows once the maximize control is on screen, and
-       it grows with the same beat as that control's fade. */
     transition:
       min-height 240ms ease,
-      max-height 240ms ease,
-      padding-right 140ms ease;
+      max-height 240ms ease;
   }
 
   :global(.chat-composer.composer-maximized .composer-editor) {
