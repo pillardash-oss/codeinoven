@@ -17,19 +17,16 @@
     areas
       .map((area) =>
         area.additions + area.deletions > 0
-          ? `${area.label} +${area.additions} −${area.deletions} (${area.files} ${
-              area.files === 1 ? 'file' : 'files'
-            })`
-          : `${area.label} ${area.percentage}% (${area.files} ${
-              area.files === 1 ? 'file' : 'files'
-            })`
+          ? `${area.label} +${area.additions} −${area.deletions}`
+          : `${area.label} ${area.percentage}%`
       )
       .join(' · ')
   )
 </script>
 
 <!-- Where a change set happened, in the space a header has for it: one clause per
-     area, its line counts when they are known and its file share when they are not. -->
+     area, with the lines that area accounts for. A header already says how many
+     files moved, so this never repeats a file count. -->
 {#if areas.length > 0}
   <span
     class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 tabular-nums {className}"
@@ -41,11 +38,6 @@
         {#if area.additions + area.deletions > 0}
           <span class="shrink-0 text-success">+{area.additions}</span>
           <span class="shrink-0 text-danger">−{area.deletions}</span>
-        {:else}
-          <span class="shrink-0 text-dimmed">
-            {area.files}
-            {area.files === 1 ? 'file' : 'files'}
-          </span>
         {/if}
       </span>
     {/each}

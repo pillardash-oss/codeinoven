@@ -57,17 +57,14 @@
   {@const areas = breakdown?.areas ?? []}
   <!-- The tab's own summary: the line totals the files add up to, then the areas
        they came from, so a reader knows which part of the tree moved before
-       opening a single file. -->
+       opening a single file. The header already counts the files, so this row
+       never repeats that count. -->
   <div
     class="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-border px-3 py-1.5 text-[0.5625rem] tabular-nums text-dimmed"
     title={formatChangeSummary(breakdown, breakdown ?? null, count)}
   >
     <span class="text-success">+{breakdown?.additions ?? 0}</span>
     <span class="text-danger">−{breakdown?.deletions ?? 0}</span>
-    <span class="shrink-0">
-      {count}
-      {count === 1 ? 'file' : 'files'}
-    </span>
     {#if areas.length > 0}
       <ChangeAreaSummary {areas} limit={4} class="text-[0.5625rem]" />
     {/if}
