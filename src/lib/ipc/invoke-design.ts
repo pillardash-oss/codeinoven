@@ -20,8 +20,13 @@ import type { DesignModelRanking } from '../design/design-review'
 import type { VideoStudioDocument, VideoJob } from '../video/studio'
 import type { VideoProjectManifest } from '../video/project'
 import type { VideoPackagesState } from './video-packages'
+import type { VideoFrameThumbnail } from '../video/frame-grid'
 
 export const invokeDesignContract = {
+  'video:frameStrip': {} as Contract<
+    [projectId: string, directory: string, times: number[]],
+    VideoFrameThumbnail[]
+  >,
   /**
    * The composition's saved edits, plus the manifest a timeline is drawn from:
    * its duration is the ruler and its rate is the frame step, and neither of

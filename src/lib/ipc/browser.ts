@@ -285,7 +285,8 @@ export interface CompositionFrameSnapshot {
  * command names a function the transport defines, so no part of a caller's input
  * is ever evaluated as code.
  */
-export type BrowserTransportCommand = 'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'loop'
+export type BrowserTransportCommand =
+  'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'freeze' | 'loop'
 
 /**
  * One element the user picked from a design, reported by the injected inspector.

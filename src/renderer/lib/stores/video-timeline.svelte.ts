@@ -17,6 +17,8 @@ export interface VideoCompositionTab extends BrowserCompositionTab {
   url: string
   /** The cookie jar the tab runs against, or null for the scope's own. */
   boxId: string | null
+  loading: boolean
+  sourceRevision: number
 }
 
 function compositionKey(projectId: string, threadId: string): string {
@@ -74,13 +76,17 @@ class VideoTimelineState {
   adopt(state: BrowserPageState): void {
     const key = compositionKey(state.projectId, state.threadId)
     if (state.composition) {
+      const previous = this.byTabId.get(state.tabId)
       const tab: VideoCompositionTab = {
         ...state.composition,
         tabId: state.tabId,
         projectId: state.projectId,
         threadId: state.threadId,
         url: state.url,
-        boxId: state.boxId
+        boxId: state.boxId,
+        loading: state.loading,
+        sourceRevision:
+          (previous?.sourceRevision ?? 0) + (previous?.loading && !state.loading ? 1 : 0)
       }
       this.tabs.set(key, tab)
       this.byTabId.set(state.tabId, tab)

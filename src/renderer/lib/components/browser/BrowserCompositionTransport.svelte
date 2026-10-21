@@ -12,6 +12,9 @@
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { invoke } from '$lib/ipc.svelte'
+  import { VideoFrameSeeker } from '$lib/video-frame-seeker'
+  import { snapVideoFrame } from '$shared/video/frame-grid'
+  import { videoTimecode } from '$shared/video/timeline'
   import {
     compositionFrameFocusState,
     type CompositionFrameFocusRequest
@@ -68,6 +71,8 @@
   /** True while the user holds the scrubber, so a poll cannot yank it back. */
   let scrubbing = $state(false)
   let scrubValue = $state(0)
+  let pendingFrame = $state<number | null>(null)
+  let seekRevision = 0
   /** The frame the user asked to write about, once it has been captured. */
   let frameNote = $state<{
     snapshot: CompositionFrameSnapshot
@@ -96,7 +101,17 @@
   const playing = $derived(playback?.playing ?? false)
   const loop = $derived(playback?.loop ?? true)
   const error = $derived(playback?.error ?? null)
-  const shown = $derived(Math.min(scrubbing ? scrubValue : time, duration))
+  const shown = $derived(Math.min(scrubbing ? scrubValue : (pendingFrame ?? time), duration))
+  const seeker = new VideoFrameSeeker(
+    (id, seconds) => invoke('browser:transport', id, 'freeze', seconds),
+    (id, next) => {
+      if (id === tabId) {
+        apply(next)
+        seekRevision += 1
+        pendingFrame = null
+      }
+    }
+  )
   /** A note needs a picture and a conversation, and a composition declares both. */
   const canNote = $derived(Boolean(projectId && threadId))
 
@@ -110,7 +125,9 @@
 
   async function refresh(): Promise<void> {
     try {
-      apply(await invoke('browser:transportState', tabId))
+      const revision = seekRevision
+      const next = await invoke('browser:transportState', tabId)
+      if (revision === seekRevision && !scrubbing && pendingFrame === null) apply(next)
     } catch {
       // The tab can be closed while a poll is in flight.
     }
@@ -120,6 +137,9 @@
     command: BrowserTransportCommand,
     value: number | boolean = 0
   ): Promise<void> {
+    seeker.clear()
+    seekRevision += 1
+    pendingFrame = null
     try {
       apply(await invoke('browser:transport', tabId, command, value))
     } catch {
@@ -152,7 +172,7 @@
   }
 
   function step(direction: 1 | -1): void {
-    void send('seek', clamp(time + direction * frameStep))
+    queueFrame(clamp(shown + direction * frameStep))
   }
 
   function toggleLoop(): void {
@@ -346,20 +366,22 @@
 
   function commitScrub(): void {
     scrubbing = false
-    void send('seek', clamp(scrubValue))
+    queueFrame(clamp(scrubValue))
+  }
+
+  function queueFrame(seconds: number): void {
+    seekRevision += 1
+    pendingFrame = seconds
+    seeker.seek(tabId, seconds)
   }
 
   function clamp(seconds: number): number {
-    if (!Number.isFinite(seconds)) return 0
-    return Math.min(Math.max(seconds, 0), duration)
+    return snapVideoFrame(seconds, duration, composition.fps)
   }
 
-  /** Minutes and tenths, which is the resolution a frame step is measured in. */
+  /** Minutes, seconds and milliseconds for the selected frame. */
   function format(seconds: number): string {
-    const safe = Math.max(0, seconds)
-    const minutes = Math.floor(safe / 60)
-    const rest = safe - minutes * 60
-    return `${minutes}:${rest.toFixed(1).padStart(4, '0')}`
+    return videoTimecode(seconds)
   }
 
   // The page owns the clock, so the panel reads it rather than running one of its
@@ -373,6 +395,9 @@
     const timer = setInterval(() => void refresh(), POLL_MS)
     return () => {
       clearInterval(timer)
+      seeker.clear()
+      seekRevision += 1
+      pendingFrame = null
       if (pauseOnHide) void invoke('browser:transport', playbackTabId, 'pause', 0).catch(() => {})
     }
   })
@@ -423,7 +448,9 @@
   >
     <CioForward size={14} />
   </button>
-  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed">{format(shown)}</span>
+  <span class="shrink-0 tabular-nums text-[0.6875rem] text-dimmed"
+    >{format(shown)} · f{Math.round(shown * composition.fps)}</span
+  >
   <SeekBar
     class="min-w-0 flex-1"
     value={shown}
@@ -434,7 +461,8 @@
     title="Seek the composition"
     onInput={(seconds) => {
       scrubbing = true
-      scrubValue = seconds
+      scrubValue = clamp(seconds)
+      queueFrame(scrubValue)
     }}
     onCommit={() => commitScrub()}
   />

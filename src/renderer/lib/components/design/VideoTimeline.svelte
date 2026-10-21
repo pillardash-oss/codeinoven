@@ -2,6 +2,8 @@
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
+  import { Popover } from 'bits-ui'
   import { onMount, tick, type Snippet } from 'svelte'
   import ResponseAnnotationComment from '$lib/components/chats/ResponseAnnotationComment.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -9,6 +11,8 @@
   import { videoTimelineState } from '$lib/stores/video-timeline.svelte'
   import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
   import { videoNoteReference } from '$lib/video-note-reference'
+  import { VideoFrameSeeker } from '$lib/video-frame-seeker'
+  import { snapVideoFrame, visibleVideoFrames } from '$shared/video/frame-grid'
   import {
     videoAudioLanes,
     videoBandGeometry,
@@ -106,9 +110,16 @@
   let studio = $state<VideoStudioDocument | null>(null)
   let manifest = $state<VideoProjectManifest | null>(null)
   let playback = $state<BrowserCompositionPlayback | null>(null)
+  let thumbnails = $state.raw<Record<number, string>>({})
+  let thumbnailOwner = ''
+  let thumbnailBusy = false
+  let thumbnailPending: { owner: string; project: string; folder: string; times: number[] } | null =
+    null
   let waveforms = $state.raw<Record<string, string | null>>({})
   /** True while the user holds the band area, so a poll cannot yank the playhead. */
   let scrubbing = $state(false)
+  let pendingFrame = $state<number | null>(null)
+  let seekRevision = 0
   let scrubSeconds = $state(0)
   let error = $state('')
   /**
@@ -142,19 +153,42 @@
     Math.max(manifest?.duration ?? tab?.duration ?? playback?.duration ?? 0, 0.001)
   )
   const fps = $derived(manifest?.fps ?? tab?.fps ?? 30)
+  const activeTabId = $derived(tab?.tabId ?? '')
   const time = $derived(playback?.time ?? 0)
-  const shown = $derived(Math.min(Math.max(scrubbing ? scrubSeconds : time, 0), duration))
+  const shown = $derived(
+    Math.min(Math.max(scrubbing ? scrubSeconds : (pendingFrame ?? time), 0), duration)
+  )
   const playhead = $derived(`${(shown / duration) * 100}%`)
   const frame = $derived(Math.round(shown * fps))
   /**
    * The most the track may be stretched.
    *
-   * Twelve pixels is enough to place one frame by eye, so the ceiling is the
+   * Seventy-two pixels gives each frame a readable thumbnail and keeps even an
+   * hour at 120 fps below Chromium's layout-width limit. The ceiling is the
    * composition's own frame count against the width it is drawn at. Pinching past
    * it would only make the ruler coarser than the frames it addresses.
    */
-  const maxZoom = $derived(Math.max(1, (duration * fps * 12) / Math.max(viewportWidth, 1)))
+  const maxZoom = $derived(Math.max(1, (duration * fps * 72) / Math.max(viewportWidth, 1)))
   const scale = $derived(Math.min(zoom, maxZoom))
+  const frameCells = $derived(
+    visibleVideoFrames(
+      duration,
+      fps,
+      scrollFraction * duration,
+      Math.min(duration, (scrollFraction + 1 / scale) * duration),
+      viewportWidth * scale
+    )
+  )
+  const seeker = new VideoFrameSeeker(
+    (id, seconds) => videoTimelineState.command(id, 'freeze', seconds),
+    (id, next) => {
+      if (mounted && tab?.tabId === id) {
+        playback = next
+        seekRevision += 1
+        pendingFrame = null
+      }
+    }
+  )
   const ticks = $derived(
     videoTimelineTicks(duration, Math.max(2, viewportWidth / 96), {
       start: scrollFraction * duration,
@@ -227,27 +261,27 @@
     }
   }
 
-  async function refresh(): Promise<void> {
+  async function refresh(id: string): Promise<void> {
     // One read at a time: a slow round trip must not let the next tick stack on
     // top of it, because the page is the only thing that can be behind.
     if (reading) return
-    const current = tab
-    if (!current) {
+    if (!id) {
       playback = null
       return
     }
     reading = true
     try {
-      const next = await videoTimelineState.playback(current.tabId)
-      if (mounted && next) playback = next
+      const revision = seekRevision
+      const next = await videoTimelineState.playback(id)
+      if (mounted && revision === seekRevision && !scrubbing && pendingFrame === null && next)
+        playback = next
     } finally {
       reading = false
     }
   }
 
   function clamp(seconds: number): number {
-    if (!Number.isFinite(seconds)) return 0
-    return Math.min(Math.max(seconds, 0), duration)
+    return snapVideoFrame(seconds, duration, fps)
   }
 
   /**
@@ -260,8 +294,12 @@
   async function goTo(seconds: number): Promise<void> {
     const current = tab
     if (!current) return
-    const next = await videoTimelineState.seek(current.tabId, clamp(seconds))
-    if (mounted && next) playback = next
+    const target = clamp(seconds)
+    seekRevision += 1
+    pendingFrame = target
+    scrubSeconds = target
+    if (playback) playback = { ...playback, time: target, playing: false }
+    seeker.seek(current.tabId, target)
   }
 
   /** The second a pointer at one x position is pointing at. */
@@ -328,21 +366,91 @@
     scrubSeconds = secondsAt(event.clientX)
     scrubbing = true
     bandArea?.setPointerCapture(event.pointerId)
+    void goTo(scrubSeconds)
   }
 
   function moveScrub(event: PointerEvent): void {
     if (!scrubbing) return
     scrubSeconds = secondsAt(event.clientX)
+    void goTo(scrubSeconds)
   }
 
   function endScrub(event: PointerEvent): void {
     if (!scrubbing) return
     scrubbing = false
     bandArea?.releasePointerCapture(event.pointerId)
-    const target = secondsAt(event.clientX)
+    const target = event.type === 'pointercancel' ? scrubSeconds : secondsAt(event.clientX)
     scrubSeconds = target
     void goTo(target)
   }
+
+  async function showFrames(): Promise<void> {
+    zoom = maxZoom
+    await tick()
+    if (!viewport) return
+    viewport.scrollLeft = Math.max(
+      0,
+      (shown / duration) * viewportWidth * scale - viewportWidth / 2
+    )
+    scrollLeft = viewport.scrollLeft
+    scrollFraction = scrollLeft / (viewportWidth * scale)
+  }
+
+  async function readThumbnails(): Promise<void> {
+    if (thumbnailBusy) return
+    thumbnailBusy = true
+    try {
+      while (thumbnailPending && mounted) {
+        const request = thumbnailPending
+        thumbnailPending = null
+        const missing = request.times.filter((time) => !thumbnails[Math.round(time * fps)])
+        if (!missing.length) continue
+        const result = await invoke('video:frameStrip', request.project, request.folder, missing)
+        if (!mounted || request.owner !== thumbnailOwner) continue
+        if (!result.length) continue
+        const next = { ...thumbnails }
+        for (const item of result) next[Math.round(item.time * fps)] = item.image
+        const keys = Object.keys(next)
+        const visible = new Set(frameCells.map((cell) => cell.frame))
+        for (const key of keys
+          .filter((key) => !visible.has(Number(key)))
+          .slice(0, Math.max(0, keys.length - 96)))
+          delete next[Number(key)]
+        thumbnails = next
+      }
+    } catch {
+      // An incomplete composition keeps its frame addresses usable without pictures.
+    } finally {
+      thumbnailBusy = false
+    }
+  }
+
+  $effect(() => {
+    const owner = JSON.stringify([
+      projectId,
+      directory,
+      revision,
+      tab?.sourceRevision,
+      fps,
+      duration
+    ])
+    if (owner !== thumbnailOwner) {
+      thumbnailOwner = owner
+      thumbnails = {}
+    }
+    if (!onScreen || !pageVisible || section !== 'timeline' || !tab || tab.loading) return
+    const times = frameCells.filter((cell) => !thumbnails[cell.frame]).map((cell) => cell.time)
+    if (!times.length) return
+    const request = { owner, project: projectId, folder: directory, times }
+    const timer = setTimeout(() => {
+      thumbnailPending = request
+      void readThumbnails()
+    }, 180)
+    return () => {
+      clearTimeout(timer)
+      thumbnailPending = null
+    }
+  })
 
   /**
    * Write one note on the conversation at a second.
@@ -465,6 +573,7 @@
 
     return () => {
       mounted = false
+      seeker.clear()
       observer?.disconnect()
       document.removeEventListener('visibilitychange', onVisibility)
     }
@@ -474,20 +583,26 @@
   // own. Only the tab and whether the timeline is on screen are read here, so a
   // state report cannot restart the timer it just fed.
   $effect(() => {
-    const current = tab
-    if (!current || !onScreen || !pageVisible) return
-    void refresh()
-    const timer = setInterval(() => void refresh(), POLL_MS)
-    return () => clearInterval(timer)
+    const id = activeTabId
+    if (!id || !onScreen || !pageVisible) return
+    void refresh(id)
+    const timer = setInterval(() => void refresh(id), POLL_MS)
+    return () => {
+      clearInterval(timer)
+      seeker.clear()
+      seekRevision += 1
+      pendingFrame = null
+    }
   })
 
   // The bands are read from the composition itself, on mount and again whenever
   // the editor saves it. The revision is the trigger and nothing else is read in
   // here, so a read cannot re-run on the document it just wrote.
-  let readRevision = $state<number | null>(null)
+  let readRevision: string | null = null
   $effect(() => {
-    if (readRevision === revision) return
-    readRevision = revision
+    const source = JSON.stringify([projectId, directory, revision, tab?.sourceRevision])
+    if (readRevision === source) return
+    readRevision = source
     void load()
   })
 
@@ -511,12 +626,12 @@
 >
   <!--
     One row of chrome. The tabs say which half of the editor is open, and the
-    strip on the right says where the playhead is. Commenting on a moment is the
+    strip on the right holds timeline tools and frame information. Commenting on a moment is the
     transport's job, not this row's: the transport carries the playhead, so it
     carries the button that names it, and the note it writes lists itself here as
     a row the reader can reopen.
   -->
-  <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 pb-1.5">
+  <div class="flex shrink-0 items-center justify-between gap-2 pb-1.5">
     {#if controls}
       <div
         class="flex w-max items-center gap-0.5 border border-border bg-elevated p-0.5"
@@ -527,7 +642,7 @@
           {@const Icon = entry.icon}
           <!--
             The open tab names itself and its neighbours do not. The strip shares
-            one row with the timecode and the frame, and a row of words for the
+            one row with the timeline tools, and a row of words for the
             three tabs pushes those off the panel at its default width. An icon
             still says which half of the editor is closed, and its title says the
             word when the pointer rests on it.
@@ -554,16 +669,67 @@
     {:else}
       <span></span>
     {/if}
-    <div class="ml-auto flex shrink-0 items-center gap-2">
-      <span class="text-[0.6875rem] whitespace-nowrap text-foreground tabular-nums">
-        {videoTimecode(shown)}<span class="text-dimmed"> / {videoTimecode(duration)}</span>
-      </span>
-      <span class="text-[0.6875rem] whitespace-nowrap text-dimmed tabular-nums">
-        Frame {frame} · {fps} fps
-      </span>
-    </div>
+    {#if section === 'timeline'}
+      <div
+        class="ml-auto flex shrink-0 items-center gap-1"
+        role="group"
+        aria-label="Timeline tools"
+      >
+        <button
+          type="button"
+          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+          title="Fit the whole video in the timeline"
+          aria-label="Fit the whole video in the timeline"
+          onclick={() =>
+            zoomBy(1 / scale, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
+          >Fit</button
+        >
+        <button
+          type="button"
+          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+          title="Zoom out of the timeline"
+          aria-label="Zoom out of the timeline"
+          onclick={() =>
+            zoomBy(1 / 1.5, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
+          >−</button
+        >
+        <button
+          type="button"
+          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+          title="Zoom into the timeline"
+          aria-label="Zoom into the timeline"
+          onclick={() =>
+            zoomBy(1.5, (viewport?.getBoundingClientRect().left ?? 0) + viewportWidth / 2)}
+          >+</button
+        >
+        <button
+          type="button"
+          class="px-2 py-1 text-[0.6875rem] text-muted hover:bg-elevated"
+          title="Show individual frames around the playhead"
+          aria-label="Show individual frames around the playhead"
+          onclick={showFrames}>Frames</button
+        >
+        <Popover.Root>
+          <Popover.Trigger
+            class="flex items-center justify-center px-2 py-1 text-muted hover:bg-elevated"
+            title="Show frame and frame rate"
+            aria-label="Show frame and frame rate"
+          >
+            <CioTabInfo size={14} aria-hidden="true" />
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              align="end"
+              sideOffset={6}
+              class="z-60 border border-border bg-surface px-3 py-2 text-xs text-foreground shadow-lg"
+            >
+              <span class="tabular-nums">Frame {frame} · {fps} fps</span>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+      </div>
+    {/if}
   </div>
-
   {#if error}
     <p class="shrink-0 bg-danger/10 px-2 py-1 text-xs text-danger" role="alert">{error}</p>
   {:else if !manifest}
@@ -639,6 +805,29 @@
                 onpointerup={endScrub}
                 onpointercancel={endScrub}
               >
+                <div class="relative h-14 overflow-hidden" aria-label="Video frame thumbnails">
+                  {#each frameCells as cell (cell.frame)}
+                    <button
+                      type="button"
+                      class="absolute top-0 h-full overflow-hidden border-r border-border bg-elevated text-left"
+                      style:left={`${(cell.time / duration) * 100}%`}
+                      style:width={`${((cell.end - cell.time) / duration) * 100}%`}
+                      title={`Seek to frame ${cell.frame}, ${videoTimecode(cell.time)}`}
+                      aria-label={`Seek to frame ${cell.frame}, ${videoTimecode(cell.time)}`}
+                      onclick={() => goTo(cell.time)}
+                    >
+                      {#if thumbnails[cell.frame]}<img
+                          src={thumbnails[cell.frame]}
+                          alt=""
+                          class="h-full w-full object-contain"
+                        />{/if}
+                      <span
+                        class="absolute right-0 bottom-0 left-0 bg-app/80 px-1 text-[0.5625rem] text-foreground tabular-nums"
+                        >f{cell.frame}</span
+                      >
+                    </button>
+                  {/each}
+                </div>
                 <div class="relative h-6">
                   {#each captions as band (band.key)}
                     {@const geometry = videoBandGeometry(band.start, band.end, duration)}
