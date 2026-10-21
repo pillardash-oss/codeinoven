@@ -5,17 +5,15 @@
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import type { OfferedProvider, ProviderConnectionInfo } from '$shared/types'
+  import type { OfferedProvider } from '$shared/types'
   import type { AddTab, ConnectStep } from './add-provider-modal-helpers'
 
   interface Props {
     tab: AddTab
     step: ConnectStep
-    harness: ProviderConnectionInfo
     canSignIn: boolean
     pickerLogin: boolean
     apiKeyEntry: boolean
-    antigravityConnected: boolean
     storingKey: boolean
     oauthLoginId: string | null
     selectedProvider: OfferedProvider | null
@@ -31,11 +29,9 @@
   let {
     tab,
     step,
-    harness,
     canSignIn,
     pickerLogin,
     apiKeyEntry,
-    antigravityConnected,
     storingKey,
     oauthLoginId,
     selectedProvider,
@@ -49,37 +45,7 @@
   }: Props = $props()
 </script>
 
-<div class="flex w-full items-center justify-between gap-4">
-  {#if tab === 'custom'}
-    <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-      Add any OpenAI-compatible endpoint by base URL Ollama, LM Studio, llama.cpp, or a hosted
-      gateway. Models are ready in the picker as soon as you save.
-    </p>
-  {:else if antigravityConnected}
-    <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-      Antigravity is connected. Each additional sign-in uses an isolated account container.
-    </p>
-  {:else if apiKeyEntry && canSignIn}
-    <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-      Pick any provider from {harness.name}’s catalog and paste its API key stored in
-      {harness.name}’s own credential file.
-    </p>
-  {:else if pickerLogin}
-    <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-      Runs {harness.name}’s own interactive provider picker in a built-in terminal choose any
-      provider there and follow the flow it shows (API key or OAuth).
-    </p>
-  {:else if canSignIn}
-    <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-      Runs {harness.name}’s own sign-in flow in a built-in terminal rooted at your home directory a
-      browser window opens so you can authenticate.
-    </p>
-  {:else}
-    <p class="min-w-0 flex-1 text-[0.6875rem] text-dimmed">
-      {harness.name} does not expose a login flow CodeInOven can run. Use the Custom base URL tab to add
-      an OpenAI-compatible provider instead.
-    </p>
-  {/if}
+<div class="flex w-full justify-end">
   <div class="flex shrink-0 items-center gap-2">
     {#if tab === 'custom'}
       <button

@@ -104,13 +104,6 @@
       authStatus.capabilities.loginHandoff !== false
   )
 
-  /** Antigravity keeps one Google account per HOME container. A new sign-in
-   *  writes into a fresh managed container, so an already-connected default
-   *  account never blocks adding another. */
-  let antigravityConnected = $derived(
-    harness.id === 'antigravity' && authStatus?.state === 'authenticated'
-  )
-
   /**
    * Harness presents its own interactive provider picker inside the login
    * terminal (`opencode auth login`), so the bare login command is launched and
@@ -658,11 +651,9 @@
     <AddProviderModalFooter
       {tab}
       {step}
-      {harness}
       {canSignIn}
       {pickerLogin}
       {apiKeyEntry}
-      {antigravityConnected}
       {storingKey}
       oauthLoginId={oauth.loginId}
       {selectedProvider}
