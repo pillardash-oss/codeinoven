@@ -284,8 +284,14 @@
   let readingToken = 0
 
   /** Opens the context battery or the generation rate from outside the shoe (the
-   *  composer's `/status` and `/tps` commands, which have no pointer to hover). */
+   *  composer's `/status` and `/tps` commands, which have no pointer to hover).
+   *  The reveal and hide work rides this call rather than the panel's own effect,
+   *  because it runs on the user's action: flushing a live reading reads and
+   *  writes the state the reading is drawn from, which no effect may do. */
   export function openReading(surface: ComposerReadingSurface): void {
+    const previous = readingRequest?.surface
+    if (previous === 'context' && surface !== 'context') usage.onHide?.()
+    if (surface === 'context') usage.onReveal?.()
     readingToken += 1
     readingRequest = { surface, token: readingToken }
   }

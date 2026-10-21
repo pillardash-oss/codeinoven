@@ -66,11 +66,15 @@
     const request = openRequest
     if (request === undefined && !requestedOnce) return
     // Every request carries a new token, and the token of a reading is cleared
-    // when the other reading is asked for: a number opens this panel the way a
-    // hover would, and clearing it closes whatever it opened, so the two
-    // readings are never on screen together.
+    // when the other reading is asked for: a number opens this panel, and
+    // clearing it closes whatever it opened, so the two readings are never on
+    // screen together.
+    //
+    // This effect only assigns `open`. It never calls `onReveal` or `onHide`: the
+    // owners flush live readings there, which reads and writes the very state an
+    // effect tracks, and doing it from here is an update-depth loop.
     requestedOnce = request !== undefined
-    handleOpenChange(request !== undefined)
+    open = request !== undefined
   })
 </script>
 
