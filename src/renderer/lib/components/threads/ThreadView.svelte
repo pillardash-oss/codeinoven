@@ -7546,6 +7546,14 @@
     captureLiveWorkingSelection()
     agentRuns.setBusy(projectId, id, true, userMessageId)
 
+    // Set the moment the dispatch settles: from that instant the prompt is the
+    // agent's, and everything the rest of this block does (the scroll, the
+    // Engineering reconciliation) is bookkeeping around a turn that is already
+    // running. A failure in that bookkeeping must never hand the message back to
+    // the composer   the buffer the user just emptied would refill with the
+    // words the agent is already answering, which reads as "the send did nothing"
+    // even though the work started.
+    let dispatched = false
     try {
       const sendPromise = threadMessages.send(
         projectId,
@@ -7568,6 +7576,7 @@
       await tick()
       if (scrollEl && !userScrolledAway) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
+      dispatched = true
       if (engineeringOn) {
         await reconcileReadySpec()
         if (brainstormWorkflow?.stage === 'choice_pending') {
@@ -7580,10 +7589,11 @@
       agentRuns.setIdle(projectId, id)
       const failure = error instanceof Error ? error.message : 'The prompt could not be sent.'
       errorMessage = failure
-      // If the message never reached the conversation (the agent never started
-      // working and the optimistic copy was rolled back), put it back in the
-      // composer so the user doesn't lose what they were about to send.
-      if (restorable) {
+      // Only when the message never reached the conversation   the agent never
+      // started working, so nothing on screen owns the words   is it put back in
+      // the composer. Once `dispatched` is set the optimistic user message is
+      // that copy, and a later failure has to leave the composer empty.
+      if (restorable && !dispatched) {
         rendererRecovery.setDraft(
           projectId,
           id,
