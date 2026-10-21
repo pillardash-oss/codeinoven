@@ -15,7 +15,6 @@ import type { ChatEngine } from '../chat/chat-engine'
 import type { CrossInstanceThreadService } from '../chat/cross-instance-thread-service'
 import type { ForeignRunService } from '../chat/foreign-run-service'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
-import type { GatewaySupervisorService } from '../gateway/gateway-supervisor-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import type { ComputerUsePipService } from '../utilities/computer-use-pip-service'
 import type { UpdaterService } from '../notifications/updater-service'
@@ -57,7 +56,6 @@ export interface BootstrapState {
    * the records outlive both. Null until the post-paint graph builds it.
    */
   browserDownloads: BrowserDownloadManager | null
-  gatewaySupervisor: GatewaySupervisorService | null
 
   // Quit lifecycle flags shared by the close gate, the signal handlers and the
   // shutdown pipeline.
@@ -174,7 +172,6 @@ export function createBootstrapState(): BootstrapState {
     mainWindow: null,
     browserService: null,
     browserDownloads: null,
-    gatewaySupervisor: null,
     quitCleanupStarted: false,
     quitConfirmed: false,
     quitForUpdate: false,

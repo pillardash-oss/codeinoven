@@ -6,10 +6,9 @@ import { randomUUID } from 'node:crypto'
  * `server` is an in-process loopback listener with no child process (the
  * prototype preview server, a previewed folder's static host, the utility
  * gateway). `mcp` is a stdio MCP server a turn or a long-lived service started.
- * `gateway` is a supervised local model gateway. `worker` is any other
- * app-owned long-lived helper.
+ * `worker` is any other app-owned long-lived helper.
  */
-export type AppServiceKind = 'server' | 'mcp' | 'gateway' | 'worker'
+export type AppServiceKind = 'server' | 'mcp' | 'worker'
 
 /** Owner of a registered service; `app` means it belongs to no single thread. */
 export type AppServiceScope = 'app' | 'project' | 'thread'

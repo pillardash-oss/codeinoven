@@ -5,7 +5,6 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
   import CioDisk from '@pdslng/cio-icon/CioDisk.svelte'
-  import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
@@ -451,7 +450,6 @@
   const SERVICE_KIND_LABELS: Record<TaskManagerServiceKind, string> = {
     server: 'Server',
     mcp: 'MCP',
-    gateway: 'Gateway',
     worker: 'Worker'
   }
 
@@ -992,8 +990,6 @@
             >
               {#if service.kind === 'mcp'}
                 <CioPlug size={15} />
-              {:else if service.kind === 'gateway'}
-                <CioNetwork size={15} />
               {:else if service.kind === 'worker'}
                 <CioTools size={15} />
               {:else}

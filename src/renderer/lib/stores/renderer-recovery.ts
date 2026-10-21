@@ -24,7 +24,6 @@ export type SettingsSection =
   | 'heartbeat'
   | 'harnesses'
   | 'utilities'
-  | 'gateways'
   | 'computer-use'
   | 'sound'
   | 'search'
@@ -52,7 +51,6 @@ export type MainView =
   | 'settings-heartbeat'
   | 'settings-harnesses'
   | 'settings-utilities'
-  | 'settings-gateways'
   | 'settings-computer-use'
   | 'settings-sound'
   | 'settings-search'
@@ -224,7 +222,6 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'heartbeat',
   'harnesses',
   'utilities',
-  'gateways',
   'computer-use',
   'sound',
   'search',

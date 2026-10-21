@@ -181,12 +181,6 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
-    await state.gatewaySupervisor?.dispose()
-  } catch (error) {
-    Logger.error('Gateway supervisor cleanup failed during shutdown:', error)
-  }
-
-  try {
     await state.computerUsePipService?.dispose()
   } catch (error) {
     Logger.error('Computer-use PiP service cleanup failed during shutdown:', error)

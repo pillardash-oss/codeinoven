@@ -14,7 +14,6 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
-import { getConfigRoot } from '../../lib/utils'
 import { appResourcesRoot, isShippedBuild } from './app-resources'
 import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
 import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
@@ -1014,9 +1013,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
-    const { registerGatewayIpc } = await import('../ipc/gateway-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
-    const { OwnedProcessJournal } = await import('../system/owned-process-journal')
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
@@ -1036,20 +1033,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // a server in Utilities is what a turn then connects with.
       state.chatEngine?.mcpOAuth
     )
-    state.gatewaySupervisor = registerGatewayIpc(
-      storage,
-      () => state.mainWindow?.webContents ?? null,
-      undefined,
-      new OwnedProcessJournal(join(getConfigRoot(), 'gateways', 'owned-processes.json'))
-    )
-    // Reap gateway processes orphaned by a previous crash before anything can
-    // bind their port again, then bring enabled gateways back up.
-    void state.gatewaySupervisor
-      .recoverOrphans()
-      .then(() => state.gatewaySupervisor?.autoStartEnabled())
-      .catch((error) => {
-        Logger.error('Gateway startup recovery failed (non-fatal):', error)
-      })
 
     // Wire PTY to the window now that it exists.
     if (state.mainWindow && !state.mainWindow.isDestroyed()) {

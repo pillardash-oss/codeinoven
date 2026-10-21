@@ -7,7 +7,6 @@
   import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
@@ -20,7 +19,6 @@
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
-  import { gatewayState } from '$lib/stores/gateway.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
@@ -34,7 +32,6 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { INBOX_PROJECT_ID, isAssistantSetupThread } from '$shared/types'
 
-  import { toast } from 'svelte-sonner'
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderEditorMenu from './AppHeaderEditorMenu.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
@@ -214,19 +211,6 @@
   // ─── Editor preference ───────────────────────────────────────────────
 
   void editorPreference.load()
-  gatewayState.ensureSubscribed()
-
-  let gatewayDashboardUrl = $derived(gatewayState.dashboardUrl)
-  let hasGateway = $derived(gatewayState.hasReadyGateway)
-
-  async function openGatewayDashboard(): Promise<void> {
-    if (!gatewayDashboardUrl) {
-      toast.error('Gateway dashboard is not available   start the gateway first')
-      return
-    }
-    const opened = await gatewayState.openDashboard(gatewayDashboardUrl)
-    if (!opened) toast.error('Could not open dashboard')
-  }
 
   // ─── Git status chip ─────────────────────────────────────────────────────
 
@@ -337,19 +321,6 @@
   <AppHeaderThreadModals menu={threadActionsMenu} />
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- Gateway dashboard   global browser entry. Hidden in the browser view,
-         where the dashboard would open in the very surface already on screen. -->
-    {#if hasGateway && gatewayDashboardUrl && !onBrowser}
-      <button
-        class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-        aria-label="Open gateway dashboard"
-        title="Open gateway dashboard   {gatewayDashboardUrl}"
-        onclick={() => void openGatewayDashboard()}
-      >
-        <CioThreadBrowser size={ICON_SIZE.control} />
-      </button>
-    {/if}
-
     <!-- Editor preference   hidden in chat mode, scope view, the browser view,
          and when no project is selected -->
     {#if !chatMode && !onScope && !onBrowser && workspaceState.activeProject}

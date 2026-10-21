@@ -66,11 +66,10 @@ export interface TaskManagerProcess extends AgentRunningProcess {
 /**
  * Kind of app-owned runtime a `TaskManagerService` describes. `server` is an
  * in-process loopback listener with no child process, `mcp` is a stdio MCP
- * server, `gateway` is a supervised local model gateway, and `worker` is any
- * other app-owned helper. Distinct from `TaskManagerProcess` because a service
- * may have no pid at all.
+ * server, and `worker` is any other app-owned helper. Distinct from
+ * `TaskManagerProcess` because a service may have no pid at all.
  */
-export type TaskManagerServiceKind = 'server' | 'mcp' | 'gateway' | 'worker'
+export type TaskManagerServiceKind = 'server' | 'mcp' | 'worker'
 
 /**
  * App-wide runtime row surfaced by the task manager alongside OS processes.
