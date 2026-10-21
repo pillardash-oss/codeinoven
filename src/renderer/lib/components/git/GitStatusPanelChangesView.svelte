@@ -17,6 +17,7 @@
   } from '$shared/types'
   import GitChangesTree from './GitChangesTree.svelte'
   import GitFileRow from './GitFileRow.svelte'
+  import ChangeAreaSummary from '../shared/ChangeAreaSummary.svelte'
   import Switch from '../ui/Switch.svelte'
   import { fileDiffKey, sortCommitDirs, type CommitTreeNode } from './git-status-panel-format'
 
@@ -111,6 +112,12 @@
       breakdownState.summary?.breakdown?.totalFiles ??
         (selectedCommit ? commitDiffChanges.length : changes.length)
     )
+  )
+  /** Where this change set lives: the open commit's files, or the working tree's. */
+  const summaryAreas = $derived(breakdownState.summary?.breakdown?.areas ?? [])
+  const summaryFileCount = $derived(
+    breakdownState.summary?.breakdown?.totalFiles ??
+      (selectedCommit ? commitDiffChanges.length : changes.length)
   )
 
   /**
@@ -270,12 +277,21 @@
         first card 4px under the header while the other three sides had 8.
       -->
       <div class="flex flex-col gap-1 p-1">
-        <span class="px-2 py-1 text-[0.625rem] tabular-nums text-muted" title={summaryTitle}>
-          {breakdownState.summary?.breakdown?.totalFiles ?? changes.length}
-          {(breakdownState.summary?.breakdown?.totalFiles ?? changes.length) === 1
-            ? 'file'
-            : 'files'} changed
-        </span>
+        <!-- The count, then where the change actually is. This surface reports
+             areas by file share: a staged or unstaged file carries no line
+             counts until its diff is opened, and a partial sum would mislead. -->
+        <div
+          class="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2 py-1 text-[0.625rem] tabular-nums text-muted"
+          title={summaryTitle}
+        >
+          <span class="shrink-0">
+            {summaryFileCount}
+            {summaryFileCount === 1 ? 'file' : 'files'} changed
+          </span>
+          {#if summaryAreas.length > 0}
+            <ChangeAreaSummary areas={summaryAreas} limit={3} class="text-[0.625rem]" />
+          {/if}
+        </div>
         {#if conflictSections.length > 0}
           <div class={paneClass}>
             {#if changesView === 'tree'}

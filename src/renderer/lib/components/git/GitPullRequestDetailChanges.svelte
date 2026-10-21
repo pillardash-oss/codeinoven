@@ -3,8 +3,11 @@
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
+  import { formatChangeSummary, type ChangeBreakdown } from '$shared/change-breakdown'
   import type { PullRequestCommit, PullRequestFile } from '$shared/types'
   import PrDiffHunk from './PrDiffHunk.svelte'
+  import ChangeAreaSummary from '../shared/ChangeAreaSummary.svelte'
+  import { RunChangesState } from '../threads/run-changes-state.svelte'
 
   interface Props {
     mode: 'commits' | 'files'
@@ -20,6 +23,18 @@
   let commitFiles = $state<Record<string, PullRequestFile[]>>({})
   let loadingCommit = $state<string | null>(null)
   let expandedFile = $state<string | null>(null)
+
+  // The same worker pass the changes panel uses: the pull request's own files for
+  // the files tab, and one commit's files while it is expanded. Both arrays are
+  // stable, so the grouping a surface already computed is reused instead of
+  // scanned again.
+  const filesSummary = new RunChangesState(() => ({ changes: files }), true)
+  const commitSummary = new RunChangesState(
+    () => ({ changes: expandedCommit ? (commitFiles[expandedCommit] ?? []) : [] }),
+    true
+  )
+  const filesBreakdown = $derived(filesSummary.summary?.breakdown)
+  const commitBreakdown = $derived(commitSummary.summary?.breakdown)
 
   async function toggleCommit(sha: string): Promise<void> {
     if (expandedCommit === sha) {
@@ -37,6 +52,27 @@
     }
   }
 </script>
+
+{#snippet totalsBar(breakdown: ChangeBreakdown | undefined, count: number)}
+  {@const areas = breakdown?.areas ?? []}
+  <!-- The tab's own summary: the line totals the files add up to, then the areas
+       they came from, so a reader knows which part of the tree moved before
+       opening a single file. -->
+  <div
+    class="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-border px-3 py-1.5 text-[0.5625rem] tabular-nums text-dimmed"
+    title={formatChangeSummary(breakdown, breakdown ?? null, count)}
+  >
+    <span class="text-success">+{breakdown?.additions ?? 0}</span>
+    <span class="text-danger">−{breakdown?.deletions ?? 0}</span>
+    <span class="shrink-0">
+      {count}
+      {count === 1 ? 'file' : 'files'}
+    </span>
+    {#if areas.length > 0}
+      <ChangeAreaSummary {areas} limit={4} class="text-[0.5625rem]" />
+    {/if}
+  </div>
+{/snippet}
 
 {#snippet fileList(list: PullRequestFile[], keyPrefix: string)}
   {#each list as file (file.path)}
@@ -82,6 +118,7 @@
       <p class="text-[0.6875rem] leading-relaxed text-dimmed">No changed files.</p>
     </div>
   {:else}
+    {@render totalsBar(filesBreakdown, files.length)}
     {@render fileList(files, 'pr')}
   {/if}
 {:else if commits.length === 0}
@@ -116,6 +153,7 @@
           <p class="px-3 py-2 text-[0.625rem] text-dimmed">No files in this commit.</p>
         {:else}
           <div class="border-t border-border/50 bg-elevated/20">
+            {@render totalsBar(commitBreakdown, changed.length)}
             {@render fileList(changed, commit.sha)}
           </div>
         {/if}

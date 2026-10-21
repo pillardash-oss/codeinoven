@@ -34,6 +34,15 @@ export type ChangeCardMessage =
   | { finish: true }
 
 const BATCH_SIZE = 512
+/**
+ * Area groupings already computed for a change set, keyed by the array that holds
+ * it. The Git panel mounts the same change set from several surfaces (the changes
+ * header, the pull request header, the files tab), and a status refresh hands back
+ * the same array, so a mounted surface reuses the worker pass instead of paying for
+ * the same paths again. The cache is a WeakMap, so an unreferenced change set never
+ * keeps its grouping alive.
+ */
+const breakdownCache = new WeakMap<readonly unknown[], ChangeBreakdown>()
 interface SummaryJob {
   checkpoint: ChangeCardSource
   signal: AbortSignal
@@ -104,6 +113,8 @@ function scan(
   signal: AbortSignal,
   classify: boolean
 ): Promise<ChangeCardSummary> {
+  const cached = classify ? breakdownCache.get(checkpoint.changes) : undefined
+  const classifyNow = classify && !cached
   return new Promise((resolve, reject) => {
     let worker: Worker | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -119,7 +130,12 @@ function scan(
       signal.removeEventListener('abort', abort)
       worker?.terminate()
       if (error) reject(error)
-      else if (summary) resolve(summary)
+      else if (summary) {
+        if (cached) summary.breakdown = cached
+        else if (classify && summary.breakdown)
+          breakdownCache.set(checkpoint.changes, summary.breakdown)
+        resolve(summary)
+      }
     }
     const abort = (): void => finish(new DOMException('Cancelled', 'AbortError'))
     const send = (): void => {
@@ -127,7 +143,7 @@ function scan(
       try {
         let message: ChangeCardMessage
         if (!initialized) {
-          message = { totalChanges: checkpoint.changes.length, classify }
+          message = { totalChanges: checkpoint.changes.length, classify: classifyNow }
           initialized = true
         } else if (restoredIndex < restored.length) {
           message = { restored: restored.slice(restoredIndex, restoredIndex + BATCH_SIZE) }
