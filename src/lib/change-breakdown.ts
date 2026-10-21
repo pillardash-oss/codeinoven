@@ -20,11 +20,25 @@ export interface ChangeArea {
   percentage: number
 }
 
+/**
+ * One kind of work in a change set, judged by the file itself rather than by where
+ * it sits: tests, components, styles, docs, config, video, images, audio, code.
+ */
+export interface ChangeKind {
+  label: string
+  files: number
+  additions: number
+  deletions: number
+  /** Share of the change this kind holds: of the lines when known, else of the files. */
+  percentage: number
+}
+
 export interface ChangeBreakdown {
   totalFiles: number
   additions: number
   deletions: number
   areas: ChangeArea[]
+  kinds: ChangeKind[]
 }
 
 /**
@@ -80,6 +94,61 @@ export function buildChangeBreakdown(files: readonly ChangeBreakdownFile[]): Cha
     )
   }
 
+  /** What kind of work a path is, by its own name and extension. */
+  const kindOf = (path: string): string => {
+    const name = path.split('/').at(-1) ?? path
+    const dot = name.lastIndexOf('.')
+    const extension = dot > 0 ? name.slice(dot + 1) : ''
+    if (isTestPath(path)) return 'tests'
+    if (['svelte', 'vue', 'jsx', 'tsx'].includes(extension)) return 'components'
+    if (['css', 'scss', 'sass', 'less', 'styl'].includes(extension)) return 'styles'
+    if (['md', 'mdx', 'rst', 'txt', 'adoc'].includes(extension)) return 'docs'
+    if (
+      ['json', 'jsonc', 'yaml', 'yml', 'toml', 'ini', 'conf', 'lock', 'plist'].includes(
+        extension
+      ) ||
+      /^(\.env|\.gitignore|\.gitattributes|dockerfile|makefile|bun\.lockb|procfile)/.test(name)
+    )
+      return 'config'
+    if (['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v'].includes(extension)) return 'video'
+    if (
+      ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'avif', 'bmp', 'tiff'].includes(extension)
+    )
+      return 'images'
+    if (['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'].includes(extension)) return 'audio'
+    if (
+      [
+        'ts',
+        'js',
+        'mjs',
+        'cjs',
+        'mts',
+        'cts',
+        'py',
+        'go',
+        'rs',
+        'c',
+        'cpp',
+        'h',
+        'hpp',
+        'java',
+        'kt',
+        'swift',
+        'rb',
+        'php',
+        'sh',
+        'sql',
+        'html',
+        'ex',
+        'exs',
+        'cs',
+        'dart'
+      ].includes(extension)
+    )
+      return 'code'
+    return 'other'
+  }
+
   const root: Node = {
     path: '',
     name: 'root',
@@ -94,6 +163,7 @@ export function buildChangeBreakdown(files: readonly ChangeBreakdownFile[]): Cha
     children: new Map()
   }
   const seen = new Set<string>()
+  const kindCounts = new Map<string, { files: number; additions: number; deletions: number }>()
   for (const file of files) {
     const path = file.path.replaceAll('\\', '/').replace(/^\.\//, '').replace(/^\/+/, '')
     if (!path || seen.has(path)) continue
@@ -103,6 +173,12 @@ export function buildChangeBreakdown(files: readonly ChangeBreakdownFile[]): Cha
     const segments = path.split('/').filter(Boolean)
     const directories = segments.slice(0, -1)
     const test = isTestPath(path.toLowerCase()) ? 1 : 0
+    const kind = kindOf(path.toLowerCase())
+    const kindCount = kindCounts.get(kind) ?? { files: 0, additions: 0, deletions: 0 }
+    kindCount.files += 1
+    kindCount.additions += additions
+    kindCount.deletions += deletions
+    kindCounts.set(kind, kindCount)
     let node = root
     node.files += 1
     node.additions += additions
@@ -260,12 +336,41 @@ export function buildChangeBreakdown(files: readonly ChangeBreakdownFile[]): Cha
     folded.percentage = Number(folded.percentage.toFixed(1))
     areas.push(folded)
   }
+  // What kind of work the change set is, as whole percentages so a reader can read
+  // "tests 60%, components 40%" at a glance. The largest kind absorbs the rounding
+  // remainder so the brackets always add up to 100.
+  const kinds: ChangeKind[] = [...kindCounts.entries()].map(([label, count]) => ({
+    label,
+    files: count.files,
+    additions: count.additions,
+    deletions: count.deletions,
+    percentage: Math.round(share(totalLines > 0 ? count.additions + count.deletions : count.files))
+  }))
+  kinds.sort(
+    (left, right) =>
+      right.percentage - left.percentage ||
+      right.files - left.files ||
+      (left.label < right.label ? -1 : 1)
+  )
+  if (kinds.length > 0) {
+    const rounded = kinds.reduce((sum, kind) => sum + kind.percentage, 0)
+    kinds[0].percentage = Math.max(0, kinds[0].percentage + (100 - rounded))
+  }
   return {
     totalFiles: root.files,
     additions: root.additions,
     deletions: root.deletions,
-    areas
+    areas,
+    kinds
   }
+}
+
+/** The bracketed composition of a change set: `media 100%`, `components 62%, tests 38%`. */
+export function formatChangeKinds(kinds: readonly ChangeKind[] | undefined, limit = 3): string {
+  if (!Array.isArray(kinds) || kinds.length === 0) return ''
+  const shown = kinds.slice(0, limit).map((kind) => `${kind.label} ${kind.percentage}%`)
+  const folded = kinds.length - shown.length
+  return folded > 0 ? `${shown.join(', ')}, +${folded}` : shown.join(', ')
 }
 
 function plural(count: number, noun: string): string {

@@ -13,7 +13,7 @@ let lane: Promise<unknown> = Promise.resolve()
 export async function snapshotChangeBreakdown(
   changes: readonly ChangeBreakdownFile[]
 ): Promise<ChangeBreakdown | undefined> {
-  if (changes.length === 0) return { totalFiles: 0, additions: 0, deletions: 0, areas: [] }
+  if (changes.length === 0) return { totalFiles: 0, additions: 0, deletions: 0, areas: [], kinds: [] }
   if (pending >= 8) return undefined
   pending += 1
   const job = lane.then(

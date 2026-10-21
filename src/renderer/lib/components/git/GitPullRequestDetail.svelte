@@ -1,6 +1,5 @@
 <script lang="ts">
   import { formatChangeSummary } from '$shared/change-breakdown'
-  import { RunChangesState } from '../threads/run-changes-state.svelte'
 
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioBan from '@pdslng/cio-icon/CioBan.svelte'
@@ -41,7 +40,6 @@
   import BotBadge from './BotBadge.svelte'
   import GitPullRequestDetailConversation from './GitPullRequestDetailConversation.svelte'
   import GitPullRequestDetailChanges from './GitPullRequestDetailChanges.svelte'
-  import ChangeAreaSummary from '../shared/ChangeAreaSummary.svelte'
   import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
   import GitPullRequestDetailAgentReport from './GitPullRequestDetailAgentReport.svelte'
   import { assignAgentToCheck, assignAgentToComment } from './git-status-panel-agent-actions'
@@ -252,20 +250,11 @@
     mentionCandidates(mentionParticipants, mentionDirectory, mentionQuery)
   )
   const detail = $derived(bundle?.detail ?? null)
-  const fileSummary = new RunChangesState(() => ({ changes: bundle?.files ?? [] }), true)
-  /**
-   * The pull request's own grouping, once every changed file has arrived. Until
-   * then the header keeps to the totals GitHub reported.
-   */
-  const changeBreakdown = $derived(
-    fileSummary.summary?.breakdown?.totalFiles === detail?.changedFiles
-      ? fileSummary.summary?.breakdown
-      : undefined
-  )
-  const changeAreas = $derived(changeBreakdown?.areas ?? [])
+  // A pull request's own composition says little: it averages whatever the branch
+  // did. The hover keeps to the totals; each commit carries its own summary.
   const changeSummaryTitle = $derived(
     formatChangeSummary(
-      changeBreakdown,
+      undefined,
       detail ? { additions: detail.additions, deletions: detail.deletions } : null,
       detail?.changedFiles ?? 0
     )
@@ -832,11 +821,6 @@
         </span>
       {/if}
     </p>
-    <!-- Hovering the totals above names the same areas in one line; this draws
-         them, so the shape of a pull request is readable without a hover. -->
-    {#if changeAreas.length > 0}
-      <ChangeAreaSummary areas={changeAreas} limit={4} class="mt-1 text-[0.5625rem] text-dimmed" />
-    {/if}
   </div>
 
   {#if notice}
