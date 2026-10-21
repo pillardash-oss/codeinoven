@@ -1,5 +1,6 @@
 <script lang="ts">
   import { isMacPlatform } from '$lib/shortcut-display'
+  import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -5467,6 +5468,11 @@
         // planning turn awaiting a choice) cannot strand the remote prompt.
         void refreshMessages()
         restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
+        if (updatedThread.status === 'completed' || updatedThread.status === 'interrupted') {
+          // A persisted settle repairs a missed remote recovery frame too.
+          providerStatus = null
+          errorMessage = ''
+        }
       }
       // A durable auditor child (independent or Achievement audit) owns its own
       // lifecycle; mirror status transitions so the coordinator panel and the
@@ -5505,7 +5511,26 @@
       'agent:remoteEvent',
       (payload: RemoteAgentEventPayload) => {
         if (payload.projectId !== thread.projectId || payload.threadId !== thread.id) return
-        const type = payload.event.type
+        const event = payload.event
+        const type = event.type
+        // Remote lifecycle updates are observations only. Applying the local
+        // event handler would also dispatch queues and pending attention actions.
+        if (event.type === 'session.status') {
+          providerStatus = event.status
+          errorMessage = ''
+        } else if (
+          (event.type === 'message.part.updated' || event.type === 'message.part.delta') &&
+          !(
+            event.type === 'message.part.updated' &&
+            event.part.type === 'subagent' &&
+            subagentStatusIsTerminal(event.part.activity.status)
+          )
+        ) {
+          providerStatus = null
+          errorMessage = ''
+        } else if (event.type === 'session.error' && event.issue) {
+          providerStatus = { state: 'error', issue: event.issue }
+        }
         if (type === 'message.completed') {
           void refreshStreamTailAfterTurn()
           return
