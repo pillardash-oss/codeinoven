@@ -17,11 +17,18 @@ import type {
 
 /** Open the thread a handoff created, so its run is visible from the first token. */
 async function openAssistThread(projectId: string, threadId: string): Promise<void> {
-  const [project, thread] = await Promise.all([
-    invoke('project:get', projectId).catch(() => null),
-    invoke('thread:get', projectId, threadId).catch(() => null)
-  ])
-  if (thread) workspaceState.openThread(thread, project)
+  const project = await invoke('project:get', projectId).catch(() => null)
+  // The thread was created optimistically a moment ago, so its row may not be
+  // readable on the first attempt. Opening it is how the user watches the run
+  // they paid for, so it is worth a few short retries rather than a silent miss.
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const thread = await invoke('thread:get', projectId, threadId).catch(() => null)
+    if (thread) {
+      workspaceState.openThread(thread, project)
+      return
+    }
+    await new Promise((done) => setTimeout(done, 150))
+  }
 }
 
 /**
@@ -42,8 +49,7 @@ function reportStartFailure(
   const raw = error instanceof Error ? error.message : 'The agent run could not be started.'
   const message = ipcErrorMessage(error, raw)
   const kind = classifyProviderIssue(message)
-  const retryAt =
-    kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+  const retryAt = kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
   threadMessages.setRunIssue(projectId, threadId, {
     kind,
     message,
@@ -91,9 +97,13 @@ export async function runAgentAssist(
     await openAssistThread(request.projectId, prepared.threadId)
     if (delivery === 'immediate') {
       try {
+        // The confirmed configuration travels with the message: the turn runs
+        // (and the thread's row is written) with the model, Oven and
+        // permissions the user picked, never with whatever a row read returns.
         await sendThreadMessageHeadless(request.projectId, prepared.threadId, {
           text: prepared.text,
-          attachments: prepared.attachments ?? []
+          attachments: prepared.attachments ?? [],
+          settings: selection.settings
         })
       } catch (error) {
         // A submit-time failure (an unreachable Oven, a provider that refused
