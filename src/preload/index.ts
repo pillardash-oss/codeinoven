@@ -33,7 +33,7 @@ type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[numb
 const allInvokeChannelsRegistered: [MissingInvokeChannel] extends [never] ? true : never = true
 void allInvokeChannelsRegistered
 
-const SEND_CHANNELS = ['pty:resize', 'pty:write', 'terminal:focusState'] as const
+const SEND_CHANNELS = ['pty:resize', 'pty:write', 'pty:ack', 'terminal:focusState'] as const
 
 /* Every main-to-renderer event channel in the IPC contract is exposed here.
  * The list is derived from the contract itself, so an event and its

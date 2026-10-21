@@ -1,4 +1,4 @@
-import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+import { SvelteSet } from 'svelte/reactivity'
 import type { ProjectFileEntry } from '$shared/types'
 import { posixDirname } from '$shared/paths'
 import type { AppBridge } from '../../../../preload/index'
@@ -253,8 +253,25 @@ export function buildTreeRows(
   return rows
 }
 
-export function buildEntryRowIndex(rows: readonly TreeRow[]): SvelteMap<string, number> {
-  const indexByPath = new SvelteMap<string, number>()
+/** One immutable snapshot per tree change; the viewport slice reuses it on scroll. */
+export function buildTreeModel(input: TreeFilterInput, filterMatches: Record<string, boolean>) {
+  const rows = buildTreeRows(input, filterMatches)
+  const entries: ProjectFileEntry[] = []
+  const entryIndex = new Map<string, number>()
+  const rowIndex = new Map<string, number>()
+  const keyIndex = new Map<string, number>()
+  for (const [index, row] of rows.entries()) {
+    keyIndex.set(row.key, index)
+    if (row.kind !== 'entry') continue
+    entryIndex.set(row.entry.path, entries.length)
+    rowIndex.set(row.entry.path, index)
+    entries.push(row.entry)
+  }
+  return { rows, entries, entryIndex, rowIndex, keyIndex }
+}
+
+export function buildEntryRowIndex(rows: readonly TreeRow[]): Map<string, number> {
+  const indexByPath = new Map<string, number>()
   rows.forEach((row, index) => {
     if (row.kind === 'entry') indexByPath.set(row.entry.path, index)
   })
@@ -263,14 +280,14 @@ export function buildEntryRowIndex(rows: readonly TreeRow[]): SvelteMap<string, 
 
 export function buildEntryIndexFromEntries(
   entries: readonly ProjectFileEntry[]
-): SvelteMap<string, number> {
-  const indexByPath = new SvelteMap<string, number>()
+): Map<string, number> {
+  const indexByPath = new Map<string, number>()
   entries.forEach((entry, index) => indexByPath.set(entry.path, index))
   return indexByPath
 }
 
-export function buildRowIndexByKey(rows: readonly TreeRow[]): SvelteMap<string, number> {
-  const indexByKey = new SvelteMap<string, number>()
+export function buildRowIndexByKey(rows: readonly TreeRow[]): Map<string, number> {
+  const indexByKey = new Map<string, number>()
   rows.forEach((row, index) => indexByKey.set(row.key, index))
   return indexByKey
 }

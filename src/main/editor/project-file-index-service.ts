@@ -1,4 +1,5 @@
 /// <reference types="electron-vite/node" />
+import { createWorkQueue } from '../../lib/bounded-work'
 import createIndexWorker from './project-file-index-worker.ts?nodeWorker'
 import type { Worker } from 'node:worker_threads'
 import type { ProjectFileEntry } from '../../lib/types'
@@ -23,6 +24,7 @@ export interface IndexResponse {
 /** The index, watchers, Git parsing and ranking all live in one lazy worker.
  * Only bounded search results cross back to the Electron main process. */
 export class ProjectFileIndexService {
+  private readonly runIndexWork = createWorkQueue(1, 64)
   private worker?: Worker
   private sequence = 0
   private readonly keys = new Set<string>()
@@ -78,6 +80,21 @@ export class ProjectFileIndexService {
   }
 
   private request(request: IndexRequest): Promise<ProjectFileEntry[]> {
+    // Control messages must still invalidate an index while a build is awaiting I/O.
+    if (request.kind === 'invalidate' || request.kind === 'dispose') return this.dispatch(request)
+    return this.runIndexWork(() => {
+      if (
+        this.keys.size === 0 ||
+        ((request.kind === 'search' || request.kind === 'prewarm') &&
+          !this.keys.has(request.projectId))
+      )
+        return Promise.resolve([])
+      // Start the watchdog when dispatched, not while waiting for another index.
+      return this.dispatch(request)
+    })
+  }
+
+  private dispatch(request: IndexRequest): Promise<ProjectFileEntry[]> {
     if (this.pending.size >= 64) return Promise.reject(new Error('Project file search is busy'))
     return new Promise((resolve, reject) => {
       let worker = this.worker

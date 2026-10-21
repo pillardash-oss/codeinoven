@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { access, mkdir } from 'node:fs/promises'
 import { delimiter, join, resolve, win32 } from 'node:path'
 import type { HarnessExecutionTarget } from '../../lib/types'
 import {
   buildProcessEnvironment,
+  buildProcessEnvironmentAsync,
+  resolveExecutablePathAsync,
   commandRequiresShell,
   resolveExecutablePath
 } from './cli-environment'
@@ -88,6 +90,16 @@ export function isHarnessCommandAvailable(
 ): boolean {
   if (resolveExecutablePath(command, env) !== undefined) return true
   return bundledPiRuntime(command) !== null
+}
+
+export async function isHarnessCommandAvailableAsync(
+  command: string,
+  env?: NodeJS.ProcessEnv
+): Promise<boolean> {
+  return (
+    (await resolveExecutablePathAsync(command, env)) !== undefined ||
+    bundledPiRuntime(command) !== null
+  )
 }
 
 /**
@@ -325,19 +337,25 @@ function capture(
   })
 }
 
-function wslExecutable(env: NodeJS.ProcessEnv): string | undefined {
+async function wslExecutable(env: NodeJS.ProcessEnv): Promise<string | undefined> {
   if (process.platform !== 'win32') return undefined
   const systemPath = win32.join(env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'wsl.exe')
-  if (existsSync(systemPath)) return systemPath
-  return resolveExecutablePath('wsl.exe', env, 'win32')
+  if (
+    await access(systemPath).then(
+      () => true,
+      () => false
+    )
+  )
+    return systemPath
+  return resolveExecutablePathAsync('wsl.exe', env, 'win32')
 }
 
 async function wslDistributions(force = false): Promise<string[]> {
   if (!force && distributionCache && fresh(distributionCache, RUNTIME_CACHE_TTL_MS)) {
     return distributionCache.value
   }
-  const env = buildProcessEnvironment()
-  const executable = wslExecutable(env)
+  const env = await buildProcessEnvironmentAsync()
+  const executable = await wslExecutable(env)
   if (!executable) return []
   try {
     const result = await capture(executable, ['--list', '--quiet'], { env })
@@ -376,8 +394,11 @@ function runtimeCacheKey(command: string, projectPath?: string): string {
   return `${distributionFromUncPath(projectPath) ?? 'host'}\0${command}`
 }
 
-function nativeRuntime(command: string, env: NodeJS.ProcessEnv): HarnessRuntime | null {
-  const executable = resolveExecutablePath(command, env)
+async function nativeRuntime(
+  command: string,
+  env: NodeJS.ProcessEnv
+): Promise<HarnessRuntime | null> {
+  const executable = await resolveExecutablePathAsync(command, env)
   return executable
     ? { command, executable, resolvedPath: executable, target: { kind: 'native' } }
     : null
@@ -426,7 +447,7 @@ export async function discoverHarnessRuntimes(
   const result = new Map<string, HarnessRuntime | null>()
   const missing: string[] = []
   const preferredDistribution = distributionFromUncPath(options.projectPath)
-  const env = buildProcessEnvironment()
+  const env = await buildProcessEnvironmentAsync(process.env, process.platform, true, options.force)
 
   for (const command of uniqueCommands) {
     const key = runtimeCacheKey(command, options.projectPath)
@@ -435,13 +456,13 @@ export async function discoverHarnessRuntimes(
       result.set(command, cached.value)
       continue
     }
-    const native = preferredDistribution ? null : nativeRuntime(command, env)
+    const native = preferredDistribution ? null : await nativeRuntime(command, env)
     if (native) result.set(command, native)
     else missing.push(command)
   }
 
   if (missing.length > 0 && process.platform === 'win32') {
-    const executable = wslExecutable(env)
+    const executable = await wslExecutable(env)
     const distributions = orderedDistributions(
       await wslDistributions(options.force),
       options.projectPath
@@ -465,7 +486,7 @@ export async function discoverHarnessRuntimes(
 
   for (const command of missing) {
     if (!result.has(command)) {
-      const native = nativeRuntime(command, env)
+      const native = preferredDistribution ? await nativeRuntime(command, env) : null
       result.set(command, native ?? bundledPiRuntime(command))
     }
   }
@@ -512,7 +533,7 @@ async function translatePath(runtime: HarnessRuntime, path: string): Promise<str
   try {
     const refreshed = pathCache.get(key)
     if (fresh(refreshed, PATH_CACHE_TTL_MS)) return refreshed.value
-    const env = buildProcessEnvironment()
+    const env = await buildProcessEnvironmentAsync()
     const result = await capture(
       runtime.executable,
       ['--distribution', runtime.target.distribution, '--', 'wslpath', '-a', '-u', path],
@@ -627,11 +648,11 @@ export function buildWslProcessEnvironment(env: NodeJS.ProcessEnv): NodeJS.Proce
   return { ...env, WSLENV: [...new Set([...inherited, ...forwarded])].join(':') }
 }
 
-function prepareNativeInvocation(
+async function prepareNativeInvocation(
   runtime: HarnessRuntime,
   args: string[],
   env: NodeJS.ProcessEnv
-): Pick<PreparedHarnessInvocation, 'command' | 'args' | 'shell'> {
+): Promise<Pick<PreparedHarnessInvocation, 'command' | 'args' | 'shell'>> {
   if (!commandRequiresShell(runtime.executable)) {
     return { command: runtime.command, args, shell: false }
   }
@@ -643,10 +664,19 @@ function prepareNativeInvocation(
     'v1.0',
     'powershell.exe'
   )
-  const powershell = existsSync(fixedPowershell)
+  const powershell = (await access(fixedPowershell).then(
+    () => true,
+    () => false
+  ))
     ? fixedPowershell
-    : resolveExecutablePath('powershell.exe', env, 'win32')
-  if (!powershell || !existsSync(powershellShim)) {
+    : await resolveExecutablePathAsync('powershell.exe', env, 'win32')
+  if (
+    !powershell ||
+    !(await access(powershellShim).then(
+      () => true,
+      () => false
+    ))
+  ) {
     throw new Error(
       `${runtime.command} uses a Windows command shim without a safe PowerShell companion`
     )
@@ -690,7 +720,7 @@ export async function prepareHarnessInvocation(
   args: string[],
   options: HarnessInvocationOptions = {}
 ): Promise<PreparedHarnessInvocation> {
-  let env = { ...(options.env ?? buildProcessEnvironment()) }
+  let env = { ...(options.env ?? (await buildProcessEnvironmentAsync())) }
   if (options.cwd) {
     // Set all runtime conventions before launch so harness children inherit
     // workspace scratch without changing the desktop process environment. A
@@ -708,7 +738,7 @@ export async function prepareHarnessInvocation(
     }
   }
   if (process.platform !== 'win32') {
-    if (!resolveExecutablePath(command, env)) {
+    if (!(await resolveExecutablePathAsync(command, env))) {
       const bundled = bundledPiRuntime(command, options.bundledEntry)
       if (bundled) {
         return {
@@ -739,7 +769,7 @@ export async function prepareHarnessInvocation(
     const { prepareWindowsGitRuntime } = await import('./windows-git-runtime')
     try {
       const git = await prepareWindowsGitRuntime(env)
-      env = buildProcessEnvironment(env)
+      env = await buildProcessEnvironmentAsync(env)
       if (git) env['CLAUDE_CODE_GIT_BASH_PATH'] = git.bash
     } catch (error) {
       // Native PowerShell/CMD remain usable when provisioning cannot reach GitHub.
@@ -757,7 +787,7 @@ export async function prepareHarnessInvocation(
     }
   }
   if (runtime.target.kind === 'native') {
-    const native = prepareNativeInvocation(runtime, args, env)
+    const native = await prepareNativeInvocation(runtime, args, env)
     return {
       command: native.command,
       args: native.args,
@@ -814,7 +844,11 @@ export async function prepareHarnessTerminalHandoff(
     // Route those through the same PowerShell shim invocation the structured
     // runner uses, so `pi update` & co. actually start on Windows.
     if (commandRequiresShell(runtime.executable)) {
-      const shim = prepareNativeInvocation(runtime, args, buildProcessEnvironment())
+      const shim = await prepareNativeInvocation(
+        runtime,
+        args,
+        await buildProcessEnvironmentAsync()
+      )
       return { command: shim.command, args: shim.args, runtime }
     }
     return { command: runtime.executable, args, runtime }
@@ -841,12 +875,20 @@ function fixedWindowsPowerShell(env: NodeJS.ProcessEnv): string {
  * Resolve the executable for a documented one-shot command, falling back to the
  * fixed PowerShell location for a bare `powershell`.
  */
-function resolveTerminalExecutable(command: string, env: NodeJS.ProcessEnv): string | undefined {
-  const resolved = resolveExecutablePath(command, env)
+async function resolveTerminalExecutable(
+  command: string,
+  env: NodeJS.ProcessEnv
+): Promise<string | undefined> {
+  const resolved = await resolveExecutablePathAsync(command, env)
   if (resolved) return resolved
   if (process.platform === 'win32' && (command === 'powershell' || command === 'powershell.exe')) {
     const fixed = fixedWindowsPowerShell(env)
-    return existsSync(fixed) ? fixed : undefined
+    return (await access(fixed).then(
+      () => true,
+      () => false
+    ))
+      ? fixed
+      : undefined
   }
   return undefined
 }
@@ -867,18 +909,18 @@ function resolveTerminalExecutable(command: string, env: NodeJS.ProcessEnv): str
  * actually starts. A POSIX PTY resolves the bare name against the PATH it is
  * given, so non-Windows is returned untouched.
  */
-export function prepareTerminalCommandHandoff(
+export async function prepareTerminalCommandHandoff(
   command: string,
   args: string[]
-): { command: string; args: string[] } {
+): Promise<{ command: string; args: string[] }> {
   if (process.platform !== 'win32') return { command, args }
-  const env = buildProcessEnvironment()
-  const executable = resolveTerminalExecutable(command, env)
+  const env = await buildProcessEnvironmentAsync()
+  const executable = await resolveTerminalExecutable(command, env)
   if (!executable) {
     throw new Error(`${command} was not found on this machine, so it cannot run in the terminal.`)
   }
   if (!commandRequiresShell(executable)) return { command: executable, args }
-  const shim = prepareNativeInvocation(
+  const shim = await prepareNativeInvocation(
     { command, executable, resolvedPath: executable, target: { kind: 'native' } },
     args,
     env
@@ -886,12 +928,12 @@ export function prepareTerminalCommandHandoff(
   return { command: shim.command, args: shim.args }
 }
 
-export function prepareWslTerminalHandoff(
+export async function prepareWslTerminalHandoff(
   distribution: string,
   command: string,
   args: string[]
-): WslTerminalHandoff {
-  const executable = wslExecutable(buildProcessEnvironment())
+): Promise<WslTerminalHandoff> {
+  const executable = await wslExecutable(await buildProcessEnvironmentAsync())
   if (!executable) throw new Error('Windows Subsystem for Linux is unavailable')
   return {
     command: executable,
@@ -912,8 +954,9 @@ function validateHarnessHomePath(relativePath: string): void {
 export async function probeHarnessRuntime(
   runtime: HarnessRuntime,
   args: string[],
-  env: NodeJS.ProcessEnv = buildProcessEnvironment()
+  env?: NodeJS.ProcessEnv
 ): Promise<{ ok: true; stdout: string; stderr: string } | { ok: false; reason: string }> {
+  env ??= await buildProcessEnvironmentAsync()
   try {
     const command = runtime.executable
     const probeArgs =
@@ -1039,7 +1082,7 @@ export async function readHarnessHomeFile(
         'cio',
         relativePath
       ],
-      { env: buildProcessEnvironment(), maxOutputBytes: 4 * 1024 * 1024 }
+      { env: await buildProcessEnvironmentAsync(), maxOutputBytes: 4 * 1024 * 1024 }
     )
     return result.code === 0 ? decodeWslOutput(result.stdout) : null
   } catch {
@@ -1060,6 +1103,7 @@ export async function writeHarnessHomeFile(
   if (Buffer.byteLength(content) > 4 * 1024 * 1024) {
     throw new Error('WSL harness config content is invalid')
   }
+  const environment = await buildProcessEnvironmentAsync()
   await new Promise<void>((resolve, reject) => {
     const script =
       'target="$HOME/$1"; directory=${target%/*}; mkdir -p -- "$directory"; temporary="$target.cio.$$"; trap \'rm -f -- "$temporary"\' EXIT HUP INT TERM; cat > "$temporary" && chmod 600 "$temporary" && mv -f -- "$temporary" "$target"; result=$?; trap - EXIT HUP INT TERM; exit $result'
@@ -1067,7 +1111,7 @@ export async function writeHarnessHomeFile(
       runtime.executable,
       ['--distribution', distribution, '--', 'sh', '-c', script, 'cio', relativePath],
       {
-        env: buildProcessEnvironment(),
+        env: environment,
         windowsHide: true,
         stdio: ['pipe', 'ignore', 'pipe']
       }

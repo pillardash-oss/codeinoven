@@ -20,6 +20,7 @@ export function registerProviderAccountIpc(
   removeAccount?: (accountId: string) => Promise<boolean>
 ): void {
   const accounts = new HarnessAccountRegistry(storage)
+  const accountLists = new Map<string, Promise<HarnessAccount[]>>()
   const lastAccountSync = new Map<string, number>()
   ipcMain.handle(
     'providerAccounts:list',
@@ -27,53 +28,62 @@ export function registerProviderAccountIpc(
       if (rawHarnessId === undefined) return accounts.list()
       const harnessId = validateEntityId(rawHarnessId, 'Harness ID', 256)
       const refresh = rawRefresh === undefined ? false : boolean(rawRefresh, 'Refresh')
-      const capabilities = await auth.capabilities(harnessId)
-      const shouldSync = refresh || Date.now() - (lastAccountSync.get(harnessId) ?? 0) >= 30_000
-      if (capabilities && shouldSync) {
-        const status = await auth.getStatus(harnessId)
-        if (status.state !== 'error' && status.state !== 'unknown') {
-          await accounts.reconcileLegacy(harnessId, status.accounts)
-        }
-        const unresolved = (await accounts.list(harnessId)).filter(
-          (account) => account.containerKind === 'managed' && account.providerId === ''
-        )
-        for (const account of unresolved) {
-          const managedStatus = await auth.getStatus(
-            harnessId,
-            undefined,
-            accounts.environment(account)
+      const pending = accountLists.get(harnessId)
+      if (pending) return pending
+      const request = (async (): Promise<HarnessAccount[]> => {
+        const shouldSync = refresh || Date.now() - (lastAccountSync.get(harnessId) ?? 0) >= 30_000
+        if (!shouldSync) return accounts.list(harnessId)
+        const capabilities = await auth.capabilities(harnessId)
+        if (capabilities) {
+          const status = await auth.getStatus(harnessId)
+          if (status.state !== 'error' && status.state !== 'unknown') {
+            await accounts.reconcileLegacy(harnessId, status.accounts)
+          }
+          const unresolved = (await accounts.list(harnessId)).filter(
+            (account) => account.containerKind === 'managed' && account.providerId === ''
           )
-          const authenticated = managedStatus.accounts.find((entry) => entry.active !== false)
-          if (authenticated) {
-            await accounts.adoptManagedCredential(
-              account.id,
-              authenticated.providerId,
-              authenticated.label
+          for (const account of unresolved) {
+            const managedStatus = await auth.getStatus(
+              harnessId,
+              undefined,
+              accounts.environment(account)
             )
-          } else if (managedStatus.state === 'unauthenticated') {
-            await (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(account.id)
+            const authenticated = managedStatus.accounts.find((entry) => entry.active !== false)
+            if (authenticated) {
+              await accounts.adoptManagedCredential(
+                account.id,
+                authenticated.providerId,
+                authenticated.label
+              )
+            } else if (managedStatus.state === 'unauthenticated') {
+              await (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(
+                account.id
+              )
+            }
           }
-        }
-        // A managed row's provider id is pinned when its container is created,
-        // so a release that renamed an integration leaves the row naming a
-        // provider the CLI no longer knows. A harness whose credential store is
-        // read locally (OpenCode V2) can repair it here, before that stale id
-        // breaks a login, a logout or a switch.
-        const managed = (await accounts.list(harnessId)).filter(
-          (account) => account.containerKind === 'managed' && account.providerId !== ''
-        )
-        for (const account of managed) {
-          const storedProvider = await auth.storedProviderFor(
-            harnessId,
-            accounts.environment(account)
+          // A managed row's provider id is pinned when its container is created,
+          // so a release that renamed an integration leaves the row naming a
+          // provider the CLI no longer knows. A harness whose credential store is
+          // read locally (OpenCode V2) can repair it here, before that stale id
+          // breaks a login, a logout or a switch.
+          const managed = (await accounts.list(harnessId)).filter(
+            (account) => account.containerKind === 'managed' && account.providerId !== ''
           )
-          if (storedProvider && storedProvider !== account.providerId) {
-            await accounts.adoptManagedCredential(account.id, storedProvider, storedProvider)
+          for (const account of managed) {
+            const storedProvider = await auth.storedProviderFor(
+              harnessId,
+              accounts.environment(account)
+            )
+            if (storedProvider && storedProvider !== account.providerId) {
+              await accounts.adoptManagedCredential(account.id, storedProvider, storedProvider)
+            }
           }
+          lastAccountSync.set(harnessId, Date.now())
         }
-        lastAccountSync.set(harnessId, Date.now())
-      }
-      return accounts.list(harnessId)
+        return accounts.list(harnessId)
+      })().finally(() => accountLists.delete(harnessId))
+      accountLists.set(harnessId, request)
+      return request
     }
   )
   ipcMain.handle('providerAccounts:prepare', (_, rawHarnessId: unknown, rawProviderId?: unknown) =>

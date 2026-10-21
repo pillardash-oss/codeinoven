@@ -1,3 +1,4 @@
+import { mapInBatches } from '$shared/bounded-work'
 import { ovenRootKey, ovenRootThread } from '$lib/oven-root-target'
 import type {
   DirectoryPreviewSession,
@@ -762,8 +763,8 @@ class ProjectFilesWorkspace {
   async refresh(projectId: string, activePath?: string): Promise<void> {
     const state = this.ensureState(projectId)
     const directories = directoriesToRefresh(state)
-    await Promise.all(
-      directories.map((directory) => this.explorer.loadDirectory(projectId, directory, true))
+    await mapInBatches(directories, 2, (directory) =>
+      this.explorer.loadDirectory(projectId, directory, true)
     )
     const path = activePath ?? state.tabs.find((tab) => tab.id === state.activeTabId)?.path
     if (!path) return

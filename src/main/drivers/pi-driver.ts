@@ -18,7 +18,7 @@ import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../lib/core-tools'
-import { buildProcessEnvironment, OWNED_SESSION_MARKER } from './cli-environment'
+import { buildProcessEnvironmentAsync, OWNED_SESSION_MARKER } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -502,7 +502,7 @@ export class PiDriver extends PersistentCliDriver {
     try {
       await runHarnessCommand('pi', ['--version'], {
         cwd: projectPath,
-        env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        env: await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment }),
         timeoutMs: 5_000
       })
     } catch {
@@ -661,7 +661,7 @@ export class PiDriver extends PersistentCliDriver {
    */
   async refreshModelCatalog(): Promise<void> {
     await runHarnessCommand('pi', ['update', '--models'], {
-      env: buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+      env: await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment }),
       timeoutMs: PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS,
       bundledEntry: 'cli'
     })
@@ -676,7 +676,7 @@ export class PiDriver extends PersistentCliDriver {
       prepareWindowsTools: false,
       cwd: projectPath,
       env: {
-        ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        ...(await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })),
         ...overlay.env,
         ...(await this.workspaceTemporaryEnvironment(projectPath))
       }
@@ -708,7 +708,7 @@ export class PiDriver extends PersistentCliDriver {
       prepareWindowsTools: false,
       cwd,
       env: {
-        ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+        ...(await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })),
         ...(await this.workspaceTemporaryEnvironment(cwd))
       }
     })
@@ -1632,7 +1632,7 @@ export class PiDriver extends PersistentCliDriver {
       {
         cwd: projectPath,
         env: {
-          ...buildProcessEnvironment({ ...process.env, ...this.accountEnvironment }),
+          ...(await buildProcessEnvironmentAsync({ ...process.env, ...this.accountEnvironment })),
           ...(this.cioProvidersExtensionEnvs.get(sessionId) ?? {}),
           ...runtimeEnv,
           ...(await this.workspaceTemporaryEnvironment(projectPath)),

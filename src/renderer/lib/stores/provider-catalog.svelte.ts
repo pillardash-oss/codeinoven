@@ -415,13 +415,16 @@ class ProviderCatalogStore {
       // Keep account discovery on the same refresh lifecycle as model discovery.
       // It runs independently so a slow authentication probe never delays the
       // model catalog or the main thread.
-      void harnessAccountCache.refreshHarnesses(cachedHarnessIds)
+      void harnessAccountCache.refreshHarnesses(cachedHarnessIds, refreshModelCatalogs)
       const catalogs = await invoke('agent:refreshProviderCatalog', projectId, {
         force: true,
         refreshModelCatalogs
       })
       this.cache.set(projectId, catalogs)
-      void harnessAccountCache.refreshHarnesses(catalogs.map((catalog) => catalog.harnessId))
+      void harnessAccountCache.refreshHarnesses(
+        catalogs.map((catalog) => catalog.harnessId),
+        refreshModelCatalogs
+      )
       this.knownProjects.add(projectId)
       this.refreshedAt.set(projectId, Date.now())
       this.failedAt.delete(projectId)

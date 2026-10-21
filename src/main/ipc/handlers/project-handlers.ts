@@ -418,13 +418,8 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
     ipcMain.handle('project:list', async () => {
       const projects = await projectManager.listProjects()
-      // Index every local project's files in the background so the first
-      // search is instant instead of building the whole index on demand.
-      for (const project of projects) {
-        if (project.source === 'local' && project.path.trim()) {
-          void projectFilesService.prewarmProject(project.id)
-        }
-      }
+      // Search builds its index on demand. Listing projects must not scan
+      // every checkout or start watchers on memory-constrained machines.
       return projects
     })
     ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
@@ -619,8 +614,6 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       }
       const project = await projectManager.updateProject(projectId, validatedInput)
       projectFilesService.invalidateProject(projectId)
-      // The root may have changed; warm the index and re-point the watcher.
-      void projectFilesService.prewarmProject(projectId)
       return project
     }
   )
@@ -762,9 +755,6 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     ) => {
       const validatedProjectId = validateEntityId(projectId, 'Project ID')
       const directory = requireString(relativeDirectory, 'Project directory', true)
-      if (directory === '') {
-        void projectFilesService.prewarmProject(validatedProjectId, threadIdArg(threadId))
-      }
       return projectFilesService.listDirectory(
         validatedProjectId,
         directory,

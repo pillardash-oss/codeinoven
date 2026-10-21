@@ -1,3 +1,4 @@
+import { access, readdir, readFile } from 'node:fs/promises'
 import { accessSync, constants, existsSync, readdirSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { isAbsolute, join } from 'path'
@@ -171,13 +172,27 @@ export function buildProcessEnvironment(
   platform: NodeJS.Platform = process.platform,
   markOwned = true
 ): NodeJS.ProcessEnv {
+  const root = nvmRoot(base, platform)
+  return composeProcessEnvironment(
+    base,
+    platform,
+    markOwned,
+    installedVersionNames(root, platform),
+    preferredNodeBin(base, platform)
+  )
+}
+
+function composeProcessEnvironment(
+  base: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  markOwned: boolean,
+  installed: string[],
+  preferred: string | undefined
+): NodeJS.ProcessEnv {
   const sep = pathSeparator(platform)
   const home =
     base['HOME'] ?? (platform === 'win32' ? (base['USERPROFILE'] ?? homedir()) : homedir())
   const root = nvmRoot(base, platform)
-  const installed = installedVersionNames(root, platform)
-
-  const preferred = preferredNodeBin(base, platform)
   const windowsGit = platform === 'win32' ? selectedWindowsGitRuntime() : null
 
   const preferredManagerPaths =
@@ -268,6 +283,117 @@ export function buildProcessEnvironment(
   if (markOwned) environment[OWNED_PROCESS_MARKER] = '1'
   else delete environment[OWNED_PROCESS_MARKER]
   return environment
+}
+
+interface NodePaths {
+  installed: string[]
+  preferred: string | undefined
+}
+const nodePaths = new Map<string, { expires: number; pending: Promise<NodePaths> }>()
+
+/** Async discovery is used by interactive paths; cache only filesystem metadata,
+ * never a caller's credential-bearing environment. */
+export async function buildProcessEnvironmentAsync(
+  base: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+  markOwned = true,
+  force = false
+): Promise<NodeJS.ProcessEnv> {
+  const root = nvmRoot(base, platform)
+  const key = JSON.stringify([root, platform, base['NVM_SYMLINK']])
+  let cached = nodePaths.get(key)
+  if (!cached || force || cached.expires < Date.now()) {
+    const pending = discoverNodePaths(root, base, platform)
+    cached = { expires: Date.now() + 30_000, pending }
+    if (nodePaths.size >= 32) nodePaths.delete(nodePaths.keys().next().value!)
+    nodePaths.set(key, cached)
+  }
+  const paths = await cached.pending
+  return composeProcessEnvironment(base, platform, markOwned, paths.installed, paths.preferred)
+}
+
+async function discoverNodePaths(
+  root: string,
+  base: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform
+): Promise<NodePaths> {
+  const installed = await readdir(platform === 'win32' ? root : join(root, 'versions', 'node'), {
+    withFileTypes: true
+  }).then(
+    (entries) =>
+      entries
+        .filter((entry) => entry.isDirectory() && parseVersion(entry.name))
+        .map((entry) => entry.name)
+        .sort(compareVersionsDescending),
+    () => []
+  )
+  if (platform === 'win32' && base['NVM_SYMLINK'])
+    return { installed, preferred: base['NVM_SYMLINK'] }
+  const current = join(root, 'current')
+  if (
+    await access(current).then(
+      () => true,
+      () => false
+    )
+  )
+    return { installed, preferred: join(current, 'bin') }
+  const read = (path: string): Promise<string> =>
+    readFile(join(root, path), 'utf8').then(
+      (value) => value.trim(),
+      () => ''
+    )
+  let alias = await read(join('alias', 'default'))
+  for (let depth = 0; depth < 4 && alias.startsWith('lts/'); depth += 1)
+    alias = await read(join('alias', alias))
+  // LTS aliases are resolved above, keeping the shared version-selection rules pure here.
+  const version =
+    alias && !alias.startsWith('lts/')
+      ? resolveAliasToVersion(root, alias, installed)
+      : installed[0]
+  return { installed, preferred: version ? versionBinDir(root, version, platform) : undefined }
+}
+
+export async function resolveExecutablePathAsync(
+  command: string,
+  env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform
+): Promise<string | undefined> {
+  for (const candidate of executableCandidates(
+    command,
+    env ?? (await buildProcessEnvironmentAsync(process.env, platform)),
+    platform
+  )) {
+    if (
+      await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK).then(
+        () => true,
+        () => false
+      )
+    )
+      return candidate
+  }
+  return undefined
+}
+
+export async function resolveExecutablePathsAsync(
+  command: string,
+  env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform
+): Promise<string[]> {
+  const results: string[] = []
+  for (const candidate of executableCandidates(
+    command,
+    env ?? (await buildProcessEnvironmentAsync(process.env, platform)),
+    platform
+  )) {
+    if (
+      await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK).then(
+        () => true,
+        () => false
+      )
+    )
+      results.push(candidate)
+  }
+  return results
 }
 
 /** Backward-compatible name for extensions that have not moved to the app-wide terminology. */

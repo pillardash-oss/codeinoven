@@ -334,7 +334,7 @@ export class HarnessUpdateService {
         : null
     const prepared =
       provider?.executionTarget?.kind === 'wsl' && provider.resolvedPath
-        ? prepareWslTerminalHandoff(
+        ? await prepareWslTerminalHandoff(
             provider.executionTarget.distribution,
             provider.resolvedPath,
             args

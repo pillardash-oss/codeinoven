@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { createWorkQueue } from '../../lib/bounded-work'
 import { homedir } from 'node:os'
 import { OPENCODE_COMMAND } from '../../lib/opencode-version'
 import { Logger } from '../system/logger'
@@ -141,7 +143,8 @@ export function mapOpenCodeV2Agents(value: unknown): OpenCodeV2AgentEntry[] {
  * lifetime; this function only issues reads.
  */
 export async function readOpenCodeV2Catalog(
-  handle: OpenCodeV2ServerHandle
+  handle: OpenCodeV2ServerHandle,
+  signal?: AbortSignal
 ): Promise<
   | { ok: true; catalog: OpenCodeV2Catalog }
   | { ok: false; reason: 'unreachable' | 'unsupported-version'; detail: string }
@@ -149,10 +152,10 @@ export async function readOpenCodeV2Catalog(
   try {
     const client = new OpenCodeV2Client(handle)
     const [info, providers, models, agents] = await Promise.all([
-      client.json('/api/info'),
-      client.json('/api/provider'),
-      client.json('/api/model'),
-      client.json('/api/agent')
+      client.json('/api/info', { signal }),
+      client.json('/api/provider', { signal }),
+      client.json('/api/model', { signal }),
+      client.json('/api/agent', { signal })
     ])
     const server = mapOpenCodeV2ServerIdentity(info)
     if (!server) {
@@ -203,13 +206,14 @@ function delay(ms: number): Promise<void> {
  * model; a genuinely empty install is returned as-is once the window elapses.
  */
 async function readSettledCatalog(
-  handle: OpenCodeV2ServerHandle
+  handle: OpenCodeV2ServerHandle,
+  signal?: AbortSignal
 ): Promise<
   | { ok: true; catalog: OpenCodeV2Catalog }
   | { ok: false; reason: 'unreachable' | 'unsupported-version'; detail: string }
 > {
   const deadline = Date.now() + CATALOG_SETTLE_TIMEOUT_MS
-  let result = await readOpenCodeV2Catalog(handle)
+  let result = await readOpenCodeV2Catalog(handle, signal)
   while (
     result.ok &&
     result.catalog.providers.length === 0 &&
@@ -217,7 +221,7 @@ async function readSettledCatalog(
     Date.now() < deadline
   ) {
     await delay(CATALOG_POLL_INTERVAL_MS)
-    result = await readOpenCodeV2Catalog(handle)
+    result = await readOpenCodeV2Catalog(handle, signal)
   }
   return result
 }
@@ -227,11 +231,12 @@ async function readSettledCatalog(
  * The server is short-lived and private (`--port 0`), so a discovery run cannot
  * collide with the user's own background service or another run.
  */
-export async function discoverOpenCodeV2Catalog(
+async function runOpenCodeV2Catalog(
   options: {
     command?: string
     cwd?: string
     env?: NodeJS.ProcessEnv
+    signal?: AbortSignal
   } = {}
 ): Promise<OpenCodeV2DiscoveryResult> {
   const command = options.command ?? OPENCODE_COMMAND
@@ -239,6 +244,7 @@ export async function discoverOpenCodeV2Catalog(
   try {
     handle = await startOpenCodeV2Server({
       command,
+      signal: options.signal,
       cwd: options.cwd ?? homedir(),
       ...(options.env ? { env: options.env } : {})
     })
@@ -250,7 +256,7 @@ export async function discoverOpenCodeV2Catalog(
   }
 
   try {
-    const result = await readSettledCatalog(handle)
+    const result = await readSettledCatalog(handle, options.signal)
     return result.ok ? result : { ok: false, reason: result.reason, detail: result.detail }
   } finally {
     await handle.close()
@@ -258,10 +264,11 @@ export async function discoverOpenCodeV2Catalog(
 }
 
 /** Probe the provider catalog on an ephemeral server that always gets closed. */
-export async function discoverOpenCodeV2ProviderCatalogs(options: {
+async function runOpenCodeV2ProviderCatalogs(options: {
   command: string
   cwd: string
   env?: NodeJS.ProcessEnv
+  signal?: AbortSignal
 }): Promise<ProviderCatalog[]> {
   let handle: OpenCodeV2ServerHandle
   try {
@@ -275,9 +282,12 @@ export async function discoverOpenCodeV2ProviderCatalogs(options: {
     const query = client.locationQuery(options.cwd)
     const deadline = Date.now() + CATALOG_SETTLE_TIMEOUT_MS
     for (;;) {
+      options.signal?.throwIfAborted()
       const [models, providers] = await Promise.all([
-        client.json(`/api/model?${query}`, { timeoutMs: 30_000 }),
-        client.json(`/api/provider?${query}`, { timeoutMs: 30_000 }).catch(() => null)
+        client.json(`/api/model?${query}`, { timeoutMs: 30_000, signal: options.signal }),
+        client
+          .json(`/api/provider?${query}`, { timeoutMs: 30_000, signal: options.signal })
+          .catch(() => null)
       ])
       const catalogs = mapOpenCodeV2Catalogs(models, providers)
       if (catalogs.length > 0 || Date.now() >= deadline) return catalogs
@@ -289,4 +299,60 @@ export async function discoverOpenCodeV2ProviderCatalogs(options: {
   } finally {
     await handle.close()
   }
+}
+
+// Discovery servers are temporary and can be expensive on low-end Windows.
+// The slot covers startup, reads and teardown, even after a picker deadline.
+const discoveryQueue = createWorkQueue(1)
+const discoveryRequests = new Map<string, Promise<unknown>>()
+
+function queuedDiscovery<T>(
+  kind: string,
+  options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv },
+  run: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const fingerprint = createHash('sha256')
+    .update(
+      JSON.stringify(
+        Object.entries(options.env ?? process.env).sort(([a], [b]) => a.localeCompare(b))
+      )
+    )
+    .digest('hex')
+  const key = JSON.stringify([
+    kind,
+    options.command ?? OPENCODE_COMMAND,
+    options.cwd ?? homedir(),
+    fingerprint
+  ])
+  const pending = discoveryRequests.get(key)
+  if (pending) return pending as Promise<T>
+  const request = discoveryQueue(async () => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), CATALOG_SETTLE_TIMEOUT_MS)
+    try {
+      return await run(controller.signal)
+    } finally {
+      clearTimeout(timer)
+    }
+  }).finally(() => discoveryRequests.delete(key))
+  discoveryRequests.set(key, request)
+  return request
+}
+
+export function discoverOpenCodeV2Catalog(
+  options: { command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {}
+): Promise<OpenCodeV2DiscoveryResult> {
+  return queuedDiscovery('catalog', options, (signal) =>
+    runOpenCodeV2Catalog({ ...options, signal })
+  )
+}
+
+export function discoverOpenCodeV2ProviderCatalogs(options: {
+  command: string
+  cwd: string
+  env?: NodeJS.ProcessEnv
+}): Promise<ProviderCatalog[]> {
+  return queuedDiscovery('providers', options, (signal) =>
+    runOpenCodeV2ProviderCatalogs({ ...options, signal })
+  )
 }

@@ -1,3 +1,4 @@
+import { backgroundIo } from '../system/background-io'
 import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -90,39 +91,6 @@ interface CredentialRow {
   updatedAt: number
 }
 
-/** The slice of a SQLite connection this reader needs. */
-interface CredentialStore {
-  prepare(sql: string): { all(): unknown }
-  close(): void
-}
-
-type CredentialStoreConstructor = new (
-  path: string,
-  options?: { readonly?: boolean; fileMustExist?: boolean }
-) => CredentialStore
-
-async function openCredentialStore(databasePath: string): Promise<CredentialStore | undefined> {
-  let constructor: CredentialStoreConstructor
-  try {
-    const module = (await import('better-sqlite3')) as unknown
-    const candidate =
-      module !== null && typeof module === 'object' && 'default' in module
-        ? (module as { default: unknown }).default
-        : module
-    if (typeof candidate !== 'function') return undefined
-    constructor = candidate as CredentialStoreConstructor
-  } catch (error) {
-    Logger.dev('OpenCode V2 credential store unavailable:', error)
-    return undefined
-  }
-  try {
-    return new constructor(databasePath, { readonly: true, fileMustExist: true })
-  } catch {
-    // A missing or locked store simply means no key to read.
-    return undefined
-  }
-}
-
 /**
  * Credential ids OpenCode V2 currently has marked active, per its own store.
  *
@@ -166,52 +134,20 @@ export async function readOpenCodeV2StoredCredentials(
 ): Promise<OpenCodeV2StoredCredential[]> {
   const credentials: OpenCodeV2StoredCredential[] = []
   for (const databasePath of await openCodeCredentialDatabasePaths(environment)) {
-    const database = await openCredentialStore(databasePath)
-    if (!database) continue
-    try {
-      const rows = database
-        .prepare(
-          'SELECT id, integration_id AS integrationId, label, method_id AS methodId FROM credential'
-        )
-        .all()
-      for (const raw of Array.isArray(rows) ? rows : []) {
-        if (raw === null || typeof raw !== 'object') continue
-        const row = raw as Record<string, unknown>
-        const id = typeof row['id'] === 'string' ? row['id'] : ''
-        const integrationId = typeof row['integrationId'] === 'string' ? row['integrationId'] : ''
-        if (!id || !integrationId) continue
-        credentials.push({
-          id,
-          integrationId,
-          label: typeof row['label'] === 'string' ? row['label'] : null,
-          method: typeof row['methodId'] === 'string' ? row['methodId'] : null
-        })
-      }
-    } catch {
-      // A store written by a different schema is not a reason to fail a read.
-    } finally {
-      database.close()
-    }
+    credentials.push(
+      ...(await backgroundIo<OpenCodeV2StoredCredential[]>({
+        kind: 'credential-read',
+        databasePath,
+        values: false
+      }))
+    )
   }
+
   return credentials
 }
 
 async function readV2CredentialRows(databasePath: string): Promise<CredentialRow[]> {
-  const database = await openCredentialStore(databasePath)
-  if (!database) return []
-  try {
-    const rows = database
-      .prepare(
-        'SELECT id, integration_id AS integrationId, value, active, time_updated AS updatedAt FROM credential'
-      )
-      .all()
-    return Array.isArray(rows) ? (rows as CredentialRow[]) : []
-  } catch {
-    // A store written by a different schema is not a reason to fail a read.
-    return []
-  } finally {
-    database.close()
-  }
+  return backgroundIo<CredentialRow[]>({ kind: 'credential-read', databasePath, values: true })
 }
 
 /** V1 keys: an environment override, injected auth content, then `auth.json`. */

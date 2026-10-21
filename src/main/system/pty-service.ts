@@ -1,3 +1,4 @@
+import { PtyOutputBuffer } from './pty-output-buffer'
 import type { WebContents } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { existsSync, realpathSync, statSync } from 'fs'
@@ -13,7 +14,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { buildProcessEnvironmentAsync } from '../drivers/cli-environment'
 import { scopeRootProvider, type ScopeRootResolver } from '../workspaces/scope-root-resolver'
 
 export interface PtyRemoteLaunch {
@@ -130,8 +131,8 @@ export interface PtyTrackedProcess {
   cwd: string
 }
 
-function buildShellEnv(): Record<string, string> {
-  const harnessEnv = buildProcessEnvironment()
+async function buildShellEnv(): Promise<Record<string, string>> {
+  const harnessEnv = await buildProcessEnvironmentAsync()
   const env = Object.fromEntries(
     Object.entries(harnessEnv).filter((entry): entry is [string, string] => entry[1] !== undefined)
   )
@@ -177,9 +178,9 @@ function resolveStartingDirectory(baseCwd: string, directory: string): string {
 }
 
 /** Prefer Git Bash on Windows, with native shells available offline. */
-function resolveShell(): string {
+async function resolveShell(): Promise<string> {
   if (process.platform === 'win32') {
-    const bash = buildProcessEnvironment()['CLAUDE_CODE_GIT_BASH_PATH']
+    const bash = (await buildProcessEnvironmentAsync())['CLAUDE_CODE_GIT_BASH_PATH']
     if (bash && existsSync(bash)) return bash
     const systemRoot = process.env['SystemRoot'] || 'C:\\Windows'
     const powershell = join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
@@ -240,6 +241,7 @@ function resolveShellCommandArgs(shell: string, script: string): string[] {
 export class PtyService {
   private sessions = new Map<string, PtySession>()
   private idleWatchdog: ReturnType<typeof setInterval> | null = null
+  private readonly commandOutput = new Map<string, PtyOutputBuffer>()
   private sender: WebContents | null = null
   private projectManager: ProjectManager
   private scopeRoots
@@ -318,6 +320,11 @@ export class PtyService {
     ipcMain.handle('pty:createOven', (_, id: string, ovenId: string, cols: number, rows: number) =>
       this.createOven(id, ovenId, cols, rows)
     )
+    ipcMain.on('pty:ack', (event, id: unknown, length: unknown) => {
+      if (event.sender !== this.sender || typeof id !== 'string' || typeof length !== 'number')
+        return
+      this.commandOutput.get(id)?.acknowledge(length)
+    })
     ipcMain.on('pty:write', (_, id: string, data: string) => this.write(id, data))
     ipcMain.on('pty:resize', (_, id: string, cols: number, rows: number) =>
       this.resize(id, cols, rows)
@@ -392,7 +399,7 @@ export class PtyService {
     const cwd = directory === undefined ? baseCwd : resolveStartingDirectory(baseCwd, directory)
 
     await this.prepareWindowsShell()
-    const shell = resolveShell()
+    const shell = await resolveShell()
     const createdAt = Date.now()
 
     const proc = pty.spawn(shell, resolveShellArgs(shell), {
@@ -400,7 +407,7 @@ export class PtyService {
       cols,
       rows,
       cwd,
-      env: buildShellEnv()
+      env: await buildShellEnv()
     })
     this.trackProcess?.({
       scopeId: `pty:${id}`,
@@ -589,7 +596,7 @@ export class PtyService {
       cols,
       rows,
       cwd,
-      env: { ...buildShellEnv(), ...safeCommandEnvironment(environment) }
+      env: { ...(await buildShellEnv()), ...safeCommandEnvironment(environment) }
     })
     this.trackProcess?.({
       pid: proc.pid,
@@ -597,16 +604,23 @@ export class PtyService {
       cwd
     })
 
+    const output = new PtyOutputBuffer(proc, (data) =>
+      sendToRenderer(this.sender, `pty:data:${id}`, data)
+    )
+    this.commandOutput.set(id, output)
     proc.onData((data) => {
       const session = this.sessions.get(id)
       if (session) session.lastActivityAt = Date.now()
-      sendToRenderer(this.sender, `pty:data:${id}`, data)
+      output.push(data)
     })
 
     proc.onExit(({ exitCode }) => {
       exitCode = this.sessions.get(id)?.exitCodeOverride ?? exitCode
       this.sessions.delete(id)
-      sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
+      output.end(() => {
+        if (this.commandOutput.get(id) === output) this.commandOutput.delete(id)
+        sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
+      })
       void this.recordEvent({
         type: 'exit',
         terminalId: id,
@@ -757,14 +771,14 @@ export class PtyService {
     }
 
     await this.prepareWindowsShell()
-    const shell = resolveShell()
+    const shell = await resolveShell()
     const createdAt = Date.now()
     const proc = pty.spawn(shell, resolveShellCommandArgs(shell, script), {
       name: 'xterm-256color',
       cols,
       rows,
       cwd,
-      env: { ...buildShellEnv(), ...safeVariables }
+      env: { ...(await buildShellEnv()), ...safeVariables }
     })
     this.trackProcess?.({
       scopeId: `pty:${id}`,
@@ -840,6 +854,8 @@ export class PtyService {
   }
 
   private destroy(id: string): void {
+    this.commandOutput.get(id)?.dispose()
+    this.commandOutput.delete(id)
     const session = this.sessions.get(id)
     if (session) {
       try {
@@ -852,6 +868,8 @@ export class PtyService {
   }
 
   destroyAll(): void {
+    for (const output of this.commandOutput.values()) output.dispose()
+    this.commandOutput.clear()
     this.sender = null
     this.stopIdleWatchdog()
     for (const id of this.sessions.keys()) {

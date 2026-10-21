@@ -1,3 +1,4 @@
+import { createWorkQueue, mapInBatches } from '../../lib/bounded-work'
 import { unarchivedThreadSql } from '../../lib/archives'
 import { deliverWithWorkPathNotices } from '../design/work-path-notices'
 import type { AssistantReportingPatch } from '../../lib/assistant-authoring'
@@ -71,8 +72,8 @@ import { appendPartDelta } from '../../lib/agent-part-merge'
 import { latestAgentTodo } from '../../lib/agent-todos'
 import { toPosixPath } from '../../lib/paths'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
-import { buildProcessEnvironment } from '../drivers/cli-environment'
-import { isHarnessCommandAvailable } from '../drivers/harness-runtime'
+import { buildProcessEnvironmentAsync } from '../drivers/cli-environment'
+import { isHarnessCommandAvailableAsync } from '../drivers/harness-runtime'
 import { CheckpointLimitError } from '../git/change-tracking-service'
 import type { ProjectFingerprint } from '../git/change-tracking-service'
 import {
@@ -1001,6 +1002,7 @@ export class ChatEngine {
 
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
 
+  private readonly catalogProbeQueue = createWorkQueue(2)
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
 
   /** Root for every disposable working directory a local harness turn needs.
@@ -4719,7 +4721,7 @@ export class ChatEngine {
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      const catalogs = filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      const catalogs = await filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
       this.providerCache.set(projectId, catalogs)
       return catalogs
     }
@@ -5230,19 +5232,22 @@ export class ChatEngine {
    * read it from here instead of keeping their own copy of the rule.
    */
   private async catalogDrivers(): Promise<HarnessDriver[]> {
-    const harnessEnv = buildProcessEnvironment()
-    const defaultDrivers = [...this.drivers.values()].filter((driver) => {
+    const harnessEnv = await buildProcessEnvironmentAsync()
+    const defaultDrivers: HarnessDriver[] = []
+    for (const driver of this.drivers.values()) {
       const command = findHarness(driver.id)?.command
-      return command !== undefined && isHarnessCommandAvailable(command, harnessEnv)
-    })
+      if (command !== undefined && (await isHarnessCommandAvailableAsync(command, harnessEnv)))
+        defaultDrivers.push(driver)
+    }
+
     const managedAccounts = (await this.accountRegistry.list()).filter(
       (account) =>
         account.containerKind === 'managed' &&
         defaultDrivers.some((driver) => driver.id === account.harnessId) &&
         ['pi', 'opencode', 'codex', 'claude-code'].includes(account.harnessId)
     )
-    const managedDrivers = await Promise.all(
-      managedAccounts.map((account) => this.driverForAccount(account.harnessId, account.id))
+    const managedDrivers = await mapInBatches(managedAccounts, 2, (account) =>
+      this.driverForAccount(account.harnessId, account.id)
     )
     return [...defaultDrivers, ...managedDrivers]
   }
@@ -5364,7 +5369,7 @@ export class ChatEngine {
         return null
       }
       if (Array.isArray(stored)) {
-        const catalogs = filterInstalledProviderCatalogs(stored)
+        const catalogs = await filterInstalledProviderCatalogs(stored)
         this.sharedProviderCatalog = {
           schemaVersion: 3,
           discoveredAt: Date.now(),
@@ -5391,7 +5396,7 @@ export class ChatEngine {
             return null
           }
         }
-        const catalogs = filterInstalledProviderCatalogs(stored.catalogs)
+        const catalogs = await filterInstalledProviderCatalogs(stored.catalogs)
         this.sharedProviderCatalog = { ...stored, catalogs }
         if (stored.catalogFingerprints && this.catalogFingerprints.size === 0) {
           for (const [driverId, fingerprint] of Object.entries(stored.catalogFingerprints)) {
@@ -5419,7 +5424,7 @@ export class ChatEngine {
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      const catalogs = filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      const catalogs = await filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
       this.providerCache.set(projectId, catalogs)
       return catalogs
     }
@@ -5467,8 +5472,7 @@ export class ChatEngine {
     projectPath: string
   ): Promise<DriverDiscovery> {
     const budget = ChatEngine.CATALOG_DRIVER_BUDGET_MS
-    const probe = driver
-      .listProviders(projectPath)
+    const probe = this.catalogProbeQueue(() => driver.listProviders(projectPath))
       .then((catalogs) =>
         catalogs.map((catalog) => ({
           ...catalog,

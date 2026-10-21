@@ -24,7 +24,7 @@ class HarnessAccountCache {
     if (!force && cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.accounts)
     const pending = this.inflight.get(harnessId)
     if (pending) return pending
-    const request = invoke('providerAccounts:list', harnessId)
+    const request = invoke('providerAccounts:list', harnessId, force)
       .then((accounts) => {
         this.cache.set(harnessId, { accounts, expiresAt: Date.now() + ACCOUNT_CACHE_MS })
         return accounts
@@ -73,13 +73,13 @@ class HarnessAccountCache {
   }
 
   /** Reconcile account registries whenever the matching model catalogs refresh. */
-  async refreshHarnesses(harnessIds: Iterable<string>): Promise<void> {
+  async refreshHarnesses(harnessIds: Iterable<string>, force = false): Promise<void> {
     const targets = [...new Set(harnessIds)]
     for (let offset = 0; offset < targets.length; offset += ACCOUNT_REFRESH_BATCH_SIZE) {
       await Promise.all(
         targets
           .slice(offset, offset + ACCOUNT_REFRESH_BATCH_SIZE)
-          .map((harnessId) => this.list(harnessId, true).catch(() => []))
+          .map((harnessId) => this.list(harnessId, force).catch(() => []))
       )
     }
   }

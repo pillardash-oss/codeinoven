@@ -1,3 +1,4 @@
+import { createWorkQueue, mapInBatches } from '$shared/bounded-work'
 import type {
   DirectoryPreviewSession,
   ProjectDirectorySize,
@@ -58,6 +59,7 @@ export interface ProjectFilesExplorerHost {
  * maps and the clipboard.
  */
 export class ProjectFilesExplorer {
+  private readonly listDirectory = createWorkQueue(2)
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private directoryLoads = new Map<string, Promise<void>>()
   /** Pending debounced silent refreshes, keyed `projectId:directory`. A plain
@@ -127,13 +129,16 @@ export class ProjectFilesExplorer {
       if (!options.silent) state.loadingDirectories[directory] = true
       delete state.directoryErrors[directory]
       try {
-        const entries = await invoke(
-          'projectFiles:list',
-          projectId,
-          directory,
-          this.host.scopeFor(projectId),
-          this.host.threadArg(projectId)
+        const entries = await this.listDirectory(() =>
+          invoke(
+            'projectFiles:list',
+            projectId,
+            directory,
+            this.host.scopeFor(projectId),
+            this.host.threadArg(projectId)
+          )
         )
+        if (this.host.mountKeyFor(projectId) !== mountKey) return
         state.entriesByDirectory[directory] = entries
         state.listingFromCache = false
         if (directory === '') this.rememberRoot(projectId, state, entries)
@@ -316,7 +321,7 @@ export class ProjectFilesExplorer {
       state.expandedDirectories[directory] = true
     }
     if (persist) this.persistExplorer(projectId)
-    await Promise.all(directories.map((directory) => this.loadDirectory(projectId, directory)))
+    await mapInBatches(directories, 2, (directory) => this.loadDirectory(projectId, directory))
   }
 
   /** Collapse a batch of directories without loading anything (used to revert
@@ -468,8 +473,8 @@ export class ProjectFilesExplorer {
     this.removePathsFromState(state, projectId, ordered)
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
     const parents = new Set(ordered.map((path) => parentDirectory(path)))
-    await Promise.all(
-      [...parents].map((directory) => this.loadDirectory(projectId, directory, true))
+    await mapInBatches([...parents], 2, (directory) =>
+      this.loadDirectory(projectId, directory, true)
     )
   }
 
