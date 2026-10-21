@@ -1,6 +1,6 @@
 <script lang="ts">
   import { diffLayoutState } from '$lib/stores/diff-layout.svelte'
-  import { splitRows, type DiffLine } from './file-diff'
+  import { highlightDiffLines, splitRows, type DiffLine } from './file-diff'
 
   interface Props {
     /** Lines of a single diff block, in source order. */
@@ -10,6 +10,8 @@
   }
 
   let { lines, paneLabels = false }: Props = $props()
+
+  const highlightedLines = $derived(highlightDiffLines(lines))
 
   /** Background tint for a line, matching across the gutter and the text cell. */
   function tint(kind: DiffLine['kind'] | undefined): string {
@@ -23,6 +25,20 @@
     return 'text-muted'
   }
 </script>
+
+{#snippet content(line: DiffLine | null)}
+  {#if line?.segments}
+    {#each line.segments as segment, index (index)}<span
+        class={segment.changed
+          ? line.kind === 'added'
+            ? 'bg-success/30'
+            : 'bg-danger/30'
+          : undefined}>{segment.text}</span
+      >{/each}
+  {:else}
+    {line?.text || ' '}
+  {/if}
+{/snippet}
 
 {#snippet pane(rows: { line: DiffLine | null }[], side: 'before' | 'after')}
   <div class="min-w-0 overflow-x-auto">
@@ -41,7 +57,7 @@
             </span>
           </span>
           <span class={['flex-1 whitespace-pre pr-4 pl-2', textTone(kind)]}>
-            {row.line ? row.line.text || ' ' : ' '}
+            {@render content(row.line)}
           </span>
         </div>
       {/each}
@@ -50,7 +66,7 @@
 {/snippet}
 
 {#if diffLayoutState.layout === 'horizontal'}
-  {@const rows = splitRows(lines)}
+  {@const rows = splitRows(highlightedLines)}
   {#if paneLabels}
     <div
       class="sticky top-0 z-20 grid grid-cols-2 divide-x divide-border border-b border-border bg-elevated text-[0.5625rem] tracking-wide text-dimmed uppercase"
@@ -72,7 +88,7 @@
 {:else}
   <div class="overflow-x-auto">
     <div class="min-w-max">
-      {#each lines as line, index (`${line.kind}:${line.beforeLine ?? 0}:${line.afterLine ?? 0}:${index}`)}
+      {#each highlightedLines as line, index (`${line.kind}:${line.beforeLine ?? 0}:${line.afterLine ?? 0}:${index}`)}
         <div class={['flex', tint(line.kind)]}>
           <span class="sticky left-0 z-10 flex shrink-0 bg-app">
             <span class={['flex', tint(line.kind)]}>
@@ -97,7 +113,7 @@
             </span>
           </span>
           <span class={['flex-1 whitespace-pre pr-4 pl-2', textTone(line.kind)]}>
-            {line.text || ' '}
+            {@render content(line)}
           </span>
         </div>
       {/each}
