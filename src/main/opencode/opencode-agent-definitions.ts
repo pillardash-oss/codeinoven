@@ -58,9 +58,16 @@ const baseDeny: Record<string, AgentPermissionValue> = {
   question: DENY
 }
 
-/** Inbox chat: web research + clarifying questions only, no file-system tools. */
+/** Chat tools work in its dedicated cwd; external paths follow the app policy. */
 const chatPermission: Record<string, AgentPermissionValue> = {
   ...baseDeny,
+  read: ALLOW,
+  edit: ALLOW,
+  glob: ALLOW,
+  grep: ALLOW,
+  list: ALLOW,
+  bash: ALLOW,
+  skill: ALLOW,
   webfetch: ALLOW,
   websearch: ALLOW,
   question: ALLOW
@@ -137,11 +144,11 @@ const assistantPermission: Record<string, AgentPermissionValue> = {
 const leanAgents: readonly LeanOpenCodeAgent[] = [
   {
     name: 'cio-chat',
-    description: `Web-only inbox chat inside ${APP_NAME}; answers from the internet, never file operations.`,
+    description: `Inbox chat inside ${APP_NAME}; research and create outputs in its dedicated workspace.`,
     mode: 'primary',
     prompt: [
       `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
-      'This chat has no file-system access. The neutral chat-cwd is only a required process working directory, not conversation or project context. Never inspect it by default. Do not traverse, read, search, or modify local files.',
+      'This chat owns its dedicated cwd. Complete requested work there, including image generation, scripts, and file operations, without asking for permission. File System controls external paths; do not explore outside this workspace unless authorized.',
       'When you do not know an answer, search the internet with the web search and web fetch tools instead of inspecting files.',
       'Cite external sources as Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL.'
     ].join(' '),
@@ -149,7 +156,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
   },
   {
     name: 'cio-chat-fs',
-    description: `File-system-enabled chat inside ${APP_NAME}; read/search/write-free.`,
+    description: `File-system-enabled chat inside ${APP_NAME}; research and create requested outputs.`,
     mode: 'primary',
     prompt: [
       `You are a general-purpose assistant inside ${APP_NAME} with file-system access enabled.`,
@@ -158,7 +165,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
       'Do not modify files unless the user explicitly asks you to.',
       'Cite local findings with project-rooted relative paths (e.g. `src/app.html:42`), never bare filenames or absolute filesystem paths.'
     ].join(' '),
-    permission: readResearchPermission
+    permission: chatPermission
   },
   {
     name: 'cio-eph',

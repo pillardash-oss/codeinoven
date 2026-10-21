@@ -51,6 +51,9 @@ export function buildClaudeEnvironment(
 export const CLAUDE_TOOL_NAMES: Record<string, string> = {
   question: 'AskUserQuestion',
   read: 'Read',
+  write: 'Write',
+  edit: 'Edit',
+  skill: 'Skill',
   glob: 'Glob',
   grep: 'Grep',
   list: 'Glob',

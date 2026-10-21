@@ -333,7 +333,7 @@ export class PermissionPolicy {
         return this.createDecision(
           'ask',
           false,
-          'This chat is restricted to the files you attached; anything beyond that needs your approval.',
+          'Work inside this chat workspace is already authorized; access outside it requires an attached input or your approval.',
           risk,
           scope
         )
@@ -396,6 +396,9 @@ export class PermissionPolicy {
     const inScratch = this.scratchPaths.some((scratch) => isWithinDirectory(scratch, resolvedPath))
     if (!inScratch) return false
     return !this.scratchPaths.some((scratch) => {
+      // Only project scratch has platform-owned lifecycle folders. A chat
+      // owns every subdirectory of its dedicated workspace.
+      if (basename(scratch) !== '.cio') return false
       return SCRATCH_RESERVED_DIRECTORIES.some((reserved) =>
         isWithinDirectory(resolve(scratch, reserved), resolvedPath)
       )
@@ -422,7 +425,24 @@ export class PermissionPolicy {
     for (const segment of segments) {
       const [name, ...operands] = segment
       if (name === undefined) return false
-      if (SHELL_INTERPRETERS.has(basename(name).toLowerCase())) return false
+      if (SHELL_INTERPRETERS.has(basename(name).toLowerCase()) || name === 'bun') {
+        // A chat may run a script it created in its own cwd, just as it may
+        // create the file. Keep inline evaluation and shell wrappers gated:
+        // their arguments are code, so path checks cannot establish scope.
+        const runtime = basename(name).toLowerCase()
+        const script = runtime === 'bun' && operands[0] === 'run' ? operands[1] : operands[0]
+        if (
+          !this.scratchPaths.includes(this.projectRoot) ||
+          !['python', 'python3', 'node', 'nodejs', 'bun', 'deno', 'ruby', 'perl'].includes(
+            runtime
+          ) ||
+          script === undefined ||
+          script.startsWith('-') ||
+          !/\.(?:py|js|mjs|cjs|ts|mts|rb|pl)$/u.test(script) ||
+          !this.resolveScratchTarget(workingDirectory, script)
+        )
+          return false
+      }
       if (name === 'cd' || name === 'pushd') {
         const target = operands.find((operand) => !operand.startsWith('-'))
         if (target === undefined || operands.length > 1) return false

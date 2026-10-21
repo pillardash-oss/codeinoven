@@ -666,7 +666,7 @@ import {
   BRAINSTORM_DOCUMENT_WRITE_TOOLS,
   BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
   BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
-  CHAT_WEB_ONLY_TOOLS,
+  CHAT_WORKSPACE_TOOLS,
   chatGatewayAllowedTools,
   CONVERSATION_ASSIGNMENT_INSTRUCTION,
   ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
@@ -10674,7 +10674,9 @@ export class ChatEngine {
     const chatSystemPrompt = isChatThread
       ? [
           await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat'),
-          chatFileSystemEnabled ? '' : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
+          chatFileSystemEnabled
+            ? `This chat owns the dedicated workspace ${chatWorkspaceRoot}. Work inside it, including image generation, scripts, and generated files, is already authorized and requires no permission question.`
+            : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
         ]
           .filter(Boolean)
           .join('\n\n')
@@ -11026,17 +11028,20 @@ export class ChatEngine {
         activeSession.estimatedContextUsed = composition.totalTokens
       }
       this.markSessionWorking(sessionId)
-      // Chat threads (standalone Chats-tab conversations) behave like a plain
-      // browser chatbot: no file-system tools, internet-first answers. File
-      // operations are granted only when the user explicitly enables the
-      // File System mode for the thread.
+      // Chat owns a writable cwd even with File System off. External paths
+      // remain subject to the thread's file-access permission policy.
       await this.deliverWorkPrompt(projectId, threadId, userMessage, driverText, async (text) => {
         await driver.sendPrompt(projectPath, {
           sessionId,
-          settings,
+          // Full Access may skip native permission events. With File System
+          // off, retain the native cwd sandbox so external paths still ask.
+          settings:
+            isChatThread && !chatFileSystemEnabled
+              ? { ...settings, permissionLevel: 'auto_review' }
+              : settings,
           text,
           attachments,
-          readOnly: isChatThread && !chatFileSystemEnabled,
+          readOnly: false,
           systemPrompt:
             composeTurnSystemPrompt({
               chatPrompt: chatSystemPrompt,
@@ -11052,13 +11057,7 @@ export class ChatEngine {
             isChatThread &&
             !chatFileSystemEnabled &&
             (!utilitySetupAllowed || projectId === GLOBAL_BROWSER_PROJECT_ID)
-              ? [
-                  ...CHAT_WEB_ONLY_TOOLS,
-                  ...chatGatewayAllowedTools(driverId),
-                  ...(projectId === GLOBAL_BROWSER_PROJECT_ID
-                    ? ['read', 'write', 'edit', 'glob', 'grep']
-                    : [])
-                ]
+              ? [...CHAT_WORKSPACE_TOOLS, ...chatGatewayAllowedTools(driverId)]
               : undefined,
           agent: utilitySetupRequested
             ? leanAgentNameForMode('utility-setup')
@@ -27436,8 +27435,7 @@ export class ChatEngine {
     const { allowedPaths, scratchPaths, restrictToAllowed } = await this.chatPermissionScope(info)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
-      mode:
-        info.projectId === GLOBAL_BROWSER_PROJECT_ID && restrictToAllowed ? 'auto_review' : level,
+      mode: restrictToAllowed ? 'auto_review' : level,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})

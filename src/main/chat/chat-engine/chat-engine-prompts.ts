@@ -356,7 +356,7 @@ export const TEMPORARY_CHAT_ALLOWED_TOOLS = [
 export const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
   'Files the user attaches to this chat are explicitly shared and may be read and inspected   use them whenever relevant.',
-  'This chat has no broader file-system access. Do not traverse, read, search, or modify any local file other than the files the user attached. Never enumerate or guess at other file paths. Do not inspect the current working directory for context.',
+  'This chat owns a dedicated working directory. Use it freely to complete user requests, including generating images, creating artifacts, running tools, and managing output files, without asking for file access. File System controls access outside this directory. Outside it, use only files the user attached and required harness skill instructions unless broader access is granted.',
   'If something you need was not attached, ask the user to attach it or work only from what was provided; when you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
   'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
   'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`)   never a bare URL or a plain-text mention.',
@@ -366,13 +366,13 @@ export const CHAT_SYSTEM_PROMPT = [
 /** Non-editable safety boundary appended even when the user customized Chat prompts. */
 export const CHAT_FILESYSTEM_BOUNDARY_LINES = [
   'FILESYSTEM-OFF CHAT BOUNDARY:',
-  'The harness starts in a neutral chat-cwd only because its process requires a working directory. That directory is not part of the conversation, not project context, and never a source to inspect.',
-  'Do not proactively call read, list, glob, grep, find, bash, powershell, or another local tool to discover context. Do not inspect chat-cwd, the open project, the repository, the home directory, or application storage.',
+  'This chat owns its dedicated cwd. All work inside it is already authorized, including image and media generation, scripts, file reads, writes, edits, and output management. Proceed without asking for permission or asking the user to enable File System.',
+  'Do not inspect external paths for context, including the open project, the repository, the home directory, other chats, or application storage outside this cwd. File System controls access to paths outside this chat workspace.',
   'Use the conversation and your own knowledge first. Use web search, web fetch, and other internet tools when current or external information is needed.',
   'Ordinary internet research is already authorized in this chat. Proceed with web searches, reading public pages, and assistant browser navigation without asking for internet access or asking the user to enable File System.',
   'If native web search or web fetch tools are absent, use cio_util_find to discover web search or web fetch capabilities. The in-app browser is also reachable through cio_util_init with utility_id "cio:browser" and cio_util_use; load its operations, open a page, and use its navigation and snapshot operations to research. A discovery result containing unrelated utilities does not mean internet access is unavailable.',
   'Do not substitute bash, curl, wget, shell pipelines, or local scripts for missing web tools. These are shell operations and can require permission even when their purpose is internet research. Use the web or browser gateway instead. If those routes fail, report the actual failure rather than requesting broader filesystem access.',
-  'You may read only files the user attached and harness-owned skill instructions needed for the request. Their availability is not permission to explore neighboring files.',
+  'Outside the dedicated cwd, you may read files the user attached and harness-owned skill instructions needed for the request. Their availability is not permission to explore neighboring files.',
   'Only File System mode changes this boundary.'
 ]
 
@@ -385,7 +385,7 @@ export function chatFilesystemBoundaryInstruction(chatWorkspaceRoot?: string): s
   if (!chatWorkspaceRoot) return CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION
   return [
     CHAT_FILESYSTEM_BOUNDARY_INSTRUCTION,
-    `One exception: the workspace directory of this chat (${chatWorkspaceRoot}) is part of this conversation. You may create and read files inside it freely, and outputs you create for the user belong there. This carve-out does not extend to anything outside that directory.`
+    `The dedicated workspace directory of this chat is ${chatWorkspaceRoot}. Save generated images, media, artifacts, scripts, and intermediate files there. Work inside it never requires File System access or a permission question. Access outside it follows the external-file rules for this chat.`
   ].join(' ')
 }
 
@@ -401,23 +401,34 @@ export const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
   SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
-/** Tools available to a plain (web-only) chat thread   no file-system tools. */
-export const CHAT_WEB_ONLY_TOOLS = ['question', 'webfetch', 'websearch']
+/** Chat tools operate in the dedicated cwd; the permission policy gates external paths. */
+export const CHAT_WORKSPACE_TOOLS = [
+  'question',
+  'webfetch',
+  'websearch',
+  'read',
+  'write',
+  'edit',
+  'glob',
+  'grep',
+  'list',
+  'bash',
+  'skill'
+]
 
 /** The utility gateway's MCP transport name, as every harness registers it. */
 const CHAT_GATEWAY_TRANSPORT_NAME = 'utilities'
 
 /**
  * The gateway's own tools as one harness gates them through a tool allowlist,
- * appended to a web-only chat so the in-app browser (and any installed web
- * tool) stays reachable while the chat's file-system tools remain masked.
+ * appended to a chat so the in-app browser and installed utilities stay
+ * reachable alongside the tools for its dedicated workspace.
  *
  * Only harnesses that gate MCP tools through this allowlist need an entry:
  * OpenCode enables a namespaced MCP tool as `<transport>_<tool>` and
  * claude-code as `mcp__<transport>__<tool>`. Pi and codex carry the gateway as
  * un-gated custom tools, and the remaining harnesses ignore the list for MCP
- * tools, so they contribute nothing here   which keeps cline's list exactly the
- * web set its web-only approval hook keys on.
+ * tools, so they contribute nothing here.
  */
 export function chatGatewayAllowedTools(harnessId: string): string[] {
   const names = [UTILITY_SEARCH_TOOL_NAME, UTILITY_ACTIVATE_TOOL_NAME, UTILITY_INVOKE_TOOL_NAME]
