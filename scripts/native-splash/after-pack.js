@@ -241,9 +241,11 @@ export default async function installNativeSplash(context) {
     compileLinux(launcherExecutable, temporaryDirectory)
   }
 
-  // Fuses belong to Electron, and every platform applies them to the runtime at
-  // its final path.
-  await hardenElectron(electronExecutable, platform)
+  // Fuses belong to Electron. macOS already has the runtime at its final name;
+  // Windows and Linux move it aside just below, so they must be flipped while it
+  // still sits at the path electron-builder created. Opening the post-rename
+  // path here fails with ENOENT because the rename has not happened yet.
+  await hardenElectron(isMac ? electronExecutable : publicExecutable, platform)
   if (isMac) {
     // The plist already names the Electron runtime; assert it so a packaging
     // change can never silently rename what users see again.

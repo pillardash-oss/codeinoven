@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { constants, existsSync } from 'node:fs'
 import { access, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, posix } from 'node:path'
 import { homedir } from 'node:os'
 import { fingerprint } from '../../../src/main/ovens/oven-agent-descriptor'
 
@@ -49,10 +49,16 @@ export interface AuthorizedKeyPlanInput {
  * first and report the answer.
  */
 export function authorizedKeyPlan(input: AuthorizedKeyPlanInput): AuthorizedKeyPlan {
-  const perUser = join(input.home, '.ssh', 'authorized_keys')
+  // These are paths on the target machine, rendered as strings that the
+  // installer and the Oven's sshd both read. Join them with POSIX separators
+  // regardless of the host computing the plan: `join()` would emit backslashes
+  // on a Windows checkout, so the same plan would name different files per
+  // host. Windows accepts mixed separators, so the POSIX form is correct there
+  // too.
+  const perUser = posix.join(input.home, '.ssh', 'authorized_keys')
   if (input.platform !== 'win32' || !input.administrator)
     return { kind: 'standard', files: [perUser], requiredFile: perUser, adminFile: null }
-  const adminFile = join(input.programData, 'ssh', 'administrators_authorized_keys')
+  const adminFile = posix.join(input.programData, 'ssh', 'administrators_authorized_keys')
   return { kind: 'administrator', files: [adminFile, perUser], requiredFile: adminFile, adminFile }
 }
 
