@@ -728,6 +728,7 @@
       {togglingHide}
       {oauth}
       {accountForConnected}
+      onOpenPicker={openPicker}
       onCheckAuth={() => void checkAuth()}
       onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
       onBackToList={backToList}
