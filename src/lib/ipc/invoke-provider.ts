@@ -108,6 +108,7 @@ export const invokeProviderContract = {
   'capabilities:listAll': {} as Contract<[], AgentCapabilityCatalog>,
   'visionModels:list': {} as Contract<[], VisionModelRecord[]>,
   'cioPrompts:list': {} as Contract<[], CioPromptSetting[]>,
+  'cioPrompts:get': {} as Contract<[id: CioPromptId], string>,
   'cioPrompts:save': {} as Contract<[id: CioPromptId, template: string], CioPromptSetting[]>,
   'cioPrompts:reset': {} as Contract<[id: CioPromptId], CioPromptSetting[]>,
   'workerNames:getSettings': {} as Contract<[], WorkerNameSettings>,
