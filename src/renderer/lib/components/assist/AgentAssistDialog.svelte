@@ -11,12 +11,14 @@
   import type {
     HarnessAccount,
     ModelRuntimeSettings,
+    PermissionLevel,
     ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
   import Modal from '../ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import AgentAssistOvenField from './AgentAssistOvenField.svelte'
+  import AgentAssistPermissionField from './AgentAssistPermissionField.svelte'
   import AgentAssistScopeField from './AgentAssistScopeField.svelte'
   import type { AgentAssistDelivery, AgentAssistRequest } from './agent-assist-store.svelte'
   import { runAgentAssist } from './agent-assist-run'
@@ -38,10 +40,23 @@
 
   let { request, onClose }: Props = $props()
 
-  /** The confirmed configuration, seeded from the user's last thread. */
+  /**
+   * The configuration this dialog will hand over.
+   *
+   * Seeded from the user's last thread so the common case needs no picks, but
+   * every field the pickers own is stated here explicitly: the thread this
+   * dialog mints takes these values and never inherits a flag (an Assignment
+   * or Achievement switch, a chat's file-system mode) from whatever thread the
+   * user happened to be reading. Permission always starts at auto review, so
+   * full access is a deliberate second choice rather than an inherited one.
+   */
   let settings = $state<ThreadSettings>({
     ...threadSettings.lastUsed,
-    ovenId: threadSettings.lastUsed.ovenId ?? LOCAL_OVEN_ID
+    ovenId: threadSettings.lastUsed.ovenId ?? LOCAL_OVEN_ID,
+    permissionLevel: 'auto_review',
+    assignmentMode: false,
+    loopMode: false,
+    fileSystemMode: false
   })
   // The dialog mounts per request, so the request's own scope is the seed this
   // instance starts from; a later request mounts a fresh dialog.
@@ -115,6 +130,10 @@
     settings = { ...settings, thinkingLevel: level }
   }
 
+  function selectPermission(level: PermissionLevel): void {
+    settings = { ...settings, permissionLevel: level }
+  }
+
   function selectRuntime(runtime: ModelRuntimeSettings): void {
     settings = { ...settings, ...runtime }
   }
@@ -126,13 +145,37 @@
     if (ovenId !== LOCAL_OVEN_ID) void ovens.ensureInventory(ovenId)
   }
 
+  /**
+   * Exactly the values on screen, and nothing carried over from another thread.
+   *
+   * The components that build the thread read this object directly, so a field
+   * shown here can never disagree with the run it starts.
+   */
+  function confirmedSettings(): ThreadSettings {
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      thinkingLevel: settings.thinkingLevel,
+      permissionLevel: settings.permissionLevel,
+      assignmentMode: false,
+      loopMode: false,
+      fileSystemMode: false,
+      ovenId: settings.ovenId ?? LOCAL_OVEN_ID,
+      ...(settings.ovenPath ? { ovenPath: settings.ovenPath } : {}),
+      ...(settings.accountId ? { accountId: settings.accountId } : {}),
+      ...(settings.inferenceMode ? { inferenceMode: settings.inferenceMode } : {}),
+      ...(settings.contextWindow ? { contextWindow: settings.contextWindow } : {})
+    }
+  }
+
   async function submit(delivery: AgentAssistDelivery): Promise<void> {
     if (!canSubmit) return
     busy = true
     pendingDelivery = delivery
     errorMessage = ''
     try {
-      await runAgentAssist(request, { settings, scopeBucketId }, delivery)
+      await runAgentAssist(request, { settings: confirmedSettings(), scopeBucketId }, delivery)
       onClose()
     } catch (error) {
       errorMessage =
@@ -168,33 +211,43 @@
 
     <section class="space-y-1.5" data-assist-model>
       <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Model</h2>
-      <ModelPicker
-        {providers}
-        projectId={request.projectId}
-        harnessId={settings.harnessId}
-        providerId={settings.providerId}
-        modelId={settings.modelId}
-        accountId={settings.accountId}
-        {unavailableHarnessIds}
-        {unavailableHarnessReason}
-        thinkingLevel={settings.thinkingLevel}
-        runtimeSettings={settings}
-        onSelect={selectModel}
-        onSelectAccount={selectAccount}
-        onSelectThinking={selectThinking}
-        onSelectRuntime={selectRuntime}
-        variant="field"
-        side="bottom"
-        fullWidth
-      />
+      <div class="flex items-stretch gap-2">
+        <div class="min-w-0 flex-1">
+          <ModelPicker
+            {providers}
+            projectId={request.projectId}
+            harnessId={settings.harnessId}
+            providerId={settings.providerId}
+            modelId={settings.modelId}
+            accountId={settings.accountId}
+            {unavailableHarnessIds}
+            {unavailableHarnessReason}
+            thinkingLevel={settings.thinkingLevel}
+            runtimeSettings={settings}
+            onSelect={selectModel}
+            onSelectAccount={selectAccount}
+            onSelectThinking={selectThinking}
+            onSelectRuntime={selectRuntime}
+            variant="field"
+            side="bottom"
+            fullWidth
+          />
+        </div>
+        <div class="flex shrink-0 items-center border bg-elevated">
+          <AgentAssistPermissionField
+            value={settings.permissionLevel}
+            onSelect={selectPermission}
+          />
+        </div>
+      </div>
     </section>
 
     <section class="space-y-1.5">
       <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Oven</h2>
       <AgentAssistOvenField value={settings.ovenId ?? LOCAL_OVEN_ID} onSelect={selectOven} />
       <p class="text-[0.625rem] leading-relaxed text-dimmed">
-        The machine the agent runs on. A remote Oven works from its own isolated
-        checkout of this project.
+        The machine the agent runs on. A remote Oven works from its own isolated checkout of this
+        project.
       </p>
     </section>
 

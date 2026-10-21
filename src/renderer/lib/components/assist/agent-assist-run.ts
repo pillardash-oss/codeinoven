@@ -1,10 +1,13 @@
 import { invoke } from '$lib/ipc.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sendThreadMessageHeadless } from '$lib/stores/thread-delivery'
+import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
 import { DEFAULT_SCOPE_WORKTREE_DEFAULTS } from '$shared/types'
 import type {
   AgentAssistDelivery,
@@ -22,13 +25,44 @@ async function openAssistThread(projectId: string, threadId: string): Promise<vo
 }
 
 /**
+ * Put a refused start in front of the user where the work was meant to happen.
+ *
+ * A send can reject before it ever reaches the harness (an Oven that is not
+ * answering, a provider that refused the session), and that rejection produces
+ * no message to hang an error on. The run-issue card is the same surface a
+ * mid-run provider failure uses, so the thread says what happened and what to
+ * do about it instead of sitting there empty.
+ */
+function reportStartFailure(
+  projectId: string,
+  threadId: string,
+  selection: AgentAssistSelection,
+  error: unknown
+): void {
+  const raw = error instanceof Error ? error.message : 'The agent run could not be started.'
+  const message = ipcErrorMessage(error, raw)
+  const kind = classifyProviderIssue(message)
+  const retryAt =
+    kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+  threadMessages.setRunIssue(projectId, threadId, {
+    kind,
+    message,
+    rawError: raw,
+    harnessId: selection.settings.harnessId || 'unknown',
+    retryable: true,
+    ...(retryAt === undefined ? {} : { retryAt })
+  })
+}
+
+/**
  * Carry out one confirmed agent handoff.
  *
  * The handoff is always two steps: the scope has to exist before a thread can
  * own it (a review checkout can take minutes), and the brief is only a draft
  * until this decides what to do with it. `immediate` sends the brief the moment
  * the thread exists, `draft` leaves the same brief in the composer for the user
- * to adjust. Both open the thread, so the user watches the run they started.
+ * to adjust. Both open the thread, so the user watches the run they started
+ * with the model, thinking level, permissions, Oven and scope they confirmed.
  */
 export async function runAgentAssist(
   request: AgentAssistRequest,
@@ -40,6 +74,14 @@ export async function runAgentAssist(
   // The confirmed configuration seeds the next thread the user starts.
   threadSettings.commit(selection.settings)
 
+  /**
+   * Build the thread, open it, and start the brief.
+   *
+   * A run that cannot start is not a handoff that failed to be created: the
+   * thread exists, is on screen, and carries the failure (a provider or Oven
+   * problem lands there as its own card with the retry). Only the thread
+   * creation itself is allowed to abort the handoff.
+   */
   const prepare = async (scopeBucketId: string): Promise<string> => {
     const prepared = await request.prepare({
       scopeBucketId,
@@ -48,10 +90,18 @@ export async function runAgentAssist(
     })
     await openAssistThread(request.projectId, prepared.threadId)
     if (delivery === 'immediate') {
-      await sendThreadMessageHeadless(request.projectId, prepared.threadId, {
-        text: prepared.text,
-        attachments: prepared.attachments ?? []
-      })
+      try {
+        await sendThreadMessageHeadless(request.projectId, prepared.threadId, {
+          text: prepared.text,
+          attachments: prepared.attachments ?? []
+        })
+      } catch (error) {
+        // A submit-time failure (an unreachable Oven, a provider that refused
+        // the session) is reported in the thread itself, as the card the user
+        // can act on and retry. The thread exists either way, so the handoff
+        // itself did not fail, and the scope job must not claim it did.
+        reportStartFailure(request.projectId, prepared.threadId, selection, error)
+      }
     } else {
       rendererRecovery.setDraft(
         request.projectId,
