@@ -111,15 +111,28 @@ function backoffDelay(attempt: number): number {
  * Download `url` to `destination` with retry and HTTP Range resume. A dropped
  * connection ("terminated", socket reset, timeout) never restarts from zero
  * while a partial file exists: the next attempt continues from the received
- * byte offset and the checksum is verified over the complete file. Cancelling
- * the signal aborts immediately with a cancellation error.
+ * byte offset and the checksum is verified over the complete file. Kept bytes
+ * that turn out not to belong to this file (a partial left by an older revision
+ * of the artifact) are discarded and the file is fetched once from zero instead
+ * of failing the download. Cancelling the signal aborts immediately with a
+ * cancellation error.
  */
 export async function downloadFileResumable(request: ResumableDownloadRequest): Promise<number> {
   const { url, destination, expectedBytes, checksum, signal, onProgress } = request
   // Survives failed attempts: the number of bytes safely on disk. A failed
   // attempt truncates the file to this count before the next one resumes.
-  const state = { received: Math.max(0, request.resumeFromBytes ?? 0) }
+  const state = {
+    received: Math.max(0, request.resumeFromBytes ?? 0),
+    // How much of `received` came from an earlier attempt, so a digest mismatch
+    // is only blamed on kept bytes while any are actually in play.
+    resumedFrom: Math.max(0, request.resumeFromBytes ?? 0)
+  }
   let lastCause: unknown = new Error('The download did not start.')
+  // A digest mismatch over kept bytes is recoverable exactly once: those bytes
+  // are thrown away and the next pass fetches the whole file, so a stale partial
+  // can never turn a resumable download into a permanent failure the user has to
+  // clear by hand.
+  let discardedKeptBytes = false
   for (let attempt = 1; attempt <= DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
     if (signal.aborted) throw new Error('Download cancelled.')
     // Streamed hash of the bytes already on disk so a resumed download can
@@ -137,6 +150,7 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
           cause
         )
         state.received = 0
+        state.resumedFrom = 0
         await rm(destination, { force: true }).catch(() => undefined)
         // feedPrefix may have fed part of the prefix into the hash before
         // failing; rebuild it so the fresh download hashes a clean stream.
@@ -144,6 +158,25 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
       }
     }
     try {
+      // Everything is already on disk (an earlier attempt wrote the last byte
+      // before it was stopped): verify it locally instead of asking the server
+      // for an empty range.
+      if (expectedBytes > 0 && state.received === expectedBytes) {
+        if (hash.read() === checksum.digest) {
+          onProgress?.(state.received)
+          return state.received
+        }
+        if (!discardedKeptBytes) {
+          discardedKeptBytes = true
+          state.received = 0
+          state.resumedFrom = 0
+          await rm(destination, { force: true }).catch(() => undefined)
+          throw new Error('The kept partial file did not match its checksum; downloading it again.')
+        }
+        throw new PermanentDownloadError(
+          'The downloaded file does not match its expected checksum.'
+        )
+      }
       const received = await downloadRange(
         url,
         destination,
@@ -155,10 +188,20 @@ export async function downloadFileResumable(request: ResumableDownloadRequest): 
         request.responseTimeoutMs
       )
       const digest = hash.read()
-      if (digest !== checksum.digest)
+      if (digest !== checksum.digest) {
+        // Only a resumed download can reconsider its starting bytes; a file
+        // fetched entirely in this pass that still mismatches is fatal.
+        if (state.resumedFrom > 0 && !discardedKeptBytes) {
+          discardedKeptBytes = true
+          state.received = 0
+          state.resumedFrom = 0
+          await rm(destination, { force: true }).catch(() => undefined)
+          throw new Error('The kept partial file did not match its checksum; downloading it again.')
+        }
         throw new PermanentDownloadError(
           'The downloaded file does not match its expected checksum.'
         )
+      }
       return received
     } catch (cause) {
       if (signal.aborted) throw new Error('Download cancelled.', { cause })
@@ -234,7 +277,7 @@ async function downloadRange(
   url: string,
   destination: string,
   expectedBytes: number,
-  state: { received: number },
+  state: { received: number; resumedFrom: number },
   hash: RunningHash,
   signal: AbortSignal,
   onProgress?: (receivedSoFar: number) => void,
@@ -259,6 +302,7 @@ async function downloadRange(
     // digest over prefix + full body would fail against the feed's checksum.
     received = 0
     state.received = 0
+    state.resumedFrom = 0
     start = 0
     hash.reset()
     await rm(destination, { force: true })
@@ -300,6 +344,9 @@ async function downloadRange(
     // that boundary so the next attempt resumes from a consistent prefix.
     const flushed = Math.max(0, stream.bytesWritten)
     state.received = start + flushed
+    // These bytes were written in this pass, so none of the kept prefix that
+    // was discarded (if it was) can still be blamed for a digest mismatch.
+    state.resumedFrom = start > 0 ? state.resumedFrom : 0
     if (flushed < received - start)
       await truncate(destination, state.received).catch(() => undefined)
     stream.destroy()

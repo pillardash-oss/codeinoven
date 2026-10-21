@@ -14,12 +14,14 @@
   } from '../../../../lib/speech/model-path-validation'
   import type {
     SpeechCapability,
+    SpeechDownloadMode,
     SpeechInstalledArtifact,
     SpeechModelArtifact,
     SpeechRuntime,
     SpeechSettings
   } from '../../../../lib/speech/types'
   import DownloadProgress from '../ui/DownloadProgress.svelte'
+  import DownloadRecovery from '../ui/DownloadRecovery.svelte'
   import PasteModelPathModal from './PasteModelPathModal.svelte'
   import {
     activeIdFor,
@@ -56,6 +58,8 @@
   let runtimeFilter = $state<'all' | SpeechRuntime>('all')
   let importing = $state(false)
   let pasteOpen = $state(false)
+  /** Artifacts whose resume/restart request has not reported progress yet. */
+  let recovering = $state<Record<string, boolean>>({})
 
   const activeSubTab = $derived(
     modelSubTabs.find((tab) => tab.id === activeModelSubTab) ?? modelSubTabs[0]
@@ -111,10 +115,37 @@
    * manual "Set Active" after a multi-hundred-megabyte download is busywork:
    * downloading a model is the request to use it.
    */
-  async function downloadAndActivate(artifact: SpeechModelArtifact): Promise<void> {
-    await speech.download(artifact.id)
+  async function downloadAndActivate(
+    artifact: SpeechModelArtifact,
+    mode: SpeechDownloadMode = 'resume'
+  ): Promise<void> {
+    await speech.download(artifact.id, mode)
+    // A cancelled or failed download installed nothing, so there is nothing to
+    // activate; the row's own resume/restart panel owns what happens next.
+    const installed = speech.capabilities?.installedArtifacts.some(
+      (item) => item.artifactId === artifact.id
+    )
+    if (!installed) return
     const sub = modelSubTabForCapability(artifact.capability)
     if (activeIdFor(settings, sub) !== artifact.id) setActive(sub, artifact.id)
+  }
+
+  /**
+   * Pick a stopped download back up, or start it over, from the row itself. The
+   * button spins until the download's first progress event replaces the row.
+   */
+  async function recoverDownload(
+    artifact: SpeechModelArtifact,
+    mode: SpeechDownloadMode
+  ): Promise<void> {
+    if (recovering[artifact.id]) return
+    recovering = { ...recovering, [artifact.id]: true }
+    try {
+      await downloadAndActivate(artifact, mode)
+    } finally {
+      const { [artifact.id]: _done, ...rest } = recovering
+      recovering = rest
+    }
   }
 
   /** An imported model becomes active the same way a downloaded one does. */
@@ -334,11 +365,13 @@
 {#snippet artifactRow(artifact: SpeechModelArtifact)}
   {@const download = speech.downloads[artifact.id]}
   {@const isRetired = artifact.qualification.status === 'retired'}
-  {@const busy =
+  {@const progressing =
     download?.state === 'downloading' ||
     download?.state === 'verifying' ||
     download?.state === 'queued'}
-  {@const canDownload = !busy && download?.state !== 'cancelled'}
+  {@const busy = progressing || recovering[artifact.id] === true}
+  {@const recoverable = download?.state === 'cancelled' || download?.state === 'failed'}
+  {@const canDownload = !busy && !recoverable}
   <li class="py-3">
     <div class="flex items-start justify-between gap-6">
       <div class="min-w-0 flex-1">
@@ -374,12 +407,12 @@
           onclick={() => void downloadAndActivate(artifact)}
         >
           <CioDownload size={12} aria-hidden="true" />
-          {download?.state === 'failed' ? 'Retry' : 'Download'}
+          Download
         </button>
       {/if}
     </div>
 
-    {#if busy}
+    {#if progressing}
       {@const pct =
         download.state === 'queued'
           ? 0
@@ -401,22 +434,39 @@
               : `Position ${download.position}`}
           tone={download.state === 'verifying' ? 'verifying' : 'default'}
           ariaLabel="Downloading {artifact.label}"
+          hint={download.state === 'downloading' && download.resumedFromBytes
+            ? `Continuing from ${formatBytes(download.resumedFromBytes)} kept by the stopped download.`
+            : undefined}
           onCancel={() => void speech.cancelDownload(artifact.id)}
           cancelLabel={`Cancel ${artifact.label} download`}
         />
       </div>
     {:else if download?.state === 'failed'}
-      <div
-        class="mt-2.5 flex items-start justify-between gap-2 border border-danger/20 bg-danger/5 px-3 py-2"
-      >
-        <p class="text-[0.6875rem] leading-snug text-danger">
-          Download failed{download.error?.message ? `: ${download.error.message}` : '.'}
-        </p>
+      <div class="mt-2.5">
+        <DownloadRecovery
+          label={artifact.label}
+          message={`Download failed${download.error?.message ? `: ${download.error.message}` : '.'}`}
+          keptBytes={download.bytesReceived}
+          totalBytes={download.totalBytes}
+          tone="failed"
+          busy={recovering[artifact.id] === true}
+          onResume={() => void recoverDownload(artifact, 'resume')}
+          onRestart={() => void recoverDownload(artifact, 'restart')}
+        />
       </div>
     {:else if download?.state === 'cancelled'}
-      <p class="mt-2.5 border bg-muted/10 px-3 py-2 text-[0.6875rem] text-muted">
-        Download cancelled.
-      </p>
+      <div class="mt-2.5">
+        <DownloadRecovery
+          label={artifact.label}
+          message="Download cancelled."
+          keptBytes={download.bytesReceived}
+          totalBytes={download.totalBytes}
+          tone="cancelled"
+          busy={recovering[artifact.id] === true}
+          onResume={() => void recoverDownload(artifact, 'resume')}
+          onRestart={() => void recoverDownload(artifact, 'restart')}
+        />
+      </div>
     {/if}
   </li>
 {/snippet}

@@ -2,6 +2,7 @@ import type { WebContents } from 'electron'
 import { MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
 import type {
   SpeechCapability,
+  SpeechDownloadMode,
   SpeechLearningObservation,
   SpeechCleanupMode,
   SpeechDestructiveAction,
@@ -37,6 +38,16 @@ function destructiveAction(value: unknown): SpeechDestructiveAction {
 function speechCapability(value: unknown): SpeechCapability {
   if (value !== 'asr' && value !== 'cleanup' && value !== 'tts')
     throw new RangeError('Speech capability is invalid.')
+  return value
+}
+
+/**
+ * What a download request does with the bytes an earlier attempt kept: continue
+ * from them, or start the model over from zero. Omitted means resume.
+ */
+function speechDownloadMode(value: unknown): SpeechDownloadMode {
+  if (value === undefined) return 'resume'
+  if (value !== 'resume' && value !== 'restart') throw new RangeError('Download mode is invalid.')
   return value
 }
 
@@ -317,8 +328,10 @@ export function registerSpeechIpc(
       service.enforceHistoryLimit(boundedInteger(rawLimit, 'History limit', 1, 500))
     )
   )
-  ipcMain.handle('speech:downloadArtifact', (_event, rawArtifactId: unknown) =>
-    speechResult(() => service.downloadArtifact(entityId(rawArtifactId, 'Artifact id')))
+  ipcMain.handle('speech:downloadArtifact', (_event, rawArtifactId: unknown, rawMode?: unknown) =>
+    speechResult(() =>
+      service.downloadArtifact(entityId(rawArtifactId, 'Artifact id'), speechDownloadMode(rawMode))
+    )
   )
   ipcMain.handle('speech:cancelDownload', (_event, rawArtifactId: unknown) =>
     speechResult(async () => service.cancelDownload(entityId(rawArtifactId, 'Artifact id')))

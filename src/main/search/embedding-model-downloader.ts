@@ -1,8 +1,16 @@
-import { randomUUID } from 'node:crypto'
 import { mkdir, rename, rm, statfs } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import type { SearchDownloadState, SearchModelArtifact } from '../../lib/search/types'
-import { downloadFileResumable } from '../util/resumable-download'
+import { dirname } from 'node:path'
+import type {
+  SearchDownloadMode,
+  SearchDownloadState,
+  SearchModelArtifact
+} from '../../lib/search/types'
+import {
+  discardLegacyStagingDirectories,
+  discardStagedArtifact,
+  downloadStagedArtifact,
+  stagedArtifactBytes
+} from '../util/staged-artifact-download'
 import type { SearchStorage } from './search-storage'
 
 export interface SearchModelDownloadHost {
@@ -14,7 +22,9 @@ export interface SearchModelDownloadHost {
 /**
  * Streams catalog embedding models into their model directories with resumable,
  * checksum-verified downloads and throttled progress reporting. Mirrors the
- * speech artifact downloader so both domains share one behaviour.
+ * speech artifact downloader so both domains share one behaviour: a stopped
+ * download keeps its staged bytes under a stable per-artifact path and is
+ * resumed from them, or restarted from zero on request.
  */
 export class SearchModelDownloader {
   private readonly controllers = new Map<string, AbortController>()
@@ -24,62 +34,59 @@ export class SearchModelDownloader {
     private readonly host: SearchModelDownloadHost
   ) {}
 
-  async download(artifactId: string): Promise<void> {
+  async download(artifactId: string, mode: SearchDownloadMode = 'resume'): Promise<void> {
     if (this.controllers.has(artifactId)) throw new Error('Model download is already active.')
     const artifact = this.host.catalog().find((item) => item.id === artifactId)
     if (!artifact) throw new Error('Model artifact was not found.')
     const controller = new AbortController()
     this.controllers.set(artifactId, controller)
-    const staging = this.storage.stagingFile(`${artifactId}.${randomUUID()}.download`)
     const destination = this.storage.modelDirectory(artifactId)
-    let received = 0
+    // One staging directory per artifact, never per attempt, so a cancelled or
+    // interrupted download leaves bytes the next attempt continues from.
+    const staging = this.storage.stagingFile(`${artifactId}.download`)
+    if (mode === 'restart') await discardStagedArtifact(staging)
+    else await discardLegacyStagingDirectories(staging, artifact.id)
+    const kept = mode === 'restart' ? 0 : await stagedArtifactBytes(staging, artifact.files)
     try {
-      await this.assertDiskSpace(staging, artifact.byteSize)
-      await mkdir(staging, { recursive: true })
+      await mkdir(dirname(staging), { recursive: true })
+      await this.assertDiskSpace(staging, Math.max(0, artifact.byteSize - kept))
       this.host.emitDownload(artifactId, {
         state: 'downloading',
-        bytesReceived: 0,
-        totalBytes: artifact.byteSize
+        bytesReceived: kept,
+        totalBytes: artifact.byteSize,
+        ...(kept > 0 ? { resumedFromBytes: kept } : {})
       })
       let lastEmitAt = 0
-      for (const file of artifact.files) {
-        const target = join(staging, file.path)
-        await mkdir(dirname(target), { recursive: true })
-        received += await downloadFileResumable({
-          url: file.sourceUrl,
-          destination: target,
-          expectedBytes: file.byteSize,
-          checksum: {
-            algorithm: 'sha256',
-            encoding: 'hex',
-            digest: file.sha256
-          },
-          signal: controller.signal,
-          onProgress: (fileReceivedSoFar) => {
-            const now = Date.now()
-            if (now - lastEmitAt < 120) return
-            lastEmitAt = now
-            this.host.emitDownload(artifactId, {
-              state: 'downloading',
-              bytesReceived: received + fileReceivedSoFar,
-              totalBytes: artifact.byteSize
-            })
-          }
-        })
-        this.host.emitDownload(artifactId, {
-          state: 'downloading',
-          bytesReceived: received,
-          totalBytes: artifact.byteSize
-        })
-      }
+      const received = await downloadStagedArtifact({
+        stagingDirectory: staging,
+        files: artifact.files,
+        restart: mode === 'restart',
+        signal: controller.signal,
+        onProgress: (receivedSoFar) => {
+          const now = Date.now()
+          if (now - lastEmitAt < 120) return
+          lastEmitAt = now
+          this.host.emitDownload(artifactId, {
+            state: 'downloading',
+            bytesReceived: receivedSoFar,
+            totalBytes: artifact.byteSize,
+            ...(kept > 0 ? { resumedFromBytes: kept } : {})
+          })
+        }
+      })
       this.host.emitDownload(artifactId, {
         state: 'verifying',
         bytesReceived: received,
         totalBytes: artifact.byteSize
       })
-      const previous = `${destination}.${randomUUID()}.previous`
+      const previous = `${destination}.previous`
       const hadPrevious = await this.storage.exists(destination)
-      if (hadPrevious) await rename(destination, previous)
+      if (hadPrevious) {
+        // A previous run that died mid-install leaves this path behind, and a
+        // rename onto an existing directory would fail.
+        await rm(previous, { recursive: true, force: true })
+        await rename(destination, previous)
+      }
       try {
         await rename(staging, destination)
       } catch (cause) {
@@ -91,14 +98,23 @@ export class SearchModelDownloader {
       await this.host.recordInstalled(artifact, installedAt)
       this.host.emitDownload(artifactId, { state: 'installed', installedAt })
     } catch (cause) {
-      await rm(staging, { recursive: true, force: true })
+      // Keep the staged bytes: they are what a resume (or a retry after a
+      // dropped connection) continues from.
+      const keptBytes = await stagedArtifactBytes(staging, artifact.files)
       if (controller.signal.aborted) {
-        this.host.emitDownload(artifactId, { state: 'cancelled', cancelledAt: Date.now() })
+        this.host.emitDownload(artifactId, {
+          state: 'cancelled',
+          cancelledAt: Date.now(),
+          bytesReceived: keptBytes,
+          totalBytes: artifact.byteSize
+        })
       } else {
         this.host.emitDownload(artifactId, {
           state: 'failed',
           failedAt: Date.now(),
-          message: cause instanceof Error ? cause.message : 'The download failed.'
+          message: cause instanceof Error ? cause.message : 'The download failed.',
+          bytesReceived: keptBytes,
+          totalBytes: artifact.byteSize
         })
       }
       throw cause
@@ -119,16 +135,20 @@ export class SearchModelDownloader {
     this.controllers.clear()
   }
 
-  private async assertDiskSpace(path: string, byteSize: number): Promise<void> {
-    if (!Number.isFinite(byteSize) || byteSize <= 0) return
+  /**
+   * Preflight against the disk space still needed, not the whole artifact: bytes
+   * a resume already has on disk are not asked for twice.
+   */
+  private async assertDiskSpace(path: string, remainingBytes: number): Promise<void> {
+    if (!Number.isFinite(remainingBytes) || remainingBytes <= 0) return
     try {
-      const stats = await statfs(path)
+      const stats = await statfs(dirname(path))
       const available = Number(stats.bavail) * Number(stats.bsize)
-      const margin = Math.min(Math.max(byteSize * 0.05, 64 * 1024 * 1024), 1_073_741_824)
-      if (available < byteSize + margin) {
+      const margin = Math.min(Math.max(remainingBytes * 0.05, 64 * 1024 * 1024), 1_073_741_824)
+      if (available < remainingBytes + margin) {
         throw new Error(
           `Not enough disk space to download this model: ${Math.round(
-            (byteSize + margin) / (1024 * 1024)
+            (remainingBytes + margin) / (1024 * 1024)
           )} MB is needed, ${Math.round(available / (1024 * 1024))} MB is available. Free up space and try again.`
         )
       }
