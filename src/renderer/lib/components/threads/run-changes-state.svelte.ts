@@ -1,17 +1,20 @@
-import type { TurnCheckpointSummary } from '$shared/types'
-import { summarizeChanges, type ChangeCardSummary } from './run-changes-summary'
+import {
+  summarizeChanges,
+  type ChangeCardSummary,
+  type ChangeCardSource
+} from './run-changes-summary'
 
 export class RunChangesState {
   summary = $state.raw<ChangeCardSummary | null>(null)
   error = $state('')
 
-  constructor(source: () => TurnCheckpointSummary) {
+  constructor(source: () => ChangeCardSource, classify = false) {
     $effect(() => {
       const checkpoint = source()
       const abort = new AbortController()
       this.summary = null
       this.error = ''
-      void summarizeChanges(checkpoint, abort.signal).then(
+      void summarizeChanges(checkpoint, abort.signal, classify).then(
         (summary) => {
           if (!abort.signal.aborted) this.summary = summary
         },

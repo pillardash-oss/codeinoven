@@ -144,6 +144,7 @@
   import type { ProjectFamilyLanding } from '../layout/AppHeaderNavigationController.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
+  import { formatChangeSummary } from '$shared/change-breakdown'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import { fullscreenFileChatHost } from '$lib/fullscreen-file-chat-portal'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
@@ -1243,13 +1244,7 @@
       // The stored label doubles as the rail's tooltip, so it carries the same
       // summary the hover flyout draws when a change set exists.
       const changeLabel = hasRecordedChanges
-        ? [
-            'Changes',
-            changeTotals ? `+${changeTotals.additions} −${changeTotals.deletions}` : null,
-            `${changeFileCount} ${changeFileCount === 1 ? 'file' : 'files'}`
-          ]
-            .filter((part): part is string => part !== null)
-            .join(' · ')
+        ? `Changes · ${formatChangeSummary(threadChangesState.current?.breakdown, changeTotals, changeFileCount)}`
         : 'Changes'
       // While the turn runs, the icon itself carries the running insertions and
       // deletions as plain, colour-coded text on one line ("+128/-24"), so the

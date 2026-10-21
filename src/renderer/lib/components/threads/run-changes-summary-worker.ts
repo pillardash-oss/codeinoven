@@ -1,3 +1,4 @@
+import { buildChangeBreakdown } from '$shared/change-breakdown'
 import type { ChangeCardMessage, ChangeCardSummary } from './run-changes-summary'
 
 /**
@@ -22,12 +23,16 @@ const summary: ChangeCardSummary = {
   remaining: false,
   restored: new Uint8Array()
 }
+const paths = new Set<string>()
+let pathChars = 0
+let classify = false
 let changeIndex = 0
 let restoredChars = 0
 workerScope.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
   try {
     const message = event.data
     if ('totalChanges' in message) {
+      classify = message.classify ?? false
       if (message.totalChanges > 8_000_000)
         throw new Error('Change summary exceeds the preview limit.')
       summary.restored = new Uint8Array(Math.ceil(message.totalChanges / 8))
@@ -44,6 +49,12 @@ workerScope.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
       }
     } else if ('changes' in message) {
       for (const change of message.changes) {
+        if (classify && !paths.has(change.path)) {
+          pathChars += change.path.length
+          if (paths.size >= 65536 || pathChars > 8 * 1024 * 1024)
+            throw new Error('File breakdown exceeds the preview limit.')
+          paths.add(change.path)
+        }
         summary.additions += change.additions
         summary.deletions += change.deletions
         summary.edited &&= change.edited
@@ -54,6 +65,7 @@ workerScope.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
         changeIndex += 1
       }
     } else {
+      if (classify) summary.breakdown = buildChangeBreakdown([...paths])
       workerScope.postMessage({ summary }, [summary.restored.buffer])
       return
     }

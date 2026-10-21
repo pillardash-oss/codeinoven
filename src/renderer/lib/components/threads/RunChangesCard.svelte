@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatChangeSummary } from '$shared/change-breakdown'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
@@ -47,6 +48,9 @@
   let redoing = $state(false)
 
   const aggregation = new RunChangesState(() => checkpoint)
+  const summaryTitle = $derived(
+    formatChangeSummary(checkpoint.breakdown, aggregation.summary, checkpoint.changes.length)
+  )
   const additionsTotal = $derived(aggregation.summary?.additions)
   const deletionsTotal = $derived(aggregation.summary?.deletions)
   const PAGE_SIZE = 20
@@ -157,11 +161,11 @@
 two things a reader does with it. Square, in the same head/body/foot language as
 the composer cards, with both actions quiet in the head: undoing is the frequent
 one and reviewing is optional, so neither is dressed as the card's main call. -->
-<div {@attach preserveReadingPosition} class="min-w-0">
+<div {@attach preserveReadingPosition} class="min-w-0" title={summaryTitle}>
   <CardFrame placement="top" label="Edited files">
     <CardHead {title} icon={CioDiff} {chip} foldLabel="changed files" bind:folded>
       {#snippet meta()}
-        <span class="flex shrink-0 gap-1.5 text-xs font-medium tabular-nums">
+        <span class="flex shrink-0 gap-1.5 text-xs font-medium tabular-nums" title={summaryTitle}>
           <span class="text-success">+{additionsTotal ?? '…'}</span>
           <span class="text-danger">−{deletionsTotal ?? '…'}</span>
           {#if aggregation.summary?.partial}

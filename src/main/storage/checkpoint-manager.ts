@@ -1,3 +1,5 @@
+import { snapshotChangeBreakdown } from './checkpoint/checkpoint-breakdown'
+import type { ChangeBreakdown } from '../../lib/change-breakdown'
 import { readFile } from 'fs/promises'
 import { join, resolve, sep } from 'path'
 import { APP_NAME } from '../../lib/brand'
@@ -60,6 +62,7 @@ export interface TurnCheckpoint {
   status: TurnCheckpointStatus
   before: ProjectCheckpoint
   after?: ProjectCheckpoint
+  breakdown?: ChangeBreakdown
   changes: CheckpointChange[]
   toolSources?: Record<string, FileChangeSource>
   changeSourceRefs?: Record<
@@ -318,6 +321,7 @@ export class CheckpointManager {
           : {}),
         changeFilterApplied: changedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
+        breakdown: await snapshotChangeBreakdown(changes),
         completedAt: Date.now(),
         ...(stopReason ? { stopReason } : {}),
         ...(completionFailure ? { failure: completionFailure } : {})
@@ -791,6 +795,7 @@ export class CheckpointManager {
       projectId: checkpoint.projectId,
       threadId: checkpoint.threadId,
       ...(checkpoint.sourceMessageId ? { sourceMessageId: checkpoint.sourceMessageId } : {}),
+      ...(checkpoint.breakdown ? { breakdown: checkpoint.breakdown } : {}),
       label: checkpoint.label,
       status: checkpoint.status,
       changes: checkpoint.changes.map((change): TurnCheckpointChangeSummary => ({

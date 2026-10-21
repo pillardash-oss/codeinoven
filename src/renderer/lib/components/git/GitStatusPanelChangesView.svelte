@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { formatChangeSummary } from '$shared/change-breakdown'
+  import { RunChangesState } from '../threads/run-changes-state.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioCommit from '@pdslng/cio-icon/CioCommit.svelte'
@@ -96,6 +98,20 @@
     toggleCommitDir,
     requestRemoveCommitChanges
   }: Props = $props()
+
+  // The existing summary worker batches path metadata. Rendering never waits on it.
+  const breakdownState = new RunChangesState(
+    () => ({ changes: selectedCommit ? commitDiffChanges : changes }),
+    true
+  )
+  const summaryTitle = $derived(
+    formatChangeSummary(
+      breakdownState.summary?.breakdown,
+      null,
+      breakdownState.summary?.breakdown?.totalFiles ??
+        (selectedCommit ? commitDiffChanges.length : changes.length)
+    )
+  )
 
   /**
    * Whether every file of the open commit is selected. The commit's own header
@@ -195,7 +211,7 @@
           <span class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted">
             Changed files
           </span>
-          <span class="text-[0.5rem] tabular-nums text-dimmed">
+          <span class="text-[0.5rem] tabular-nums text-dimmed" title={summaryTitle}>
             {commitDiffChanges.length}
           </span>
         </div>
@@ -254,6 +270,12 @@
         first card 4px under the header while the other three sides had 8.
       -->
       <div class="flex flex-col gap-1 p-1">
+        <span class="px-2 py-1 text-[0.625rem] tabular-nums text-muted" title={summaryTitle}>
+          {breakdownState.summary?.breakdown?.totalFiles ?? changes.length}
+          {(breakdownState.summary?.breakdown?.totalFiles ?? changes.length) === 1
+            ? 'file'
+            : 'files'} changed
+        </span>
         {#if conflictSections.length > 0}
           <div class={paneClass}>
             {#if changesView === 'tree'}

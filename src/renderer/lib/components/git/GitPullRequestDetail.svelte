@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { formatChangeSummary } from '$shared/change-breakdown'
+  import { RunChangesState } from '../threads/run-changes-state.svelte'
+
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioBan from '@pdslng/cio-icon/CioBan.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -245,6 +248,16 @@
     mentionCandidates(mentionParticipants, mentionDirectory, mentionQuery)
   )
   const detail = $derived(bundle?.detail ?? null)
+  const fileSummary = new RunChangesState(() => ({ changes: bundle?.files ?? [] }), true)
+  const changeSummaryTitle = $derived(
+    formatChangeSummary(
+      fileSummary.summary?.breakdown?.totalFiles === detail?.changedFiles
+        ? fileSummary.summary?.breakdown
+        : undefined,
+      detail ? { additions: detail.additions, deletions: detail.deletions } : null,
+      detail?.changedFiles ?? 0
+    )
+  )
   const checks = $derived(bundle?.checks ?? null)
   const loading = $derived(gitState.isBusy('pr-detail') && !bundle)
   const posting = $derived(gitState.isBusy('pr-comment'))
@@ -790,7 +803,7 @@
       {/if}
       <span class="shrink-0">· {formatCompactAge(summary.updatedAt)}</span>
       {#if detail}
-        <span class="flex shrink-0 items-center gap-1.5 tabular-nums">
+        <span class="flex shrink-0 items-center gap-1.5 tabular-nums" title={changeSummaryTitle}>
           <span class="text-success">+{detail.additions}</span>
           <span class="text-danger">−{detail.deletions}</span>
           <span>{detail.changedFiles} files</span>
