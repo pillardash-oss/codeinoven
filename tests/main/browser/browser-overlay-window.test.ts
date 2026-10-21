@@ -83,10 +83,8 @@ function setup() {
 /**
  * Pin the platform a test reads instead of inheriting the host's.
  *
- * The overlay takes different paths per platform (the Linux tooltip refusal
- * above all), so a suite that only passes on the machine it was written on is
- * not covering the behaviour. `afterEach` unstubs the global; the prototype
- * keeps every other member of `process` reachable.
+ * `afterEach` unstubs the global; the prototype keeps every other member of
+ * `process` reachable.
  */
 function stubPlatform(platform: NodeJS.Platform): void {
   vi.stubGlobal('process', Object.create(process, { platform: { value: platform } }))
@@ -99,13 +97,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 describe('native browser overlay window', () => {
-  it('keeps Linux tooltips in the renderer without creating an overlay window', () => {
+  it('accepts a tooltip projection on Linux: the document decides where it draws', () => {
     stubPlatform('linux')
     const { host } = setup()
     expect(
       host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', modal: false, passive: true })
-    ).toBe(false)
-    expect(windows).toHaveLength(1)
+    ).toBe(true)
+    expect(windows).toHaveLength(2)
     expect(host.applyDock('app-tooltip', null)).toBe(true)
     expect(host.applyDock(request.id, request)).toBe(true)
   })
@@ -147,9 +145,6 @@ describe('native browser overlay window', () => {
     ])
   })
   it('keeps tooltips click-through and gives only a modal keyboard ownership', () => {
-    // The native tooltip dock is only projected off Linux, so pin the platform
-    // rather than inheriting whatever host runs the suite.
-    stubPlatform('darwin')
     const { host, parent } = setup()
     host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', passive: true, modal: false })
     const popup = windows[1]
@@ -157,20 +152,6 @@ describe('native browser overlay window', () => {
     expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
     expect(popup.focus).not.toHaveBeenCalled()
     host.applyDock(request.id, request)
-    expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
-    expect(host.focusDock(request.id)).toBe(true)
-    expect(popup.focus).toHaveBeenCalledOnce()
-    expect(parent.hide).not.toHaveBeenCalled()
-  })
-  it('leaves Linux modal ownership intact after refusing the tooltip projection', () => {
-    stubPlatform('linux')
-    const { host, parent } = setup()
-    host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', passive: true, modal: false })
-    expect(windows).toHaveLength(1)
-    expect(host.applyDock(request.id, request)).toBe(true)
-    const popup = windows[1]
-    popup.webContents.emit('did-finish-load')
-    expect(host.currentState().docks.map((dock) => dock.id)).toEqual([request.id])
     expect(popup.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false, { forward: true })
     expect(host.focusDock(request.id)).toBe(true)
     expect(popup.focus).toHaveBeenCalledOnce()

@@ -25,7 +25,8 @@ const bridge = vi.hoisted(() => ({
   invoke: vi.fn().mockResolvedValue(true),
   listeners: new Map<string, (payload: unknown) => void>(),
   publish: vi.fn(),
-  clear: vi.fn()
+  clear: vi.fn(),
+  overlapsNative: vi.fn()
 }))
 vi.mock('$lib/ipc.svelte', () => ({
   invoke: bridge.invoke,
@@ -38,7 +39,8 @@ vi.mock('$lib/stores/browser-visibility.svelte', () => ({
   browserVisibility: {
     canUseNativeDock: true,
     publishOcclusion: bridge.publish,
-    clearOcclusion: bridge.clear
+    clearOcclusion: bridge.clear,
+    overlapsNative: bridge.overlapsNative
   }
 }))
 vi.mock('$lib/system/renderer-logger', () => ({
@@ -61,6 +63,9 @@ beforeEach(() => {
   bridge.invoke.mockReset()
   bridge.invoke.mockResolvedValue(true)
   bridge.publish.mockClear()
+  bridge.clear.mockClear()
+  bridge.overlapsNative.mockReset()
+  bridge.overlapsNative.mockReturnValue(false)
   bridge.listeners.clear()
   vi.mocked(logRendererError).mockClear()
   restore.mockClear()
@@ -168,8 +173,8 @@ describe('native dock chips', () => {
 })
 
 describe('native tooltip source', () => {
-  it('projects tooltip content passively without hiding the browser or claiming focus', async () => {
-    vi.stubGlobal('api', { windowInfo: { platform: 'darwin' } })
+  it('projects a tooltip the page would cover, passively and without focus', async () => {
+    bridge.overlapsNative.mockReturnValue(true)
     const target = document.createElement('div')
     document.body.append(target)
     instance = mount(TooltipHost, { target })
@@ -196,8 +201,7 @@ describe('native tooltip source', () => {
     expect(bridge.publish).not.toHaveBeenCalled()
     expect(target.querySelector('[role="tooltip"]')?.textContent?.trim()).toBe('Restore the panel')
   })
-  it('keeps Linux tooltips in the DOM without publishing or waiting on a host', async () => {
-    vi.stubGlobal('api', { windowInfo: { platform: 'linux' } })
+  it('draws the tooltip in the DOM while no native page would cover it', async () => {
     const target = document.createElement('div')
     document.body.append(target)
     instance = mount(TooltipHost, { target })
@@ -214,8 +218,24 @@ describe('native tooltip source', () => {
     expect(logRendererError).not.toHaveBeenCalled()
     expect(host?.style.opacity).toBe('1')
   })
+  it('projects a covered tooltip on Linux too, so the page cannot clip it', async () => {
+    vi.stubGlobal('api', { windowInfo: { platform: 'linux' } })
+    bridge.overlapsNative.mockReturnValue(true)
+    const target = document.createElement('div')
+    document.body.append(target)
+    instance = mount(TooltipHost, { target })
+    flushSync()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(
+      bridge.invoke.mock.calls.filter(
+        ([channel, id, request]) =>
+          channel === 'browser:setDockOverlay' && id === 'app-tooltip' && request
+      )
+    ).toHaveLength(1)
+    expect(target.querySelector('[role="tooltip"]')?.textContent?.trim()).toBe('Restore the panel')
+  })
   it('keeps the DOM tooltip visible when a host refuses the projection', async () => {
-    vi.stubGlobal('api', { windowInfo: { platform: 'darwin' } })
+    bridge.overlapsNative.mockReturnValue(true)
     bridge.invoke.mockImplementation(
       async (channel: string) => channel !== 'browser:setDockOverlay'
     )
@@ -237,6 +257,7 @@ describe('native tooltip source', () => {
     expect(logRendererError).toHaveBeenCalledOnce()
   })
   it('avoids recursively projecting a tooltip already inside a native renderer', async () => {
+    bridge.overlapsNative.mockReturnValue(true)
     const target = document.createElement('div')
     document.body.append(target)
     instance = mount(TooltipHost, { target, props: { nativeOverlay: false } })

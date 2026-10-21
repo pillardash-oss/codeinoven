@@ -9,23 +9,10 @@
   } from './tooltip-manager.svelte'
   import ShortcutHint from './ShortcutHint.svelte'
   import { NativeDockController } from '$lib/native-dock-controller.svelte'
-  import { NATIVE_TOOLTIP_DOCK_ID, nativeDockProjectedOnPlatform } from '$shared/native-dock'
+  import { NATIVE_TOOLTIP_DOCK_ID } from '$shared/native-dock'
+  import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 
   let { nativeOverlay = true }: { nativeOverlay?: boolean } = $props()
-
-  /**
-   * Whether this platform projects the tooltip at all.
-   *
-   * A native tooltip is an optimization: it lets the tooltip paint over the
-   * native page view. Where the projection is not dependable (see
-   * {@link nativeDockProjectedOnPlatform}) the DOM host is the whole tooltip,
-   * so it is never armed, never waits for an acknowledgement, and never clears
-   * itself because a host refused a frame.
-   */
-  const projectNatively = $derived(
-    nativeOverlay &&
-      nativeDockProjectedOnPlatform(NATIVE_TOOLTIP_DOCK_ID, window.api?.windowInfo?.platform ?? '')
-  )
 
   let side = $state<TooltipSide>('top')
 
@@ -58,7 +45,7 @@
     const request = tooltipState.request
     const el = container.querySelector<HTMLElement>('[role="tooltip"]')
     if (!request || !el) {
-      if (projectNatively) nativeTooltip.update(false, { x: 0, y: 0, width: 1, height: 1 })
+      if (nativeOverlay) nativeTooltip.update(false, { x: 0, y: 0, width: 1, height: 1 })
       return
     }
     const rect = el.getBoundingClientRect()
@@ -98,12 +85,20 @@
 
     container.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`
     side = resolved
-    if (projectNatively) nativeTooltip.update(tooltipState.visible, { x, y, width, height })
+    if (nativeOverlay) {
+      // The DOM tooltip is the source of truth and the only surface it cannot
+      // paint is a native page: the compositor draws that above every DOM node.
+      // Everywhere else the projection is the worse path   a child window mapped
+      // for a hover is what Linux lost tooltips to   so the native copy exists
+      // exactly while the page would cover it.
+      const covered = browserVisibility.overlapsNative({ x, y, width, height })
+      nativeTooltip.update(tooltipState.visible && covered, { x, y, width, height })
+    }
   }
 </script>
 
 <div
-  {@attach projectNatively && mountNativeTooltip}
+  {@attach nativeOverlay && mountNativeTooltip}
   {@attach positionTooltip}
   data-tooltip-host
   class="fixed left-0 top-0"

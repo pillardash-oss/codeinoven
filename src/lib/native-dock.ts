@@ -70,23 +70,6 @@ export type NativeDockInteraction =
 /** The tooltip's identity, shared by the document that draws it and its host. */
 export const NATIVE_TOOLTIP_DOCK_ID = 'app-tooltip'
 
-/**
- * Whether a dock can be projected into its native overlay on this platform.
- *
- * Linux child windows do not reliably deliver hover to a passive, click-through
- * tooltip: the projection is either mapped after the pointer already left or
- * never mapped at all, and the tooltip simply reads as missing. The app window's
- * own DOM draws it without a compositor or child-window round trip, so on Linux
- * the tooltip stays there and every other dock keeps its native projection.
- *
- * Both ends ask this question   the document before it publishes and the host
- * before it accepts   because a tooltip that is waiting on a projection it will
- * never get is the failure this exists to prevent.
- */
-export function nativeDockProjectedOnPlatform(id: string, platform: string): boolean {
-  return !(platform === 'linux' && id === NATIVE_TOOLTIP_DOCK_ID)
-}
-
 export const NATIVE_DOCK_TAGS = new Set([
   'div',
   'aside',
