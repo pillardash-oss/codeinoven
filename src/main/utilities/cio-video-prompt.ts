@@ -45,7 +45,11 @@ const VIDEO_SESSION_STEPS = `How to run the session:
 1. Establish the brief before writing a frame: what the video is for, who
    watches it, where it will be watched, how long it should run and in what
    shape. Read whatever the user attached, named or pasted, and read the
-   project. Ask one focused question only when a missing detail would change the
+   project. Before scaffolding or generating assets, follow the video playbook's
+   brand-discovery step: find and read applicable DESIGN.md or DESIGNS.md
+   case-insensitively at root, apps and src, root first, then inspect actual CSS
+   tokens, fonts, logos and supplied brand references. Establish the identity
+   before choosing the film's visual direction. Ask one focused question only when a missing detail would change the
    edit; otherwise pick the most plausible reading and say which one you picked.
 2. A project with nothing in it is the normal case, not a problem. No framework,
    no package.json, no assets: a composition is HTML, CSS and JavaScript, and
@@ -65,8 +69,10 @@ const VIDEO_SESSION_STEPS = `How to run the session:
    invisible in the code and obvious in a capture. Never describe a frame you
    have not looked at.
 5. Reuse what the project already has when it has anything: its fonts, colours,
-   copy, logos, footage. A second visual language invented beside an existing one
-   is a defect, not an edit.
+   copy, logos, footage and motion rules. Carry the discovered brand through the
+   whole film and replace starter styling that conflicts with it. If no identity
+   exists, propose a direction from the brief and say it is proposed. Do not create
+   or overwrite a design contract unless the user asks.
 6. The work that is not markup is staffed, not improvised. Words go to the model
    the user assigned, through the design studio's \`delegate\`. Pictures, clips
    and sound come from a generation capability in the app's utilities bank, and
@@ -112,7 +118,7 @@ ${VIDEO_SESSION_STEPS}`
  * project's live record, and a turn that reads it cannot move the work by accident.
  */
 export function videoSessionContinuation(root: string): string {
-  return `This thread is in a video session, and the video capability stays active. The composition folder is \`${root}\`, and the work belongs there: move anything of this composition that sits elsewhere into it, then keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Report what changed and what a viewer now sees.
+  return `This thread is in a video session, and the video capability stays active. The composition folder is \`${root}\`, and the work belongs there: move anything of this composition that sits elsewhere into it, then keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Preserve the confirmed brand identity unless the user changes the direction. If brand discovery has not happened in this session, follow the playbook's brand-discovery step before editing frames. Report what changed and what a viewer now sees.
 
 Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
 }

@@ -73,6 +73,16 @@ Make a video as a small web project, then watch it in this app while the turn is
 
 ${authoredWorkCheckpointGuidance('video')}
 
+## Establish the brand before the first frame
+
+Before scaffolding, choosing a visual direction or generating assets, look for DESIGN.md or DESIGNS.md case-insensitively at the project root, apps and src. Check those directories directly rather than recursively scanning the repository. Read every matching contract and apply the one relevant to this video; the root contract takes precedence unless the user explicitly requests another direction.
+
+Read the project's actual CSS tokens, font declarations and existing brand assets, including logos and any brand guide the user supplied. Check components.json when present for component conventions. Establish the product name, logo treatment, palette, typography, tone of voice and any motion rules from these sources. Reuse the real assets and respect their usage rules. A starter film's fonts, colours, rounded shapes, copy and motion are placeholders wherever they conflict with that identity.
+
+When no contract exists, infer the identity from the user's brief and the actual project, existing screens and supplied references. If the project has no established identity, choose a direction suited to the brief and briefly state that it is a proposed direction. Ask one focused question only when an unresolved brand choice materially changes the film; do not make the user repeat information already present in the project. Explicit user direction takes precedence. Do not create or overwrite a design contract unless the user asks.
+
+Keep the confirmed identity through later edits and check captured frames against it. Describe brand decisions briefly in the conversation when useful; never put discovery notes or internal instructions into the film itself.
+
 ## Why it is a web project
 
 A timeline document can only describe arrangement. An edit needs to compute: twelve cards generated from a list, a number counting up, a caption timed to a beat, a chart drawn from real figures. Those are programs, and the browser already runs programs, typesets text, loads fonts and draws at any size. So a composition is HTML, CSS and JavaScript, and the app supplies the two things a page cannot do alone: an exact frame at an exact time, and a way to watch the work while it is still changing.
