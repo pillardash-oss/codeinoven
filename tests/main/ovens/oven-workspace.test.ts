@@ -93,22 +93,38 @@ function run(program: string, args: string[]): Promise<void> {
 }
 
 describe('oven git environment', () => {
+  /**
+   * How `GIT_SSH_COMMAND` spells a path: Git parses that string with shell rules,
+   * so the Oven-side command doubles every backslash and Windows paths carry one
+   * per separator. Quoted the same way here so the assertion holds on both.
+   */
+  function commandPath(path: string): string {
+    return `"${path.replace(/\\/gu, '\\\\')}"`
+  }
+
   /** Run one case against a private home so this machine's own keys never leak in. */
   async function withHome(
     files: Record<string, string>,
     run: (home: string) => Promise<void>
   ): Promise<void> {
     const home = await mkdtemp(join(tmpdir(), 'cio-git-env-'))
-    const previous = process.env['HOME']
-    process.env['HOME'] = home
+    // The environment reads the home directory through `os.homedir()`, which
+    // resolves USERPROFILE on Windows and HOME elsewhere, so pin both to the
+    // scratch home instead of this machine's real one.
+    const homeVariables = ['HOME', 'USERPROFILE'] as const
+    const previous = homeVariables.map((name) => process.env[name])
+    for (const name of homeVariables) process.env[name] = home
     try {
       await mkdir(join(home, '.ssh'), { recursive: true })
       for (const [name, contents] of Object.entries(files))
         await writeFile(join(home, name), contents)
       await run(home)
     } finally {
-      if (previous === undefined) delete process.env['HOME']
-      else process.env['HOME'] = previous
+      for (const [index, name] of homeVariables.entries()) {
+        const value = previous[index]
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
       await rm(home, { recursive: true, force: true })
     }
   }
@@ -132,7 +148,7 @@ describe('oven git environment', () => {
         const env = await ovenGitEnvironment()
         expect(env['GIT_SSH_VARIANT']).toBe('ssh')
         expect(env['GIT_SSH_COMMAND']).toContain(
-          `-i "${join(home, '.ssh/codeinoven-local-github')}"`
+          `-i ${commandPath(join(home, '.ssh/codeinoven-local-github'))}`
         )
         expect(env['GIT_SSH_COMMAND']).toContain('UserKnownHostsFile=')
         expect(env['GIT_SSH_COMMAND']).toContain('BatchMode=yes')
@@ -148,7 +164,9 @@ describe('oven git environment', () => {
       },
       async (home) => {
         const env = await ovenGitEnvironment('.ssh/codeinoven-local-github')
-        expect(env['GIT_SSH_COMMAND']).toContain(`-i "${join(home, '.ssh/codeinoven-github')}"`)
+        expect(env['GIT_SSH_COMMAND']).toContain(
+          `-i ${commandPath(join(home, '.ssh/codeinoven-github'))}`
+        )
         expect(env['GIT_SSH_COMMAND']).not.toContain('codeinoven-local-github')
       }
     )
