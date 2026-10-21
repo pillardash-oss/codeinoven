@@ -72,7 +72,7 @@ export interface TurnCheckpointSummary {
   sourceMessageId?: string
   label: string
   status: TurnCheckpointStatus
-  /** Absent on historical snapshots; never rebuilt during display. */
+  /** Absent on historical snapshots and on pre-grouping records; never rebuilt during display. */
   breakdown?: ChangeBreakdown
   changes: TurnCheckpointChangeSummary[]
   /** Paths too large to be captured by the checkpoint (no rollback coverage). */

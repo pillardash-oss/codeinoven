@@ -4,13 +4,14 @@
   const current = $derived(threadChangesState.current)
   const fileCount = $derived(threadChangesState.fileCount)
   const totals = $derived(threadChangesState.totals)
+  const areas = $derived(threadChangesState.breakdown?.areas ?? [])
   const heading = $derived(threadChangesState.working ? 'This turn' : 'Last turn')
 </script>
 
 {#if current && fileCount > 0}
   <!-- The rail's own tooltip already carries the plain-text summary; this card
        is the richer, labelled read, so it is presentational for narration. -->
-  <div class="min-w-36 border border-border bg-surface px-2.5 py-2 shadow-lg" aria-hidden="true">
+  <div class="min-w-44 border border-border bg-surface px-2.5 py-2 shadow-lg" aria-hidden="true">
     <p class="mb-1.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed">
       {heading}
     </p>
@@ -33,14 +34,27 @@
     >
       <span>Total files</span><span class="text-foreground">{fileCount}</span>
     </div>
-    {#each current.breakdown?.categories ?? [] as category (category.label)}
+    <!-- One row per area the files share, so the card answers "where is this turn
+         happening" as well as "how much". A running turn has no stored line
+         counts, so its rows lead with the share of files instead. -->
+    {#each areas as area (area.path || area.label)}
       <div
-        class="mt-1 flex items-center justify-between gap-4 text-[0.6875rem] tabular-nums text-muted"
+        class="mt-1 flex items-center justify-between gap-3 text-[0.6875rem] tabular-nums text-muted"
+        title={area.path || 'Project root'}
       >
-        <span>{category.label}</span>
-        <span class="text-foreground"
-          >{category.percentage}% ({category.files} {category.files === 1 ? 'file' : 'files'})</span
-        >
+        <span class="truncate">{area.label}</span>
+        <span class="flex shrink-0 items-center gap-1.5">
+          {#if area.additions + area.deletions > 0}
+            <span class="text-success">+{area.additions}</span>
+            <span class="text-danger">−{area.deletions}</span>
+          {:else}
+            <span class="text-foreground">{area.percentage}%</span>
+          {/if}
+          <span class="text-dimmed">
+            {area.files}
+            {area.files === 1 ? 'file' : 'files'}
+          </span>
+        </span>
       </div>
     {/each}
   </div>

@@ -1,4 +1,4 @@
-import { buildChangeBreakdown } from '$shared/change-breakdown'
+import { buildChangeBreakdown, type ChangeBreakdownFile } from '$shared/change-breakdown'
 import type { ChangeCardMessage, ChangeCardSummary } from './run-changes-summary'
 
 /**
@@ -23,7 +23,7 @@ const summary: ChangeCardSummary = {
   remaining: false,
   restored: new Uint8Array()
 }
-const paths = new Set<string>()
+const paths = new Map<string, ChangeBreakdownFile>()
 let pathChars = 0
 let classify = false
 let changeIndex = 0
@@ -53,7 +53,11 @@ workerScope.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
           pathChars += change.path.length
           if (paths.size >= 65536 || pathChars > 8 * 1024 * 1024)
             throw new Error('File breakdown exceeds the preview limit.')
-          paths.add(change.path)
+          paths.set(change.path, {
+            path: change.path,
+            additions: change.additions,
+            deletions: change.deletions
+          })
         }
         summary.additions += change.additions
         summary.deletions += change.deletions
@@ -65,7 +69,7 @@ workerScope.onmessage = (event: MessageEvent<ChangeCardMessage>): void => {
         changeIndex += 1
       }
     } else {
-      if (classify) summary.breakdown = buildChangeBreakdown([...paths])
+      if (classify) summary.breakdown = buildChangeBreakdown([...paths.values()])
       workerScope.postMessage({ summary }, [summary.restored.buffer])
       return
     }

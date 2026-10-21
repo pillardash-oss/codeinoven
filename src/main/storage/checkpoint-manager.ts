@@ -321,7 +321,15 @@ export class CheckpointManager {
           : {}),
         changeFilterApplied: changedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
-        breakdown: await snapshotChangeBreakdown(changes),
+        // The area grouping weighs each file's changed lines, so the same pass
+        // that already measured them hands them to the worker.
+        breakdown: await snapshotChangeBreakdown(
+          changes.map((change) => ({
+            path: change.path,
+            additions: lineStats.stats[change.path]?.additions,
+            deletions: lineStats.stats[change.path]?.deletions
+          }))
+        ),
         completedAt: Date.now(),
         ...(stopReason ? { stopReason } : {}),
         ...(completionFailure ? { failure: completionFailure } : {})

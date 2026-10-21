@@ -60,7 +60,7 @@ export function summarizeChanges(
       partial: false,
       remaining: false,
       restored: new Uint8Array(),
-      ...(classify ? { breakdown: { totalFiles: 0, categories: [] } } : {})
+      ...(classify ? { breakdown: { totalFiles: 0, additions: 0, deletions: 0, areas: [] } } : {})
     })
   }
   if (pending.length >= 128)
