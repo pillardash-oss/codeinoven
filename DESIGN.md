@@ -20,7 +20,7 @@ A third axis sits beside the scheme: Appearance offers a contrast level (`normal
 
 ## Typography and spacing
 
-Use the app font token, currently JetBrains Mono Variable with system monospace fallbacks; Appearance settings can replace it at runtime. The composer uses compact text, clear weight differences, and tabular numerals for usage values. Keep typography in scalable units and use a tight spacing rhythm built from rem increments, with small gaps for grouped controls and larger gaps between regions. [src/renderer/app.css](src/renderer/app.css) [.cio/designs/chosen/styles.css](.cio/designs/chosen/styles.css)
+Use the app font token, currently Oven Box with system monospace fallbacks; Appearance settings can replace it at runtime. The composer uses compact text, clear weight differences, and tabular numerals for usage values. Keep typography in scalable units and use a tight spacing rhythm built from rem increments, with small gaps for grouped controls and larger gaps between regions. [src/renderer/app.css](src/renderer/app.css)
 
 ## Surfaces and reusable patterns
 
