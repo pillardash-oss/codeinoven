@@ -166,7 +166,6 @@
           {onEditClosed}
           {armed}
           activeSeconds={moment?.seconds ?? null}
-          badgeVisibility="while-annotating"
           onArmedChange={(next) => (armed = next)}
           hint="Draw on the picture · Esc to finish"
         />

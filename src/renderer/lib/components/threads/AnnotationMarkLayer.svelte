@@ -74,17 +74,6 @@
     /** Wording for the hint shown while the picture is being drawn on. */
     hint?: string
     /**
-     * When the numbered badges are shown.
-     *
-     * `always` suits a still, where a badge marks a spot on the picture in front
-     * of the reader. `while-annotating` suits a video, where a badge belongs to a
-     * moment that is not necessarily the frame on screen, and where the badges
-     * would otherwise sit over the player's own controls. A mark being commented
-     * on always shows its badge, so an editor opened from the composer has
-     * something to anchor to.
-     */
-    badgeVisibility?: 'always' | 'while-annotating'
-    /**
      * The second whose frame the picture is showing, for a video.
      *
      * A video's marks belong to moments, not to the file: a stroke drawn at 0:05
@@ -111,7 +100,6 @@
     armed = false,
     onArmedChange = () => {},
     hint = 'Draw on the picture · Esc to finish',
-    badgeVisibility = 'always',
     activeSeconds = null,
     onFocusMark
   }: Props = $props()
@@ -304,21 +292,6 @@
     onArmedChange(false)
   }
 
-  /**
-   * Whether any mark on this picture has a comment the reader can open again.
-   *
-   * A saved mark is an annotation the user made, and its numbered badge is how
-   * they find it: hiding the badge the moment the comment is written leaves the
-   * stroke on the picture with nothing to click, which is the opposite of what a
-   * numbered mark is for.
-   */
-  const hasSavedMarks = $derived(marks.some((mark) => (mark.comment ?? '').trim() !== ''))
-
-  /** Whether the numbered badges are on screen right now. */
-  const showBadges = $derived(
-    badgeVisibility === 'always' || armed || activeEditingId !== null || hasSavedMarks
-  )
-
   /** Badge wording names a frame's moment, which a still mark has none of. */
   function markMoment(mark: ResponseReferenceAnchor): string {
     return mark.markSeconds === undefined ? '' : ` at ${videoTimecode(mark.markSeconds)}`
@@ -340,6 +313,15 @@
    * the composer lists every mark with its own jump.
    */
   const visibleMarks = $derived(marks.filter(marksThisPicture))
+
+  /**
+   * The badge of every mark on the picture.
+   *
+   * Shown whenever a mark belongs to the picture in front of the reader, because
+   * the badge is the only way back to that mark's comment: the reader updates a
+   * comment by pressing the badge, with the pen armed or not.
+   */
+  const showBadges = $derived(visibleMarks.length > 0)
 
   /** The badge's wording, naming a frame's moment when it has one. */
   function badgeHint(mark: ResponseReferenceAnchor, number: number): string {
@@ -399,7 +381,7 @@
       {number}
       hasComment={Boolean(mark.comment)}
       title={badgeHint(mark, number)}
-      class="z-20"
+      class="z-40"
       attach={badgeAttachment(mark.id)}
       onOpen={() => requestEdit(mark.id)}
     />
