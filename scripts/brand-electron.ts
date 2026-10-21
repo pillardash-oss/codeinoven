@@ -56,9 +56,39 @@ if (!existsSync(pathTxt) || readFileSync(pathTxt, 'utf8').trim() !== development
   writeFileSync(pathTxt, developmentPath)
 }
 
-const current = readFileSync(plistPath, 'utf8')
-let plist = current
-for (const [key, value] of [
+/**
+ * Read the bundle's Info.plist as a plain object through `plutil`.
+ *
+ * Editing the XML text is the obvious way to write this, and it is the way that
+ * once dropped `NSLocalNetworkUsageDescription` into a nested asar integrity
+ * dictionary instead of the top level. The bundle then carried the key and macOS
+ * still refused the app every local network connection, which is indistinguishable
+ * from an Oven that is switched off. Converting through `plutil` edits the real
+ * top-level dictionary, so a key cannot land somewhere the system never reads.
+ */
+function readPlistObject(path: string): Record<string, unknown> {
+  const json = execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path], {
+    encoding: 'utf8'
+  })
+  const parsed: unknown = JSON.parse(json)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new TypeError('The dev bundle Info.plist did not parse into a dictionary.')
+  return parsed as Record<string, unknown>
+}
+
+/** Remove one key everywhere it appears, including any copy left nested. */
+function removeKeyEverywhere(value: unknown, key: string): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) removeKeyEverywhere(entry, key)
+    return
+  }
+  if (typeof value !== 'object' || value === null) return
+  const record = value as Record<string, unknown>
+  delete record[key]
+  for (const nested of Object.values(record)) removeKeyEverywhere(nested, key)
+}
+
+const managedKeys: [string, string][] = [
   ['CFBundleDisplayName', developmentName],
   ['CFBundleName', developmentName],
   ['CFBundleIdentifier', developmentId],
@@ -75,14 +105,22 @@ for (const [key, value] of [
     'NSLocalNetworkUsageDescription',
     `${developmentName} connects to the Ovens you add, such as a tablet on your Wi-Fi or a virtual machine on this Mac, over SSH.`
   ]
-]) {
-  const entry = new RegExp(`(<key>${key}</key>\\s*<string>)[^<]*(</string>)`)
-  plist = entry.test(plist)
-    ? plist.replace(entry, `$1${value}$2`)
-    : plist.replace('</dict>', `\t<key>${key}</key>\n\t<string>${value}</string>\n</dict>`)
+]
+const current = readFileSync(plistPath, 'utf8')
+const before = readPlistObject(plistPath)
+const after: Record<string, unknown> = JSON.parse(JSON.stringify(before)) as Record<string, unknown>
+for (const [key, value] of managedKeys) {
+  // A key left nested by an older branding pass is removed first, so exactly one
+  // copy remains and it is the one the system reads.
+  removeKeyEverywhere(after, key)
+  after[key] = value
 }
-if (plist !== current) {
-  writeFileSync(plistPath, plist, 'utf8')
+if (JSON.stringify(after) !== JSON.stringify(before)) {
+  const converted = join(dirname(plistPath), 'Info.plist.converted')
+  writeFileSync(converted, JSON.stringify(after), 'utf8')
+  execFileSync('/usr/bin/plutil', ['-convert', 'xml1', '-o', plistPath, converted])
+  rmSync(converted, { force: true })
+  if (readFileSync(plistPath, 'utf8') === current) throw new Error('Info.plist was not updated.')
   resourcesChanged = true
 }
 

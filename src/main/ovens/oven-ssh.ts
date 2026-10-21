@@ -12,6 +12,7 @@ import {
   windowsEncodedCommand
 } from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
+import { unreachableHostIssue } from './oven-network-hint'
 import { validateIdentityPath } from './oven-validation'
 import {
   ensureMultiplexDirectory,
@@ -717,7 +718,10 @@ export class OvenSsh {
             sshIssue =
               'The host refused the connection. Check that SSH is running on the selected port.'
           } else if (/No route to host|Network is unreachable/u.test(text)) {
-            sshIssue = 'This host is unreachable from this computer.'
+            sshIssue = unreachableHostIssue(
+              process.platform,
+              prepared.args[prepared.args.indexOf('--') + 1] ?? ''
+            )
           } else if (/Could not resolve hostname/u.test(text)) {
             sshIssue = 'The SSH hostname or config alias could not be resolved.'
           } else if (/Operation timed out|Connection timed out/u.test(text)) {
