@@ -38,6 +38,8 @@
     onReveal?: () => void
     /** Called when the user stops hovering the indicator. */
     onHide?: () => void
+    /** A request to open the panel, for the composer's `/status` command. */
+    openRequest?: number
     /** Whether live account usage is currently being fetched from the harness. */
     refreshing?: boolean
   }
@@ -53,6 +55,7 @@
     onActivateBankedReset,
     onReveal,
     onHide,
+    openRequest,
     refreshing = false
   }: Props = $props()
 
@@ -444,7 +447,7 @@
 
 <!-- The panel opens above the control, portal-positioned so no pane can clip it.
      The shell takes a tap as well as a hover, so a touch reaches the same reading. -->
-<ShoePopover label="Context and provider usage" {onReveal} {onHide}>
+<ShoePopover label="Context and provider usage" {onReveal} {onHide} {openRequest}>
   {#snippet trigger({ props })}
     <!-- Console usage control: a four-cell column and its number, the reading the
          shoe carries. The cells keep the app's severity colours, so a nearly full

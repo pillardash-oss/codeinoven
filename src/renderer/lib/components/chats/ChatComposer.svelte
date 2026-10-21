@@ -10,6 +10,7 @@
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { tick, onDestroy, onMount } from 'svelte'
+  import { toast } from 'svelte-sonner'
   import type { Attachment } from 'svelte/attachments'
   import { scale } from 'svelte/transition'
 
@@ -44,7 +45,12 @@
   import { readComposerDrop } from './chat-composer-drop-source'
   import { handleComposerKeydown, type ComposerKeydownContext } from './chat-composer-keydown'
   import { handleComposerPaste, type ComposerPasteContext } from './chat-composer-paste'
-  import { createComposerSlashActions, isSlashRoutedAction } from './chat-composer-slash.svelte'
+  import {
+    createComposerSlashActions,
+    isSlashRoutedAction,
+    composerReadingSurface,
+    type ComposerReadingSurface
+  } from './chat-composer-slash.svelte'
   import { createComposerMentionSearch } from './chat-composer-mentions.svelte'
   import { createComposerExpansion } from './chat-composer-expand.svelte'
   import { trackMenuCloseFocus } from './chat-composer-menu-focus.svelte'
@@ -922,6 +928,21 @@
     shoeComponent?.openScopeMenu()
   }
 
+  /** Opens one of the shoe's readings: the context battery (`/status`) or the
+   *  generation rate (`/tps`). Neither takes arguments, so both run the moment
+   *  they are picked from the menu or typed and submitted, exactly like `/scope`. */
+  function showReading(surface: ComposerReadingSurface): void {
+    // A thread that has measured nothing yet has no rate to open, and a panel
+    // that said only "measuring" would read as a command that did nothing.
+    if (surface === 'rate' && !working && generationRate == null) {
+      toast.info('No generation speed measured yet', {
+        description: 'Send a message and the tokens-per-second reading is measured as it streams.'
+      })
+      return
+    }
+    shoeComponent?.openReading(surface)
+  }
+
   trackEscapeMenu(
     () => plusMenuOpen,
     () => {
@@ -1218,6 +1239,7 @@
     getAccountPickerVisible: () => accountPickerVisible,
     getScopePickerVisible: () => scopePickerAvailable,
     getOvenPickerVisible: () => !!shoe?.onOpenOven,
+    getReadingsVisible: () => !!shoe,
     getThinkingPresets: () => thinkingPresets,
     getActions: () => actions
   })
@@ -1366,6 +1388,12 @@
     )
     if (!replaced) return
 
+    const reading = composerReadingSurface(action.id)
+    if (reading) {
+      showReading(reading)
+      return
+    }
+
     if (action.id === 'selector:models') {
       showModelMenu()
       return
@@ -1457,17 +1485,33 @@
     historyIndex = -1
     savedValue = ''
     const slashCommand = /^\/([^\s]+)(?:\s+([\s\S]*))?$/u.exec(msg)
-    if (slashCommand && onSlashCommand) {
+    if (slashCommand) {
       const name = slashCommand[1]
-      const action = actions.find(
-        (candidate) => isSlashRoutedAction(candidate) && candidate.title === `/${name}`
+      // The composer's own readings take no arguments, so a typed one runs here
+      // instead of leaving as a prompt the agent has to read.
+      const readingAction = slash.available.find(
+        (candidate) =>
+          candidate.title === `/${name}` && composerReadingSurface(candidate.id) !== undefined
       )
+      const reading = readingAction ? composerReadingSurface(readingAction.id) : undefined
+      if (reading) {
+        value = ''
+        slashOpen = false
+        onValueChange?.('')
+        showReading(reading)
+        return
+      }
+      const action = onSlashCommand
+        ? actions.find(
+            (candidate) => isSlashRoutedAction(candidate) && candidate.title === `/${name}`
+          )
+        : undefined
       if (action) {
         if (action.disabledReason) return
         value = ''
         slashOpen = false
         onValueChange?.('')
-        void onSlashCommand(action.id, slashCommand[2]?.trim() ?? '')
+        void onSlashCommand?.(action.id, slashCommand[2]?.trim() ?? '')
         return
       }
     }
