@@ -28,6 +28,25 @@
     filename: string
     /** The message the picture arrived in, so a mark can be jumped back to. */
     messageId?: string
+    /**
+     * The moment this picture is one frame of, when it is not a still artifact.
+     *
+     * A frame captured from a composition is a picture of a second, so a mark on
+     * it has to name that second: the descriptor the agent reads carries the
+     * timecode, and `detail` names the composition, the exact second to the
+     * millisecond and the frame index. A still artifact has no moment and passes
+     * nothing.
+     */
+    moment?: { seconds: number; timecode: string; detail: string }
+    /**
+     * Whether the pen starts armed.
+     *
+     * A surface opened by "annotate this frame" is opened to be drawn on, while
+     * the picture in a transcript waits to be asked. The difference is only the
+     * starting position of one toggle, so it is a prop rather than a second
+     * component.
+     */
+    startArmed?: boolean
     /** Marks already drawn on this picture, in composer order. */
     marks: ResponseReferenceAnchor[]
     /** A mark whose comment the user asked to edit from elsewhere. */
@@ -43,6 +62,8 @@
     src = url,
     filename,
     messageId,
+    moment,
+    startArmed = false,
     marks,
     editingId,
     onEditClosed
@@ -56,7 +77,8 @@
   let pictureHeight = $state(0)
 
   /** Whether the pointer draws on the picture instead of opening it. */
-  let armed = $state(false)
+  // svelte-ignore state_referenced_locally
+  let armed = $state(startArmed)
 
   const contentBox = $derived(
     markContentBox(
@@ -75,12 +97,17 @@
   function createMark(capture: MarkCapture): string | null {
     const id = crypto.randomUUID()
     const current = responseReferencesState.forThread(projectId, threadId)
+    // A frame is marked on its own terms: the descriptor names the moment, and the
+    // detail lines below it are what let the agent find the second again.
+    const descriptor = moment
+      ? `${markDescriptor(filename, capture.points, { surface: 'frame', timecode: moment.timecode })}\n${moment.detail}`
+      : markDescriptor(filename, capture.points)
     responseReferencesState.setForThread(projectId, threadId, [
       ...current,
       {
         id,
         label: '',
-        text: markDescriptor(filename, capture.points),
+        text: descriptor,
         kind: 'image',
         mediaUrl: url,
         markColor: capture.style.color,
@@ -128,6 +155,8 @@
           {editingId}
           {onEditClosed}
           {armed}
+          activeSeconds={moment?.seconds ?? null}
+          badgeVisibility="while-annotating"
           onArmedChange={(next) => (armed = next)}
           hint="Draw on the picture · Esc to finish"
         />

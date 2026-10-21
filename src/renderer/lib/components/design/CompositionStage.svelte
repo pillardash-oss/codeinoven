@@ -261,6 +261,8 @@
   <BrowserCompositionTransport
     tabId={placedTab.tabId}
     composition={placedTab}
+    projectId={placedTab.projectId}
+    threadId={placedTab.threadId}
     active={active && placed}
   />
   <div

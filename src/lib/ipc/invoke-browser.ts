@@ -11,6 +11,7 @@ import type {
 } from '../native-dock'
 import type {
   BrowserCompositionPlayback,
+  CompositionFrameSnapshot,
   BrowserDownload,
   BrowserExtension,
   BrowserExtensionInstallInput,
@@ -346,6 +347,19 @@ export const invokeBrowserContract = {
   /** Read a composition tab's playhead without changing it. Null when the tab is
    *  not a composition, or is showing a page that has not been armed. */
   'browser:transportState': {} as Contract<[tabId: string], BrowserCompositionPlayback | null>,
+  /**
+   * Draw one exact frame of a composition and keep it as a still on disk.
+   *
+   * A frame note is a comment on a moment, so the moment has to be capturable:
+   * the tab is paused, the page is asked to draw the second, and the picture is
+   * written into the project's scratch so the annotation surface can show it and
+   * the send can hand the agent the frame with the marks on it. Null when the
+   * tab is gone, is not a composition, or the page would not draw that frame.
+   */
+  'browser:captureCompositionFrame': {} as Contract<
+    [tabId: string, seconds: number],
+    CompositionFrameSnapshot | null
+  >,
   /** Reload bypassing the HTTP cache (hard reload). */
   'browser:reloadIgnoringCache': {} as Contract<[tabId: string], void>,
   'browser:stop': {} as Contract<[tabId: string], void>,

@@ -95,13 +95,17 @@ export function isResponseSelection(reference: Pick<PromptReference, 'kind'>): b
  * three, so a comment can be read and edited from where it is listed rather than
  * only from the surface that happens to be on screen.
  */
-export function referenceHasEditableSurface(reference: Pick<PromptReference, 'kind'>): boolean {
+export function referenceHasEditableSurface(
+  reference: Pick<PromptReference, 'kind'> & { points?: readonly unknown[] }
+): boolean {
+  // A picture reference with no stroke names a frame rather than a place on it:
+  // there is no mark to reopen, so the composer offers no edit action for it.
+  if (reference.kind === 'image') return (reference.points?.length ?? 0) > 0
   return (
     isResponseSelection(reference) ||
     reference.kind === 'file' ||
     reference.kind === 'design' ||
     reference.kind === 'video' ||
-    reference.kind === 'image' ||
     reference.kind === 'svg'
   )
 }

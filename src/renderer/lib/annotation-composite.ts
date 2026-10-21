@@ -63,21 +63,25 @@ function groupMarks(references: readonly ResponseReferenceAnchor[]): MarkGroup[]
   const groups = new Map<string, MarkGroup>()
   references.forEach((reference, position) => {
     if (reference.kind !== 'image' || !reference.mediaUrl) return
-    const points = reference.points
-    if (!points || points.length === 0) return
+    const points = reference.points ?? []
     const seconds =
       reference.markSeconds !== undefined && Number.isFinite(reference.markSeconds)
         ? Math.max(0, reference.markSeconds)
         : null
     const key = `${reference.mediaUrl}\u0000${seconds === null ? '' : seconds.toFixed(3)}`
     const group = groups.get(key) ?? { url: reference.mediaUrl, seconds, marks: [] }
-    group.marks.push({
-      color: markColor(reference.markColor),
-      number: referenceLabelNumber(reference.label, position),
-      points: [...points],
-      strokeWidth: clampMarkStrokeWidth(reference.markStrokeWidth),
-      surfaceEdge: reference.markSurfaceEdge
-    })
+    // A frame note that carries no stroke is still a picture the user asked to
+    // send: a captured frame with a written comment is evidence, and the picture
+    // is the half the agent cannot otherwise see.
+    if (points.length > 0) {
+      group.marks.push({
+        color: markColor(reference.markColor),
+        number: referenceLabelNumber(reference.label, position),
+        points: [...points],
+        strokeWidth: clampMarkStrokeWidth(reference.markStrokeWidth),
+        surfaceEdge: reference.markSurfaceEdge
+      })
+    }
     groups.set(key, group)
   })
   return [...groups.values()]

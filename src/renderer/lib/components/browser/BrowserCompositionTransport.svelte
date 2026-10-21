@@ -1,15 +1,19 @@
 <script lang="ts">
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
   import CioPause from '@pdslng/cio-icon/CioPause.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
+  import CompositionFrameNote from './CompositionFrameNote.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     BrowserCompositionPlayback,
     BrowserCompositionTab,
-    BrowserTransportCommand
+    BrowserTransportCommand,
+    CompositionFrameSnapshot
   } from '$shared/ipc-contract'
 
   interface Props {
@@ -23,9 +27,19 @@
     active: boolean
     /** Board playback must stop when its surface goes away. */
     pauseWhenHidden?: boolean
+    /**
+     * The conversation a frame note belongs to.
+     *
+     * A note is a composer reference, so it needs the thread it is written for.
+     * The transport drives a tab rather than a conversation, and the board's
+     * video panel names both; a tab shown without a conversation has nothing to
+     * write a note into, and the two note buttons stay out of the bar.
+     */
+    projectId?: string
+    threadId?: string
   }
 
-  let { tabId, composition, active, pauseWhenHidden = false }: Props = $props()
+  let { tabId, composition, active, pauseWhenHidden = false, projectId, threadId }: Props = $props()
 
   /** How often the scrubber catches up with the page it is driving. */
   const POLL_MS = 250
@@ -40,6 +54,12 @@
   /** True while the user holds the scrubber, so a poll cannot yank it back. */
   let scrubbing = $state(false)
   let scrubValue = $state(0)
+  /** The frame the user asked to write about, once it has been captured. */
+  let frameNote = $state<{ snapshot: CompositionFrameSnapshot; armed: boolean } | null>(null)
+  /** True while a frame is being drawn and kept, so a click cannot start two. */
+  let capturing = $state(false)
+  /** Why the last frame capture did not produce a picture. */
+  let captureError = $state<string | null>(null)
 
   /** A composition always runs for something, and a zero-length timeline would
    *  make every fraction below divide by it. */
@@ -50,6 +70,8 @@
   const loop = $derived(playback?.loop ?? true)
   const error = $derived(playback?.error ?? null)
   const shown = $derived(Math.min(scrubbing ? scrubValue : time, duration))
+  /** A note needs a picture and a conversation, and a composition declares both. */
+  const canNote = $derived(Boolean(projectId && threadId))
   /** How much of the track is behind the playhead, for the filled scrubber. */
   const fill = $derived(`${(shown / duration) * 100}%`)
 
@@ -94,6 +116,32 @@
 
   function toggleLoop(): void {
     void send('loop', !loop)
+  }
+
+  /**
+   * Keep the frame on screen and open it for a note.
+   *
+   * The playhead is stopped before the capture, because the picture has to be the
+   * frame the user is looking at: a capture taken while the timeline moves can
+   * land on a later frame, and the note would then name a moment it does not show.
+   * The second that travels with the picture is the playhead the panel is
+   * showing, to the millisecond, so a note about a frame is unambiguous.
+   */
+  async function noteFrame(armed: boolean): Promise<void> {
+    if (!canNote || capturing) return
+    capturing = true
+    captureError = null
+    try {
+      await send('pause')
+      const snapshot = await invoke('browser:captureCompositionFrame', tabId, shown)
+      if (snapshot) frameNote = { snapshot, armed }
+      else captureError = 'That frame could not be captured. Try again.'
+    } catch {
+      // The tab can be closed between the click and the capture.
+      captureError = 'That frame could not be captured. Try again.'
+    } finally {
+      capturing = false
+    }
   }
 
   function commitScrub(): void {
@@ -206,7 +254,46 @@
   >
     <CioRefresh size={13} />
   </button>
+  <button
+    type="button"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+    aria-label="Comment on this frame"
+    title={canNote ? 'Comment on this frame' : 'Comment on a frame from the video panel'}
+    disabled={!canNote || capturing}
+    onclick={() => void noteFrame(false)}
+  >
+    <CioMessagePlus size={13} />
+  </button>
+  <button
+    type="button"
+    class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+    aria-label="Annotate this frame"
+    title={canNote
+      ? 'Annotate this frame: circle an area and write why'
+      : 'Annotate a frame from the video panel'}
+    disabled={!canNote || capturing}
+    onclick={() => void noteFrame(true)}
+  >
+    <CioPencil size={13} />
+  </button>
 </div>
+{#if frameNote}
+  <CompositionFrameNote
+    projectId={projectId ?? ''}
+    threadId={threadId ?? ''}
+    snapshot={frameNote.snapshot}
+    armed={frameNote.armed}
+    onClose={() => (frameNote = null)}
+  />
+{/if}
+{#if captureError}
+  <p
+    class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
+    role="alert"
+  >
+    {captureError}
+  </p>
+{/if}
 {#if error}
   <p
     class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-1 text-[0.6875rem] text-danger"
