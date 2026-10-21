@@ -1,0 +1,215 @@
+{
+  "timeout": "30m",
+  "jobs": [
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/01",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/02",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/03",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/04",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/05",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/06",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/07",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/08",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/09",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    },
+    {
+      "harness": "codex",
+      "directory": "benchmark-projects/10",
+      "steps": [
+        {
+          "command": "codex",
+          "args": [
+            "exec",
+            "Implement the fixed task in BENCHMARK_TASK.md. Run the tests and build commands it specifies. Do not commit."
+          ]
+        },
+        {
+          "command": "bun",
+          "args": ["test"]
+        },
+        {
+          "command": "bun",
+          "args": ["run", "build"]
+        }
+      ]
+    }
+  ]
+}
