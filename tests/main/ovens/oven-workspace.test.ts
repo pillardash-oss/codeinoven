@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { OvenSsh } from '../../../src/main/ovens/oven-ssh'
 import type { OvenRegistry } from '../../../src/main/ovens/oven-registry'
-import { normalizeGitHubSshUrl, ovenWorkspace } from '../../../src/main/ovens/remote/oven-workspace'
+import {
+  normalizeGitHubSshUrl,
+  ovenGitEnvironment,
+  ovenWorkspace
+} from '../../../src/main/ovens/remote/oven-workspace'
 
 describe('oven SSH workspace writes', () => {
   it('normalizes GitHub HTTPS and SSH origins to the dedicated-key SSH URL', () => {
@@ -87,3 +91,66 @@ function run(program: string, args: string[]): Promise<void> {
     )
   })
 }
+
+describe('oven git environment', () => {
+  /** Run one case against a private home so this machine's own keys never leak in. */
+  async function withHome(
+    files: Record<string, string>,
+    run: (home: string) => Promise<void>
+  ): Promise<void> {
+    const home = await mkdtemp(join(tmpdir(), 'cio-git-env-'))
+    const previous = process.env['HOME']
+    process.env['HOME'] = home
+    try {
+      await mkdir(join(home, '.ssh'), { recursive: true })
+      for (const [name, contents] of Object.entries(files))
+        await writeFile(join(home, name), contents)
+      await run(home)
+    } finally {
+      if (previous === undefined) delete process.env['HOME']
+      else process.env['HOME'] = previous
+      await rm(home, { recursive: true, force: true })
+    }
+  }
+
+  it('leaves a machine whose own Git is configured completely alone', async () => {
+    await withHome({}, async () => {
+      // Nothing of ours to offer, so nothing is overridden: the Oven's own
+      // core.sshCommand, agent, or HTTPS helper stays the credential.
+      expect(await ovenGitEnvironment()).toEqual({})
+      expect(await ovenGitEnvironment('.ssh/codeinoven-local-github')).toEqual({})
+    })
+  })
+
+  it('uses the mirror already on the Oven even for a read that carried none', async () => {
+    await withHome(
+      {
+        '.ssh/codeinoven-local-github': 'private key',
+        '.ssh/codeinoven-local-github-known-hosts': 'github host key'
+      },
+      async (home) => {
+        const env = await ovenGitEnvironment()
+        expect(env['GIT_SSH_VARIANT']).toBe('ssh')
+        expect(env['GIT_SSH_COMMAND']).toContain(
+          `-i "${join(home, '.ssh/codeinoven-local-github')}"`
+        )
+        expect(env['GIT_SSH_COMMAND']).toContain('UserKnownHostsFile=')
+        expect(env['GIT_SSH_COMMAND']).toContain('BatchMode=yes')
+      }
+    )
+  })
+
+  it('prefers a dedicated identity for this Oven over the mirror', async () => {
+    await withHome(
+      {
+        '.ssh/codeinoven-github': 'dedicated key',
+        '.ssh/codeinoven-local-github': 'mirror key'
+      },
+      async (home) => {
+        const env = await ovenGitEnvironment('.ssh/codeinoven-local-github')
+        expect(env['GIT_SSH_COMMAND']).toContain(`-i "${join(home, '.ssh/codeinoven-github')}"`)
+        expect(env['GIT_SSH_COMMAND']).not.toContain('codeinoven-local-github')
+      }
+    )
+  })
+})

@@ -178,6 +178,7 @@ function gitFailure(stderr: string, code: number | null): string {
 /** The app-managed identities an Oven may hold, most specific first. */
 const DEDICATED_IDENTITY = '.ssh/codeinoven-github'
 const MIRRORED_IDENTITY = /^\.ssh\/codeinoven-local-github(?:\.pub)?$/u
+const MIRRORED_IDENTITY_FILE = '.ssh/codeinoven-local-github'
 const MIRRORED_TRUST = '.ssh/codeinoven-local-github-known-hosts'
 
 /** One home-relative path inside a shell command Git will parse again. */
@@ -197,29 +198,48 @@ async function isFile(path: string): Promise<boolean> {
 /**
  * The Git-over-SSH environment every Oven-side Git command runs with.
  *
- * A dedicated CodeInOven identity for this Oven wins; otherwise the app mirror
- * of the user's own GitHub identity is used, paired with the host keys this
- * machine already trusts so the Oven inherits the user's trust decisions. Host
- * key checking stays strict and forwarding stays off in both cases.
+ * A dedicated CodeInOven identity for this Oven wins; otherwise the mirror of the
+ * user's own GitHub identity is used, paired with the host keys this machine
+ * already trusts so the Oven inherits the user's trust decisions. Host key
+ * checking stays strict and forwarding stays off for an identity the app owns.
+ *
+ * A mirror this app already placed on the Oven counts even when this call did not
+ * carry one: reads and refreshes do not mirror anything, and the copy on the Oven
+ * is the identity its checkout was cloned with. Without that, every remote read
+ * on an Oven whose Git the app set up looked unauthenticated.
+ *
+ * With no identity of its own to offer, the app sets nothing at all. Overriding
+ * `GIT_SSH_COMMAND` on a machine whose Git already works replaces whatever the
+ * person configured there (`core.sshCommand`, an ssh-agent, a helper for HTTPS
+ * remotes) with a bare `ssh` that holds no credential, which is exactly how a
+ * signed-in Oven ended up reporting that its remote could not be read.
  */
 export async function ovenGitEnvironment(
   localIdentityFile?: unknown
 ): Promise<Record<string, string>> {
   const dedicated = join(homedir(), DEDICATED_IDENTITY)
   const hasDedicated = await isFile(dedicated)
-  const mirror =
-    !hasDedicated &&
+  const mirroredOnOven = join(homedir(), MIRRORED_IDENTITY_FILE)
+  const provided =
     typeof localIdentityFile === 'string' &&
-    MIRRORED_IDENTITY.test(localIdentityFile)
+    MIRRORED_IDENTITY.test(localIdentityFile) &&
+    (await isFile(join(homedir(), localIdentityFile)))
       ? join(homedir(), localIdentityFile)
       : null
+  const mirror = hasDedicated
+    ? null
+    : (provided ?? ((await isFile(mirroredOnOven)) ? mirroredOnOven : null))
   const identity = hasDedicated ? dedicated : mirror
+  // The machine's own Git configuration is the credential in that case, and it
+  // stays untouched.
+  if (!identity) return {}
   const trust =
-    mirror && (await isFile(join(homedir(), MIRRORED_TRUST)))
+    !hasDedicated && (await isFile(join(homedir(), MIRRORED_TRUST)))
       ? join(homedir(), MIRRORED_TRUST)
       : null
   const options = [
-    ...(identity ? [`-i ${optionPath(identity)}`, '-o IdentitiesOnly=yes'] : []),
+    `-i ${optionPath(identity)}`,
+    '-o IdentitiesOnly=yes',
     ...(trust ? [`-o UserKnownHostsFile=${optionPath(trust)}`] : []),
     '-o StrictHostKeyChecking=yes',
     '-o BatchMode=yes',
