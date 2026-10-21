@@ -53,6 +53,13 @@
     /** Sentence behind the save button, for its `title`. Defaults to `saveLabel`. */
     saveTitle?: string
     fullscreen: boolean
+    /** Whether the reader can search what it is showing. Media and sandboxed
+     *  frame previews cannot be read from this document at all. */
+    findDisabled: boolean
+    /** Replace needs a draft, which only the source editor has. */
+    replaceDisabled: boolean
+    onSearch: () => void
+    onSearchReplace: () => void
     onSetView: (view: ProjectFileView) => void
     onInfo: () => void
     /** File info is disabled for files that no longer exist on disk. */
@@ -93,6 +100,10 @@
     saveLabel,
     saveTitle = undefined,
     fullscreen,
+    findDisabled,
+    replaceDisabled,
+    onSearch,
+    onSearchReplace,
     onSetView,
     onInfo,
     infoDisabled = false,
@@ -218,6 +229,10 @@
     {canRedo}
     {beautifyLabel}
     {fullscreen}
+    {findDisabled}
+    {replaceDisabled}
+    {onSearch}
+    {onSearchReplace}
     {onInfo}
     {infoDisabled}
     {onUndo}

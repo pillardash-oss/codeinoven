@@ -38,6 +38,7 @@ import {
   setPowerWakeService
 } from '../chat/thread-events'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
+import { instanceEventBus } from '../system/instance-event-bus'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -180,6 +181,12 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
+  // This independent prerequisite must not hold the feature graph, a first
+  // message, or terminal creation behind a download/extraction promise.
+  if (process.platform === 'win32')
+    void import('../drivers/windows-git-runtime')
+      .then(({ startWindowsGitPreparation }) => startWindowsGitPreparation())
+      .catch((error: unknown) => Logger.error('Windows Git startup preparation failed', error))
   const [
     { registerIpcHandlers },
     { ProjectManager },
@@ -850,6 +857,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.foreignRuns = new ForeignRunService(database)
   state.foreignRuns.registerIpc()
   state.foreignRuns.start()
+  // The cross-instance stream bus: it serves this process and dials its live
+  // peers so a sibling window renders the same run this one renders. It arms its
+  // listener only while the registry proves another instance is running.
+  instanceEventBus.start()
   // Shared rows and transcripts a sibling writes into: the writer announces the
   // threads it touched, and this instance re-reads and pushes them.
   state.crossInstanceThreads = new CrossInstanceThreadService(database)
@@ -954,6 +965,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         }
       })
     }
+    // A pid the task manager ends can be a terminal's own shell. The PTY
+    // service announces that stop so the renderer does not respawn it as a
+    // crash, which is the difference between a kill that holds and a shell that
+    // is back a moment later.
+    state.chatEngine?.setPtyStopAnnouncer(
+      (pid) => state.ptyService?.announceStopForPid(pid) ?? false
+    )
     state.ptyService.register()
     state.providerConnection.register()
     state.openCodeV2Service.register()

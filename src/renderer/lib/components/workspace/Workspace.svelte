@@ -66,11 +66,7 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
-  import {
-    assistantEffectiveSettings,
-    chatEffectiveSettings,
-    threadSettings
-  } from '$lib/stores/thread-settings.svelte'
+  import { assistantEffectiveSettings, threadSettings } from '$lib/stores/thread-settings.svelte'
   import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import {
@@ -90,6 +86,7 @@
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewAssistantTask,
+    settingsForNewChat,
     settingsForNewThread,
     threadWithInheritedSettings,
     withProjectOven
@@ -3869,6 +3866,12 @@
     return projects.find((candidate) => candidate.id === INBOX_PROJECT_ID) ?? null
   }
 
+  /** The chat a new chat is minted from: the thread in focus when it is a chat. */
+  function selectedChatThread(): Thread | null {
+    const selected = workspaceState.selectedThread
+    return selected?.projectId === INBOX_PROJECT_ID ? selected : null
+  }
+
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(
     project: Project,
@@ -3897,13 +3900,25 @@
     // The assistant space is its own model-memory family: a new task inherits
     // the assistant task in focus, and nothing else, so a chat or project
     // thread that happens to be selected never leaks into the assistant space.
+    // A task of another assistant is not a source either: it carries that
+    // assistant's Oven and workspace, which do not belong to this one.
     const assistantFocus =
-      project.id === ASSISTANT_SPACE_ID && activeThread?.projectId === ASSISTANT_SPACE_ID
+      project.id === ASSISTANT_SPACE_ID &&
+      activeThread?.projectId === ASSISTANT_SPACE_ID &&
+      (assistantId === undefined || activeThread.assistantId === assistantId)
         ? activeThread
         : null
+    const assistantRecord =
+      assistantId === undefined
+        ? null
+        : (assistants.assistants.find((candidate) => candidate.id === assistantId) ?? null)
     const inheritedSettings =
       project.id === ASSISTANT_SPACE_ID
-        ? settingsForNewAssistantTask(assistantFocus, threadSettings.lastUsed)
+        ? settingsForNewAssistantTask(
+            assistantFocus,
+            threadSettings.lastUsed,
+            assistantRecord?.execution
+          )
         : withProjectOven(
             settingsForNewThread(activeThread, threadSettings.lastUsed),
             project,
@@ -4101,15 +4116,25 @@
    */
   function startNewChat(): void {
     const existing = findEmptyNewThread(allThreads, INBOX_PROJECT_ID, undefined)
+    // A blank row that predates this click is refreshed from the chat in focus,
+    // so a reused row never stands on the Oven it happened to be created with.
+    const source = existing ? selectedChatThread() : null
+    const inherited = source?.settings ? settingsForNewChat(source, threadSettings.lastUsed) : null
     if (existing) {
+      const thread = inherited ? threadWithInheritedSettings(existing, inherited) : existing
       threadMessages.seedEmpty(INBOX_PROJECT_ID, existing.id)
+      upsertThreadInList(thread)
+      if (inherited) {
+        void invoke('thread:updateSettings', INBOX_PROJECT_ID, existing.id, inherited)
+          .then((updated) => upsertThreadInList(updated))
+          .catch(() => {})
+      }
       // The blank row is already the chat the click asked for.
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
         return
       }
-      upsertThreadInList(existing)
-      workspaceState.openThread(existing, inboxProject())
+      workspaceState.openThread(thread, inboxProject())
       return
     }
     openNewChatThread()
@@ -4123,7 +4148,7 @@
    */
   function openNewChatThread(): void {
     const optimisticId = newOptimisticThreadId()
-    const settings = chatEffectiveSettings(threadSettings.lastUsed)
+    const settings = settingsForNewChat(selectedChatThread(), threadSettings.lastUsed)
     const optimisticThread: Thread = {
       id: optimisticId,
       projectId: INBOX_PROJECT_ID,
@@ -4186,7 +4211,7 @@
       providerId: 'pi',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: '',
-      settings: chatEffectiveSettings(threadSettings.lastUsed)
+      settings: settingsForNewChat(selectedChatThread(), threadSettings.lastUsed)
     })
     return { thread, inbox }
   }
@@ -5066,18 +5091,19 @@
       thread.id,
       `${thread.title} (fork)`
     )
-    upsertThreadInList(forked)
     scopeState.updateThread(forked)
     if (scopeState.sidebarContext?.projectId === forked.projectId) {
       scopeState.showSidebarForThread(forked, scopeState.sidebarContext.bucketId)
     }
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    // Land the fork in the view that owns it, exactly like every other created
+    // thread: an assistant fork belongs in Assistant View, not in whatever view
+    // happened to be on screen when it was made.
+    openCreatedThread(forked)
   }
 
   /** A message-level fork succeeded inside the thread view   surface and open it. */
   function handleForkedThread(forked: Thread): void {
-    upsertThreadInList(forked)
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    openCreatedThread(forked)
   }
 
   /** Register a thread that arrived from another view, then hand it to the shell
@@ -5251,6 +5277,7 @@
         onContinueInProject={handleContinuedInProject}
         onProjectCreated={handleChatProjectCreated}
         onOpenScopeView={(thread) => void openThreadScopeView(thread)}
+        onOpenAssistantThread={openAssistantTask}
         onSendChat={createStandaloneChat}
         onStartChatDraft={startChatDraft}
         onRequestAddProject={(kind) => {

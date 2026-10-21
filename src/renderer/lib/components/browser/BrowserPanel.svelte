@@ -336,7 +336,7 @@
       showAtCurrentBounds().catch(() => {})
     })
     return () => {
-      void invoke('browser:hide', tabId).catch(() => {})
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
     }
   }
 
@@ -413,7 +413,7 @@
       // the attach lands. A redundant hide is a no-op in the main process when
       // this tab is not the one attached.
       if (!browserVisibility.isVisible(tabId, contentBounds())) {
-        void invoke('browser:hide', tabId).catch(() => {})
+        browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
       }
     } catch {
       // Tab may have been destroyed between the visibility check and the IPC.
@@ -561,7 +561,7 @@
         document.removeEventListener('focusout', onSidebarFocusOut)
         browserKeyboardFocus.setClaim('sidebar', null)
       }
-      void invoke('browser:hide', tabId).catch(() => {})
+      browserVisibility.detachReleasedTab(tabId)
     }
   })
 </script>

@@ -785,11 +785,14 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
   )
   ipcMain.handle(
     'projectFiles:resolveCitationPaths',
-    (_, projectId: unknown, candidates: unknown, scopeBucketId?: unknown) =>
+    (_, projectId: unknown, candidates: unknown, scopeBucketId?: unknown, threadId?: unknown) =>
       projectFilesService.resolveCitationPaths(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(candidates, 'Citation paths'),
-        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        scopeBucketId === undefined
+          ? undefined
+          : validateEntityId(scopeBucketId, 'Scope bucket ID'),
+        threadIdArg(threadId)
       )
   )
   ipcMain.handle('projectFiles:resolveExternalCitationPaths', (_, absolutePaths: unknown) =>

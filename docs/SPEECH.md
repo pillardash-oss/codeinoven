@@ -94,6 +94,8 @@ Every Apple Silicon checkout resolves the three Swift speech workers (`mlx-worke
 
 Recording begins and ends only through the microphone control unless permission is revoked, the capture device disappears, the application shuts down, storage fails, or disk space becomes insufficient. There is no duration cutoff.
 
+Microphone permission is requested at the recording gesture, never at launch. macOS shows its prompt to a process that touches the input device, so the capture worker is only pre-warmed when the TCC decision already exists (`microphoneAccessGranted`): a user who has recorded before gets an instant first start after a relaunch, while a fresh install stays silent until a recording asks for access (`speech:ensureMicrophoneAccess`). A refusal settles that recording as a permission failure with the System Settings path in the message rather than silently falling back.
+
 Media chunks are fixed-size and backpressured. Main writes them into a staging file beneath the CodeInOven configuration directory, finalizes that file atomically, and records an opaque audio ID. Audio, transcripts, model state, history, and learned rules never go into the user's repository.
 
 Speech history defaults to 30 attempts and can be set from 1 through 500. Every permission, capture, ASR, cleanup, cancellation, success, and failure outcome belongs to its original attempt. Retries append results without duplicating retained audio. After a new history index is committed, oldest-first eviction removes the evicted attempt's app-owned audio. Explicit deletion always requires confirmation.
@@ -160,7 +162,7 @@ Every destructive action uses the shared confirmation modal. The modal focuses i
 
 ## Troubleshooting
 
-- **Microphone unavailable:** Check the operating-system permission and the active capture device. CodeInOven grants media capture only to its trusted renderer; embedded browser origins do not inherit it.
+- **Microphone unavailable:** Check the operating-system permission and the active capture device. CodeInOven grants media capture only to its trusted renderer; embedded browser origins do not inherit it. Access is only requested when a recording starts, so no prompt appears before the user records for the first time.
 - **Model cannot be selected:** The artifact may be missing, corrupt, incompatible with the active runtime, or still awaiting qualification.
 - **Checksum mismatch:** Retry the download. Staging bytes are discarded and never become selectable.
 - **Cleanup failed:** The raw transcript is retained and inserted. Details remain on the original history attempt.

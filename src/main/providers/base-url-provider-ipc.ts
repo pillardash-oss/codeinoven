@@ -180,7 +180,7 @@ export function registerBaseUrlProviderIpc(
       const provider = await providers.getProvider(input.harnessId, input.id)
       if (provider?.apiKeyRef) apiKey = await vault.resolve(provider.apiKeyRef)
     }
-    clipboard.writeText(
+    await clipboard.writeText(
       serializeProviderClipboard({
         harnessId: input.harnessId,
         npm: input.npm,

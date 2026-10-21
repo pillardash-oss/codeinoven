@@ -561,9 +561,10 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     name: ${JSON.stringify(diagnosticsTool.name)},
     label: 'Run CodeInOven app diagnostics',
     description: ${JSON.stringify(diagnosticsTool.description)},
-    promptSnippet: 'Look up an app, thread, assistant or log problem yourself with read-only CodeInOven diagnostics',
+    promptSnippet: 'Search conversation threads for context, or look up an app, thread, assistant or log problem yourself with read-only CodeInOven diagnostics',
     promptGuidelines: [
       'When the user reports a problem with the app, a thread, an assistant, or a log line, look it up with ${JSON.stringify(diagnosticsTool.name)} instead of asking them to re-send their request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs.',
+      'When the task needs context that lives in another conversation, search for it with action search_threads: it ranks threads across every project by keyword and by meaning, includes matching passages for content hits, and action read_messages then reads that thread. Search before asking the user to explain something their own history already holds.',
       'Diagnostics output is redacted and bounded and the capability never writes, deletes, or reconfigures anything. Report the evidence you actually read, and say plainly when it is insufficient instead of guessing.'
     ],
     parameters: Type.Object({

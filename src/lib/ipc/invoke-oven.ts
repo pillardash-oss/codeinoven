@@ -18,7 +18,6 @@ import type {
   OvenAgentScript,
   OvenAgentScriptRequest,
   OvenAgentPreview,
-  OvenEndpoint,
   OvenAgentRegistrationInput,
   OvenAgentRegistration
 } from '../ovens'
@@ -27,7 +26,12 @@ import type { Contract } from './contract-helpers'
 import type { Thread } from '../types'
 
 export const invokeOvenContract = {
-  'oven:testConnection': {} as Contract<[input: SaveOvenInput], OvenConnectionStatus>,
+  'oven:hostTrust:respond': {} as Contract<[requestId: string, approved: boolean], void>,
+  'oven:testConnection': {} as Contract<
+    [input: SaveOvenInput, requestId: string],
+    OvenConnectionStatus
+  >,
+  'oven:cancelConnectionTest': {} as Contract<[requestId: string], void>,
   'oven:connectionHealth': {} as Contract<[id: string], OvenConnectionStatus>,
   'oven:validateIdentity': {} as Contract<[path: string], string>,
   'oven:rootOperation': {} as Contract<
@@ -51,6 +55,14 @@ export const invokeOvenContract = {
   'oven:probe': {} as Contract<[id: string, refresh?: boolean], OvenProbe>,
   /** The unified, cached check for one Oven: device, harnesses, and packages. */
   'oven:peek': {} as Contract<[id: string, refresh?: boolean], OvenPeek>,
+  /**
+   * Start one Oven's long-lived session before anything needs it.
+   *
+   * Opening a thread that is attached to an Oven sends this, so the first file
+   * tree, Git status, or prompt costs a round trip instead of a remote process
+   * start. It answers immediately: the session keeps opening in the background.
+   */
+  'oven:warm': {} as Contract<[id: string], void>,
   'oven:runs': {} as Contract<[id: string], OvenRun[]>,
   'oven:workspace': {} as Contract<[id: string, input: OvenWorkspaceRequest], OvenWorkspaceResult>,
   'oven:reviewTransfer': {} as Contract<[input: OvenTransferInput], OvenTransferReview>,
@@ -83,7 +95,9 @@ export const invokeOvenContract = {
   >,
   'oven:agent:script': {} as Contract<[input: OvenAgentScriptRequest], OvenAgentScript>,
   'oven:agent:preview': {} as Contract<[code: string], OvenAgentPreview>,
-  'oven:agent:test': {} as Contract<[input: OvenAgentRegistrationInput], OvenConnectionStatus>,
-  'oven:agent:reachable': {} as Contract<[code: string], OvenEndpoint | null>,
+  'oven:agent:test': {} as Contract<
+    [input: OvenAgentRegistrationInput, requestId: string],
+    OvenConnectionStatus
+  >,
   'oven:agent:register': {} as Contract<[input: OvenAgentRegistrationInput], OvenAgentRegistration>
 }

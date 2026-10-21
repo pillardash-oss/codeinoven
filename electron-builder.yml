@@ -82,14 +82,19 @@ mac:
     - dmg
     - zip
   artifactName: ${name}-${version}-${arch}.${ext}
-  # The native-splash launcher is the main executable (bundle id
-  # `com.pillardash.codeinoven`); it `execv`s into the renamed Electron binary
-  # `CodeInOven-electron`. Squirrel.Mac validates every update against the
-  # RUNNING process's designated requirement (`identifier "CodeInOven-electron"`),
-  # so the top-level bundle sign must carry that same identifier or every update
-  # fails with "code failed to satisfy specified code requirement(s)".
-  # `mac-sign.js` wraps the default signer and overrides the identifier for the
-  # bundle sign only (helpers/frameworks keep their own identifiers).
+  # macOS runs the Electron runtime as the bundle's main executable, because
+  # that process is the product: its name is what the Dock, the Applications
+  # folder, privacy dialogs and Activity Monitor show, and it is the folder name
+  # Squirrel's installer writes into /Applications. The native splash is a flat
+  # helper under `Contents/Helpers` that the app spawns itself.
+  #
+  # Squirrel.Mac validates every update against the RUNNING process's designated
+  # requirement (`identifier "CodeInOven-electron"`), so the top-level bundle
+  # sign must keep that identifier or every update fails with "code failed to
+  # satisfy specified code requirement(s)". `mac-sign.js` wraps the default
+  # signer: it overrides the identifier for the bundle sign only (helpers and
+  # frameworks keep their own) and gives the runtime the canonical bundle
+  # identifier that macOS `UNNotification` requires.
   sign: scripts/native-splash/mac-sign.js
   # Platform-level `files` replaces the top-level list, so the base set is
   # repeated here. better-sqlite3 ships prebuilds for every platform; this app

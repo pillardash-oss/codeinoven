@@ -5,7 +5,6 @@ import type {
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
-  PromptReference,
   SpecActionIntent,
   ThreadSettings,
   UserMessagePresentation
@@ -28,6 +27,21 @@ export interface SendPayload {
    *  temporary chats to show a short action label while sending the full
    *  instruction to the agent). */
   transportText?: string
+}
+
+/**
+ * A passage a conversation attached to its composer.
+ *
+ * A thread resolves these against its own reference store, which rebuilds the
+ * highlight from the message and its character range; a side chat keeps them on
+ * its tab. Both need the range so the highlight survives a re-render, and both
+ * carry the comment the user wrote on the passage.
+ */
+export interface SelectionAttachment {
+  text: string
+  messageId?: string
+  startOffset?: number
+  endOffset?: number
 }
 
 /**
@@ -88,13 +102,16 @@ export interface ConversationController {
   clearStatus(): void
 
   /** Optional composer-level selection references (used by temporary chats). */
-  readonly references?: PromptReference[]
+  readonly references?: readonly ResponseReferenceAnchor[]
   /** Remove a single composer selection reference (used by temporary chats). */
   removeReference?(id: string): void
   /** Remove all composer selection references (used by temporary chats). */
   clearReferences?(): void
-  /** Attach an additional response selection to the composer (temporary chats). */
-  addSelection?(text: string): void
+  /** Attach a response selection to the composer, and name the reference it
+   *  became so its comment can be written on it (temporary chats). */
+  addSelection?(selection: SelectionAttachment): string | null
+  /** Save or clear the comment attached to one composer selection. */
+  updateReferenceComment?(id: string, comment: string): void
 
   /** Drop a message and everything after it (message editing). Temporary
    *  chats implement this against their own backend; threads use the

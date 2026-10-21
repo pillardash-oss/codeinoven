@@ -31,13 +31,26 @@ export function currentUser(): string {
   return process.env['USER'] ?? process.env['USERNAME'] ?? userInfo().username
 }
 
-/** The platform family the app supports, rejecting anything it cannot set up. */
-export function agentPlatform(): OvenAgentPlatform {
-  if (process.platform === 'linux' || process.platform === 'darwin' || process.platform === 'win32')
-    return process.platform
+/**
+ * The platform family a machine belongs to, as the app names Ovens.
+ *
+ * Android is not a separate family here: Termux is a Linux userspace with a
+ * POSIX shell, npm, and the same command set as any other Oven, and only the
+ * runtime's own name differs. npm also reads `process.platform` when it applies
+ * a package's `os` field, which is why the published package lists `android`
+ * and this maps it to the Linux plan.
+ */
+export function agentPlatformFor(platform: string): OvenAgentPlatform {
+  if (platform === 'android') return 'linux'
+  if (platform === 'linux' || platform === 'darwin' || platform === 'win32') return platform
   throw new Error(
-    `CodeInOven supports Linux, macOS, and Windows Ovens. This machine reports ${process.platform}.`
+    `CodeInOven supports Linux, macOS, Windows, and Termux on Android Ovens. This machine reports ${platform}.`
   )
+}
+
+/** The platform family this machine belongs to, rejecting one the app cannot set up. */
+export function agentPlatform(): OvenAgentPlatform {
+  return agentPlatformFor(process.platform)
 }
 
 /**

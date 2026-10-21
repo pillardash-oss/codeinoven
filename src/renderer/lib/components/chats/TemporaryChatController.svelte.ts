@@ -10,11 +10,15 @@ import type {
   AgentMessage,
   AgentProviderIssue,
   AgentSessionStatus,
-  PromptReference,
   ThreadSettings
 } from '$shared/types'
 import { DEFAULT_HARNESS } from '$shared/harness-default'
-import type { ConversationController, SendPayload } from '../threads/ConversationController.svelte'
+import type {
+  ConversationController,
+  SelectionAttachment,
+  SendPayload
+} from '../threads/ConversationController.svelte'
+import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
 
 /**
  * Conversation adapter for temporary side chats.
@@ -98,31 +102,48 @@ export class TemporaryChatController implements ConversationController {
     return agentRuns.busySince(this.projectId, this.conversationId)
   }
 
-  get references(): PromptReference[] {
+  get references(): ResponseReferenceAnchor[] {
     if (!this.#tab.selectionAttached || this.#tab.selections.length === 0) return []
     return this.#tab.selections.map((selection, index) => ({
-      id: `${this.#tab.temporaryChatId}.selection.${index}`,
+      id: selection.id,
       label: `Selection ${index + 1}`,
-      text: selection
+      text: selection.text,
+      ...(selection.comment ? { comment: selection.comment } : {}),
+      ...(selection.messageId === undefined ? {} : { messageId: selection.messageId }),
+      ...(selection.startOffset === undefined ? {} : { startOffset: selection.startOffset }),
+      ...(selection.endOffset === undefined ? {} : { endOffset: selection.endOffset })
     }))
   }
 
   removeReference(id: string): void {
-    const index = Number(id.split('.').pop())
-    if (Number.isNaN(index)) return
-    this.#tab.selections = this.#tab.selections.filter((_, i) => i !== index)
+    this.#tab.selections = this.#tab.selections.filter((selection) => selection.id !== id)
     if (this.#tab.selections.length === 0) this.#tab.selectionAttached = false
+    this.#touch()
   }
 
   clearReferences(): void {
     this.#tab.selections = []
     this.#tab.selectionAttached = false
+    this.#touch()
   }
 
-  addSelection(text: string): void {
-    if (!text.trim() || this.#tab.expired) return
-    this.#tab.selections = [...this.#tab.selections, text]
+  /** Attach a passage to the composer and name the reference it became, so the
+   *  comment editor opens on it exactly as it does in a thread. */
+  addSelection(selection: SelectionAttachment): string | null {
+    if (!selection.text.trim() || this.#tab.expired) return null
+    const id = crypto.randomUUID()
+    this.#tab.selections = [...this.#tab.selections, { id, ...selection }]
     this.#tab.selectionAttached = true
+    this.#touch()
+    return id
+  }
+
+  /** Save or clear the comment on one attached passage. */
+  updateReferenceComment(id: string, comment: string): void {
+    const trimmed = comment.trim()
+    this.#tab.selections = this.#tab.selections.map((selection) =>
+      selection.id === id ? { ...selection, comment: trimmed || undefined } : selection
+    )
     this.#touch()
   }
 
@@ -382,7 +403,7 @@ export class TemporaryChatController implements ConversationController {
     }
   }
 
-  #selectionReferences(): PromptReference[] {
+  #selectionReferences(): ResponseReferenceAnchor[] {
     if (!this.#tab.selectionAttached) return []
     const references = this.references
     this.#tab.selections = []

@@ -11,6 +11,15 @@ class FindNavState {
   gitFindFocusTrigger = $state(0)
   studioFindOpen = $state(false)
   studioFindFocusTrigger = $state(0)
+  /** The file reader's rendered views (annotate, document preview, diff). Their
+   *  text only exists as DOM, so the source editor's own find cannot see it and
+   *  the reader searches the visible document instead. */
+  fileDocumentFindOpen = $state(false)
+  fileDocumentFindFocusTrigger = $state(0)
+  stickyNotesFindOpen = $state(false)
+  stickyNotesFindFocusTrigger = $state(0)
+  threadNotesFindOpen = $state(false)
+  threadNotesFindFocusTrigger = $state(0)
 
   openEditorFind(): void {
     if (!this.editorFindOpen) {
@@ -54,6 +63,36 @@ class FindNavState {
 
   closeStudioFind(): void {
     this.studioFindOpen = false
+  }
+
+  openFileDocumentFind(): void {
+    // Only one find covers the reader at a time: a query in the source editor
+    // and a query in the rendered document would each claim every match.
+    this.closeEditorFind()
+    this.fileDocumentFindOpen = true
+    this.fileDocumentFindFocusTrigger++
+  }
+
+  closeFileDocumentFind(): void {
+    this.fileDocumentFindOpen = false
+  }
+
+  openStickyNotesFind(): void {
+    this.stickyNotesFindOpen = true
+    this.stickyNotesFindFocusTrigger++
+  }
+
+  closeStickyNotesFind(): void {
+    this.stickyNotesFindOpen = false
+  }
+
+  openThreadNotesFind(): void {
+    this.threadNotesFindOpen = true
+    this.threadNotesFindFocusTrigger++
+  }
+
+  closeThreadNotesFind(): void {
+    this.threadNotesFindOpen = false
   }
 }
 

@@ -37,6 +37,10 @@ flowchart LR
   `Thread.assistantTaskId` (`isAssistantRunThread`). **Only an assistant's Getting
   started thread hosts the getting-started run** the authoring conversation
   and no task's scheduled run ever executes on a task's own thread.
+- **Forking stays in the assistant.** A fork copies history into a new thread in
+  the same assistant space and carries the parent's `assistantId` (plus its
+  icon and schedule override), so the copy sits under that assistant. It is
+  never a run and never the knowledge thread, so neither link travels.
 - **Hierarchy is always Assistant -> Task -> runs.** A run is never a task: it is
   never scheduled, never counted in an assistant's task count, and never grouped.
   Each task may override its assistant's schedule (`scheduleOverride`), and shows a
@@ -100,6 +104,13 @@ workspace instead of a shared scratch directory:
   accent carry the identity and the full name is the root icon's tooltip (and
   its image `alt`). A project and a chat root keep their name label, and a
   assistant-less task keeps the assistant space's own identity.
+- Because every task of one assistant mounts that same directory, a composer
+  reference chip (an attached file, a doc comment, an inspector comment) can be
+  relocated or copied from one task of the assistant to another:
+  `ThreadView.svelte` allows relocation when the thread has an `assistantId`, and
+  `RelocateThreadPicker.svelte` offers exactly that assistant's tasks. Another
+  assistant's tasks read a different directory and are never destinations, and an
+  assistant-less task owns a directory of its own.
 - Directory constants live in `src/lib/project-artifacts.ts`
   (`ASSISTANT_CWD_DIR`, `CHATS_CWD_DIR`) and are pre-created by
   `src/main/storage/storage-engine.ts`.
@@ -161,9 +172,14 @@ the engineering agent behavior:
   permission level: a task stays pinned to auto review until File System is
   turned on for the assistant itself, exactly like a chat. Changing a model in a
   task commits to the assistant store, so an assistant task never reshapes the
-  model a chat or a project thread starts on. The model pickers in a task and in
-  an assistant's **Agents** tab read the assistant's own favorites and recently
-  used models (`assistantFavoriteModels` / `assistantRecentModels` in
+  model a chat or a project thread starts on. Where the task runs follows a
+  different order: the task in focus, else the assistant's own execution target,
+  else the last task's Oven (`settingsForNewAssistantTask` applies
+  `settingsWithAssistantTarget` in `src/lib/assistant-execution.ts`, the same
+  overlay the dispatch path runs), so a new task's Oven control already names the
+  machine its runs will use. The model pickers in a task and in an assistant's
+  **Agents** tab read the assistant's own favorites and recently used models
+  (`assistantFavoriteModels` / `assistantRecentModels` in
   `src/renderer/lib/stores/renderer-recovery.svelte.ts`).
 
 ## Scheduler contract
@@ -248,7 +264,11 @@ the app's clock for Assistant View.
   dispatches the run on it, settles the record on success, and returns the run so
   the caller can open it. Neither is automatic. An unattended run recorded in the
   ledger is acknowledged separately by `assistant:dismissBackgroundRun`, which
-  drops the durable entry from every "While you were away" surface.
+  stamps the entry's `acknowledgedAt` so it leaves every "While you were away"
+  surface while the ledger keeps it as run history. `assistant:dismissRuns`
+  acknowledges the missed records and runs a surface is clearing in one call, and
+  is what the notification panel's **Dismiss all** uses on the Assistants tab
+  (together with `notification:clearInbox('assistant')` for the notices).
 
 ## Background mode (menu bar)
 
@@ -377,13 +397,16 @@ default:
 - the **While you were away** section of the same Assistants tab, which lists the
   recent unattended runs straight from the ledger (outcome, why it ran, when it
   settled, any persisted failure, and how many gates it answered for you), with a
-  per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that removes the
-  durable ledger entry, and an assistant profile's **Run history** list in the
+  per-entry **Dismiss** (`assistant:dismissBackgroundRun`) that acknowledges the
+  ledger entry, and an assistant profile's **Run history** list in the
   knowledge panel. A run whose thread was later deleted still shows, as
   non-clickable evidence. These rows name the task or assistant the same way, so
   the section never falls back to the authoring host's fixed title. Dismissing a
-  run is the user acknowledging evidence they no longer need: the row leaves
-  every surface and does not return on the next launch.
+  run is the user acknowledging a row: it leaves every notification surface and
+  does not return on the next launch, while the ledger keeps the entry so the run
+  history still says what ran. The tab's **Dismiss all** retires the missed fires
+  and every unacknowledged run in one `assistant:dismissRuns` call, so the tab
+  cannot be left showing run rows the panel's own clear-all could not reach.
 
 ## Auto-resolved gates (attention rail)
 
@@ -1282,3 +1305,34 @@ confirmation. The fork is seeded with `handoffSummary` (recorded with
 `history:append`), and the original task thread and its schedule stay intact.
 Handing off while the task is mid-run always passes a confirmation dialog first,
 so a concurrent write cannot corrupt the thread session.
+
+## Tagging assistants and threads
+
+An Assistant View composer tags what a message is about. Typing `@` offers the
+assistants in the tab and their threads (tasks, runs, and Getting started
+conversations) beside the usual built-in tags and Assignment tasks; a project or
+chat composer never sees them, because they only exist inside the assistant
+space (`ComposerAssistantTag`, `src/lib/components/chats/composer-mentions.ts`).
+
+- A pick inserts an id and nothing else: `@thread:<threadId>` for a thread,
+  `@assistant:<assistantId>` for an assistant. No transcript is copied into the
+  prompt, so a tag costs one line no matter how long the thread is.
+- The writer never sees that id. The composer renders the token as an inline
+  badge carrying the assistant's own icon and the thread title
+  (`assistantTagIconHtml` in `assistant-tag-badge.ts`,
+  `projectReferenceBadges` in `ChatComposer.svelte`), and a sent message renders
+  the same icon plus the title (`thread-message-presentation.ts`). The tag also
+  wears the assistant's accent colour as its inset left edge
+  (`RichInlineBadge.accentColor`), the same way the assistant's rows do. The id
+  stays in the stored text, which is what the agent reads.
+- A tag is a link: clicking its badge or its chip opens that thread
+  (`onInlineBadgeActivate` in `RichMarkdownEditor.svelte`, `onOpenAssistantTag`
+  in `MarkdownView.svelte`). An assistant tag opens its Getting started
+  conversation, else its newest thread.
+- The assistant prompt (`src/lib/cio-prompts.ts`, id `assistant`) tells the agent
+  what a tag is and to read it before answering: `cio_util_diagnose` with
+  `read_messages` returns a tagged thread's newest messages.
+- Escape dismisses the suggestion list for the token being typed and keeps it
+  shut until the caret leaves that `@` (`composerMentionStart`,
+  `ChatComposer.svelte`), so a typed tag stays exactly as typed instead of
+  springing back open.

@@ -24,6 +24,9 @@
      *  can only offer when the search behind it understands case at all. */
     onToggleMatchCase?: () => void
     enableReplace?: boolean
+    /** Open with the replace row already expanded, which is how a "Search and
+     *  replace" command asks for it. Only meaningful with `enableReplace`. */
+    initialReplaceOpen?: boolean
     replaceValue?: string
     onQueryChange: (query: string) => void | Promise<void>
     onReplaceChange?: (value: string) => void
@@ -47,6 +50,7 @@
     matchCase = false,
     onToggleMatchCase = undefined,
     enableReplace = false,
+    initialReplaceOpen = false,
     replaceValue = '',
     onQueryChange,
     onReplaceChange = undefined,
@@ -65,7 +69,10 @@
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let handledFocusTrigger = -1
   let previousFocus: HTMLElement | null = null
-  let replaceOpen = $state(false)
+  // The replace row is asked to be open or closed once, when the bar opens: a
+  // "Search and replace" command expands it, and the user can collapse it again.
+  // svelte-ignore state_referenced_locally
+  let replaceOpen = $state(enableReplace && initialReplaceOpen)
   let replaceInputEl = $state<HTMLInputElement | null>(null)
 
   function clearDebounce(): void {
@@ -87,7 +94,13 @@
 
   async function handleKeydown(event: KeyboardEvent): Promise<void> {
     if (keymapState.matches('files-find-close', event)) {
+      // Claim Escape completely: the bar is the innermost thing on screen, and
+      // the shell around it (a modal reader, the workspace) closes on Escape at
+      // the document, so a bar that only prevented the default still let the
+      // surface behind it be dismissed. Stopping propagation is what keeps the
+      // dismissal to the bar itself.
       event.preventDefault()
+      event.stopPropagation()
       handleClose()
       return
     }
@@ -122,6 +135,7 @@
   function handleReplaceKeydown(event: KeyboardEvent): void {
     if (keymapState.matches('files-find-close', event)) {
       event.preventDefault()
+      event.stopPropagation()
       handleClose()
       return
     }

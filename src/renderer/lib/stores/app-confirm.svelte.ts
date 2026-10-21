@@ -33,9 +33,20 @@ class AppConfirmStore {
   }
 
   /** Raise a confirmation and wait for the answer. Never answers on its own. */
-  request(options: AppConfirmOptions): Promise<boolean> {
-    return new Promise<boolean>((settle) => {
-      this.pending = [...this.pending, { id: this.#nextId++, options, settle }]
+  request(options: AppConfirmOptions, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false)
+    return new Promise<boolean>((resolve) => {
+      const id = this.#nextId++
+      const settle = (approved: boolean): void => {
+        signal?.removeEventListener('abort', cancel)
+        resolve(approved)
+      }
+      const cancel = (): void => {
+        this.pending = this.pending.filter((candidate) => candidate.id !== id)
+        settle(false)
+      }
+      this.pending = [...this.pending, { id, options, settle }]
+      signal?.addEventListener('abort', cancel, { once: true })
     })
   }
 

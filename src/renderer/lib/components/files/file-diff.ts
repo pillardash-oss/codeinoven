@@ -11,6 +11,8 @@ export interface DiffHunk {
   /** Inclusive indexes into the full diff `lines` array for the changed region. */
   changeStart: number
   changeEnd: number
+  additions: number
+  deletions: number
   /** Context lines available strictly before the first changed line. */
   contextBefore: number
   /** Context lines available strictly after the last changed line. */
@@ -263,7 +265,11 @@ function diffHunks(lines: DiffLine[]): DiffHunk[] {
       continue
     }
     const changeStart = index
+    let additions = 0
+    let deletions = 0
     while (index < lines.length && lines[index].kind !== 'context') {
+      if (lines[index].kind === 'added') additions += 1
+      else deletions += 1
       index += 1
     }
     const changeEnd = index - 1
@@ -274,6 +280,8 @@ function diffHunks(lines: DiffLine[]): DiffHunk[] {
       id: `change:${changeStart}`,
       changeStart,
       changeEnd,
+      additions,
+      deletions,
       contextBefore,
       contextAfter
     })

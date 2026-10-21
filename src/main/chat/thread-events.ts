@@ -1,11 +1,12 @@
 import { BrowserWindow } from 'electron'
-import type { AgentEvent, Thread } from '../../lib/types'
+import type { AgentEvent, RemoteAgentEventPayload, Thread } from '../../lib/types'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { broadcastAppToast } from '../ipc/app-toast'
 import { instanceRegistry } from '../system/instance-registry'
+import { instanceEventBus } from '../system/instance-event-bus'
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
 
@@ -275,6 +276,24 @@ function deliverCrossInstanceCheckpointUpdated(event: CheckpointUpdatedEvent): v
 }
 
 instanceRegistry.onCheckpointUpdated(deliverCrossInstanceCheckpointUpdated)
+
+/**
+ * Deliver one stream event another instance produced for a shared thread.
+ *
+ * Deliberately its own channel rather than `agent:event`: the local channel is
+ * wired to every action that follows a run this process owns (approving a
+ * permission, answering a question, dispatching a queued message, refreshing a
+ * git panel), and none of those can act on a harness process held by a sibling.
+ * This channel is consumed by the transcript cache and the conversation surface,
+ * which only render.
+ */
+function deliverCrossInstanceAgentEvent(payload: RemoteAgentEventPayload): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'agent:remoteEvent', payload)
+  }
+}
+
+instanceEventBus.onRemoteEvent(deliverCrossInstanceAgentEvent)
 
 /**
  * Pipe a temporary chat (side chat) completion through the parent thread's

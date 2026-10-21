@@ -26,6 +26,12 @@ export interface ResponseReferenceAnchor extends PromptReference {
   /** Design references: the browser tab the element was picked from, so the
    *  panel knows which tab a reference's pin belongs to. */
   tabId?: string
+  /** Design references: the page's entry file inside that design folder, so a
+   *  comment whose page was closed can be reopened on the very screen the
+   *  element was picked from instead of the folder's default one. Absent on a
+   *  picker used on the folder listing, and on references written before it
+   *  existed. */
+  designEntry?: string
   /** Document annotations: the project-relative path of the document the
    *  passage was annotated in, so a document's preview pins only its own
    *  annotations and the path travels with the prompt. */
@@ -33,8 +39,10 @@ export interface ResponseReferenceAnchor extends PromptReference {
   /** Video notes: the second on the composition the note was written at, so the
    *  timeline can place its row and a jump can seek the preview back to it. */
   seconds?: number
-  /** Video notes: the project-relative composition folder the moment belongs
-   *  to, so a note names its file the way a document annotation names its path. */
+  /** Video notes and design references: the project-relative folder of the work
+   *  the reference belongs to, so a note names its file the way a document
+   *  annotation names its path, and a commented design element can be reopened
+   *  from the folder it was picked in. */
   directory?: string
   /** Media marks: the artifact part the stroke was drawn on, whether that part
    *  is a still picture or a video. The conversation pins the mark to that media

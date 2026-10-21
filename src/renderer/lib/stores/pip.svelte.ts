@@ -106,12 +106,15 @@ class PipState {
   }
 
   async dismiss(): Promise<void> {
+    // Hide locally before the round trip: a close must never wait on main tearing
+    // down its driver connection, and a slow (or never-answering) teardown used to
+    // leave the overlay on screen after the user asked for it to go.
+    this.applyState({ active: false })
     try {
       await invoke('computerUse:pipDismiss')
     } catch {
-      // Fall through — the overlay hides locally on the next state event anyway.
+      // Main may no longer own the PiP service; the local hide already closed it.
     }
-    this.applyState({ active: false })
   }
 
   private applyActivity(activity: ComputerUseActivity): void {

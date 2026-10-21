@@ -2,7 +2,11 @@ import {
   isResponseSelection,
   type ResponseReferenceAnchor
 } from '$lib/stores/response-references.svelte'
-import { anchorTextMatches, type SelectionMenuAnchor } from '$lib/selection-anchors'
+import {
+  anchorTextMatches,
+  selectionMenuAnchor,
+  type SelectionMenuAnchor
+} from '$lib/selection-anchors'
 
 /**
  * DOM geometry for quoted response annotations.
@@ -16,9 +20,6 @@ import { anchorTextMatches, type SelectionMenuAnchor } from '$lib/selection-anch
  */
 
 export const RESPONSE_HIGHLIGHT_NAME = 'response-annotation'
-
-/** Space between the selection and the menu that sits below it. */
-const SELECTION_MENU_GAP = 6
 
 export interface ResponseSelectionCandidate {
   text: string
@@ -103,8 +104,8 @@ export function responseRangeFor(
 /**
  * Turn the current document selection into an anchor candidate. Returns null
  * when the selection is empty, spans more than one response, or cannot be
- * measured. The menu is anchored to the selection itself: its left edge, and
- * the top edge it sits above whenever there is room there.
+ * measured. The menu is anchored to the point the selection ended at, so a
+ * passage that runs over two lines raises it on the second one.
  */
 export function captureResponseSelection(): ResponseSelectionCandidate | null {
   const selection = document.getSelection()
@@ -119,14 +120,13 @@ export function captureResponseSelection(): ResponseSelectionCandidate | null {
   const startOffset = textOffsetWithin(anchorResponse, range.startContainer, range.startOffset)
   const endOffset = textOffsetWithin(anchorResponse, range.endContainer, range.endOffset)
   if (startOffset === null || endOffset === null) return null
-  const rect = range.getBoundingClientRect()
   return {
     text,
     messageId,
     range,
     startOffset,
     endOffset,
-    anchor: { x: rect.left, y: rect.bottom + SELECTION_MENU_GAP, selectionTop: rect.top }
+    anchor: selectionMenuAnchor(selection, range)
   }
 }
 

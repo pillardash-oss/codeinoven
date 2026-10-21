@@ -99,9 +99,11 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     }
   })
 
-  ipcMain.handle('clipboard:writeText', (_event, text: unknown) => {
+  ipcMain.handle('clipboard:writeText', async (_event, text: unknown) => {
     if (typeof text !== 'string') throw new TypeError('Clipboard text must be a string')
-    clipboard.writeText(text)
+    // The clipboard module is promise-based since Electron 44: awaiting the write
+    // makes the handler resolve only once the text is actually on the clipboard.
+    await clipboard.writeText(text)
   })
 
   ipcMain.handle('clipboard:readText', () => clipboard.readText())

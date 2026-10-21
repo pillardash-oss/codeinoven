@@ -8,7 +8,7 @@ import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, resolve } from 'path'
 import { homedir } from 'os'
-import { fileURLToPath } from 'url'
+import { userSuppliedPaths } from './user-supplied-paths'
 import { createHash, randomBytes, randomInt, randomUUID } from 'crypto'
 import { createServer } from 'http'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
@@ -61,7 +61,11 @@ import { OvenChat } from '../ovens/oven-chat'
 import { CheckpointManager, LATE_CLAIM_REOPEN_WINDOW_MS } from '../storage/checkpoint-manager'
 import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import type { SearchSummaryRequest } from '../search/thread-search-summary'
-import { budgetSearchSummaryPrompt, validateSearchSummary } from '../search/thread-search-summary'
+import {
+  budgetSearchSummaryPrompt,
+  SearchSummaryUnavailableError,
+  validateSearchSummary
+} from '../search/thread-search-summary'
 import { formatTime } from '../../lib/date-time-format'
 import { appendPartDelta } from '../../lib/agent-part-merge'
 import { latestAgentTodo } from '../../lib/agent-todos'
@@ -169,6 +173,7 @@ import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-
 import type { ConnectivitySource } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
+import { instanceEventBus } from '../system/instance-event-bus'
 import { WorkflowOwnershipService } from '../system/workflow-ownership-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
@@ -602,6 +607,7 @@ import {
   formatHistoryRecap,
   formatInterviewDecisions,
   formatProjectReferenceContext,
+  formatTemporaryReferenceContext,
   hasTerminalSpecContractMarker,
   mermaidValidationFailureMessage,
   mermaidValidationNotice,
@@ -1836,6 +1842,17 @@ export class ChatEngine {
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )
+    // The diagnostics tool is the one app capability every turn carries, so the
+    // hybrid thread search hangs off it: an agent gathering context searches the
+    // user's conversation history by meaning, not only by the words it guessed.
+    this.utilityOrchestration.setThreadSearchProvider(async (query) => {
+      const { results } = await this.threadManager.searchThreadsWithIntent(
+        query,
+        { limit: 20 },
+        12_000
+      )
+      return results
+    })
     // An agent can enter a design or a video session without the user typing the
     // tag for it, by picking up the capability itself, and the session that opens
     // is the same session: the memo the tag sets is set here, and the thread's row
@@ -2278,6 +2295,14 @@ export class ChatEngine {
   }
 
   register(): void {
+    // The cross-instance bus ships render-only stream events to sibling
+    // instances. Resolving the conversation here is what lets a sibling window
+    // bind a session it has never seen and render the turn from its first frame
+    // instead of waiting for the shared row to catch up.
+    instanceEventBus.setSessionOwnerResolver((sessionId) => {
+      const info = this.sessionRegistry.get(sessionId)
+      return info ? { projectId: info.projectId, threadId: info.threadId } : null
+    })
     ipcMain.handle(
       'harnessRuntime:restart',
       (_, harnessId: unknown, options?: { force?: boolean }) =>
@@ -5264,8 +5289,12 @@ export class ChatEngine {
    */
   private async discoveryWorkingDirectory(projectId: string): Promise<string> {
     const project = await this.projectManager.getProject(projectId)
-    if (!project || (project.source === 'local' && project.path))
+    // A missing project row must never fail an app-wide pass: a cold data root
+    // requests the inbox catalog before its hidden row is written, and discovery
+    // needs nothing from the project anyway.
+    if (project?.source === 'local' && project.path) {
       return this.resolveProjectPath(projectId)
+    }
     return this.ephemeralWorkingDirectory()
   }
 
@@ -6654,51 +6683,144 @@ export class ChatEngine {
       threadHarnessId: harnessId,
       projectPath
     })
-    const driver =
-      auxiliary?.driver ?? (await this.driverForAccount(harnessId, thread.settings.accountId))
-    const settings: ThreadSettings = auxiliary?.settings ?? {
-      ...thread.settings,
-      thinkingLevel: 'minimal',
-      permissionLevel: 'auto_review',
-      assignmentMode: false,
-      loopMode: false
+    // An assigned auxiliary agent can run on another harness than the thread's,
+    // and then it is that harness whose accounts serve the summary.
+    const routeHarnessId = auxiliary?.harnessId ?? harnessId
+    const accountIds = await this.summaryAccountIds(
+      routeHarnessId,
+      auxiliary?.settings.providerId ?? thread.settings.providerId,
+      auxiliary?.settings.modelId ?? thread.settings.modelId,
+      auxiliary?.settings.accountId ?? thread.settings.accountId
+    )
+    const candidates = auxiliary?.candidates
+    let failure: string | null = null
+    for (const [index, accountId] of accountIds.entries()) {
+      input.signal.throwIfAborted()
+      let driver: HarnessDriver
+      try {
+        driver = await this.driverForAccount(routeHarnessId, accountId)
+      } catch (error) {
+        failure = rawErrorMessage(error)
+        continue
+      }
+      const settings: ThreadSettings = {
+        ...(auxiliary?.settings ?? thread.settings),
+        accountId,
+        thinkingLevel: 'minimal',
+        permissionLevel: 'auto_review',
+        assignmentMode: false,
+        loopMode: false
+      }
+      // The first account keeps the harness's own cheap-candidate discovery, so
+      // a healthy setup still summarizes with the cheapest model it has. A
+      // fallback account is a probe of one credential, so it asks this model
+      // directly instead of paying every candidate again on every account.
+      const attemptCandidates =
+        candidates ??
+        (index === 0
+          ? undefined
+          : settings.providerId && settings.modelId
+            ? [{ providerId: settings.providerId, modelId: settings.modelId }]
+            : [])
+      try {
+        const result = await driver.provideCheapModel(projectPath, {
+          settings,
+          purpose: 'Thread search summary',
+          prompt: input.prompt,
+          timeoutMs: 45_000,
+          preparePrompt: (candidate) => {
+            const reported = this.modelContextWindow(
+              input.projectId,
+              candidate.providerId,
+              candidate.modelId
+            )
+            const selectedWindow =
+              candidate.modelId === settings.modelId && candidate.providerId === settings.providerId
+                ? settings.contextWindow
+                : undefined
+            const window =
+              reported && selectedWindow
+                ? Math.min(reported, selectedWindow)
+                : (reported ?? selectedWindow)
+            // An unknown window gets a conservative small request, never the
+            // application's large default conversation budget.
+            const inputBudget = window && window > 0 ? Math.max(0, window - 4096) : 1024
+            return budgetSearchSummaryPrompt(input.prompt, inputBudget)
+          },
+          validateResponse: validateSearchSummary,
+          ...(attemptCandidates ? { candidates: attemptCandidates } : {})
+        })
+        input.signal.throwIfAborted()
+        const text = result.text?.trim()
+        if (text) return text
+        failure = result.attempts.at(-1)?.failure ?? null
+      } catch (error) {
+        if (input.signal.aborted) throw error
+        failure = rawErrorMessage(error)
+      }
+      Logger.dev('Search summary account could not answer; trying the next one', {
+        harnessId: routeHarnessId,
+        accountId,
+        failure
+      })
     }
-    const result = await driver.provideCheapModel(projectPath, {
-      settings,
-      purpose: 'Thread search summary',
-      prompt: input.prompt,
-      timeoutMs: 45_000,
-      preparePrompt: (candidate) => {
-        const reported = this.modelContextWindow(
-          input.projectId,
-          candidate.providerId,
-          candidate.modelId
-        )
-        const selectedWindow =
-          candidate.modelId === settings.modelId && candidate.providerId === settings.providerId
-            ? settings.contextWindow
-            : undefined
-        const window =
-          reported && selectedWindow
-            ? Math.min(reported, selectedWindow)
-            : (reported ?? selectedWindow)
-        // An unknown window gets a conservative small request, never the
-        // application's large default conversation budget.
-        const inputBudget = window && window > 0 ? Math.max(0, window - 4096) : 1024
-        return budgetSearchSummaryPrompt(input.prompt, inputBudget)
-      },
-      validateResponse: validateSearchSummary,
-      ...(auxiliary ? { candidates: auxiliary.candidates } : {})
-    })
-    input.signal.throwIfAborted()
-    const text = result.text?.trim()
-    if (!text) {
-      const failure = result.attempts.at(-1)?.failure
-      throw new Error(
-        `The provider could not summarize this thread for search.${failure ? ` ${failure}` : ''}`
-      )
+    throw new SearchSummaryUnavailableError(
+      `No account could summarize this thread for search.${failure ? ` ${failure}` : ''}`
+    )
+  }
+
+  /**
+   * Every account that may summarize a thread for search, best credential first.
+   *
+   * A summary is index maintenance rather than conversation, so it is never
+   * bound to the account its thread was created on: that account can stop
+   * serving its provider (a lapsed subscription, a rotated key) while the model
+   * answers perfectly on another account of the same harness, which otherwise
+   * leaves every thread of the retired account without a summary on every
+   * sweep. The order is the credential the app is using for work right now
+   * first, then the provider's default, then every other account of that
+   * harness and provider (most recently touched first), and the thread's own
+   * account last, so a user with several accounts gets all of them tried.
+   */
+  private async summaryAccountIds(
+    harnessId: string,
+    providerId: string | undefined,
+    modelId: string | undefined,
+    threadAccountId: string | undefined
+  ): Promise<string[]> {
+    const ordered: string[] = []
+    const push = (id: string | undefined): void => {
+      if (id && !ordered.includes(id)) ordered.push(id)
     }
-    return text
+    if (providerId && modelId) {
+      for (const session of this.sessionRegistry.values()) {
+        if (session.driverId !== harnessId || !session.accountId) continue
+        // An Inbox session has no thread row to read the model back from.
+        if (session.projectId === INBOX_PROJECT_ID || !session.threadId) continue
+        const live = await this.threadManager.getThread(session.projectId, session.threadId)
+        if (live?.settings?.providerId !== providerId || live.settings.modelId !== modelId) continue
+        push(session.accountId)
+      }
+    }
+    const accounts = await this.accountRegistry.list(harnessId).catch(() => [])
+    const providerAccounts = providerId
+      ? accounts.filter((account) => account.providerId === providerId)
+      : []
+    for (const account of providerAccounts) {
+      if (account.isDefault) push(account.id)
+    }
+    for (const account of [...providerAccounts].sort(
+      (left, right) => right.updatedAt - left.updatedAt
+    )) {
+      push(account.id)
+    }
+    // The thread's own account is the last resort, and only while it belongs to
+    // this provider. An account the registry does not know is kept: a virtual
+    // legacy account carries no provider record to compare, and dropping it
+    // would leave a single-account harness with no credential to try.
+    const known = accounts.find((account) => account.id === threadAccountId)
+    if (!known || !providerId || known.providerId === providerId) push(threadAccountId)
+    return ordered
   }
 
   /**
@@ -6936,7 +7058,27 @@ export class ChatEngine {
     if (!Number.isSafeInteger(pid) || pid <= 0) {
       throw new TypeError('Process ID must be a positive integer')
     }
+    // A pid the task manager shows can be a terminal's own shell. Ending it is
+    // the same intent as closing that terminal, so the session is announced as
+    // a deliberate stop first: without that the renderer reads the exit as a
+    // crashed shell and restarts it, and the process the user just ended is
+    // back before the list refreshes.
+    this.ptyStopAnnouncer?.(pid)
     return this.agentProcesses.killProcessGlobal(pid, force)
+  }
+
+  /**
+   * Announces to the renderer that the terminal session behind a killed pid is
+   * ending on purpose, so it does not respawn the shell. Wired by the bootstrap
+   * from the PTY service, which is the only side that knows the sessions.
+   */
+  private ptyStopAnnouncer: ((pid: number) => boolean) | null = null
+
+  /**
+   * Register how a task-manager kill announces a terminal's deliberate stop.
+   */
+  setPtyStopAnnouncer(announcer: ((pid: number) => boolean) | null): void {
+    this.ptyStopAnnouncer = announcer
   }
 
   /** Stop one registered app service through the action it registered with. */
@@ -9742,8 +9884,15 @@ export class ChatEngine {
         settings.harnessId)
       : undefined
     if (targetThread?.sessionId && targetSessionDriverId === 'codex') {
-      const transfer = await this.threadTransferPreflight?.(projectId, threadId)
-      if (transfer && !transfer.ok) throw new Error(transfer.reason)
+      const accountId =
+        this.sessionRegistry.get(targetThread.sessionId)?.accountId ?? targetThread.sessionAccountId
+      const { driver, projectPath } = await this.resolve(projectId, 'codex', threadId, accountId)
+      // A locally held writer needs no peer handoff. Asking every peer here
+      // made ordinary follow-ups fail when an unrelated instance did not answer.
+      if (!driver.hasSessionWriter?.(projectPath, targetThread.sessionId)) {
+        const transfer = await this.threadTransferPreflight?.(projectId, threadId)
+        if (transfer && !transfer.ok) throw new Error(transfer.reason)
+      }
     }
     // This process is about to drive the workflow this thread belongs to, so it
     // records ownership for the whole group now. A peer launching between two of
@@ -11013,7 +11162,7 @@ export class ChatEngine {
     if (isContinuationRelayPrompt(text)) {
       validatedAttachments = await this.relayAttachments(projectId, threadId, validatedAttachments)
     }
-    const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
+    const referenceBlock = formatTemporaryReferenceContext(validatedReferences)
     let context = initialContext
       ? validateBoundedString(initialContext, 'Temporary chat context', 1, 100_000)
       : ''
@@ -11106,11 +11255,7 @@ export class ChatEngine {
     const driver = this.driverForRuntime(temporary.driverId, temporary.accountId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
-    const promptText = selectedTexts.length
-      ? `Referenced response selections:\n${selectedTexts
-          .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
-          .join('\n\n')}\n\nUser request:\n${text}`
-      : text
+    const promptText = referenceBlock ? `${referenceBlock}\n\nUser request:\n${text}` : text
     const completion = this.waitForSessionCompletion(temporary.sessionId, null, 'Temporary chat')
     try {
       const memoryPrompt = await this.memoryService.formatCurrent(
@@ -11491,12 +11636,8 @@ export class ChatEngine {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
     }
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
-    const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
-    const promptText = selectedTexts.length
-      ? `Referenced response selections:\n${selectedTexts
-          .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
-          .join('\n\n')}\n\nUser request:\n${text}`
-      : text
+    const referenceBlock = formatTemporaryReferenceContext(validatedReferences)
+    const promptText = referenceBlock ? `${referenceBlock}\n\nUser request:\n${text}` : text
     const steerUserMessageId = userMessageId
       ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
       : createMessageId()
@@ -13972,13 +14113,27 @@ export class ChatEngine {
     await this.settleThreadTurnForTransfer(projectId, threadId)
     instanceRegistry.publishTurnActivity()
     if (writer) {
-      const writerRelease = await writer.driver.releaseIdleSessionForTransfer?.(
-        writer.projectPath,
-        thread.sessionId
-      )
-      if (writerRelease?.owner && !writerRelease.released) {
-        return await this.resumeRunAfterRefusedHandOff(thread, writerRelease.reason)
+      // The run is already stopped at this point, so a driver that throws here
+      // must not strand it: turn the failure into the same refusal path a
+      // delivered refusal uses, which puts the run back on this instance.
+      let refusal: string | null = null
+      try {
+        const writerRelease = await writer.driver.releaseIdleSessionForTransfer?.(
+          writer.projectPath,
+          thread.sessionId
+        )
+        if (writerRelease?.owner && !writerRelease.released) {
+          refusal = writerRelease.reason ?? 'The Codex writer is still held by this instance.'
+        }
+      } catch (error) {
+        Logger.error('The Codex writer could not be released for a thread transfer:', {
+          projectId,
+          threadId,
+          error: rawErrorMessage(error)
+        })
+        refusal = 'This Codex session is no longer available to hand over.'
       }
+      if (refusal !== null) return await this.resumeRunAfterRefusedHandOff(thread, refusal)
     }
     return { released: true }
   }
@@ -14051,7 +14206,20 @@ export class ChatEngine {
       this.sessionRegistry.get(thread.sessionId)?.accountId ?? thread.sessionAccountId
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId, accountId)
     if (!driver.releaseIdleSessionForTransfer) return { owner: false, released: false }
-    return driver.releaseIdleSessionForTransfer(projectPath, thread.sessionId)
+    try {
+      return await driver.releaseIdleSessionForTransfer(projectPath, thread.sessionId)
+    } catch (error) {
+      // This preflight only clears an idle writer out of a peer's way before a
+      // prompt. A session this process cannot even read holds no writer it can
+      // act on, so the prompt is free to continue here rather than fail on a
+      // hand-off this instance has nothing to hand over.
+      Logger.error('An idle Codex thread could not be released for a prompt:', {
+        projectId,
+        threadId,
+        error: rawErrorMessage(error)
+      })
+      return { owner: false, released: false }
+    }
   }
 
   /**
@@ -21776,8 +21944,8 @@ export class ChatEngine {
       resumesSpecContract ? 'implement' : undefined,
       createMessageId(),
       undefined,
-      undefined,
-      undefined,
+      continuation.references,
+      continuation.projectReferences,
       'internal'
     )
     return true
@@ -26976,7 +27144,7 @@ export class ChatEngine {
       )
       const request = pendingContinuationRequest(page.messages)
       return request
-        ? { text: continuationRequestPrompt(request, nudge), attachments: request.attachments }
+        ? { ...request, text: continuationRequestPrompt(request, nudge) }
         : { text: nudge, attachments: [] }
     } catch (error) {
       // A continuation must still run when the mirror read fails: the harness
@@ -27102,8 +27270,8 @@ export class ChatEngine {
       undefined,
       createMessageId(),
       undefined,
-      undefined,
-      undefined,
+      continuation.references,
+      continuation.projectReferences,
       'internal'
     )
   }
@@ -27119,8 +27287,9 @@ export class ChatEngine {
    * file operations inside it never prompt, regardless of permission level or
    * File System mode.
    *
-   * Chats (inbox threads) additionally get a read allowlist containing every
-   * user attachment plus the shared and active-harness skill roots. When File
+   * All threads retain an allowlist of user-supplied attachments and local
+   * paths, including inputs outside the project. Inbox threads additionally
+   * get the shared and active-harness skill roots. When File
    * System mode is off, safe read/list/search operations are restricted to
    * those paths. Skill access never grants writes or shell commands.
    * File-System-on chats keep the normal project-root + protected-path rules
@@ -27150,30 +27319,33 @@ export class ChatEngine {
       : info.projectId === GLOBAL_BROWSER_PROJECT_ID
         ? [info.projectPath]
         : [this.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
+    // A thread in a real project also owns that project's `.cio` scratch folder:
+    // it is where the agent stages its own work, so deletes and confined shell
+    // commands there never prompt. `.cio/specs` and `.cio/git` stay gated inside
+    // the policy, because the platform owns those.
+    if (!isChat && !isAssistant) {
+      scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
+    }
+    // Reuse the allowlist until a user message invalidates it; permission
+    // requests must not rescan the conversation for every file operation.
+    const cached = this.chatAttachmentAllowlists.get(info.threadId)
+    const attachmentPaths = cached ?? (await this.collectChatAttachmentPaths(info))
+    if (cached === undefined) this.chatAttachmentAllowlists.set(info.threadId, attachmentPaths)
     if (!isChat) {
       const skillPaths = this.temporaryChatForSession(info.sessionId)
         ? chatSkillPaths(info.driverId)
         : []
-      return { allowedPaths: skillPaths, scratchPaths, restrictToAllowed: false }
+      return {
+        allowedPaths: [...attachmentPaths, ...skillPaths],
+        scratchPaths,
+        restrictToAllowed: false
+      }
     }
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
-    // Read the cached allowlist when present; otherwise build it once from the
-    // message records and memoize it. New user messages invalidate the entry, so
-    // this stays correct without re-scanning on every permission request.
-    const cached = this.chatAttachmentAllowlists.get(info.threadId)
-    if (cached === undefined) {
-      const attachmentPaths = await this.collectChatAttachmentPaths(info)
-      this.chatAttachmentAllowlists.set(info.threadId, attachmentPaths)
-      return {
-        allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
-        scratchPaths,
-        restrictToAllowed: !fileSystemMode
-      }
-    }
     return {
-      allowedPaths: [...cached, ...chatSkillPaths(info.driverId)],
+      allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
       scratchPaths,
       restrictToAllowed: !fileSystemMode
     }
@@ -27194,16 +27366,16 @@ export class ChatEngine {
     return undefined
   }
 
-  /** Absolute local paths of every file the user attached to a chat thread. */
+  /** Local inputs explicitly supplied by the user, never paths from agent output. */
   private async collectChatAttachmentPaths(info: SessionInfo): Promise<string[]> {
     const records = await this.threadManager.loadMessageRecords(info.projectId, info.threadId)
     const paths = new Set<string>()
-    for (const message of records) {
-      for (const part of message.parts) {
-        if (part.type !== 'file' || !part.url) continue
-        const raw = part.url.startsWith('file:') ? fileURLToPath(part.url) : part.url
-        paths.add(isAbsolute(raw) ? raw : resolve(info.projectPath, raw))
-      }
+    for (let index = 0; index < records.length; index++) {
+      // Long project transcripts must yield rather than monopolize the main process.
+      if (index > 0 && index % 64 === 0) await new Promise<void>((done) => setImmediate(done))
+      const message = records[index]
+      if (message.role !== 'user' || message.origin === 'orchestrator') continue
+      for (const path of userSuppliedPaths(message.parts, info.projectPath)) paths.add(path)
     }
     return [...paths]
   }

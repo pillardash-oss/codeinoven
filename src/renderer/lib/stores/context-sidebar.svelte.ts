@@ -58,8 +58,42 @@ export { EXPLAIN_SELECTION_PROMPT, STICKY_NOTES_TAB } from './context-sidebar-ty
 
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
+/**
+ * The room the rail always leaves for the surface beside it.
+ *
+ * The rail shares its row with the conversation (and, in the global browser,
+ * with the page). Its width is a user preference stored in pixels, so without
+ * this floor the drag had no viewport-aware ceiling and the surface beside it
+ * could be squeezed down to nothing. 360 is the same floor the workspace grid
+ * already keeps for a conversation (`minmax(360px, 1fr)`), so the rail, the grid
+ * and the browser view all agree on how much is untouchable.
+ */
+export const CONTEXT_SIDEBAR_MAIN_MIN_WIDTH = 360
 const TERMINAL_DOCK_MIN_HEIGHT = 180
 const TERMINAL_DOCK_MAX_HEIGHT = 560
+
+/**
+ * The widest the rail may be inside a viewport of `viewportWidth`.
+ *
+ * `CONTEXT_SIDEBAR_MAX_WIDTH` alone is not enough: a 1600px rail is legal in a
+ * wide window and fatal in a narrow one, where it would push the conversation or
+ * the page out of existence. The ceiling therefore drops with the window and
+ * never falls below the rail's own minimum.
+ */
+export function contextSidebarMaxWidth(viewportWidth: number): number {
+  return Math.max(
+    CONTEXT_SIDEBAR_MIN_WIDTH,
+    Math.min(CONTEXT_SIDEBAR_MAX_WIDTH, Math.round(viewportWidth) - CONTEXT_SIDEBAR_MAIN_MIN_WIDTH)
+  )
+}
+
+/** The window width to clamp against, or the widest window that needs no clamp.
+ *  Module-scope safety only: the rail is a renderer surface. */
+function currentViewportWidth(): number {
+  return typeof window === 'undefined'
+    ? CONTEXT_SIDEBAR_MAX_WIDTH + CONTEXT_SIDEBAR_MAIN_MIN_WIDTH
+    : window.innerWidth
+}
 
 class ContextSidebarState {
   private activeProjectId: string | null = $state(null)
@@ -1065,7 +1099,23 @@ class ContextSidebarState {
   }
 
   setWidth(width: number): void {
-    this.width = Math.max(CONTEXT_SIDEBAR_MIN_WIDTH, Math.min(width, CONTEXT_SIDEBAR_MAX_WIDTH))
+    this.width = Math.min(
+      Math.max(width, CONTEXT_SIDEBAR_MIN_WIDTH),
+      contextSidebarMaxWidth(currentViewportWidth())
+    )
+  }
+
+  /**
+   * The width to paint the rail at in a viewport of `viewportWidth`.
+   *
+   * The stored width is the user's preference and survives a window resize, so a
+   * surface that paints the rail reads it through here instead of using the raw
+   * value: a window that shrank must never let the rail keep claiming room the
+   * surface beside it needs. Surfaces that clamp in CSS already (the workspace
+   * grid) may keep doing so; this is the same rule stated in pixels.
+   */
+  widthForViewport(viewportWidth: number = currentViewportWidth()): number {
+    return Math.min(this.width, contextSidebarMaxWidth(viewportWidth))
   }
 
   setTerminalHeight(height: number): void {

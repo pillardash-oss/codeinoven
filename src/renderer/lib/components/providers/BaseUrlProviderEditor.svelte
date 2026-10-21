@@ -803,9 +803,6 @@
             <CioArrowLeft size={13} /> Back
           </button>
         {/if}
-        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
-      </div>
-      <div class="flex items-center gap-2">
         <button
           class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
           type="button"
@@ -815,6 +812,9 @@
         >
           Cancel
         </button>
+        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+      </div>
+      <div class="flex items-center gap-2">
         <button
           class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
           type="submit"

@@ -2,13 +2,13 @@
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
   import { onDestroy, tick } from 'svelte'
   import { exportEngineeringSpecMarkdown } from '$shared/spec/spec-markdown'
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
@@ -1021,18 +1021,22 @@
   {/snippet}
 
   {#snippet markers()}
-    {#each annotationMarkers as marker (marker.annotation.id)}
-      <button
-        class="absolute z-20 flex h-7 w-7 items-center justify-center border border-primary/30 bg-surface text-primary shadow-md max-md:right-2 hover:bg-elevated"
-        style:left={compactViewport.matches ? undefined : `${marker.x}px`}
-        style:top={`${marker.y}px`}
-        data-spec-annotation-marker={marker.annotation.id}
+    {#each annotationMarkers as marker, index (marker.annotation.id)}
+      <AnnotationIndicator
+        id={marker.annotation.id}
+        surface={`spec:${draft.id}`}
+        left={compactViewport.matches ? 'auto' : `${marker.x}px`}
+        top={`${marker.y}px`}
+        number={index + 1}
+        hasComment={Boolean(marker.annotation.body)}
+        active={editingAnnotation?.id === marker.annotation.id}
         title="Open anchored comment"
-        aria-label="Open anchored comment"
-        onclick={() => void openAnnotation(marker.annotation)}
-      >
-        <CioMessage size={13} />
-      </button>
+        class="z-20 max-md:right-2"
+        attach={(node) => {
+          node.setAttribute('data-spec-annotation-marker', marker.annotation.id)
+        }}
+        onOpen={() => void openAnnotation(marker.annotation)}
+      />
     {/each}
   {/snippet}
 

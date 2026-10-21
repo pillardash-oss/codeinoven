@@ -320,7 +320,8 @@ export function lexMarkdown(
           ? citationPathsState.isThreadPathValid(
               citationThread.projectId,
               citationThread.scopeBucketId,
-              path
+              path,
+              citationThread.threadId
             )
           : citationPathsState.isValidPath(path),
       (path) => citationPathsState.isKnownExternalPath(path)

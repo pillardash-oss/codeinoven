@@ -56,7 +56,7 @@
     type ComposerRelocationMode
   } from '../chats/composer-relocation'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
-  import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import MediaPreview from '../chats/MediaPreview.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
@@ -134,18 +134,15 @@
   import { actionContext } from '$lib/stores/action-context.svelte'
   import { permissionLevelActions, permissionLevelForAction } from '$lib/actions'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
-  import SpecStudio from '../specs/SpecStudio.svelte'
-  import BrainstormStudio from '../specs/BrainstormStudio.svelte'
-  import PrdStudio from '../specs/PrdStudio.svelte'
-  import AssignmentStudio from '../specs/AssignmentStudio.svelte'
-  import AuditStudio from '../specs/AuditStudio.svelte'
+  import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
   import { getAgentIcon } from '$lib/agent-icons/registry'
-  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
   import { scheduleDeferredWork } from '$lib/deferred-work'
   import { classifyProviderIssue, isUsageResetWaitIssue } from '$shared/provider-issue'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
@@ -163,9 +160,13 @@
     clearIndependentAuditIntent
   } from '$lib/stores/lifecycle-intent'
   import type OvenControls from './OvenControls.svelte'
-  import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
+  import {
+    onEngineeringLifecycleInherited,
+    withProjectOven
+  } from '$lib/thread-settings-inheritance'
   import {
     initialSettingsFor,
+    normalizeChatSettings,
     settingsStoreFor,
     type ModelScope
   } from '$lib/stores/thread-settings.svelte'
@@ -183,6 +184,7 @@
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import {
     assistantDisplayText,
+    buildAssistantTagCandidates,
     connectionsFromPlan,
     isAssistantConfirmation,
     type AssistantPlanDraft
@@ -327,7 +329,8 @@
     EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState,
     EngineeringLifecycleStage,
-    HarnessAccount
+    HarnessAccount,
+    RemoteAgentEventPayload
   } from '$shared/types'
   import {
     hasSelectedStage,
@@ -451,6 +454,18 @@
     assistantForeignRunThreadId?: string | null
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
+    /**
+     * The Assistant tab's threads (tasks, runs and Getting started conversations),
+     * when this thread is one of them. Present only in Assistant View: it is what
+     * puts assistants and assistant threads behind the composer's `@` menu, and
+     * what names those tags once a message is sent.
+     */
+    assistantSpaceThreads?: Thread[]
+    /**
+     * Opens another Assistant tab thread, when a tagged thread in this
+     * conversation is clicked.
+     */
+    onOpenAssistantThread?: (thread: Thread) => void
     /** Projects the chat can be continued into (visible projects only). */
     projects?: Project[]
     /** Data URLs of custom project icons, keyed by project id. */
@@ -515,6 +530,8 @@
     assistantKnowledgeComplete = false,
     assistantForeignRunThreadId = null,
     onForked,
+    assistantSpaceThreads,
+    onOpenAssistantThread,
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
     onContinueInProject,
@@ -541,6 +558,50 @@
     threadId: thread.id,
     scopeBucketId: thread.scopeBucketId
   })
+
+  /**
+   * What the Assistant tab's composer offers behind an `@`: its assistants and
+   * their threads. Every other view has no assistant space to point at, so the
+   * list stays empty there and the menu is exactly what it always was.
+   */
+  let assistantTagCandidates = $derived(
+    assistantSpaceThreads
+      ? buildAssistantTagCandidates({
+          assistants: assistants.assistants,
+          threads: assistantSpaceThreads,
+          excludeThreadId: thread.id,
+          // The assistant's own icon is what identifies it on a tag, exactly as
+          // it identifies the assistant in the tab.
+          assistantIcons: assistants.iconUrls
+        })
+      : []
+  )
+
+  /**
+   * Open the thread a tag chip or badge names: `thread:<id>` is that thread,
+   * `assistant:<id>` is its Getting started conversation, or its newest thread
+   * when the assistant has no authoring conversation left.
+   */
+  function openAssistantTag(reference: string): void {
+    if (!assistantSpaceThreads || !onOpenAssistantThread) return
+    if (reference.startsWith('thread:')) {
+      const id = reference.slice('thread:'.length)
+      const target = assistantSpaceThreads.find((entry) => entry.id === id)
+      if (target) onOpenAssistantThread(target)
+      return
+    }
+    if (!reference.startsWith('assistant:')) return
+    const assistantId = reference.slice('assistant:'.length)
+    const owned = assistantSpaceThreads.filter((entry) => entry.assistantId === assistantId)
+    const setup = owned.find((entry) => entry.assistantGettingStarted)
+    const target =
+      setup ??
+      owned.reduce<Thread | null>(
+        (newest, entry) => (!newest || entry.lastActivity > newest.lastActivity ? entry : newest),
+        null
+      )
+    if (target) onOpenAssistantThread(target)
+  }
 
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   let hasController = $derived(controller !== undefined)
@@ -1517,15 +1578,6 @@
    *  cache and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
 
-  /** Chats are for questions and research: they never inject the Engineering
-   *  workflow and stay pinned to auto permission review while File System is
-   *  off. Once File System is enabled the permission picker unlocks up to Full
-   *  Access, so the user's chosen level is carried through instead of being
-   *  clobbered back to auto review. */
-  function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
-    return next.fileSystemMode === true ? next : { ...next, permissionLevel: 'auto_review' }
-  }
-
   /** Commit to the model memory of this conversation's family, so a model picked
    *  for a chat or an assistant task never changes what another kind starts on. */
   function commitSettings(next: ThreadSettings): void {
@@ -1643,6 +1695,12 @@
    * project, no assistant and no page behind it.
    */
   function composerIdentity(target: Thread, isNewThread: boolean): ComposerIdentity {
+    // A temporary chat is a conversation of its own, not a thread of the project
+    // it was opened from. Its thread carries that project's id only because that
+    // is where its files are read from, so the space checks below would name it
+    // as one of that space's assistant tasks: the assistant mark and the side
+    // chat's own title in place of what it actually is.
+    if (hasController) return { kind: 'chat', temporary: true }
     if (target.projectId === ASSISTANT_SPACE_ID) {
       // A run inherits its task's assistant, so this resolves for a task and each
       // of its runs alike; an assistant-less task is named by itself.
@@ -2687,6 +2745,18 @@
   let lastCheckpointThreadId = ''
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
+  /**
+   * Bumped by a studio's Retry to rebuild its `{#key}` and re-run its `{#await}`.
+   * The studio documents are Engineering-only surfaces, so their chunks load on
+   * the first open instead of with the first screen, and a chunk that failed to
+   * load must be retryable rather than leaving the studio blank.
+   */
+  let studioReloadNonce = $state(0)
+
+  function retryStudio(key: string): void {
+    resetPanelModule(key)
+    studioReloadNonce += 1
+  }
   let threadViewElement = $state<HTMLDivElement | null>(null)
   let imageUrls = new FileBlobUrlManager()
   /** One file part of a message the fullscreen preview can render, and whether
@@ -2736,6 +2806,17 @@
   const RESPONSE_RANGE_RETRIES = 3
   /** Selection references shown in the composer (controller-driven for temporary chats). */
   let composerReferences = $derived(controller?.references ?? responseReferences)
+  /**
+   * The selections this conversation draws on screen.
+   *
+   * A thread keeps them in its own store; a side chat owns no Thread row, so its
+   * controller keeps them on its tab. Both describe a passage, its comment and
+   * the range it came from, which is everything the highlight, the bubble and
+   * the comment editor need, so the surface is the same for either.
+   */
+  let annotationReferences = $derived(
+    controller?.references ? [...controller.references] : responseReferences
+  )
   const responseReferenceRanges = new SvelteMap<string, Range>()
   /** Identity of this view as the CSS highlight registry's owner, so its
    *  teardown can never clear highlights another view published. */
@@ -2780,7 +2861,7 @@
     x: number,
     y: number
   ): ResponseSelectionCandidate | null {
-    const reference = responseReferences.find((candidate) => candidate.id === referenceId)
+    const reference = annotationReferences.find((candidate) => candidate.id === referenceId)
     const range = responseReferenceRanges.get(referenceId)
     if (!reference || !range) return null
     if (
@@ -2884,7 +2965,7 @@
       return
     responseBubblePositions = withUnmeasuredAnchors(
       measureAnnotationBubbles(scrollEl, responseReferenceRanges),
-      responseReferences.map((reference) => reference.id),
+      annotationReferences.map((reference) => reference.id),
       responseAnchorFallback
     )
   }
@@ -2899,7 +2980,7 @@
    * conversation when even that message is not mounted.
    */
   function responseAnchorFallback(id: string): { x: number; y: number } | null {
-    const messageId = responseReferences.find((reference) => reference.id === id)?.messageId
+    const messageId = annotationReferences.find((reference) => reference.id === id)?.messageId
     const rect = messageId
       ? document.getElementById(`msg-${messageId}`)?.getBoundingClientRect()
       : undefined
@@ -3020,10 +3101,22 @@
     const selection = responseSelection
     if (!selection) return
     // Temporary chats keep their composer references on the controller   the
-    // thread-scoped store below is invisible to them.
+    // thread-scoped store below is invisible to them   but they became a
+    // reference like any other, so the comment editor opens on the passage and
+    // the comment rides to the harness with it.
     if (controller?.addSelection) {
-      controller.addSelection(selection.text)
+      const referenceId = controller.addSelection({
+        text: selection.text,
+        messageId: selection.messageId,
+        startOffset: selection.startOffset,
+        endOffset: selection.endOffset
+      })
+      if (!referenceId) return
+      responseReferenceRanges.set(referenceId, selection.range)
+      refreshResponseHighlights()
+      updateResponseBubblePositions()
       closeResponseSelection()
+      commentEditorReferenceId = referenceId
       return
     }
     const id = crypto.randomUUID()
@@ -3058,7 +3151,6 @@
     updateResponseBubblePositions()
     if (commentEditorReferenceId === id) commentEditorReferenceId = null
   }
-
   function clearResponseReferences(): void {
     responseReferencesState.clearThread(thread.projectId, thread.id)
     responseReferenceRanges.clear()
@@ -3069,7 +3161,11 @@
 
   /** Save or clear the user comment attached to a reference anchor. */
   function saveResponseReferenceComment(id: string, comment: string): void {
-    responseReferencesState.updateComment(thread.projectId, thread.id, id, comment)
+    if (controller?.updateReferenceComment) {
+      controller.updateReferenceComment(id, comment)
+    } else {
+      responseReferencesState.updateComment(thread.projectId, thread.id, id, comment)
+    }
     commentEditorReferenceId = null
     // Saving closes the editor that held the caret, so the comment is now only
     // attached to the chat component. Hand focus back to the composer: the very
@@ -3078,6 +3174,12 @@
   }
 
   function persistResponseReferenceCommentDraft(id: string, comment: string): void {
+    // A temporary chat has no stored draft: its reference list is its own only
+    // copy, so the text being typed is the comment from the first keystroke.
+    if (controller?.updateReferenceComment) {
+      controller.updateReferenceComment(id, comment)
+      return
+    }
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
   }
 
@@ -3183,30 +3285,22 @@
   }
 
   /**
-   * Bring a commented design element back in front of the reader: reveal the
-   * browser tab it was picked from, then highlight the element, scroll it into
-   * view and open its comment. A tab the user has since closed has nothing to
-   * show, so it is reported rather than silently doing nothing.
+   * Bring a commented design element back in front of the reader.
+   *
+   * The comment outlives the page it was written on, so the edit action hands the
+   * reference to the browser's inspection session, which reopens the screen it was
+   * picked from when that page is closed and reveals the element again. A folder or
+   * page that has since been deleted has nothing to show, and the session reports
+   * that instead of opening a substitute.
    */
   function editDesignAnnotation(reference: ResponseReferenceAnchor): void {
-    const tabId = reference.tabId
-    const open = tabId
-      ? contextSidebarState.tabs.some((tab) => tab.id === tabId && tab.kind === 'browser')
-      : false
-    if (!tabId || !open) {
-      toast.error('The design this comment was made on is no longer open.', {
-        description: reference.label
-      })
-      return
-    }
-    contextSidebarState.focus(tabId)
     // The design inspector is the browser's own session and is not part of the
     // conversation this view owns. Importing it statically would carry the browser
     // inspector into the first-paint chunk through the thread view, so it is
     // loaded on demand; by the time a comment needs focusing the browser is open
     // and the module is already in memory.
     void import('$lib/stores/browser-inspector.svelte').then((module) =>
-      module.browserInspector.focusComment(tabId, reference.id)
+      module.browserInspector.revealComment(thread.projectId, thread.id, reference)
     )
   }
 
@@ -3237,7 +3331,7 @@
   }
 
   async function editResponseReference(id: string): Promise<void> {
-    const reference = responseReferences.find((candidate) => candidate.id === id)
+    const reference = annotationReferences.find((candidate) => candidate.id === id)
     if (!reference) return
     // A document annotation is drawn in the file panel and a design element in
     // the browser, not in the conversation, so each of their edit actions opens
@@ -3276,7 +3370,7 @@
     // and no bubble to pin.
     if (reference.messageId) await jumpToMessage(reference.messageId)
     if (!alive) return
-    syncResponseHighlights(responseReferences)
+    syncResponseHighlights(annotationReferences)
     await tick()
     if (!alive) return
     updateResponseBubblePositions()
@@ -3292,24 +3386,34 @@
   function removeComposerReference(id: string): void {
     if (controller?.removeReference) {
       controller.removeReference(id)
-    } else {
-      removeResponseReference(id)
+      // The side chat's ranges and bubble positions live in this view, so a
+      // reference the controller dropped has to stop being drawn here too.
+      responseReferenceRanges.delete(id)
+      refreshResponseHighlights()
+      updateResponseBubblePositions()
+      if (commentEditorReferenceId === id) commentEditorReferenceId = null
+      return
     }
+    removeResponseReference(id)
   }
 
   /** Clear all composer selection references, routing to the controller for temporary chats. */
   function clearComposerReferences(): void {
     if (controller?.clearReferences) {
       controller.clearReferences()
-    } else {
-      clearResponseReferences()
+      responseReferenceRanges.clear()
+      refreshResponseHighlights()
+      responseBubblePositions = {}
+      commentEditorReferenceId = null
+      return
     }
+    clearResponseReferences()
   }
 
   function commentEditorReference(): ResponseReferenceAnchor | null {
     const id = commentEditorReferenceId
     if (!id) return null
-    return responseReferences.find((reference) => reference.id === id) ?? null
+    return annotationReferences.find((reference) => reference.id === id) ?? null
   }
 
   /** Where the open comment editor anchors.
@@ -3339,16 +3443,16 @@
   // and a range that failed to rebuild in that state was never retried. That is
   // what left a comment with no bubble and no highlight on return.
   $effect(() => {
-    void responseReferences.length
+    void annotationReferences.length
     void visibleMessages.length
     void conversationBusy
     void threadMessages.streamRevision(thread.projectId, conversationId)
     void active
-    if (responseReferences.length === 0) return
+    if (annotationReferences.length === 0) return
     responseRangeRetriesLeft = RESPONSE_RANGE_RETRIES
     void tick().then(() => {
       if (!alive) return
-      syncResponseHighlights(responseReferences)
+      syncResponseHighlights(annotationReferences)
     })
   })
 
@@ -5159,6 +5263,7 @@
 
   let unsubscribe: (() => void) | null = null
   let unsubscribeThreadUpdated: (() => void) | null = null
+  let unsubscribeRemoteEvents: (() => void) | null = null
   let unsubscribeLifecycleInheritance: (() => void) | null = null
 
   /** Resolves as soon as the session id exists; transcript and attention
@@ -5321,7 +5426,7 @@
         })
         .catch(() => {})
     })
-    scheduleResponseHighlightRestore(responseReferences)
+    scheduleResponseHighlightRestore(annotationReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
     queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
@@ -5390,6 +5495,26 @@
         scheduleIdleAttention()
       }
     })
+    // Another instance is running this thread's turn, so its stream arrives over
+    // the cross-instance bus instead of this process's event channel. The trace
+    // and the answer are shared on disk as well, so the boundary of that run is
+    // when this window must re-read both: the durable log holds the last entries
+    // and the mirror holds the answer row, and neither would be picked up once
+    // the stream stops.
+    unsubscribeRemoteEvents = subscribeGuarded(
+      'agent:remoteEvent',
+      (payload: RemoteAgentEventPayload) => {
+        if (payload.projectId !== thread.projectId || payload.threadId !== thread.id) return
+        const type = payload.event.type
+        if (type === 'message.completed') {
+          void refreshStreamTailAfterTurn()
+          return
+        }
+        if (type !== 'session.idle' && type !== 'session.error' && type !== 'thread.error') return
+        void refreshMessages()
+        void refreshStreamTailAfterTurn()
+      }
+    )
     // Task mount restores app-owned state only. Native harness transport stays
     // cold until user sends a message.
     // Warm cache: the bounded window is already in memory (hover preloads or a
@@ -5424,6 +5549,7 @@
       }
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
+      unsubscribeRemoteEvents?.()
       unsubscribeLifecycleInheritance?.()
       unsubscribeVoiceSend()
       window.removeEventListener('resize', onResize)
@@ -5891,7 +6017,12 @@
 
     const oldTitle = thread.title
     const providerId = thread.providerId
+    // The destination project decides the machine: a thread moved into a local
+    // project runs here, and one moved into a project bound to an Oven runs on
+    // that Oven, exactly as a thread created there would.
     const settings = thread.settings
+      ? withProjectOven(thread.settings, targetProject, false)
+      : thread.settings
     const draft = rendererRecovery.draftFor(oldProjectId, oldThreadId)
     const attachments = rendererRecovery.attachmentsFor(oldProjectId, oldThreadId)
     const references = rendererRecovery.projectReferencesFor(oldProjectId, oldThreadId)
@@ -6000,8 +6131,8 @@
         undefined,
         true,
         undefined,
-        [],
-        [],
+        request?.references ?? [],
+        request?.projectReferences ?? [],
         { action: 'Retry connection' }
       )
     } catch (error) {
@@ -10134,17 +10265,34 @@
   }
 
   /**
+   * The assistant whose workspace this thread reads, when it is one of the
+   * Assistant tab's threads.
+   *
+   * That workspace is `assistant-cwd/<assistantId>`, shared by every task of the
+   * assistant, so a file, a doc comment and an inspector comment mean the same
+   * thing in all of them. Another assistant's tasks read a different directory,
+   * so they are never a destination, and an assistant-less task owns a directory
+   * of its own with no sibling to carry anything to.
+   */
+  const relocationAssistantId = $derived(
+    thread.projectId === ASSISTANT_SPACE_ID && thread.assistantId ? thread.assistantId : null
+  )
+
+  /**
    * Carrying composer content to another chat.
    *
    * An attached file, a doc comment and an inspector comment all name something
    * the project holds, not something this conversation holds, so any of them can
-   * be moved or copied to another chat of the same project. A chat, an assistant
-   * task or a browser tab conversation lives in a hidden container with no
-   * sibling chat to carry anything to, and a controller-driven conversation (a
-   * temporary chat) keeps its own composer state, so neither offers the action.
+   * be moved or copied to another chat of the same project. In Assistant View
+   * the same holds for another task of the same assistant, because both read one
+   * assistant workspace. A chat or a browser tab conversation lives in a hidden
+   * container with no sibling to carry anything to, and a controller-driven
+   * conversation (a temporary chat) keeps its own composer state, so neither
+   * offers the action.
    */
   const relocationAvailable = $derived(
-    !hasController && !usesThreadWorkspaceMount(thread.projectId)
+    !hasController &&
+      (!usesThreadWorkspaceMount(thread.projectId) || relocationAssistantId !== null)
   )
 
   /** The composer chip a destination is being picked for, and which verb applies. */
@@ -12737,6 +12885,29 @@
     if (streamParts.length === mountedBefore) streamHasOlder = false
   }
 
+  /** Thread whose foreign run this view marked working, so the same view clears
+   *  it and never clears a run this instance's own session owns. */
+  let foreignRunMarkedKey = ''
+  // A thread another instance is running is genuinely working, and this window
+  // has to know it: every live reader below (the durable trace poll, the trace
+  // itself, the elapsed timer) is gated on the run state, and this process
+  // receives none of the sibling's session events for it. The persisted
+  // `planning`/`executing` row is deliberately not trusted for this (it can be a
+  // leftover), but the foreign-run notice is proof the owner is alive and running
+  // that turn right now, which is exactly what the row cannot tell us.
+  $effect(() => {
+    const key = `${thread.projectId}:${thread.id}`
+    if (foreignRunActive) {
+      if (foreignRunMarkedKey === key) return
+      foreignRunMarkedKey = key
+      agentRuns.setBusy(thread.projectId, thread.id, true)
+      return
+    }
+    if (foreignRunMarkedKey !== key) return
+    foreignRunMarkedKey = ''
+    agentRuns.completeSession(thread.projectId, thread.id)
+  })
+
   // While a run is streaming on screen, re-read the durable SSE log every second
   // so the trace stays fresh even when live 'agent:event' broadcasts are not the
   // transport (e.g. a second app instance viewing the same thread, which never
@@ -12828,6 +12999,36 @@
     publishDraftActivity(thread.projectId, thread.id, false)
   })
 </script>
+
+{#snippet studioModuleLoading(label: string)}
+  <div
+    class="flex flex-1 items-center justify-center gap-2 text-xs text-dimmed"
+    role="status"
+    aria-label={`Loading ${label}`}
+  >
+    <CioSpinner size={14} class="animate-spin" />
+    Loading {label}
+  </div>
+{/snippet}
+
+{#snippet studioModuleFailed(key: string, label: string, error: unknown)}
+  {logRendererError(`The ${label} studio could not be loaded`, error)}
+  <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+    <p class="text-xs font-medium text-foreground">{label} could not load</p>
+    <p class="max-w-[34ch] text-[0.625rem] leading-relaxed text-muted">
+      Loading it was interrupted. Try again.
+    </p>
+    <button
+      type="button"
+      class="mt-1 bg-primary px-2 py-1 text-[0.625rem] text-on-primary transition-colors hover:bg-primary-hover"
+      title={`Try loading the ${label} studio again`}
+      aria-label={`Try loading the ${label} studio again`}
+      onclick={() => retryStudio(key)}
+    >
+      Retry
+    </button>
+  </div>
+{/snippet}
 
 {#snippet ovenPicker()}
   {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
@@ -12942,19 +13143,23 @@
 {/if}
 
 <!-- Comment bubbles pinned to attached response selections -->
-{#each responseReferences as reference, referenceIndex (reference.id)}
+{#each annotationReferences as reference, referenceIndex (reference.id)}
   {@const position = responseBubblePositions[reference.id]}
   {#if position?.visible}
-    <ResponseAnnotationBubble
-      x={position.x}
-      y={position.y}
+    <AnnotationIndicator
+      id={reference.id}
+      surface="conversation"
+      left={`${position.x}px`}
+      top={`${position.y}px`}
+      fixed
       number={referenceIndex + 1}
       hasComment={Boolean(reference.comment)}
       active={commentEditorReferenceId === reference.id}
       title={reference.comment
-        ? `Edit comment on "${reference.label}"`
-        : `Comment on "${reference.label}"`}
-      onClick={() => (commentEditorReferenceId = reference.id)}
+        ? `Edit comment on "${reference.label}". Drag to move it, click to edit.`
+        : `Comment on "${reference.label}". Drag to move it, click to write.`}
+      class="z-40"
+      onOpen={() => (commentEditorReferenceId = reference.id)}
     />
   {/if}
 {/each}
@@ -12998,235 +13203,265 @@
       />
     {/if}
     {#if studioDocument === 'brainstorm' && studioBrainstorm}
-      {#key `${studioBrainstorm.id}:${studioBrainstorm.version}`}
-        <BrainstormStudio
-          brainstorm={studioBrainstorm}
-          versions={brainstormVersions}
-          history={brainstormStudioHistories.forDocument(
-            `${studioBrainstorm.id}:${studioBrainstorm.version}`
-          )}
-          busy={brainstormBusy || busy}
-          error={brainstormError}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          specAvailable={spec !== null}
-          prdAvailable={prd !== null}
-          assignmentAvailable={assignment !== null}
-          auditAvailable={auditReport !== null}
-          onBack={closeSpecStudio}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onOpenPrd={openPrdStudio}
-          onOpenAssignment={openAssignmentStudio}
-          onOpenAudit={openAuditStudio}
-          onSelectVersion={selectBrainstormVersion}
-          onSave={saveBrainstorm}
-          onAddAnnotation={addBrainstormAnnotation}
-          onUpdateAnnotation={updateBrainstormAnnotation}
-          onResolveAnnotation={resolveBrainstormAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('brainstorm', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('brainstorm', 'quick', selection, documentContext)}
-          onSubmit={submitBrainstormDecision}
-          onNextStep={brainstormNextStep}
-          onOpenInEditor={openBrainstormInEditor}
-          onRevealInAppFile={revealBrainstormInAppFile}
-          onOpenPrototype={openPrototypePreview}
-          onGenerateHifi={selectLofiPrototype}
-        />
+      {#key `${studioBrainstorm.id}:${studioBrainstorm.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.brainstormStudio, () => import('../specs/BrainstormStudio.svelte'))}
+          {@render studioModuleLoading('Brainstorm')}
+        {:then { default: BrainstormStudio }}
+          <BrainstormStudio
+            brainstorm={studioBrainstorm}
+            versions={brainstormVersions}
+            history={brainstormStudioHistories.forDocument(
+              `${studioBrainstorm.id}:${studioBrainstorm.version}`
+            )}
+            busy={brainstormBusy || busy}
+            error={brainstormError}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            specAvailable={spec !== null}
+            prdAvailable={prd !== null}
+            assignmentAvailable={assignment !== null}
+            auditAvailable={auditReport !== null}
+            onBack={closeSpecStudio}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onOpenPrd={openPrdStudio}
+            onOpenAssignment={openAssignmentStudio}
+            onOpenAudit={openAuditStudio}
+            onSelectVersion={selectBrainstormVersion}
+            onSave={saveBrainstorm}
+            onAddAnnotation={addBrainstormAnnotation}
+            onUpdateAnnotation={updateBrainstormAnnotation}
+            onResolveAnnotation={resolveBrainstormAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('brainstorm', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('brainstorm', 'quick', selection, documentContext)}
+            onSubmit={submitBrainstormDecision}
+            onNextStep={brainstormNextStep}
+            onOpenInEditor={openBrainstormInEditor}
+            onRevealInAppFile={revealBrainstormInAppFile}
+            onOpenPrototype={openPrototypePreview}
+            onGenerateHifi={selectLofiPrototype}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.brainstormStudio, 'Brainstorm', error)}
+        {/await}
       {/key}
     {:else if studioDocument === 'prd' && studioPrd}
-      {#key `${studioPrd.id}:${studioPrd.version}:${studioPrd.updatedAt}`}
-        <PrdStudio
-          prd={studioPrd}
-          versions={prdVersions}
-          busy={prdBusy || busy}
-          error={prdError}
-          brainstormAvailable={brainstorm !== null}
-          specAvailable={spec !== null}
-          assignmentAvailable={assignment !== null}
-          auditAvailable={auditReport !== null}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          onBack={closeSpecStudio}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onOpenAssignment={openAssignmentStudio}
-          onOpenAudit={openAuditStudio}
-          onSelectVersion={selectPrdVersion}
-          onSave={savePrd}
-          onAddAnnotation={addPrdAnnotation}
-          onUpdateAnnotation={updatePrdAnnotation}
-          onResolveAnnotation={resolvePrdAnnotation}
-          onFinalize={finalizePrd}
-          onNextStep={prd?.status === 'finalized' ? nextStepFromPrd : undefined}
-          onOpenInEditor={openPrdInEditor}
-          onRevealInFiles={revealPrdInFiles}
-        />
+      {#key `${studioPrd.id}:${studioPrd.version}:${studioPrd.updatedAt}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.prdStudio, () => import('../specs/PrdStudio.svelte'))}
+          {@render studioModuleLoading('PRD')}
+        {:then { default: PrdStudio }}
+          <PrdStudio
+            prd={studioPrd}
+            versions={prdVersions}
+            busy={prdBusy || busy}
+            error={prdError}
+            brainstormAvailable={brainstorm !== null}
+            specAvailable={spec !== null}
+            assignmentAvailable={assignment !== null}
+            auditAvailable={auditReport !== null}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            onBack={closeSpecStudio}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onOpenAssignment={openAssignmentStudio}
+            onOpenAudit={openAuditStudio}
+            onSelectVersion={selectPrdVersion}
+            onSave={savePrd}
+            onAddAnnotation={addPrdAnnotation}
+            onUpdateAnnotation={updatePrdAnnotation}
+            onResolveAnnotation={resolvePrdAnnotation}
+            onFinalize={finalizePrd}
+            onNextStep={prd?.status === 'finalized' ? nextStepFromPrd : undefined}
+            onOpenInEditor={openPrdInEditor}
+            onRevealInFiles={revealPrdInFiles}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.prdStudio, 'PRD', error)}
+        {/await}
       {/key}
     {:else if studioDocument === 'audit' && auditReport}
-      {#key `${auditReport.id}:${auditReport.version}`}
-        <AuditStudio
-          report={auditReport}
-          versions={auditVersions}
-          history={auditStudioHistories.forDocument(`${auditReport.id}:${auditReport.version}`)}
-          busy={auditBusy || busy}
-          error={auditError}
-          assignmentAvailable={assignment !== null}
-          brainstormAvailable={brainstorm !== null}
-          prdAvailable={prd !== null}
-          specAvailable={spec !== null}
-          actionsAvailable={auditReportActionsAvailable}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          onBack={closeSpecStudio}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenPrd={openPrdStudio}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onOpenAssignment={openAssignmentStudio}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onSelectVersion={selectAuditVersion}
-          onSave={saveAudit}
-          onAddAnnotation={addAuditAnnotation}
-          onUpdateAnnotation={updateAuditAnnotation}
-          onResolveAnnotation={resolveAuditAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('audit', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('audit', 'quick', selection, documentContext)}
-          onReview={reviewAudit}
-          onComplete={completeAudit}
-          onOpenInEditor={openAuditInEditor}
-          onRevealInAppFile={revealAuditInAppFile}
-        />
+      {#key `${auditReport.id}:${auditReport.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.auditStudio, () => import('../specs/AuditStudio.svelte'))}
+          {@render studioModuleLoading('Audit')}
+        {:then { default: AuditStudio }}
+          <AuditStudio
+            report={auditReport}
+            versions={auditVersions}
+            history={auditStudioHistories.forDocument(`${auditReport.id}:${auditReport.version}`)}
+            busy={auditBusy || busy}
+            error={auditError}
+            assignmentAvailable={assignment !== null}
+            brainstormAvailable={brainstorm !== null}
+            prdAvailable={prd !== null}
+            specAvailable={spec !== null}
+            actionsAvailable={auditReportActionsAvailable}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            onBack={closeSpecStudio}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenPrd={openPrdStudio}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onOpenAssignment={openAssignmentStudio}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onSelectVersion={selectAuditVersion}
+            onSave={saveAudit}
+            onAddAnnotation={addAuditAnnotation}
+            onUpdateAnnotation={updateAuditAnnotation}
+            onResolveAnnotation={resolveAuditAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('audit', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('audit', 'quick', selection, documentContext)}
+            onReview={reviewAudit}
+            onComplete={completeAudit}
+            onOpenInEditor={openAuditInEditor}
+            onRevealInAppFile={revealAuditInAppFile}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.auditStudio, 'Audit', error)}
+        {/await}
       {/key}
     {:else if studioDocument === 'assignment' && assignment && studioAssignment}
-      {#key `${studioAssignment.id}:${studioAssignment.version}`}
-        <AssignmentStudio
-          assignment={studioAssignment}
-          threadId={thread.id}
-          projectId={thread.projectId}
-          versions={assignmentVersions}
-          history={assignmentStudioHistories.forDocument(
-            `${studioAssignment.id}:${studioAssignment.version}`
-          )}
-          {providers}
-          harnessId={settings.harnessId}
-          fallbackModel={workerModelForThread()}
-          seniorModel={seniorModelForThread()}
-          favoriteModels={rendererRecovery.favoriteModels}
-          recentModels={rendererRecovery.recentModels}
-          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-          busy={assignmentBusy || busy}
-          error={assignmentError}
-          readOnly={studioAssignment.status !== 'draft' ||
-            studioAssignment.version !== assignment.version}
-          focusTaskId={assignmentFocusTaskId}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          auditAvailable={auditReport !== null}
-          brainstormAvailable={brainstorm !== null}
-          prdAvailable={prd !== null}
-          specAvailable={spec !== null}
-          auditActive={studioAssignment.version === assignment.version &&
-            assignmentAuditState === 'offered'}
-          finalComplete={assignmentFinalComplete}
-          onBack={closeSpecStudio}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenPrd={openPrdStudio}
-          onOpenSpec={() => (studioDocument = 'spec')}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenAudit={openAuditStudio}
-          onOpenAuditWork={openAssignmentAuditWork}
-          onSelectVersion={selectAssignmentVersion}
-          onSave={saveAssignment}
-          onApprove={approveAssignment}
-          onOpenInEditor={openAssignmentInEditor}
-          onRevealInAppFile={revealAssignmentInAppFile}
-          onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
-          onSeniorModelChange={updateAssignmentSeniorModel}
-          onTaskModelChange={updateAssignmentTaskModel}
-          onTaskScopeChange={updateAssignmentTaskScope}
-          onWorkerScopeChange={updateAssignmentWorkerScope}
-          {assignmentScopeBucketId}
-          onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
-          resolveTaskThread={resolveAssignmentTaskThread}
-          onToggleFavorite={(providerId, modelId, harnessId) =>
-            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-          onReorderFavorite={(draggedKey, targetKey, position) =>
-            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          onAddAnnotation={addAssignmentAnnotation}
-          onUpdateAnnotation={updateAssignmentAnnotation}
-          onResolveAnnotation={resolveAssignmentAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('assignment', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('assignment', 'quick', selection, documentContext)}
-        />
+      {#key `${studioAssignment.id}:${studioAssignment.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.assignmentStudio, () => import('../specs/AssignmentStudio.svelte'))}
+          {@render studioModuleLoading('Assignment')}
+        {:then { default: AssignmentStudio }}
+          <AssignmentStudio
+            assignment={studioAssignment}
+            threadId={thread.id}
+            projectId={thread.projectId}
+            versions={assignmentVersions}
+            history={assignmentStudioHistories.forDocument(
+              `${studioAssignment.id}:${studioAssignment.version}`
+            )}
+            {providers}
+            harnessId={settings.harnessId}
+            fallbackModel={workerModelForThread()}
+            seniorModel={seniorModelForThread()}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            busy={assignmentBusy || busy}
+            error={assignmentError}
+            readOnly={studioAssignment.status !== 'draft' ||
+              studioAssignment.version !== assignment.version}
+            focusTaskId={assignmentFocusTaskId}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            auditAvailable={auditReport !== null}
+            brainstormAvailable={brainstorm !== null}
+            prdAvailable={prd !== null}
+            specAvailable={spec !== null}
+            auditActive={studioAssignment.version === assignment.version &&
+              assignmentAuditState === 'offered'}
+            finalComplete={assignmentFinalComplete}
+            onBack={closeSpecStudio}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenPrd={openPrdStudio}
+            onOpenSpec={() => (studioDocument = 'spec')}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenAudit={openAuditStudio}
+            onOpenAuditWork={openAssignmentAuditWork}
+            onSelectVersion={selectAssignmentVersion}
+            onSave={saveAssignment}
+            onApprove={approveAssignment}
+            onOpenInEditor={openAssignmentInEditor}
+            onRevealInAppFile={revealAssignmentInAppFile}
+            onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
+            onSeniorModelChange={updateAssignmentSeniorModel}
+            onTaskModelChange={updateAssignmentTaskModel}
+            onTaskScopeChange={updateAssignmentTaskScope}
+            onWorkerScopeChange={updateAssignmentWorkerScope}
+            {assignmentScopeBucketId}
+            onOpenTaskThread={(threadId) => void openAssignmentTaskThread(threadId)}
+            resolveTaskThread={resolveAssignmentTaskThread}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onAddAnnotation={addAssignmentAnnotation}
+            onUpdateAnnotation={updateAssignmentAnnotation}
+            onResolveAnnotation={resolveAssignmentAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('assignment', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('assignment', 'quick', selection, documentContext)}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.assignmentStudio, 'Assignment', error)}
+        {/await}
       {/key}
     {:else if spec}
-      {#key `${spec.id}:${spec.version}`}
-        <SpecStudio
-          {spec}
-          {providers}
-          projectId={thread.projectId}
-          {auditSettings}
-          favoriteModels={rendererRecovery.favoriteModels}
-          recentModels={rendererRecovery.recentModels}
-          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-          history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
-          validation={specValidation}
-          versions={specVersions}
-          busy={specBusy || busy}
-          error={specError}
-          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          assignmentAvailable={assignment !== null}
-          assignmentMode={settings.assignmentMode === true}
-          auditAvailable={auditReport !== null}
-          implementationAuditAvailable={plainEngineeringAuditAvailable}
-          implementationAuditReady={plainEngineeringAuditReady}
-          implementationAuditRunning={plainEngineeringAuditRunning}
-          brainstormAvailable={brainstorm !== null}
-          prdAvailable={prd !== null}
-          onBack={closeSpecStudio}
-          onOpenBrainstorm={openBrainstormStudio}
-          onOpenPrd={openPrdStudio}
-          onOpenInEditor={openSpecInEditor}
-          onRevealInAppFile={revealSpecInAppFile}
-          onToggleAgentMessages={() =>
-            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-          onOpenAssignment={openAssignmentStudio}
-          onGenerateAssignment={() => generateAssignmentDraft()}
-          onOpenAudit={openAuditStudio}
-          onRunImplementationAudit={() =>
-            plainEngineeringAuditReady
-              ? openAuditStudio()
-              : plainEngineeringAuditRunning
-                ? openDurableAuditWork()
-                : generateAudit(auditSettings)}
-          onAuditModelChange={changeAuditModel}
-          onToggleFavorite={(providerId, modelId, harnessId) =>
-            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-          onReorderFavorite={(draggedKey, targetKey, position) =>
-            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          onMarkImplementationComplete={completeAudit}
-          onSave={saveSpec}
-          onSelectVersion={selectSpecVersion}
-          onAddAnnotation={addSpecAnnotation}
-          onUpdateAnnotation={updateSpecAnnotation}
-          onResolveAnnotation={resolveSpecAnnotation}
-          onExplainSelection={(selection, documentContext) =>
-            openStudioSelectionChat('spec', 'elaborate', selection, documentContext)}
-          onQuickChatSelection={(selection, documentContext) =>
-            openStudioSelectionChat('spec', 'quick', selection, documentContext)}
-          onDismissValidationIssue={dismissSpecValidationIssue}
-          onSearchContext={searchSpecContext}
-          onAddContext={addSpecContext}
-          onRemoveContext={removeSpecContext}
-          onSubmit={submitSpecDecision}
-        />
+      {#key `${spec.id}:${spec.version}:${studioReloadNonce}`}
+        {#await loadPanelModule(PANEL_KEYS.specStudio, () => import('../specs/SpecStudio.svelte'))}
+          {@render studioModuleLoading('Spec')}
+        {:then { default: SpecStudio }}
+          <SpecStudio
+            {spec}
+            {providers}
+            projectId={thread.projectId}
+            {auditSettings}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
+            validation={specValidation}
+            versions={specVersions}
+            busy={specBusy || busy}
+            error={specError}
+            agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+            assignmentAvailable={assignment !== null}
+            assignmentMode={settings.assignmentMode === true}
+            auditAvailable={auditReport !== null}
+            implementationAuditAvailable={plainEngineeringAuditAvailable}
+            implementationAuditReady={plainEngineeringAuditReady}
+            implementationAuditRunning={plainEngineeringAuditRunning}
+            brainstormAvailable={brainstorm !== null}
+            prdAvailable={prd !== null}
+            onBack={closeSpecStudio}
+            onOpenBrainstorm={openBrainstormStudio}
+            onOpenPrd={openPrdStudio}
+            onOpenInEditor={openSpecInEditor}
+            onRevealInAppFile={revealSpecInAppFile}
+            onToggleAgentMessages={() =>
+              (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+            onOpenAssignment={openAssignmentStudio}
+            onGenerateAssignment={() => generateAssignmentDraft()}
+            onOpenAudit={openAuditStudio}
+            onRunImplementationAudit={() =>
+              plainEngineeringAuditReady
+                ? openAuditStudio()
+                : plainEngineeringAuditRunning
+                  ? openDurableAuditWork()
+                  : generateAudit(auditSettings)}
+            onAuditModelChange={changeAuditModel}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onMarkImplementationComplete={completeAudit}
+            onSave={saveSpec}
+            onSelectVersion={selectSpecVersion}
+            onAddAnnotation={addSpecAnnotation}
+            onUpdateAnnotation={updateSpecAnnotation}
+            onResolveAnnotation={resolveSpecAnnotation}
+            onExplainSelection={(selection, documentContext) =>
+              openStudioSelectionChat('spec', 'elaborate', selection, documentContext)}
+            onQuickChatSelection={(selection, documentContext) =>
+              openStudioSelectionChat('spec', 'quick', selection, documentContext)}
+            onDismissValidationIssue={dismissSpecValidationIssue}
+            onSearchContext={searchSpecContext}
+            onAddContext={addSpecContext}
+            onRemoveContext={removeSpecContext}
+            onSubmit={submitSpecDecision}
+          />
+        {:catch error}
+          {@render studioModuleFailed(PANEL_KEYS.specStudio, 'Spec', error)}
+        {/await}
       {/key}
     {:else}
       <div class="flex flex-1 items-center justify-center text-sm text-dimmed">
@@ -13496,7 +13731,16 @@
                         <MessageTimestamp at={previousTurnAudit.endTime} />
                       </div>
                     {/if}
-                    {@const inlineTags = inlineFileTagsForMessage(msg)}
+                    {@const inlineTags = inlineFileTagsForMessage(
+                      msg,
+                      assistantSpaceThreads
+                        ? {
+                            threads: assistantSpaceThreads,
+                            assistants: assistants.assistants,
+                            assistantIcons: assistants.iconUrls
+                          }
+                        : undefined
+                    )}
                     {@const inlinedPaths = new Set(inlineTags.map((tag) => tag.token.slice(1)))}
                     {@const leftoverReferences = (msg.projectReferences ?? []).filter(
                       (reference) => !inlinedPaths.has(reference.path)
@@ -13571,6 +13815,7 @@
                             citationThread={citationThreadContext}
                             annotationScope={{ projectId: thread.projectId, threadId: thread.id }}
                             inlineFileTags={explicitPresentation ? undefined : inlineTags}
+                            onOpenAssistantTag={openAssistantTag}
                             onCiteFile={openFileCitation}
                             onOpenLocalFile={(url) => void openFilePart(url)}
                           />
@@ -15038,6 +15283,8 @@
                         : undefined}
                       assignmentId={assignment?.id}
                       assignmentTasks={assignment?.content.tasks ?? []}
+                      assistantTags={assistantTagCandidates}
+                      onOpenAssistantTag={(tag) => openAssistantTag(`${tag.kind}:${tag.id}`)}
                       initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
                       initialAttachments={rendererRecovery.attachmentsFor(
                         thread.projectId,
@@ -15122,7 +15369,7 @@
                       references={composerReferences}
                       onRemoveReference={removeComposerReference}
                       onRemoveAllReferences={clearComposerReferences}
-                      onEditReference={controller ? undefined : editResponseReference}
+                      onEditReference={editResponseReference}
                       onSend={sendComposerMessage}
                       onNeedsAiAccount={() => (aiAccountPromptOpen = true)}
                       historyMessages={composerHistoryTexts}
@@ -15204,7 +15451,10 @@
   {@const request = relocationRequest}
   <RelocateThreadPicker
     projectId={thread.projectId}
-    projectName={project?.name ?? 'this project'}
+    projectName={relocationAssistantId
+      ? (assistantName ?? 'this assistant')
+      : (project?.name ?? 'this project')}
+    assistantId={relocationAssistantId ?? undefined}
     sourceThreadId={thread.id}
     item={request.item}
     mode={request.mode}

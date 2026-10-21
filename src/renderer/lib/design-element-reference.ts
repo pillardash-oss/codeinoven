@@ -1,4 +1,8 @@
-import type { BrowserDesignTab, BrowserInspectorTarget } from '$shared/ipc-contract'
+import type {
+  BrowserDesignTab,
+  BrowserInspectorTarget,
+  BrowserInspectorViewport
+} from '$shared/ipc-contract'
 import type { ResponseReferenceAnchor } from './stores/response-references.svelte'
 
 /**
@@ -27,6 +31,21 @@ export function describeInspectorTarget(target: BrowserInspectorTarget): string 
 }
 
 /**
+ * The layout a width describes, in the words a reader already uses.
+ *
+ * A raw number is what the model needs, but the name is what makes the comment
+ * legible beside the width: "narrow column" under `390x844 (mobile)` reads as a
+ * phone layout rather than a desktop one that happens to be squeezed. The
+ * breakpoints are the common ones, ordered widest last.
+ */
+export function viewportLabel(width: number): string {
+  if (width < 768) return 'mobile'
+  if (width < 1024) return 'tablet'
+  if (width < 1440) return 'desktop'
+  return 'wide desktop'
+}
+
+/**
  * The descriptor the model reads inside `<element>`.
  *
  * Deliberately plain `key: value` lines rather than JSON: the same text is
@@ -44,11 +63,41 @@ export function designElementDescriptor(
     `selector: ${target.selector}`,
     context ? `context: ${context}` : null,
     `size: ${target.rect.width}x${target.rect.height}`,
+    `viewport: ${formatViewport(target.viewport)}`,
     design ? `design: ${design.directory}` : null,
     target.text ? `text: ${JSON.stringify(target.text)}` : null,
     target.html ? `markup: ${target.html}` : null
   ].filter((line): line is string => line !== null)
   return lines.join('\n').slice(0, MAX_DESCRIPTOR_LENGTH)
+}
+
+/** `390x844 CSS px (mobile)`, the layout the element was measured inside. */
+export function formatViewport(viewport: BrowserInspectorViewport): string {
+  const label = viewportLabel(viewport.width)
+  return `${viewport.width}x${viewport.height} CSS px (${label})`
+}
+
+/**
+ * The entry file one served page is showing, relative to its design folder.
+ *
+ * A design folder is served on a loopback origin and each screen inside it is a
+ * file on that origin (see `servedFileUrl`), so the page's own URL is what names
+ * the screen: reopening a comment uses this to come back to the page the element
+ * was picked from rather than to whatever the folder defaults to. No path at
+ * all is the folder listing, which no entry describes.
+ */
+export function designEntryFromUrl(url: string, origin: string): string | undefined {
+  if (!url.startsWith(origin)) return undefined
+  const path = url.slice(origin.length).split(/[?#]/u)[0]
+  const segments = path.split('/').filter((segment) => segment.length > 0)
+  if (segments.length === 0) return undefined
+  try {
+    return segments.map((segment) => decodeURIComponent(segment)).join('/')
+  } catch {
+    // A URL the browser left with an unescaped `%` cannot be turned back into the
+    // file name it came from, and a guessed name would reopen the wrong screen.
+    return undefined
+  }
 }
 
 /**
@@ -57,13 +106,18 @@ export function designElementDescriptor(
  * The reference id is the page marker's id, so the panel, the page pin and the
  * composer chip all name the same element with one identifier, and a comment
  * reported by the page can update the exact reference it belongs to.
+ *
+ * The design folder and the page's entry travel with it so the comment can bring
+ * its page back after the tab is closed: the folder says where to serve, the
+ * entry says which screen of it to load.
  */
 export function designElementReference(
   id: string,
   target: BrowserInspectorTarget,
   design: BrowserDesignTab | null,
-  tabId: string
+  tab: { id: string; url: string }
 ): ResponseReferenceAnchor {
+  const entry = design ? designEntryFromUrl(tab.url, design.origin) : undefined
   return {
     id,
     kind: 'design',
@@ -71,6 +125,8 @@ export function designElementReference(
     label: 'Design element',
     text: designElementDescriptor(target, design),
     selector: target.selector,
-    tabId
+    tabId: tab.id,
+    ...(design ? { directory: design.directory } : {}),
+    ...(entry ? { designEntry: entry } : {})
   }
 }

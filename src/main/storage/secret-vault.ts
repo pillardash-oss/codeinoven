@@ -1,5 +1,6 @@
 import { safeStorage } from 'electron'
 import { uuidv7 } from '../../lib/id'
+import { Logger } from '../system/logger'
 import { clearRepeatedFailure, reportRepeatedFailure } from '../system/repeated-failure-log'
 import {
   VaultCiphertextUnreadableError,
@@ -19,6 +20,25 @@ interface EncryptedSecretRecord {
 
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
 const vaultWriteTails = new WeakMap<StorageEngine, Promise<unknown>>()
+
+/**
+ * `safeStorage`'s synchronous encryption API is deprecated in Electron 45 and
+ * removed in 46, so availability is asked through the async API. Every read and
+ * write asks again, which keeps the answer current, and the last answer is cached
+ * here because status snapshots, gateway catalogs and utility listings report
+ * availability as a plain boolean through the synchronous `isAvailable()`.
+ */
+let encryptionAvailable = false
+
+async function probeEncryption(): Promise<boolean> {
+  try {
+    encryptionAvailable = await safeStorage.isAsyncEncryptionAvailable()
+  } catch (error: unknown) {
+    Logger.error('Secure credential storage availability could not be detected:', error)
+    encryptionAvailable = false
+  }
+  return encryptionAvailable
+}
 
 /**
  * Deterministic SecretVault ref under which a provider account's token is
@@ -64,17 +84,25 @@ function mcpOAuthClientRef(utilityId: string): string {
 export class SecretVault {
   private readonly storePath = 'secrets/vault.json'
 
-  constructor(private readonly storage: StorageEngine) {}
+  constructor(private readonly storage: StorageEngine) {
+    // Availability is detected as soon as a vault exists so the synchronous
+    // `isAvailable()` readers see a settled answer instead of the pre-probe default.
+    void probeEncryption()
+  }
 
+  /** Cached keyring availability, safe to read synchronously; see `probeEncryption`. */
   isAvailable(): boolean {
-    return safeStorage.isEncryptionAvailable()
+    return encryptionAvailable
   }
 
   async save(value: string, existingRef?: string): Promise<string> {
-    if (!this.isAvailable()) {
+    if (!(await probeEncryption())) {
       throw new VaultUnavailableError()
     }
     if (!value) throw new TypeError('Credential value must not be empty')
+    // Encryption runs before the write is queued so the shared queue only serializes
+    // keyring round trips that have already completed.
+    const ciphertext = (await safeStorage.encryptStringAsync(value)).toString('base64')
 
     return this.mutate(async (store) => {
       const ref = existingRef ?? `secret_${uuidv7()}`
@@ -82,7 +110,7 @@ export class SecretVault {
       const now = Date.now()
       const writer = describeVaultWriter()
       store[ref] = {
-        value: safeStorage.encryptString(value).toString('base64'),
+        value: ciphertext,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
         ...(writer ? { writer } : {})
@@ -153,7 +181,7 @@ export class SecretVault {
 
   /** One MCP utility's stored OAuth state, or null when it has none or the vault is locked. */
   async resolveMcpOAuthState(utilityId: string): Promise<string | null> {
-    if (!this.isAvailable()) return null
+    if (!(await probeEncryption())) return null
     try {
       return await this.resolve(mcpOAuthStateRef(utilityId))
     } catch {
@@ -172,7 +200,7 @@ export class SecretVault {
 
   /** The stored client secret for one MCP utility, or null when none is stored. */
   async resolveMcpOAuthClientSecret(utilityId: string): Promise<string | null> {
-    if (!this.isAvailable()) return null
+    if (!(await probeEncryption())) return null
     try {
       return await this.resolve(mcpOAuthClientRef(utilityId))
     } catch {
@@ -185,16 +213,22 @@ export class SecretVault {
   }
 
   async resolve(ref: string): Promise<string> {
-    if (!this.isAvailable()) {
+    if (!(await probeEncryption())) {
       throw new VaultUnavailableError()
     }
     const record = (await this.load())[ref]
     if (!record) throw new VaultRecordMissingError(ref)
 
     try {
-      const value = safeStorage.decryptString(Buffer.from(record.value, 'base64'))
+      const decrypted = await safeStorage.decryptStringAsync(Buffer.from(record.value, 'base64'))
       clearRepeatedFailure(unreadableCredentialLabel(ref))
-      return value
+      if (decrypted.shouldReEncrypt) {
+        await this.rotateCiphertext(ref, decrypted.result).catch((error: unknown) => {
+          // A failed rewrite costs one more rotation attempt on the next read.
+          Logger.dev('Vault record could not be re-encrypted after a key rotation:', error)
+        })
+      }
+      return decrypted.result
     } catch (failure) {
       // The Git sidebar polls a status that reads this vault every few seconds, so
       // one unreadable credential reports itself once at error level and repeats at
@@ -214,6 +248,21 @@ export class SecretVault {
     await this.mutate(async (store) => {
       if (!(ref in store)) return
       delete store[ref]
+      await this.storage.write(this.storePath, store)
+    })
+  }
+
+  /**
+   * Rewrite one record's ciphertext after the OS keyring rotated its key, which
+   * `decryptStringAsync` reports through `shouldReEncrypt`. The rewrite goes through
+   * the shared write queue so a concurrent save cannot be lost.
+   */
+  private async rotateCiphertext(ref: string, plaintext: string): Promise<void> {
+    const value = (await safeStorage.encryptStringAsync(plaintext)).toString('base64')
+    await this.mutate(async (store) => {
+      const existing = store[ref]
+      if (!existing) return
+      store[ref] = { ...existing, value, updatedAt: Date.now() }
       await this.storage.write(this.storePath, store)
     })
   }

@@ -37,7 +37,7 @@
 </script>
 
 <div class="flex w-full items-center justify-between gap-2">
-  <div>
+  <div class="flex items-center gap-2">
     {#if showBack}
       <button
         class="flex h-9 items-center gap-1.5 px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground"
@@ -48,8 +48,6 @@
         <CioBack size={14} /> Back
       </button>
     {/if}
-  </div>
-  <div class="flex items-center gap-2">
     {#if setupPreset === 'plugin-bundle'}
       <button
         class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
@@ -58,16 +56,6 @@
         onclick={onClose}
       >
         Cancel
-      </button>
-      <button
-        class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-        type="button"
-        data-modal-primary
-        disabled={saving || !canImportPlugin}
-        onclick={onImportPlugin}
-      >
-        {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
-        Install plugin
       </button>
     {:else}
       <button
@@ -89,18 +77,31 @@
           Delete
         </button>
       {/if}
-      {#if (hasDraftId || isNative || setupPreset !== null) && !readOnly}
-        <button
-          class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          type="submit"
-          form="utility-editor-form"
-          data-modal-primary
-          disabled={saving}
-        >
-          {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
-          {isNative ? 'Save changes' : 'Save utility'}
-        </button>
-      {/if}
+    {/if}
+  </div>
+  <div class="flex items-center gap-2">
+    {#if setupPreset === 'plugin-bundle'}
+      <button
+        class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        type="button"
+        data-modal-primary
+        disabled={saving || !canImportPlugin}
+        onclick={onImportPlugin}
+      >
+        {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
+        Install plugin
+      </button>
+    {:else if (hasDraftId || isNative || setupPreset !== null) && !readOnly}
+      <button
+        class="flex h-9 items-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+        type="submit"
+        form="utility-editor-form"
+        data-modal-primary
+        disabled={saving}
+      >
+        {#if saving}<CioSpinner size={13} class="animate-spin" />{/if}
+        {isNative ? 'Save changes' : 'Save utility'}
+      </button>
     {/if}
   </div>
 </div>

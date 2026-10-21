@@ -158,7 +158,7 @@
       // the surface that now owns it.
       const current = fittedBounds(measurePane())
       if (!current || !browserVisibility.isVisible(placedTab.tabId, current)) {
-        void invoke('browser:hide', placedTab.tabId).catch(() => {})
+        browserVisibility.detachUnlessAnotherSurfaceDisplays(placedTab.tabId, surface)
       }
     } catch {
       // The tab can be destroyed between the visibility check and the call.
@@ -195,7 +195,7 @@
    */
   $effect(() => {
     if (!placed) {
-      void invoke('browser:hide', placedTab.tabId).catch(() => {})
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(placedTab.tabId, surface)
       return
     }
     void showAtCurrentBounds().catch(() => {})
@@ -242,14 +242,18 @@
       intersection.disconnect()
       window.removeEventListener('resize', place)
       if (host === element) host = undefined
-      void invoke('browser:hide', placedTab.tabId).catch(() => {})
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(placedTab.tabId, surface)
     }
   }
 
   onMount(() => {
     // Claim the native view for this tab while the stage is mounted. The claim is
     // released with the component, so a torn-down board can never keep the view.
-    return browserVisibility.claimTab(placedTab.tabId, surface)
+    const releaseClaim = browserVisibility.claimTab(placedTab.tabId, surface)
+    return () => {
+      releaseClaim()
+      browserVisibility.detachReleasedTab(placedTab.tabId)
+    }
   })
 </script>
 

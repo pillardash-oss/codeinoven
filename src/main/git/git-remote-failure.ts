@@ -56,6 +56,7 @@ const DENIED_MARKERS = [
   'authentication failed',
   'invalid username or password',
   'permission denied',
+  'denied to',
   'terminal prompts disabled',
   'could not read username',
   'could not read password',
@@ -102,7 +103,7 @@ const SENTENCES: Readonly<Record<GitRemoteIssueKind, string>> = {
   offline:
     'The remote could not be reached, and the device looks offline. Ahead and behind counts come from the last fetch that succeeded.',
   denied:
-    'The remote refused this checkout. This account has no access to fetch from or push to it.',
+    'The remote refused this operation. Check that the Git credentials used for this remote have the required repository permissions.',
   missing:
     "The remote points at no repository this account can read. Check the remote's URL and this project's access to it.",
   unknown:

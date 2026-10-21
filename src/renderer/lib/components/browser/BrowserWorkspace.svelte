@@ -147,7 +147,7 @@
       // native view can exist at a time, so a stale attach would leave the page on
       // screen on top of the surface that now owns it.
       if (holdPage || !browserVisibility.isVisible(tabId, contentBounds())) {
-        void invoke('browser:hide', tabId).catch(() => {})
+        browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
       }
     } catch {
       // The tab can be destroyed between the visibility check and the call.
@@ -174,7 +174,7 @@
   const manageNativeView: Attachment<HTMLDivElement> = () => {
     void tick().then(() => showAtCurrentBounds().catch(() => {}))
     return () => {
-      void invoke('browser:hide', tabId).catch(() => {})
+      browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
     }
   }
 
@@ -246,6 +246,7 @@
       // painted when the user comes back to this tab.
       browserFindState.forget(tabId)
       releaseClaim()
+      browserVisibility.detachReleasedTab(tabId)
     }
   })
 </script>
@@ -288,7 +289,7 @@
       />
     {:else if isBlank}
       <BrowserBlankTab
-        tabId={tabId}
+        {tabId}
         projectId={GLOBAL_BROWSER_CONTEXT.projectId}
         threadId={GLOBAL_BROWSER_CONTEXT.threadId}
         boxId={tab.boxId}

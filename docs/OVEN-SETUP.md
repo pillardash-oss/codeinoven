@@ -60,7 +60,9 @@ npx @pdslng/cio-oven stop      # stop the durable service
 npx @pdslng/cio-oven restart   # replace the running service with the current release
 ```
 
-Everything it writes stays under the same app-managed directory this app uses, `~/.config/pillardash/codeinoven/ovens`. An Oven prepared by an earlier build kept that state in a sibling `codeinoven-oven` directory; the service moves it across the next time it starts, leaving behind only the runtime files of any daemon still running there, and never overwriting an entry the new location already has. A dedicated key is created at `~/.ssh/codeinoven-oven-agent` and authorized for the account; on a Windows administrator account the key is also authorized in the machine-wide `administrators_authorized_keys`, and the command prints the exact line to add when that file needs an elevated shell. Node.js 22 or later must already be installed, because the Oven service runs on it.
+Everything it writes stays under the same app-managed directory this app uses, `~/.config/pillardash/codeinoven/ovens`. An Oven prepared by an earlier build kept that state in a sibling `codeinoven-oven` directory; the service moves it across the next time it starts, leaving behind only the runtime files of any daemon still running there, and never overwriting an entry the new location already has. A dedicated key is created at `~/.ssh/codeinoven-oven-agent` and authorized for the account; on a Windows administrator account the key is authorized in the machine-wide `administrators_authorized_keys` as well, because OpenSSH reads that file instead of the per-user one for that account class. Node.js 22 or later must already be installed, because the Oven service runs on it.
+
+Which file the key has to land in is decided by group membership, not by whether the shell is elevated. An administrator who opens an ordinary PowerShell window is still covered by `Match Group administrators`, so the agent asks `whoami /groups`, writes the key into the file sshd actually reads, restricts that file to the account plus SYSTEM and Administrators (sshd skips a key any other account can read), and reads the key back afterwards. It prints the account class, the file sshd reads, and whether the key is verified there, then runs one bounded self-check against the machine's own sshd when that service is running. When the machine-wide file needs an elevated shell the agent prints the two commands to run, so a rejected key is visible at install time instead of as a refused connection in the app later.
 
 The service survives the command exiting, the shell closing, and this app closing. `npx @pdslng/cio-oven stop` stops it and disables the logon task, so an Oven stopped on purpose stays stopped until `npx @pdslng/cio-oven start` runs again. On a machine that forbids scheduled tasks, CodeInOven falls back to starting the same hidden launcher through the WMI provider, which is equally windowless but does not return after a reboot.
 
@@ -89,6 +91,17 @@ An Oven with no dedicated key still works as the signed-in user. Before a clone 
 A dedicated key for that Oven always takes precedence over the mirror. Removing the mirrored files from the Oven is safe: the next operation re-uploads them.
 
 Git failures are reported as the situation that caused them, and never as a bare exit code such as `128`: missing repository access, a rejected identity, GitHub host trust, DNS or network reachability, disk space, or uncommitted local changes.
+
+## Which Oven a thread runs on
+
+A conversation runs on one Oven: the composer's Oven control names it, and the choice belongs to the thread rather than to the app. A new thread therefore inherits the machine of the conversation it was started from, in every family:
+
+- A **project thread** inherits the Oven and workspace of a sibling thread in the same project. Minted with no sibling open, it runs where its project runs: a project added from a remote folder runs on that Oven, and a local project runs on this computer.
+- A **chat** inherits the chat it was started from, and failing one, the last chat, because a chat has no project to answer for it.
+- An **assistant task** inherits the task in focus, else the assistant's own execution target (the Oven every unattended run of that assistant uses), else the last task.
+- A thread **moved to another project** follows that project's Oven, exactly as a thread created there would.
+
+An Oven is never inherited across a project boundary: a machine remembered from other work cannot follow a thread into a local project.
 
 ## Oven checkouts
 

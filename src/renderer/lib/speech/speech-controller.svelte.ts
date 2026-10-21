@@ -569,6 +569,26 @@ class SpeechController {
     const startToken = new AbortController()
     this.startToken = startToken
     try {
+      // The system microphone prompt belongs to this gesture: the user pressed
+      // record, so this is the moment to ask. Nothing asks at launch, which is
+      // why a fresh install is not prompted until the first recording.
+      const access = await invoke('speech:ensureMicrophoneAccess')
+      if (startToken.signal.aborted) {
+        this.state = { state: 'idle' }
+        return
+      }
+      if (!access.ok) {
+        this.surfaceFailure(target.id, 'permission', new Error(access.error.message))
+        return
+      }
+      if (!access.value.granted) {
+        const message = access.value.message ?? 'Microphone access is unavailable.'
+        await invoke('speech:recordPermissionFailure', scope, message).catch(() => undefined)
+        // A `NotAllowedError` keeps the toast on the permission message instead
+        // of the generic recording failure.
+        this.surfaceFailure(target.id, 'permission', new DOMException(message, 'NotAllowedError'))
+        return
+      }
       const nativeStarted = await invoke('speech:beginNativeCapture', scope).catch(
         (cause: unknown) => {
           // Falling back to the browser recorder is expected on a device without

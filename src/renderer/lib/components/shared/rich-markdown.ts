@@ -36,6 +36,11 @@ function escapeHtml(value: string): string {
 export interface RichInlineBadge {
   /** Raw inline SVG markup (theme-aware marks rely on inline DOM rendering). */
   iconSvg?: string
+  /**
+   * Accent colour drawn as the badge's inset left edge, the way an assistant's
+   * own colour edges its rows. Absent keeps the neutral border.
+   */
+  accentColor?: string
   label: string
   title: string
   value: string
@@ -206,7 +211,10 @@ function renderInline(
       const icon = badge.iconSvg
         ? `<span class="${INLINE_BADGE_ICON_CLASS} inline-flex shrink-0 text-[0.875rem]">${badge.iconSvg}</span>`
         : ''
-      const html = `<span contenteditable="false" data-editor-inline-badge="true" data-editor-value="${escapeHtml(badge.value)}" title="${escapeHtml(badge.title)}" class="${INLINE_BADGE_CLASS}">${icon}<span class="${INLINE_BADGE_LABEL_CLASS}">${escapeHtml(badge.label)}</span></span>`
+      const accent = badge.accentColor
+        ? ` style="border-left:2px solid ${escapeHtml(badge.accentColor)}"`
+        : ''
+      const html = `<span contenteditable="false" data-editor-inline-badge="true" data-editor-value="${escapeHtml(badge.value)}" title="${escapeHtml(badge.title)}" class="${INLINE_BADGE_CLASS}"${accent}>${icon}<span class="${INLINE_BADGE_LABEL_CLASS}">${escapeHtml(badge.label)}</span></span>`
       const index = badges.push(html)
       const caretSeparator = offset + badge.value.length === source.length ? '\u00a0' : ''
       return `\uE002${index - 1}\uE003${caretSeparator}`

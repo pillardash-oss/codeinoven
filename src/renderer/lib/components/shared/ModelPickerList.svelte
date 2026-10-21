@@ -334,6 +334,19 @@
     return current
   })
   const isProfilesView = $derived(effectiveView.kind === 'profiles')
+  /**
+   * Recently used models the list may show for the active rail section.
+   *
+   * The `all` section shows the whole history; a single harness section narrows
+   * it to that harness's models, so selecting Pi still leads with the Pi models
+   * you used last instead of dropping the section and starting straight at the
+   * providers. Favorites and profiles keep their own sections only.
+   */
+  const railRecentModelsList = $derived.by(() => {
+    const view = effectiveView
+    if (view.kind !== 'harness') return recentModelsList
+    return recentModelsList.filter((entry) => entry.provider.harnessId === view.harnessId)
+  })
   const pickerLayout = $derived(
     buildPickerLayout({
       favoriteModelsList:
@@ -342,7 +355,10 @@
           : effectiveView.kind === 'all'
             ? favoriteModelsList
             : [],
-      recentModelsList: effectiveView.kind === 'all' ? recentModelsList : [],
+      recentModelsList:
+        effectiveView.kind === 'all' || effectiveView.kind === 'harness'
+          ? railRecentModelsList
+          : [],
       unavailableFavoriteModels:
         effectiveView.kind === 'favorites' || effectiveView.kind === 'all'
           ? unavailableFavoriteModels
@@ -739,7 +755,7 @@
               Connect your AI account
             </button>
           </div>
-        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
+        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && railRecentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
           <p class="px-2 py-2 text-[0.6875rem] text-dimmed">
             {#if effectiveView.kind === 'favorites'}
               {search ? `No favorite models match “${search}”` : 'No favorite models yet'}

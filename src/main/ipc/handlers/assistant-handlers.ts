@@ -364,6 +364,18 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   const broadcastAssistants = () => broadcastAssistantsChanged(assistantManager.listAssistants())
 
   /**
+   * A list of run ids arriving over IPC, validated entry by entry.
+   *
+   * The panel sends the rows it is clearing, so this is the only shape a bulk run
+   * dismissal accepts: a non-array is a caller bug, and an id longer than the ones
+   * the scheduler mints is refused rather than written into a ledger lookup.
+   */
+  const runIds = (value: unknown, label: string): string[] => {
+    if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`)
+    return value.map((id) => requireString(id, label).slice(0, 300))
+  }
+
+  /**
    * An assistant or task write landed: push the list and let the scheduler
    * re-decide its tick.
    *
@@ -567,8 +579,9 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   )
 
   // Acknowledge one unattended run so it leaves the "While you were away"
-  // surface for good. The ledger owns the durable removal; the fresh list is
-  // pushed so every open panel and assistant history updates together.
+  // surface for good. The ledger records the acknowledgement rather than dropping
+  // the entry, because that entry is the run history; the fresh list is pushed so
+  // every open panel updates together.
   ipcMain.handle('assistant:dismissBackgroundRun', (_, id: unknown) => {
     const scheduler = requireScheduler()
     scheduler.dismissBackgroundRun(requireString(id, 'Background run ID').slice(0, 300))
@@ -699,6 +712,20 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     const scheduler = requireScheduler()
     scheduler.dismissMissedRun(requireString(id, 'Missed run ID').slice(0, 300))
     broadcastMissedRunsChanged(scheduler.listMissedRuns())
+  })
+
+  // The notification panel's clear-all on the Assistants tab. Its notices are
+  // cleared through the notification inbox; the missed fires and unattended runs
+  // it renders straight from the scheduler are the ids the panel was showing, so
+  // they are retired here in one pass and the scheduler's own change listener
+  // pushes both fresh lists back. Run history the panel never showed is left
+  // alone: it belongs to the assistant surfaces, not to this clear-all.
+  ipcMain.handle('assistant:dismissRuns', (_, missedRunIds: unknown, backgroundRunIds: unknown) => {
+    const scheduler = requireScheduler()
+    scheduler.dismissRuns(
+      runIds(missedRunIds, 'Missed run IDs'),
+      runIds(backgroundRunIds, 'Background run IDs')
+    )
   })
 
   ipcMain.handle('assistant:runMissedRunNow', async (_, id: unknown) => {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -23,6 +24,7 @@
   let hasTerminals = $derived(terminals.length > 0)
   let hasListings = $derived(hasThreads || hasTerminals)
   let forcing = $derived(updateBlockers.forcing)
+  let failure = $derived(updateBlockers.failure)
 
   /**
    * What stopping this costs, in the order the sections above list it.
@@ -65,6 +67,13 @@
 <Modal open={payload !== null} title="Update waiting on active work" size="lg" onClose={onDismiss}>
   {#if payload}
     <div class="space-y-4">
+      {#if failure}
+        <p class="flex items-start gap-2 text-sm leading-relaxed text-danger" role="alert">
+          <CioAlertCircle size={14} class="mt-0.5 shrink-0" />
+          <span>{failure}</span>
+        </p>
+      {/if}
+
       {#if hasThreads}
         <WorkingThreadList projects={payload.projects} />
       {/if}
@@ -98,7 +107,7 @@
           Installing now: {costs.toLowerCase()}
           {restartSentence}
         </p>
-      {:else if !unnamedSentence}
+      {:else if !unnamedSentence && !failure}
         <p class="text-sm leading-relaxed text-muted">{restartSentence}</p>
       {/if}
     </div>
@@ -118,14 +127,18 @@
       type="button"
       data-modal-primary
       class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
-      title="Stop everything listed above and install the update now"
+      title={failure
+        ? 'Stop everything listed above and try the install again'
+        : 'Stop everything listed above and install the update now'}
       disabled={forcing}
       onclick={() => void updateBlockers.forceInstall()}
     >
       {#if forcing}
         <CioSpinner size={14} class="animate-spin" />
       {/if}
-      <span>{forcing ? 'Stopping work' : 'Stop work & install'}</span>
+      <span
+        >{forcing ? 'Stopping work' : failure ? 'Try install again' : 'Stop work & install'}</span
+      >
     </button>
   {/snippet}
 </Modal>

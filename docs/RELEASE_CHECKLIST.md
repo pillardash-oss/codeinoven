@@ -107,6 +107,7 @@ The public-facing cutover.
 - [ ] **Confirm the website is live at `codeinoven.com`** (did not resolve during this audit   must be up before launch).
 - [x] **Link the website** in the repo: README top, repo `About`/homepage URL on GitHub.
 - [x] **Update the README release links** to the OSS repo (Phase 1) and add a hero section/logo + badges (CI status, license, downloads, version).
+- [x] **Publish the Oven CLI from its own script.** `bun run oven:cli:publish` builds the service bundle, bumps the package version, checks the tarball, publishes, and waits for the registry to serve it. Runbook: `docs/OVEN-CLI-RELEASE.md`.
 - [ ] **Tag and release `v0.5.0`** (next after current version) via the release workflow with signed installers, checksums, and release notes from `CHANGELOG.md`.
 - [x] **Verify the auto-update feed** points at the OSS GitHub Releases (README/`electron-builder.yml` now reference `pillardash-oss`). Resolution of `latest.yml`/`latest-mac.yml` is only testable after the first release is published   pending.
 - [ ] **Test the release artifacts** on a clean macOS/Windows/Linux machine (fresh install + update path) before announcing.

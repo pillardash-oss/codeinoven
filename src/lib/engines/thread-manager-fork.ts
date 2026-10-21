@@ -7,6 +7,7 @@ import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import type { Database } from '../../main/database/database'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import {
+  ASSISTANT_SPACE_ID,
   isOrchestrationChildThread,
   type AgentMessage,
   type AgentPart,
@@ -158,6 +159,29 @@ export class ThreadForkService {
 
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
     const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
+    /**
+     * A fork made inside Assistant View stays inside its assistant.
+     *
+     * An assistant task, and every run of one, carries the `assistantId` that
+     * groups it under that assistant in the tab. A fork is a new conversation
+     * over the same history, so it has to stay in that group: without the id the
+     * new row is an assistant-less task, which reads as a thread sitting outside
+     * the assistant it was forked from. Ownership is all that travels   the fork
+     * is never the knowledge thread and never a run   and the task's own
+     * schedule override travels with it so the copy is still the same task.
+     */
+    const assistantFork =
+      destinationProjectId === projectId &&
+      projectId === ASSISTANT_SPACE_ID &&
+      parent.assistantId !== undefined
+        ? {
+            assistantId: parent.assistantId,
+            assistantIconType: parent.assistantIconType,
+            assistantIcon: parent.assistantIcon,
+            scheduleOverride: parent.scheduleOverride ?? null,
+            scheduled: parent.scheduled
+          }
+        : {}
     // A fork of an Engineering thread is an Engineering thread. An Engineering
     // thread stays one for its lifetime, even with every switch off (a parked,
     // completed or cancelled run), so the marker must travel from the durable
@@ -186,7 +210,8 @@ export class ThreadForkService {
           : undefined,
       scopeBucketId: forkScopeBucketId,
       workingDirectory:
-        destinationProjectId === projectId ? parent.workingDirectory : destinationPath
+        destinationProjectId === projectId ? parent.workingDirectory : destinationPath,
+      ...assistantFork
     })
     // Same-scope forks re-resolve their compatibility directory from the
     // destination scope inside `createThread`, so a stale parent directory

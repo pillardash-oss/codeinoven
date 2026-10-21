@@ -1099,6 +1099,21 @@ html body [data-sonner-toaster] {
   pointer-events: auto;
 }
 
+html body [data-layer-above-modal] {
+  /* Any surface the app declares as drawn over its modals.
+
+     The shared text/terminal context menu is the one that declares it (see
+     `components/shared/TextSelectionContextMenu.svelte`): its menu must open on
+     a terminal the user right-clicked inside a full screen action, an Oven's own
+     shell or a provider sign-in, every one of which is a modal. Those lock the
+     page with `body { pointer-events: none }`, and pointer events inherit, so
+     the menu was painted above the panel yet dead to the mouse: the press fell
+     through to the modal's overlay and dismissed the modal the menu served.
+     `lib/layer-above-modal.ts` owns the selector `ui/Modal.svelte` shares to
+     treat a press here as a press on the menu rather than on the backdrop. */
+  pointer-events: auto;
+}
+
 html body vite-error-overlay {
   /* Vite's development error overlay is appended to `document.body`, so it
      inherits the same `body { pointer-events: none }` a modal bits-ui Dialog

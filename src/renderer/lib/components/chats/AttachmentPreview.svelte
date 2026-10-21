@@ -352,7 +352,8 @@
       class="relative flex min-h-0 flex-1 items-center justify-center"
       onclick={requestClose}
       onkeydown={(e: KeyboardEvent) => {
-        if (keymapState.matches('ui-activate', e)) requestClose()
+        // Keys from editors and embedded artifact controls must not dismiss the preview.
+        if (e.target === e.currentTarget && keymapState.matches('ui-activate', e)) requestClose()
       }}
     >
       <div

@@ -15,6 +15,27 @@ export const QUESTION_ANSWER_MESSAGE_PREFIX = 'question-answer-'
 
 export const BRAINSTORM_DECISION_LEDGER_MAX_CHARACTERS = 120_000
 
+/**
+ * The selections a temporary-chat turn carries, as the harness reads them.
+ *
+ * A side chat owns no thread transcript, so its prompt is assembled from these
+ * references directly rather than from a shared thread context. The comment the
+ * user wrote on a passage is part of the request, not decoration: it is the
+ * instruction the selected text belongs to, and a reply that ignored it would
+ * answer nothing the user asked. A passage with no comment is context the turn
+ * accounts for.
+ */
+export function formatTemporaryReferenceContext(references: readonly PromptReference[]): string {
+  const blocks = references
+    .filter((reference) => reference.text.trim().length > 0)
+    .map(
+      (reference, index) =>
+        `<selection ${index + 1}>\n${reference.text}${reference.comment ? `\nUser comment: ${reference.comment}` : ''}\n</selection>`
+    )
+  if (blocks.length === 0) return ''
+  return `Referenced response selections:\n${blocks.join('\n\n')}`
+}
+
 export function formatProjectReferenceContext(references: PromptProjectReference[]): string {
   if (references.length === 0) return ''
   return [

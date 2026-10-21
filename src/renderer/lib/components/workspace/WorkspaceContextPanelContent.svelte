@@ -225,6 +225,15 @@
 
   let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
 
+  function leavePanel(node: HTMLElement) {
+    // An outro keeps the outgoing browser mounted and its native-view claim
+    // alive. Switching back can revive that old block ahead of the newer claim,
+    // leaving the selected tab hidden behind the page it replaced. Release a
+    // browser synchronously; other tools can keep their ordinary cross-fade.
+    if (node.dataset.panelKind === 'browser') return { duration: 0 }
+    return fly(node, panelReveal(true))
+  }
+
   /** The thread whose own workspace the file tree mounts. Only a chat or an
    *  assistant task has one; a real project always reads the project root. */
   let filesThreadId = $derived(
@@ -347,7 +356,8 @@
   </div>
 {/if}
 {#if activeContextTab && !filesVisible}
-  <!-- Cross-fades the panel body when the active tool changes. Both the
+  <!-- Browser panels leave immediately to release their native-view claims.
+       Other tools cross-fade when the active tool changes. Both the
        out-going and the in-coming panel are absolutely placed in the same cell,
        so they overlap for the length of the switch instead of one blinking off
        before the other appears. Only the incoming panel rises: the outgoing one
@@ -361,7 +371,7 @@
         class="absolute inset-0"
         data-panel-kind={activeContextTab.kind}
         in:fly={panelReveal(activePanelIsBrowser)}
-        out:fly={panelReveal(true)}
+        out:leavePanel
       >
         {#if activeContextTab.kind === 'oven'}
           {#await loadPanelModule(PANEL_KEYS.oven, () => import('../threads/OvenSidebarPanel.svelte'))}
@@ -427,7 +437,14 @@
             {#await loadPanelModule(PANEL_KEYS.browser, () => import('$lib/components/browser/BrowserPanel.svelte'))}
               {@render panelLoading('Browser')}
             {:then { default: BrowserPanel }}
-              <BrowserPanel tab={activeContextTab} />
+              <!-- BrowserPanel captures its tab identity at construction. Key
+                   the lazy panel directly to browser selection on every revisit. -->
+              {#key contextSidebarState.activeBrowserTabId}
+                {@const browserTab = contextSidebarState.sidebarActiveTab}
+                {#if browserTab?.kind === 'browser'}
+                  <BrowserPanel tab={browserTab} />
+                {/if}
+              {/key}
             {:catch error}
               {@render panelLoadFailed(PANEL_KEYS.browser, 'Browser', error)}
             {/await}

@@ -20,6 +20,16 @@ const CONCURRENCY = 5
 const PEEK_STORE_PATH = 'ovens/peeks.json'
 /** A peek this old is not a safe authorization for a mutating setup. */
 const SETUP_REUSE_MS = 5 * 60_000
+/**
+ * How long one Oven's check may run before it is reported as unfinished.
+ *
+ * The SSH layer bounds every command, but a check is a probe, a preflight read
+ * and a harness resolution, and it holds one of the five slots while it runs. A
+ * check that never finished used to hold its slot and leave every surface showing
+ * "Checking…" with nothing behind it, while direct requests to the same Oven kept
+ * working.
+ */
+const PEEK_DEADLINE_MS = 150_000
 
 interface StoredPeeks {
   version: 1
@@ -124,15 +134,68 @@ export class OvenPeekService {
   private async run(ovenId: string, refresh: boolean): Promise<OvenPeek> {
     await this.acquire()
     const started = Date.now()
+    let deadline: NodeJS.Timeout | undefined
     try {
-      // The service probe and the shell preflight are independent reads, so they
-      // run together; each fails on its own without discarding the other.
-      const [probeOutcome, preflightOutcome] = await Promise.allSettled([
-        this.service.probe(ovenId, refresh),
-        this.preflight(ovenId)
+      return await Promise.race([
+        this.inspect(ovenId, refresh, started),
+        new Promise<OvenPeek>((resolve) => {
+          deadline = setTimeout(() => resolve(this.unfinished(ovenId, started)), PEEK_DEADLINE_MS)
+        })
       ])
-      const probe = probeOutcome.status === 'fulfilled' ? probeOutcome.value : null
-      const report = preflightOutcome.status === 'fulfilled' ? preflightOutcome.value : null
+    } finally {
+      if (deadline) clearTimeout(deadline)
+      this.release()
+    }
+  }
+
+  /** The answer a check that ran past its deadline leaves behind. */
+  private unfinished(ovenId: string, started: number): OvenPeek {
+    const cached = this.cache.get(ovenId)
+    Logger.dev('Oven check did not finish in time', { ovenId, durationMs: Date.now() - started })
+    return {
+      ovenId,
+      checkedAt: Date.now(),
+      durationMs: Date.now() - started,
+      probe: null,
+      inventory: this.harness.cachedInventory(ovenId),
+      preflight: cached?.preflight ?? null,
+      error: 'The check did not finish. Press Check Oven to try again.',
+      stale: false
+    }
+  }
+
+  private async inspect(ovenId: string, refresh: boolean, started: number): Promise<OvenPeek> {
+    try {
+      // Both reads start together, but only the probe decides the answer. The
+      // package read is the slow half (WMI on Windows costs tens of seconds), and
+      // waiting for it is what kept a connected Oven on "Checking…"; it fills the
+      // cache the moment it lands instead.
+      const probeTask = this.service.probe(ovenId, refresh)
+      const preflightTask = this.preflight(ovenId)
+      const probeOutcome = await probeTask.then(
+        (value) => ({ ok: true as const, value }),
+        (reason: unknown) => ({ ok: false as const, reason })
+      )
+      const probe = probeOutcome.ok ? probeOutcome.value : null
+      const cachedPreflight = this.cache.get(ovenId)?.preflight ?? null
+      const report: OvenPreflightReport | null = cachedPreflight?.report ?? null
+      void preflightTask.then(
+        (value) => {
+          const current = this.cache.get(ovenId)
+          if (!current) return
+          const filled: OvenPeek = {
+            ...current,
+            preflight: { report: value, assessment: assessPreflight(value) }
+          }
+          this.cache.set(ovenId, filled)
+          if (filled.probe) void this.persist(ovenId, filled)
+        },
+        (reason: unknown) =>
+          Logger.dev('Oven package check did not complete', {
+            ovenId,
+            error: messageOf(reason)
+          })
+      )
       let inventory: OvenHarnessInventoryItem[] = this.harness.cachedInventory(ovenId)
       if (probe) {
         try {
@@ -144,12 +207,7 @@ export class OvenPeekService {
           })
         }
       }
-      const error =
-        probeOutcome.status === 'rejected'
-          ? messageOf(probeOutcome.reason)
-          : preflightOutcome.status === 'rejected'
-            ? `The package check did not complete: ${messageOf(preflightOutcome.reason)}`
-            : undefined
+      const error = probeOutcome.ok ? undefined : messageOf(probeOutcome.reason)
       const peek: OvenPeek = {
         ovenId,
         checkedAt: Date.now(),
@@ -173,7 +231,7 @@ export class OvenPeekService {
       })
       return peek
     } finally {
-      this.release()
+      // The slot is released by `run`, which owns the deadline too.
     }
   }
 

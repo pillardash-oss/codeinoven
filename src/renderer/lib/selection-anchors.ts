@@ -370,9 +370,9 @@ export function annotationAtPoint(
 /**
  * Where a selection menu is asked to appear, before it is clamped on screen.
  *
- * The menu takes one of these from either trigger it serves: a highlight, whose
- * selection it sits beside so it never covers the text it acts on, or a
- * right-click, which anchors it at the cursor like any other context menu.
+ * The menu takes one of these from either trigger it serves: a selection, whose
+ * ending point it sits beside (see `selectionMenuAnchor`), or a right-click,
+ * which anchors it at the cursor like any other context menu.
  */
 export interface SelectionMenuAnchor {
   /** Viewport x the menu prefers. */
@@ -380,9 +380,9 @@ export interface SelectionMenuAnchor {
   /** Viewport y the menu falls back to when it cannot sit above the selection. */
   y: number
   /**
-   * Top edge of the selected passage. Present only for a highlight: it is what
-   * lets the menu open above the text it acts on, the way the toolbar it
-   * replaces did. A right-click leaves it out.
+   * Top edge of the line the selection ended on. Present only for a selection:
+   * it is what lets the menu open above that line, so it sits beside the point
+   * the reader stopped at instead of covering it. A right-click leaves it out.
    */
   selectionTop?: number
 }
@@ -398,6 +398,48 @@ const SELECTION_MENU_GAP = 6
 /** Smallest distance the menu keeps from every viewport edge. */
 const SELECTION_MENU_MARGIN = 8
 
+/**
+ * Where the menu belongs beside a selection: at the point the selection ended.
+ *
+ * A selection is made from where it began towards where it stopped, and that
+ * end is where the reader's attention is. A drag that crosses two lines ends on
+ * the second, and the menu belongs there rather than at the top-left corner of
+ * the passage, which is what the selection's own bounding box reports (and how a
+ * menu ended up pointing at the beginning of a two-line quote). The focus is that
+ * end in whichever direction the selection was made, so a drag right-to-left
+ * anchors at its left end, which is exactly where that drag finished.
+ *
+ * The caret is a collapsed range at the focus, whose box is the line the
+ * selection stopped on. A selection whose focus cannot be measured falls back to
+ * the last box the selection paints, which is the same end for a forward one.
+ */
+export function selectionMenuAnchor(selection: Selection, range: Range): SelectionMenuAnchor {
+  const focusNode = selection.focusNode ?? range.endContainer
+  const focusOffset = selection.focusNode ? selection.focusOffset : range.endOffset
+  try {
+    const caret = document.createRange()
+    caret.setStart(focusNode, focusOffset)
+    caret.collapse(true)
+    const box = caret.getBoundingClientRect()
+    if (box.width > 0 || box.height > 0) {
+      return {
+        x: box.left,
+        y: box.bottom + SELECTION_MENU_GAP,
+        selectionTop: box.top
+      }
+    }
+  } catch {
+    // A focus the range cannot address; the painted boxes below still answer.
+  }
+  const boxes = range.getClientRects()
+  const last = boxes.length > 0 ? boxes[boxes.length - 1] : range.getBoundingClientRect()
+  return {
+    x: last.left,
+    y: last.bottom + SELECTION_MENU_GAP,
+    selectionTop: last.top
+  }
+}
+
 function clampToViewport(value: number, limit: number): number {
   return Math.max(SELECTION_MENU_MARGIN, Math.min(value, Math.max(SELECTION_MENU_MARGIN, limit)))
 }
@@ -405,9 +447,11 @@ function clampToViewport(value: number, limit: number): number {
 /**
  * Place the selection menu inside the viewport.
  *
- * A selection opens the menu above itself, falling back below when the top of
- * the screen is too close, so the text being acted on stays readable. A
- * right-click point has no such preference and is simply clamped, which is what
+ * A selection opens the menu above the line it ended on, falling back below it
+ * when the top of the screen is too close. Covering the passage is fine: the
+ * menu is transient and closes on the next click, and sitting on the point the
+ * reader stopped at is what makes it obvious which passage the actions belong
+ * to. A right-click point has no such preference and is simply clamped, which
  * keeps a menu opened near an edge fully on screen instead of half outside it.
  */
 export function placeSelectionMenu(

@@ -35,6 +35,11 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // off the post-paint feature graph instead of serializing the whole first
   // usable frame behind it. Idempotent: it upserts only when the row is absent.
   void projectManager.ensureAssistantSpace()
+  // The renderer warms the provider catalog for the inbox as soon as the first
+  // paint settles, which is before any New chat resolves `project:ensureInbox`.
+  // On a cold data root that pass used to discover against a project row that
+  // did not exist yet, so the row is created here, ahead of every renderer read.
+  void projectManager.ensureInboxProject()
   const threadManager = new ThreadManager(database)
   // The global browser's per-tab agent sidebar is a side chat whose scope
   // resolves against this reserved hidden project and its single thread, so

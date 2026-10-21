@@ -1,4 +1,5 @@
 import { toast } from 'svelte-sonner'
+import { appConfirm } from '$lib/stores/app-confirm.svelte'
 import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
@@ -297,6 +298,35 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeScopeConfirmation = subscribeGuarded('scope:agentConfirmation', (request) => {
     scopeConfirmations.enqueue(request)
   })
+  const hostTrustPrompts = new Map<string, AbortController>()
+  const unsubscribeHostTrust = subscribeGuarded('oven:hostTrust:request', (request) => {
+    const controller = new AbortController()
+    hostTrustPrompts.set(request.requestId, controller)
+    void appConfirm
+      .request(
+        {
+          title: 'Trust this Oven host?',
+          body: [
+            request.prompt,
+            'Compare this fingerprint with the machine before accepting. OpenSSH will remember the approved key on this computer.'
+          ],
+          confirmLabel: 'Yes, trust host',
+          cancelLabel: 'No, cancel',
+          tone: 'primary'
+        },
+        controller.signal
+      )
+      .then(async (approved) => {
+        hostTrustPrompts.delete(request.requestId)
+        if (!controller.signal.aborted)
+          await invoke('oven:hostTrust:respond', request.requestId, approved)
+      })
+      .catch((error: unknown) => logRendererError('Oven host verification response failed', error))
+  })
+  const unsubscribeHostTrustClosed = subscribeGuarded('oven:hostTrust:closed', (requestId) => {
+    hostTrustPrompts.get(requestId)?.abort()
+    hostTrustPrompts.delete(requestId)
+  })
   // Listen from app start (not from the first local job): an agent-run
   // worktree has no renderer-owned job until its first progress event.
   scopeJobs.listen()
@@ -353,6 +383,10 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeThreadSearchIntent()
     unsubscribeScopeBoardChanged()
     unsubscribeScopeConfirmation()
+    unsubscribeHostTrust()
+    unsubscribeHostTrustClosed()
+    for (const controller of hostTrustPrompts.values()) controller.abort()
+    hostTrustPrompts.clear()
     unsubscribeCloseShortcut()
     unsubscribeNewTerminalShortcut()
     unsubscribeHistoryBack()

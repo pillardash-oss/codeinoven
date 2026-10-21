@@ -8,10 +8,10 @@
 
   import { getAnnotationToolbarHost, hasAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { Popover } from 'bits-ui'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ColorSwatches from '../shared/ColorSwatches.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import {
-    MARK_BADGE_SIZE,
     MARK_FRAME_TOLERANCE_SECONDS,
     MARK_MAX_STROKE_WIDTH,
     MARK_MIN_STROKE_WIDTH,
@@ -330,13 +330,6 @@
   const visibleMarks = $derived(marks.filter(marksThisPicture))
 
   /** The badge's wording, naming a frame's moment when it has one. */
-  function badgeLabel(mark: ResponseReferenceAnchor, number: number): string {
-    const at = markMoment(mark)
-    return mark.comment
-      ? `Edit comment on mark ${number}${at}: ${mark.comment}`
-      : `Comment on mark ${number}${at}`
-  }
-
   function badgeHint(mark: ResponseReferenceAnchor, number: number): string {
     const at = markMoment(mark)
     return mark.comment
@@ -385,20 +378,19 @@
   {#each visibleMarks as mark, index (mark.id)}
     {@const badge = markBadgePoint(mark.points ?? [])}
     {@const number = referenceLabelNumber(mark.label, index)}
-    <button
-      type="button"
-      class="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
-      style:left={`${badge.x * 100}%`}
-      style:top={`${badge.y * 100}%`}
-      style:width={`${MARK_BADGE_SIZE}px`}
-      style:height={`${MARK_BADGE_SIZE}px`}
-      title={badgeHint(mark, number)}
-      aria-label={badgeLabel(mark, number)}
-      onclick={() => requestEdit(mark.id)}
-      {@attach badgeAttachment(mark.id)}
-    >
+    <AnnotationIndicator
+      id={mark.id}
+      surface={`mark:${threadId}`}
+      left={`${badge.x * 100}%`}
+      top={`${badge.y * 100}%`}
+      centre
       {number}
-    </button>
+      hasComment={Boolean(mark.comment)}
+      title={badgeHint(mark, number)}
+      class="z-20"
+      attach={badgeAttachment(mark.id)}
+      onOpen={() => requestEdit(mark.id)}
+    />
   {/each}
 {/if}
 

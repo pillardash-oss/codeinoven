@@ -790,7 +790,7 @@ export class SidebarTabContexts {
           threadMessages.messages(projectId, tab.temporaryChatId).length === 0
       )
       if (existing) {
-        existing.selections = [...existing.selections, selection]
+        existing.selections = [...existing.selections, { id: crypto.randomUUID(), text: selection }]
         if (sourceRequestId) existing.sourceRequestId = sourceRequestId
         this.focusInContext(context, existing.id)
         this.touchTemporaryChat(existing)
@@ -838,7 +838,7 @@ export class SidebarTabContexts {
       temporaryChatId,
       sessionId: null,
       mode,
-      selections: selectionAttached ? [selection] : [],
+      selections: selectionAttached ? [{ id: crypto.randomUUID(), text: selection }] : [],
       initialContext,
       settings: { ...settings, permissionLevel: 'auto_review' },
       selectionAttached,

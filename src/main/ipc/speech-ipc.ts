@@ -166,6 +166,11 @@ export function registerSpeechIpc(
   ipcMain.handle('speech:beginNativeCapture', (_event, rawScope: unknown) =>
     speechResult(() => service.beginNativeCapture(scope(rawScope)))
   )
+  // The microphone prompt is issued here, from the recording gesture, never
+  // from launch.
+  ipcMain.handle('speech:ensureMicrophoneAccess', () =>
+    speechResult(() => service.ensureMicrophoneAccess())
+  )
   ipcMain.handle(
     'speech:recordPermissionFailure',
     (_event, rawScope: unknown, rawMessage: unknown) =>
@@ -502,6 +507,7 @@ export function registerSpeechIpc(
       'speech:getCatalog',
       'speech:beginCapture',
       'speech:beginNativeCapture',
+      'speech:ensureMicrophoneAccess',
       'speech:recordPermissionFailure',
       'speech:appendCapture',
       'speech:finishCapture',

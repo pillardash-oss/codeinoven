@@ -12,6 +12,7 @@ import {
   type ReleaseChannel
 } from '../../lib/download-mirror'
 import { Logger } from '../system/logger'
+import { cleanUpdaterCache } from './updater-cache-cleanup'
 import {
   downloadFileResumable,
   DownloadSourceError,
@@ -329,6 +330,7 @@ export async function seedUpdaterCache(
   onProgress?: (receivedBytes: number, totalBytes: number) => void
 ): Promise<void> {
   await mkdir(pendingDir, { recursive: true })
+  await cleanUpdaterCache(path.dirname(pendingDir), { downloadingFileName: artifact.fileName })
   const destination = path.join(pendingDir, artifact.fileName)
   const checksum = checksumOf(artifact.sha512)
   let resumeFromBytes = await existingBytes(destination)

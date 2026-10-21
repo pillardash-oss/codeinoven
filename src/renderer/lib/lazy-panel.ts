@@ -54,7 +54,15 @@ export const PANEL_KEYS = {
   memory: 'panel:memory',
   threadNote: 'panel:thread-note',
   attention: 'panel:attention',
-  subagent: 'panel:subagent'
+  subagent: 'panel:subagent',
+  // Engineering studio documents. Their first open is always an explicit
+  // action, and their panels are a large slice of what used to load with the
+  // first screen, so each one loads when it is opened rather than at boot.
+  specStudio: 'panel:spec-studio',
+  brainstormStudio: 'panel:brainstorm-studio',
+  prdStudio: 'panel:prd-studio',
+  assignmentStudio: 'panel:assignment-studio',
+  auditStudio: 'panel:audit-studio'
 } as const
 
 export type PanelKey = (typeof PANEL_KEYS)[keyof typeof PANEL_KEYS]

@@ -33,19 +33,21 @@ describe('oven remote commands', () => {
     expect(command).toContain("CODEINOVEN_OVEN_REVISION='abc' node ")
   })
 
-  it('envelopes every Windows command as encoded PowerShell', () => {
+  it('keeps the Windows service request out of PowerShell', () => {
+    // PowerShell startup dominated every request on a Windows Oven, and every
+    // screen made several of them; the request runs through cmd.exe instead.
     for (const shell of ['cmd', 'powershell'] as const) {
-      expect(remoteServiceCommand(shell, ['request'])).toMatch(
-        /^powershell -NoProfile -NonInteractive -EncodedCommand [A-Za-z0-9+/=]+$/u
+      expect(remoteServiceCommand(shell, ['request'])).toBe(
+        'cmd /d /s /c node "%USERPROFILE%\\.config\\pillardash\\codeinoven\\ovens\\service.mjs" request'
       )
     }
   })
 
   it('forwards stdin into the Windows service process', () => {
-    const script = decode(remoteServiceCommand('cmd', ['request']))
-    expect(script).toContain("Join-Path $env:USERPROFILE '.config\\pillardash\\codeinoven\\ovens'")
-    expect(script).toContain("$data | & node $service 'request'")
-    expect(script).toContain('exit $LASTEXITCODE')
+    const command = remoteServiceCommand('cmd', ['request'])
+    // Nothing reads stdin on the way: ssh hands it straight to node.
+    expect(command).not.toContain('OpenStandardInput')
+    expect(command.startsWith('cmd /d /s /c node ')).toBe(true)
   })
 
   it('verifies the bundle revision before installing on POSIX', () => {
@@ -80,9 +82,28 @@ describe('oven remote commands', () => {
     expect(remoteArgvCommand('posix', ['apt-get', 'update'], { elevated: true })).toContain(
       "'sudo' '-n' 'apt-get'"
     )
+    // Windows runs structured argv through cmd.exe: PowerShell prefers the
+    // `.ps1` beside an npm binary and the default ExecutionPolicy refuses it, so
+    // a harness update failed for a shim the user's own shell could run.
     expect(decode(remoteArgvCommand('powershell', ['winget', 'install', "O'Brien"]))).toBe(
-      "& 'winget' 'install' 'O''Brien'"
+      "& cmd /d /s /c 'winget install O''Brien'"
     )
+    expect(decode(remoteArgvCommand('cmd', ['opencode', 'upgrade']))).toBe(
+      "& cmd /d /s /c 'opencode upgrade'"
+    )
+    expect(decode(remoteArgvCommand('cmd', ['winget', 'install', '--id', 'Git.Git']))).toBe(
+      "& cmd /d /s /c 'winget install --id Git.Git'"
+    )
+  })
+
+  it('refuses an argument a cmd.exe command line would reinterpret', () => {
+    // cmd would expand or split on these, so the call reports the bad argument
+    // instead of running something else than what was asked.
+    expect(() => remoteArgvCommand('cmd', ['opencode', 'a&calc'])).toThrow('Invalid remote')
+    expect(() => remoteArgvCommand('powershell', ['npm', 'install', '%PATH%'])).toThrow(
+      'Invalid remote'
+    )
+    expect(() => remoteArgvCommand('cmd', ['node', 'a>b'])).toThrow('Invalid remote')
   })
 
   it('quotes PowerShell literals with doubled single quotes', () => {
@@ -118,6 +139,22 @@ describe('oven remote commands', () => {
     expect(script).toContain("Set-Location -LiteralPath 'C:\\work'")
   })
 
+  it('opens a bare Windows shell without an empty encoded command', () => {
+    // The Oven's own shell passes no root, no environment and no script, so there
+    // is nothing to encode. `-EncodedCommand` with no value made PowerShell print
+    // its help and exit instead of opening a prompt.
+    for (const shell of ['cmd', 'powershell'] as const) {
+      const command = remoteTerminalCommand({
+        shell,
+        root: undefined,
+        environment: {},
+        script: undefined
+      })
+      expect(command).toBe('powershell -NoProfile -NoExit')
+      expect(command).not.toContain('-EncodedCommand')
+    }
+  })
+
   it('runs an action script as a Windows child program', () => {
     const command = remoteTerminalCommand({
       shell: 'powershell',
@@ -129,13 +166,14 @@ describe('oven remote commands', () => {
     expect(decode(command)).toContain('& { echo hi }')
   })
 
-  it('joins the Windows service root once, not twice', () => {
-    // `Join-Path Join-Path ...` is not valid PowerShell: it failed every Windows
-    // request with "A positional parameter cannot be found".
-    const script = decode(remoteServiceCommand('cmd', ['request']))
-    expect(script).toContain('$root = (Join-Path $env:USERPROFILE ')
-    expect(script).toContain("$service = Join-Path $root 'service.mjs'")
-    expect(script).not.toContain('Join-Path Join-Path')
+  it('names the Windows service root once', () => {
+    // It used to be composed by `Join-Path` in PowerShell, where nesting produced
+    // `Join-Path Join-Path ...` and failed every Windows request. The cmd line
+    // expands `%USERPROFILE%` itself, so the path is spelled once.
+    const command = remoteServiceCommand('cmd', ['request'])
+    expect(command).not.toContain('Join-Path')
+    expect(command.match(/service\.mjs/gu)?.length).toBe(1)
+    expect(command).toContain('%USERPROFILE%')
   })
 
   it('carries a Windows install through Node, not a PowerShell stdin read', () => {

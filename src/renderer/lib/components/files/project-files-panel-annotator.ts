@@ -1,4 +1,8 @@
-import { offsetsForRange, type SelectionMenuAnchor } from '$lib/selection-anchors'
+import {
+  offsetsForRange,
+  selectionMenuAnchor,
+  type SelectionMenuAnchor
+} from '$lib/selection-anchors'
 import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
 
 /**
@@ -11,9 +15,6 @@ import type { ResponseReferenceAnchor } from '$lib/stores/response-references.sv
  * document's path in its label, which is what makes the agent read the right
  * file. Everything the panel needs from live DOM ranges is captured here.
  */
-
-/** Space between the selection and the menu that sits below it. */
-const SELECTION_MENU_GAP = 6
 
 /** How much of an annotated document rides along as a side chat's context. The
  *  same bound the spec studios use; past it the document is cut and the cut is
@@ -43,9 +44,9 @@ function selectionRoot(node: Node | null, root: HTMLElement | null): HTMLElement
 /**
  * Turn the current document selection into an annotation candidate. Returns null
  * when nothing is selected, when the selection reaches outside the rendered
- * document, or when it cannot be measured. The menu is anchored to the passage
- * itself: its left edge, and the top edge it sits above whenever there is room
- * there.
+ * document, or when it cannot be measured. The menu is anchored to the point the
+ * selection ended at, so a passage that runs over two lines raises it on the
+ * second one.
  */
 export function captureDocumentSelection(
   root: HTMLElement | null
@@ -61,13 +62,12 @@ export function captureDocumentSelection(
   const range = selection.getRangeAt(0)
   const { startOffset, endOffset } = offsetsForRange(root, range)
   if (endOffset <= startOffset) return null
-  const rect = range.getBoundingClientRect()
   return {
     text,
     range: range.cloneRange(),
     startOffset,
     endOffset,
-    anchor: { x: rect.left, y: rect.bottom + SELECTION_MENU_GAP, selectionTop: rect.top }
+    anchor: selectionMenuAnchor(selection, range)
   }
 }
 

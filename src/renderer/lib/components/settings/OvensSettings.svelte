@@ -73,6 +73,7 @@
   let connectionResult = $state<OvenConnectionStatus | null>(null)
   let setupComplete = $state<Record<string, boolean>>({})
   let busy = $state('')
+  let connectionTestId: string | undefined
   let error = $state('')
   let modalError = $state('')
   let editing = $state<Oven | null>(null)
@@ -722,7 +723,13 @@
   }
 
   function closeEditor(): void {
-    if (busy) return
+    if (busy && busy !== 'test') return
+    const requestId = connectionTestId
+    connectionTestId = undefined
+    if (requestId) {
+      void invoke('oven:cancelConnectionTest', requestId).catch(() => undefined)
+      busy = ''
+    }
     editorOpen = false
     privateKey = ''
     passphrase = ''
@@ -754,21 +761,38 @@
   }
   async function testConnection(): Promise<void> {
     if (busy) return
+    let input: SaveOvenInput
+    try {
+      input = { ...draftInput(), name: name.trim() || 'Connection test' }
+    } catch (failure) {
+      modalError = message(failure)
+      return
+    }
+    const requestId = crypto.randomUUID()
+    connectionTestId = requestId
     busy = 'test'
     modalError = ''
     connectionResult = null
-    try {
-      if (authentication === 'identity')
-        identityFile = await invoke('oven:validateIdentity', identityFile)
-      connectionResult = await invoke('oven:testConnection', {
-        ...draftInput(),
-        name: name.trim() || 'Connection test'
-      })
-      if (editing) health = { ...health, [editing.id]: connectionResult }
-    } catch (failure) {
-      modalError = message(failure)
-    } finally {
+    const timeout = setTimeout(() => {
+      if (connectionTestId !== requestId) return
+      connectionTestId = undefined
       busy = ''
+      modalError = 'Connection timed out after 60 seconds. Check the address and try again.'
+      void invoke('oven:cancelConnectionTest', requestId).catch(() => undefined)
+    }, 60_000)
+    try {
+      const result = await invoke('oven:testConnection', input, requestId)
+      if (connectionTestId !== requestId) return
+      connectionResult = result
+      if (editing) health = { ...health, [editing.id]: result }
+    } catch (failure) {
+      if (connectionTestId === requestId) modalError = message(failure)
+    } finally {
+      clearTimeout(timeout)
+      if (connectionTestId === requestId) {
+        connectionTestId = undefined
+        busy = ''
+      }
     }
   }
 
@@ -1426,6 +1450,13 @@
   {#snippet footer()}
     <div class="flex w-full flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2">
+        <button
+          type="button"
+          data-modal-dismiss
+          class="border px-3 py-2 text-sm hover:bg-elevated"
+          disabled={Boolean(busy) && busy !== 'test'}
+          onclick={closeEditor}>Cancel</button
+        >
         {#if hasAppearance}
           <button
             type="button"
@@ -1439,20 +1470,14 @@
         {:else}<span></span>{/if}
         <button
           type="button"
-          class="border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
+          class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap border px-3 py-2 text-sm hover:bg-elevated disabled:opacity-50"
           disabled={Boolean(busy)}
           onclick={() => void testConnection()}
-          >{#if busy === 'test'}<CioSpinner size={14} class="animate-spin" />{/if}Test connection</button
+          >{#if busy === 'test'}<CioSpinner size={14} class="shrink-0 animate-spin" />{/if}Test
+          connection</button
         >
       </div>
       <div class="flex items-center gap-2">
-        <button
-          type="button"
-          data-modal-dismiss
-          class="border px-3 py-2 text-sm hover:bg-elevated"
-          disabled={Boolean(busy)}
-          onclick={closeEditor}>Cancel</button
-        >
         <button
           type="submit"
           form="oven-editor"

@@ -7,36 +7,48 @@ import { retry } from 'builder-util'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 /**
- * The bundle entrypoint is CodeInOven Launcher; its supervised Electron runtime
- * is CodeInOven so macOS shows the product name for capture and process activity.
- * Preserve the legacy bundle signing identifier for existing Squirrel installs.
- * The runtime uses the canonical bundle identifier and a team-constrained bridge
- * requirement so notifications and subsequent updates retain their identity.
+ * The bundle's main executable is the product itself: the Electron runtime that
+ * owns the windows, the menu bar item, the browser, capture permissions and the
+ * agent runs. Its name is what macOS shows (Dock, Applications, privacy dialogs,
+ * Activity Monitor) and, through Squirrel's installer, the folder it installs
+ * into, so it keeps the product name and is never swapped for a helper. The
+ * native splash is a flat helper under Contents/Helpers that the app spawns.
+ *
+ * The identity rules that remain are about updates, not appearance:
+ *
+ *   - the bundle keeps the legacy signing identifier `<product>-electron`,
+ *     because Squirrel.Mac validates every update against the running process's
+ *     designated requirement, and installs signed with that identifier must keep
+ *     accepting updates;
+ *   - the bundle also carries a bridge requirement that accepts either the
+ *     canonical bundle identifier or the legacy one, so a later move to the
+ *     canonical identifier cannot strand existing installs.
+ *
+ * `codesign` signs `Foo.app/Contents/MacOS/Foo` as the bundle itself, so a
+ * per-file identifier for the runtime never survives the bundle seal. The
+ * identifier users and notifications see is the bundle identifier from
+ * Info.plist (`com.pillardash.codeinoven`), which is unchanged.
  */
 export default async function macSign(configuration) {
   const appPath = configuration.app
   const infoPlistPath = join(appPath, 'Contents', 'Info.plist')
-  let mainExecutable = 'CodeInOven Launcher'
-  try {
-    const plist = await readFile(infoPlistPath, 'utf8')
-    const match = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
-    if (match?.[1]) mainExecutable = match[1]
-  } catch {
-    // Fall back to the default above if the plist is not readable.
-  }
-  const runtimeExecutable = mainExecutable.replace(/ Launcher$/, '')
-  const electronBinaryIdentifier = `${runtimeExecutable}-electron`
+  let mainExecutable = 'CodeInOven'
   let bundleIdentifier = ''
   try {
     const plist = await readFile(infoPlistPath, 'utf8')
-    const match = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
-    bundleIdentifier = match?.[1] ?? ''
+    const executableMatch = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
+    if (executableMatch?.[1]) mainExecutable = executableMatch[1]
+    const identifierMatch = /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)
+    bundleIdentifier = identifierMatch?.[1] ?? ''
   } catch {
     // The signer will fail below with a precise identity error.
   }
   if (!/^[A-Za-z0-9.-]+$/.test(bundleIdentifier)) {
     throw new Error('Cannot sign the macOS Electron runtime without a valid CFBundleIdentifier')
   }
+
+  const runtimeExecutable = mainExecutable
+  const electronBinaryIdentifier = `${runtimeExecutable}-electron`
 
   const teamId = process.env['APPLE_TEAM_ID']?.trim() ?? ''
   const isAdHocSigning = configuration.identity === '-'
@@ -49,9 +61,9 @@ export default async function macSign(configuration) {
     ? undefined
     : `=designated => (identifier "${bundleIdentifier}" or identifier "${electronBinaryIdentifier}") and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = ${teamId}`
 
-  // Match the Electron runtime by path suffix — osx-sign may hand us
-  // normalized or relative forms of the discovered file path.
-  const isElectronBinary = (filePath) => {
+  // Match the runtime by path suffix — osx-sign may hand us normalized or
+  // relative forms of the discovered file path.
+  const isRuntimeExecutable = (filePath) => {
     const normalized = String(filePath).replace(/^\.\/+/, '')
     return normalized.endsWith(`Contents/MacOS/${runtimeExecutable}`)
   }
@@ -59,29 +71,14 @@ export default async function macSign(configuration) {
   const originalOptionsForFile = configuration.optionsForFile
   configuration.optionsForFile = (filePath) => {
     const perFile = originalOptionsForFile ? originalOptionsForFile(filePath) : {}
-    if (filePath === appPath) {
-      // The top-level bundle sign must keep the legacy running-process
-      // identifier for Squirrel.Mac update compatibility.
-      return {
-        ...perFile,
-        additionalArguments: [
-          ...(perFile.additionalArguments ?? []),
-          '--identifier',
-          electronBinaryIdentifier
-        ]
-      }
-    }
-    if (isElectronBinary(filePath)) {
-      // The product-named Electron runtime keeps the canonical bundle identifier
-      // (required by macOS UNNotification) plus the bridge requirement so
-      // Squirrel.Mac accepts update bundles signed with either identifier.
+    if (filePath === appPath || isRuntimeExecutable(filePath)) {
       return {
         ...perFile,
         ...(bridgeRequirement !== undefined ? { requirements: bridgeRequirement } : {}),
         additionalArguments: [
           ...(perFile.additionalArguments ?? []),
           '--identifier',
-          bundleIdentifier
+          electronBinaryIdentifier
         ]
       }
     }
