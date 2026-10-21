@@ -1,5 +1,7 @@
 import {
+  NATIVE_TOOLTIP_DOCK_ID,
   nativeDockImageIds,
+  nativeDockProjectedOnPlatform,
   validateNativeDockImages,
   withoutNativeDockImages,
   type NativeDockCommit,
@@ -351,8 +353,10 @@ export class BrowserOverlayWindow {
   applyDock(id: string, request: NativeDockRequest | null): boolean {
     // Keep Linux tooltips independent of compositor-specific child-window
     // stacking and hover delivery. Refusing the projection keeps the renderer's
-    // DOM host visible and avoids mapping another window during the hover.
-    if (process.platform === 'linux' && id === 'app-tooltip' && request !== null) return false
+    // DOM host visible and avoids mapping another window during the hover. The
+    // document asks the same question before it publishes, so this is the
+    // backstop for a projection that should never have been sent.
+    if (!nativeDockProjectedOnPlatform(id, process.platform) && request !== null) return false
     const leaving = this.leavingDocks.get(id)
     if (request === null && leaving && !this.docks.has(id)) return true
     if (leaving) clearTimeout(leaving.timer)
@@ -368,12 +372,14 @@ export class BrowserOverlayWindow {
         const timer = setTimeout(() => {
           this.leavingDocks.delete(id)
           this.settle()
-          if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.retire()
+          if (!this.hasContent() && id !== NATIVE_TOOLTIP_DOCK_ID && id !== 'thread-switcher')
+            this.retire()
         }, 160)
         this.leavingDocks.set(id, { modal: true, timer })
       }
       this.settle()
-      if (!this.hasContent() && id !== 'app-tooltip' && id !== 'thread-switcher') this.retire()
+      if (!this.hasContent() && id !== NATIVE_TOOLTIP_DOCK_ID && id !== 'thread-switcher')
+        this.retire()
       return true
     }
     if (!this.docks.has(id) && this.docks.size >= 32) return false

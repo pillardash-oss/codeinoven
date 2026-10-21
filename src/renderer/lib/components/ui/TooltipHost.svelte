@@ -9,8 +9,23 @@
   } from './tooltip-manager.svelte'
   import ShortcutHint from './ShortcutHint.svelte'
   import { NativeDockController } from '$lib/native-dock-controller.svelte'
+  import { NATIVE_TOOLTIP_DOCK_ID, nativeDockProjectedOnPlatform } from '$shared/native-dock'
 
   let { nativeOverlay = true }: { nativeOverlay?: boolean } = $props()
+
+  /**
+   * Whether this platform projects the tooltip at all.
+   *
+   * A native tooltip is an optimization: it lets the tooltip paint over the
+   * native page view. Where the projection is not dependable (see
+   * {@link nativeDockProjectedOnPlatform}) the DOM host is the whole tooltip,
+   * so it is never armed, never waits for an acknowledgement, and never clears
+   * itself because a host refused a frame.
+   */
+  const projectNatively = $derived(
+    nativeOverlay &&
+      nativeDockProjectedOnPlatform(NATIVE_TOOLTIP_DOCK_ID, window.api?.windowInfo?.platform ?? '')
+  )
 
   let side = $state<TooltipSide>('top')
 
@@ -20,7 +35,7 @@
 
   let host: HTMLDivElement | null = null
   const nativeTooltip = new NativeDockController(
-    'app-tooltip',
+    NATIVE_TOOLTIP_DOCK_ID,
     () => {},
     (width, height) => {
       const rect = host?.getBoundingClientRect()
@@ -43,7 +58,7 @@
     const request = tooltipState.request
     const el = container.querySelector<HTMLElement>('[role="tooltip"]')
     if (!request || !el) {
-      if (nativeOverlay) nativeTooltip.update(false, { x: 0, y: 0, width: 1, height: 1 })
+      if (projectNatively) nativeTooltip.update(false, { x: 0, y: 0, width: 1, height: 1 })
       return
     }
     const rect = el.getBoundingClientRect()
@@ -83,12 +98,12 @@
 
     container.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`
     side = resolved
-    if (nativeOverlay) nativeTooltip.update(tooltipState.visible, { x, y, width, height })
+    if (projectNatively) nativeTooltip.update(tooltipState.visible, { x, y, width, height })
   }
 </script>
 
 <div
-  {@attach nativeOverlay && mountNativeTooltip}
+  {@attach projectNatively && mountNativeTooltip}
   {@attach positionTooltip}
   data-tooltip-host
   class="fixed left-0 top-0"
