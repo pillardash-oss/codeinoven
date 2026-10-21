@@ -22,6 +22,7 @@ import {
   lockDownProductionWindow
 } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
+import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { ThreadClickedPayload } from '../lib/ipc-contract'
 import { startupTelemetry } from './system/startup-telemetry'
@@ -33,7 +34,11 @@ import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/t
 import { registerAppControlHandlers } from './app-control/app-control-ipc'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
-import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
+import {
+  hasNativeSplashHandoff,
+  signalNativeSplashReady,
+  startNativeSplashHelper
+} from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { createBootstrapState } from './bootstrap/bootstrap-state'
 import { configureElectronDataRoot, logConfiguredDataRoot } from './bootstrap/data-root'
@@ -271,6 +276,25 @@ ipcMain.handle('app:waitForFeatures', () =>
   state.featuresReady ? undefined : featuresReadyPromise
 )
 
+ipcMain.handle('app:setWindowControls', (event, symbolColor: unknown, headerHeight: unknown) => {
+  if (process.platform !== 'win32') return
+  const window = state.mainWindow
+  if (!window || window.isDestroyed() || window.webContents !== event.sender) return
+  if (typeof symbolColor !== 'string' || !/^#[\da-f]{6}$/i.test(symbolColor)) return
+  if (
+    typeof headerHeight !== 'number' ||
+    !Number.isFinite(headerHeight) ||
+    headerHeight < 24 ||
+    headerHeight > 160
+  )
+    return
+  window.setTitleBarOverlay({
+    color: '#00000000',
+    symbolColor,
+    height: Math.ceil(headerHeight * window.webContents.getZoomFactor())
+  })
+})
+
 /**
  * The renderer reports when its initial hydration is done (visible projects,
  * selected project, recent active threads). Timestamps the final startup
@@ -475,7 +499,13 @@ function createWindow(): BrowserWindow {
     icon: getAppIconPath(),
     titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset',
     ...(process.platform === 'win32'
-      ? { titleBarOverlay: { color: getStartupBackground(), height: 48 } }
+      ? {
+          titleBarOverlay: {
+            color: '#00000000',
+            symbolColor: nativeTheme.shouldUseDarkColors ? '#f5f4f0' : '#081825',
+            height: 48
+          }
+        }
       : {}),
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
@@ -495,7 +525,7 @@ function createWindow(): BrowserWindow {
       devTools: true,
       // The preload resolves the platform traffic-light layout from this flag
       // so the renderer never flashes a wrong inset on first paint.
-      additionalArguments: [getTrafficLightArg()],
+      additionalArguments: [getTrafficLightArg(), getBuildEnvironmentArg()],
       // Built-in Chromium PDF plugin (PDFium-backed viewer, annotations,
       // forms, search)   available in Electron 29+.
       plugins: true
@@ -791,6 +821,14 @@ void app
     // barrier, so low-end devices always get visual feedback first.
     let splashOutcome = 'skipped'
     if (!startHidden) {
+      // macOS starts this process as the bundle's main executable, so the native
+      // placeholder has to be spawned from here rather than wrapping the launch.
+      startNativeSplashHelper()
+      // The supervisor records this phase from the environment it hands over at
+      // process entry. macOS only knows once the helper is spawned, and a check
+      // taken before that spawn can never be true, so the phase is recorded here
+      // too; `mark` keeps it to a single record either way.
+      if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
       const { visualReady: splashVisualReady } = createSplashWindow(
         mainBundleDirectory,
         isProduction

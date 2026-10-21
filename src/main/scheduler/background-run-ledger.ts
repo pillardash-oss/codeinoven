@@ -34,6 +34,7 @@ function isValidBackgroundRun(value: unknown): value is BackgroundRun {
       outcome === 'failed' ||
       outcome === 'parked') &&
     (record.errorSummary === undefined || typeof record.errorSummary === 'string') &&
+    (record.acknowledgedAt === undefined || typeof record.acknowledgedAt === 'number') &&
     typeof record.autoAnswered === 'number'
   )
 }
@@ -149,16 +150,40 @@ export class BackgroundRunLedger {
   }
 
   /**
-   * Remove one recorded run from the ledger, returning whether an entry was
-   * removed. This is the user acknowledging evidence they no longer need: the
-   * "While you were away" surface drops the row, and the removal is durable so
-   * it does not come back on the next launch. A run that is still pending is
-   * removable too: the entry is bookkeeping, never the run itself.
+   * Acknowledge one recorded run: the notification row that reported it goes
+   * away, and the entry stays in the ledger as evidence.
+   *
+   * This is the user dismissing a notice, not asking for the run to be forgotten,
+   * so the run-history surfaces keep it. A run that is still pending is
+   * acknowledgeable too: the entry is bookkeeping, never the run itself.
+   * Returns whether an unacknowledged entry was found.
    */
-  dismiss(runThreadId: string): boolean {
-    const removed = this.runs.delete(runThreadId)
-    if (removed) this.persist()
-    return removed
+  acknowledge(runThreadId: string): boolean {
+    const existing = this.runs.get(runThreadId)
+    if (!existing || existing.acknowledgedAt !== undefined) return false
+    this.runs.set(runThreadId, { ...existing, acknowledgedAt: Date.now() })
+    this.persist()
+    return true
+  }
+
+  /**
+   * Acknowledge the given runs at once, for a panel's clear-all: the user is
+   * acknowledging the rows it is showing rather than one at a time.
+   *
+   * Persists once, so clearing a long list never becomes one file write per row.
+   * Returns how many entries were acknowledged.
+   */
+  acknowledgeMany(runThreadIds: readonly string[]): number {
+    const acknowledgedAt = Date.now()
+    let acknowledged = 0
+    for (const runThreadId of runThreadIds) {
+      const existing = this.runs.get(runThreadId)
+      if (!existing || existing.acknowledgedAt !== undefined) continue
+      this.runs.set(runThreadId, { ...existing, acknowledgedAt })
+      acknowledged += 1
+    }
+    if (acknowledged > 0) this.persist()
+    return acknowledged
   }
 
   /**
@@ -177,10 +202,16 @@ export class BackgroundRunLedger {
 
   private trimToCap(): boolean {
     if (this.runs.size <= MAX_ENTRIES) return false
+    // Acknowledged settled entries are the ones nobody is going to look at again,
+    // so they leave before an unread history does, and a still-running run leaves
+    // last of all.
+    const evictionRank = (run: BackgroundRun): number => {
+      if (run.settledAt === undefined) return 2
+      return run.acknowledgedAt === undefined ? 1 : 0
+    }
     const candidates = [...this.runs.values()].sort((a, b) => {
-      const aSettled = a.settledAt !== undefined ? 0 : 1
-      const bSettled = b.settledAt !== undefined ? 0 : 1
-      if (aSettled !== bSettled) return aSettled - bSettled
+      const rank = evictionRank(a) - evictionRank(b)
+      if (rank !== 0) return rank
       return a.startedAt - b.startedAt
     })
     const evicted = candidates.slice(0, this.runs.size - MAX_ENTRIES)

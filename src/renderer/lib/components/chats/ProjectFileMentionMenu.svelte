@@ -44,6 +44,10 @@
   function taskWorker(task: AssignmentTask): string {
     return task.workerName ?? (task.owner === 'senior' ? 'Sr. Engineer' : 'Unassigned')
   }
+
+  /** Assistant View offers its own assistants and threads, so the header names
+   *  them only where they can actually appear. */
+  const hasAssistantEntries = $derived(entries.some((mention) => mention.type === 'assistant'))
 </script>
 
 <div
@@ -54,7 +58,9 @@
 >
   <div class="flex shrink-0 items-center justify-between gap-2 px-2 py-1">
     <p class="min-w-0 truncate text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
-      {query ? `References matching “${query}”` : 'Built-in actions, files, and Assignment tasks'}
+      {query ? `References matching “${query}”` : hasAssistantEntries
+        ? 'Built-in actions, assistants, threads and Assignment tasks'
+        : 'Built-in actions, files, and Assignment tasks'}
     </p>
     <div class="flex shrink-0 items-center gap-2">
       <Switch
@@ -103,7 +109,9 @@
             ? mention.entry.description
             : mention.type === 'task'
               ? `Task: ${mention.entry.title} · Worker: ${taskWorker(mention.entry)}`
-              : mention.entry.path}
+              : mention.type === 'assistant'
+                ? `${mention.entry.detail}: ${mention.entry.name}`
+                : mention.entry.path}
           onmousedown={(event: MouseEvent) => event.preventDefault()}
           onclick={() => onSelect(mention)}
         >
@@ -117,6 +125,13 @@
             {/if}
           {:else if mention.type === 'task'}
             <CioListTodo size={13} class="shrink-0 text-info" />
+          {:else if mention.type === 'assistant'}
+            <!-- The assistant's own icon: a tag is identified by the assistant it
+                 belongs to, never by a generic work mark. -->
+            <span class="flex h-[13px] w-[13px] shrink-0 items-center justify-center">
+              <!-- eslint-disable-next-line svelte/no-at-html-tags -->
+              {@html mention.entry.iconHtml}
+            </span>
           {:else if mention.entry.kind === 'directory'}
             <FolderTypeIcon name={mention.entry.name} size={13} />
           {:else}
@@ -133,6 +148,9 @@
               <span class="block truncate text-[0.625rem] capitalize text-dimmed">
                 Task · {mention.entry.status} · {taskWorker(mention.entry)}
               </span>
+            {:else if mention.type === 'assistant'}
+              <span class="block truncate">{mention.entry.name}</span>
+              <span class="block truncate text-[0.625rem] text-dimmed">{mention.entry.detail}</span>
             {:else}
               <span class="block truncate">{mention.entry.name}</span>
               <span class="block truncate text-[0.625rem] text-dimmed">

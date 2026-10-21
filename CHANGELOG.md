@@ -316,13 +316,25 @@ All notable changes to CodeInOven are documented here. This project follows
   actions; the same actions now open as a top-to-bottom menu, once on the
   highlight and once at the cursor on a right-click, with `Copy` as the last
   item so the plain copy that used to live in the app's text menu is still one
-  click away. A right-click that lands on a passage already carrying a comment
-  also reopens that comment's bubble, and its first item edits that comment
-  instead of attaching a second one to the same words. Links and external
-  address controls keep their own menu, and fields keep cut, paste and select
-  all.
+  click away. It opens beside the point the selection stopped at, so a passage
+  that runs down two lines raises it at the end of the drag rather than at the
+  top-left corner of the quote, and a selection made right to left raises it at
+  the left end it stopped on. A right-click that lands on a passage already
+  carrying a comment also reopens that comment's bubble, and its first item
+  edits that comment instead of attaching a second one to the same words. Links
+  and external address controls keep their own menu, and fields keep cut, paste
+  and select all.
 
 ### Fixed
+
+- **A comment written in a temporary chat now exists.** Selecting a passage
+  inside a side chat dropped the text into the composer and nothing else: the
+  comment editor never opened, because a side chat keeps its own references on
+  its tab instead of in the thread store the editor read. A side chat now keeps
+  the passage, the comment written on it and the range it was taken from
+  together, so the highlight is drawn, the comment editor opens on the passage,
+  the composer chip edits and removes it, and the comment travels to the harness
+  in the turn's `<selection>` block beside the quoted text.
 
 - **A selection keeps up with shift and the arrow keys.** Highlighting a passage
   and then extending or trimming it with shift and an arrow key left the action

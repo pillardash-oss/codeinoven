@@ -23,10 +23,15 @@
   import { pageReveal } from '$lib/components/layout/page-reveal'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
+  import AppConfirmDialog from '$lib/components/ui/AppConfirmDialog.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
   import { toast } from 'svelte-sonner'
   import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
-  import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
+  import {
+    closeBlockingSurfaces,
+    closeTopVisibleDialog,
+    requestCloseTopOverlay
+  } from '$lib/overlay-close.svelte'
   import { activateTopModalPrimaryAction } from '$lib/modal-primary-action.svelte'
   import { initComposerFocusShortcut } from '$lib/focus/composer-focus-shortcut'
   import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
@@ -1312,6 +1317,11 @@
     project: Project | null,
     temporaryChatId?: string
   ): Promise<void> {
+    // The click is a decision to go somewhere, so whatever owns the window steps
+    // aside first. Without this a full screen reader (or a confirm sheet) stayed
+    // up over the workspace and the thread opened behind it, which read as a
+    // button that navigated to nothing.
+    closeBlockingSurfaces()
     const family = contentThreadFamily(thread)
     const inScopeState =
       activeView === 'scope' ||
@@ -1556,6 +1566,20 @@
     contextSidebarState.openNewTerminal(thread.projectId, thread.id)
   }
 
+  /**
+   * Find in the file reader, on the surface actually on screen. The editor
+   * region names the surface it is showing: the source editor counts and
+   * replaces its own matches, while every rendered view (annotate, document
+   * preview, diff) is plain DOM text that only a document search can read.
+   */
+  function openFilesFind(region: Element): void {
+    if (region.getAttribute('data-find-surface') === 'document') {
+      findNavState.openFileDocumentFind()
+      return
+    }
+    findNavState.openEditorFind()
+  }
+
   function handleFind(): void {
     const browserTabId = browserKeyboardFocus.tabId
     if (browserTabId) {
@@ -1573,8 +1597,17 @@
       findNavState.focusFileTreeFilter++
       return
     }
-    if (active?.closest('[data-region="editor"]')) {
-      findNavState.openEditorFind()
+    if (active?.closest('[data-region="sticky-notes"]')) {
+      findNavState.openStickyNotesFind()
+      return
+    }
+    if (active?.closest('[data-region="thread-notes"]')) {
+      findNavState.openThreadNotesFind()
+      return
+    }
+    const activeEditor = active?.closest('[data-region="editor"]')
+    if (activeEditor) {
+      openFilesFind(activeEditor)
       return
     }
     // The sidebar keeps GitStatusPanel mounted but display:none for every
@@ -1600,8 +1633,9 @@
     }
 
     // Toolbar focus still belongs to the visible regular/fullscreen file surface.
-    if (document.querySelector('[data-region="editor"][data-find-active="true"]')) {
-      findNavState.openEditorFind()
+    const visibleEditor = document.querySelector('[data-region="editor"][data-find-active="true"]')
+    if (visibleEditor) {
+      openFilesFind(visibleEditor)
       return
     }
     if (document.querySelector('[data-region="spec-studio"]')) {
@@ -2147,6 +2181,9 @@
     {/await}
   {/if}
   <Toaster />
+  <!-- Raised by menus that close as soon as one of their items is chosen, so the
+       question outlives the surface that asked it. -->
+  <AppConfirmDialog />
   <TextSelectionContextMenu />
   <TooltipHost />
   {#if scopeConfirmations.current}

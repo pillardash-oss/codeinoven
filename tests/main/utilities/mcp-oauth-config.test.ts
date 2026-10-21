@@ -18,9 +18,12 @@ function asMcpUtility(utility: UtilityDefinition | null): UtilityDefinitionFor<'
 
 const { safeStorage } = vi.hoisted(() => ({
   safeStorage: {
-    isEncryptionAvailable: vi.fn(() => true),
-    encryptString: vi.fn((value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
-    decryptString: vi.fn((buffer: Buffer) => buffer.toString('utf-8').replace(/^enc:/u, ''))
+    isAsyncEncryptionAvailable: vi.fn(async () => true),
+    encryptStringAsync: vi.fn(async (value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
+    decryptStringAsync: vi.fn(async (buffer: Buffer) => ({
+      result: buffer.toString('utf-8').replace(/^enc:/u, ''),
+      shouldReEncrypt: false
+    }))
   }
 }))
 

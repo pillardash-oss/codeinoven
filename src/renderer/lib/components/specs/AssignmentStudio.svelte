@@ -1,12 +1,12 @@
 <script lang="ts">
   import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
-  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioShell from './StudioShell.svelte'
   import type { StudioShellSection } from './StudioShell.svelte'
@@ -674,18 +674,22 @@
   {/snippet}
 
   {#snippet markers()}
-    {#each annotationMarkers as marker (marker.annotation.id)}
-      <button
-        class="absolute z-20 flex h-7 w-7 items-center justify-center border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
-        style:left={compactViewport.matches ? undefined : `${marker.x}px`}
-        style:top={`${marker.y}px`}
-        data-assignment-annotation-marker={marker.annotation.id}
+    {#each annotationMarkers as marker, index (marker.annotation.id)}
+      <AnnotationIndicator
+        id={marker.annotation.id}
+        surface={`assignment:${assignment.id}`}
+        left={compactViewport.matches ? 'auto' : `${marker.x}px`}
+        top={`${marker.y}px`}
+        number={index + 1}
+        hasComment={Boolean(marker.annotation.body)}
+        active={editingAnnotation?.id === marker.annotation.id}
         title="Open anchored comment"
-        aria-label="Open anchored comment"
-        onclick={() => void openAnnotation(marker.annotation)}
-      >
-        <CioMessage size={13} />
-      </button>
+        class="z-20 max-md:right-2"
+        attach={(node) => {
+          node.setAttribute('data-assignment-annotation-marker', marker.annotation.id)
+        }}
+        onOpen={() => void openAnnotation(marker.annotation)}
+      />
     {/each}
   {/snippet}
 

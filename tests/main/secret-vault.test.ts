@@ -19,15 +19,15 @@ const { safeStorage, app, keyring } = vi.hoisted(() => {
       isPackaged: false
     },
     safeStorage: {
-      isEncryptionAvailable: vi.fn(() => true),
-      encryptString: vi.fn((value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
-      decryptString: vi.fn((buffer: Buffer) => {
+      isAsyncEncryptionAvailable: vi.fn(async () => true),
+      encryptStringAsync: vi.fn(async (value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
+      decryptStringAsync: vi.fn(async (buffer: Buffer) => {
         if (state.decryptionFailure) {
           throw new Error(
-            'Error while decrypting the ciphertext provided to safeStorage.decryptString.'
+            'Error while decrypting the ciphertext provided to safeStorage.decryptStringAsync.'
           )
         }
-        return buffer.toString('utf-8').replace(/^enc:/u, '')
+        return { result: buffer.toString('utf-8').replace(/^enc:/u, ''), shouldReEncrypt: false }
       })
     }
   }
@@ -51,10 +51,10 @@ beforeEach(async () => {
   await mkdir(projectRoot, { recursive: true })
   storage = new StorageEngine(configRoot)
   vault = new SecretVault(storage)
-  safeStorage.isEncryptionAvailable.mockReset()
-  safeStorage.isEncryptionAvailable.mockReturnValue(true)
-  safeStorage.encryptString.mockClear()
-  safeStorage.decryptString.mockClear()
+  safeStorage.isAsyncEncryptionAvailable.mockReset()
+  safeStorage.isAsyncEncryptionAvailable.mockResolvedValue(true)
+  safeStorage.encryptStringAsync.mockClear()
+  safeStorage.decryptStringAsync.mockClear()
   keyring.decryptionFailure = false
 })
 
@@ -70,7 +70,7 @@ describe('SecretVault per-account token storage', () => {
     const ref = await vault.saveProviderToken(ACCOUNT_A, 'coolify-secret-token')
 
     expect(ref).toBe(`deployment_provider_${ACCOUNT_A}`)
-    expect(safeStorage.encryptString).toHaveBeenCalledWith('coolify-secret-token')
+    expect(safeStorage.encryptStringAsync).toHaveBeenCalledWith('coolify-secret-token')
     expect(await vault.hasProviderToken(ACCOUNT_A)).toBe(true)
     expect(await vault.resolveProviderToken(ACCOUNT_A)).toBe('coolify-secret-token')
   })
@@ -155,7 +155,7 @@ describe('SecretVault per-account token storage', () => {
   })
 
   it('throws on save when the keychain is unavailable and stores no plaintext', async () => {
-    safeStorage.isEncryptionAvailable.mockReturnValue(false)
+    safeStorage.isAsyncEncryptionAvailable.mockResolvedValue(false)
 
     await expect(vault.saveProviderToken(ACCOUNT_A, 'should-not-persist')).rejects.toThrow(
       'Secure credential storage is unavailable'
@@ -165,7 +165,7 @@ describe('SecretVault per-account token storage', () => {
 
   it('throws on resolve when the keychain is unavailable', async () => {
     await vault.saveProviderToken(ACCOUNT_A, 'token-before-lock')
-    safeStorage.isEncryptionAvailable.mockReturnValue(false)
+    safeStorage.isAsyncEncryptionAvailable.mockResolvedValue(false)
 
     await expect(vault.resolveProviderToken(ACCOUNT_A)).rejects.toThrow(
       'Secure credential storage is unavailable'
@@ -185,7 +185,7 @@ describe('SecretVault keyring identity and failure reporting', () => {
   const UNREADABLE_REF = 'unreadable_credential'
   const RECOVERING_REF = 'recovering_credential'
   const REPAIR_REF = 'repaired_credential'
-  /** What `safeStorage.encryptString` produces in this suite, base64-encoded. */
+  /** What `safeStorage.encryptStringAsync` produces in this suite, base64-encoded. */
   const encode = (value: string): string => Buffer.from(`enc:${value}`, 'utf-8').toString('base64')
 
   /**

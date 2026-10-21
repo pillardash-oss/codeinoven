@@ -1,4 +1,10 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import {
+  BUILD_ENVIRONMENT_ARG_PREFIX,
+  DEFAULT_BUILD_ENVIRONMENT,
+  parseBuildEnvironment,
+  type BuildEnvironment
+} from '../lib/build-environment'
 import type { AppConfig, AppConfigPatch, AttachmentStorageScope } from '../lib/types'
 import {
   NO_TRAFFIC_LIGHT,
@@ -85,6 +91,8 @@ export interface AppBridge {
   windowInfo: {
     platform: NodeJS.Platform
     trafficLight: TrafficLightInfo
+    /** Which build this window runs: a shipped app, a checkout, or a probe. */
+    buildEnvironment: BuildEnvironment
   }
   /** Read a local file into bytes for renderer-side preview use. The read is
    *  performed by the validated main-process `file:read` channel so the preload
@@ -100,6 +108,7 @@ export interface AppBridge {
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
+const buildEnvironmentArg = process.argv.find((arg) => arg.startsWith(BUILD_ENVIRONMENT_ARG_PREFIX))
 const MAX_PATHLESS_ATTACHMENT_BYTES = 32 * 1024 * 1024
 
 /**
@@ -159,7 +168,10 @@ const bridge: AppBridge = {
     platform: process.platform,
     trafficLight:
       parseTrafficLight(trafficLightArg?.slice(TRAFFIC_LIGHT_ARG_PREFIX.length)) ??
-      defaultTrafficLight(process.platform)
+      defaultTrafficLight(process.platform),
+    buildEnvironment:
+      parseBuildEnvironment(buildEnvironmentArg?.slice(BUILD_ENVIRONMENT_ARG_PREFIX.length)) ??
+      DEFAULT_BUILD_ENVIRONMENT
   },
   readFile: async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
     const data = await ipcRenderer.invoke('file:read', path)

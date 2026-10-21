@@ -9,6 +9,9 @@ import {
   findWindowsGitRuntime,
   invalidateWindowsGitDiscovery,
   managedWindowsGitDirectory,
+  selectedWindowsGitRuntime,
+  windowsGitBins,
+  windowsPathValue,
   windowsGitRuntimeAt,
   type WindowsGitRuntime
 } from './windows-git-paths'
@@ -21,6 +24,41 @@ interface PortableGitAsset {
 
 let pending: Promise<WindowsGitRuntime> | undefined
 let failed: { until: number; error: Error } | undefined
+let backgroundPreparation: Promise<void> | undefined
+
+/** One boot-time task, also safe to trigger from an early interactive launch. */
+export function startWindowsGitPreparation(
+  env: NodeJS.ProcessEnv = buildProcessEnvironment()
+): void {
+  if (process.platform !== 'win32' || backgroundPreparation) return
+  backgroundPreparation = ensureWindowsGitRuntime(env)
+    .then(() => undefined)
+    .catch((error: unknown) => Logger.error('Windows Git background preparation failed', error))
+    .finally(() => {
+      backgroundPreparation = undefined
+    })
+}
+
+/** Interactive callers may discover installed tools, but never await a download. */
+export async function prepareWindowsGitRuntime(
+  env: NodeJS.ProcessEnv = buildProcessEnvironment()
+): Promise<WindowsGitRuntime | null> {
+  if (process.platform !== 'win32') return null
+  startWindowsGitPreparation(env)
+  const selected = selectedWindowsGitRuntime()
+  if (selected) return selected
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      findWindowsGitRuntime(env),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 750)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 /** Validate metadata from the official stable release before downloading code. */
 export function portableGitAsset(value: unknown, arch: string): PortableGitAsset {
@@ -144,7 +182,7 @@ async function installPortableGit(env: NodeJS.ProcessEnv): Promise<WindowsGitRun
   }
 }
 
-/** On-demand only. Concurrent sessions share setup; failures do not trigger a retry storm. */
+/** Concurrent startup/SSH requests share setup; failures have a retry cooldown. */
 export async function ensureWindowsGitRuntime(
   env: NodeJS.ProcessEnv = buildProcessEnvironment()
 ): Promise<WindowsGitRuntime | null> {
@@ -156,6 +194,21 @@ export async function ensureWindowsGitRuntime(
     if (failed && Date.now() < failed.until) throw failed.error
     return installPortableGit(env)
   })()
+    .then((runtime) => {
+      // Existing main-process tools and subsequently launched harnesses must
+      // see the discovered runtime without an application restart.
+      const paths = [...windowsGitBins(runtime.root), ...windowsPathValue(process.env).split(';')]
+      const seen = new Set<string>()
+      process.env['PATH'] = paths
+        .filter((entry) => {
+          if (!entry || seen.has(entry.toLowerCase())) return false
+          seen.add(entry.toLowerCase())
+          return true
+        })
+        .join(';')
+      process.env['CLAUDE_CODE_GIT_BASH_PATH'] = runtime.bash
+      return runtime
+    })
     .catch((cause: unknown) => {
       if (failed?.error === cause) throw cause
       const detail = cause instanceof Error ? cause.message : String(cause)

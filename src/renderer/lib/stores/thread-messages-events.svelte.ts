@@ -3,7 +3,13 @@ import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageText, threadKey } from './thread-messages-merge'
 import type { ThreadMessagesCache } from './thread-messages-cache.svelte'
-import type { AgentEvent, AgentMessage, AgentPart, BrainstormTraceUpdate } from '$shared/types'
+import type {
+  AgentEvent,
+  AgentMessage,
+  AgentPart,
+  BrainstormTraceUpdate,
+  RemoteAgentEventPayload
+} from '$shared/types'
 
 /**
  * Streaming and agent-event application for thread messages.
@@ -282,6 +288,30 @@ export class ThreadMessagesEvents {
     this.cache.notifyStreaming(projectId, threadId)
   }
 
+  /**
+   * Apply a stream event another CodeInOven instance produced for a shared
+   * thread.
+   *
+   * Same cache and same run-state path as local streaming, because it is the
+   * same event: the process that owns the harness process forwards the
+   * observations of its run, and this window renders them instead of watching a
+   * transcript that only advances when the mirror is next re-read.
+   *
+   * Binding the session from the payload is what lets the first frames of a turn
+   * land: the shared thread row that carries the binding reaches this window a
+   * moment after the stream starts, so a window that trusted only its own
+   * bindings would drop the beginning of every foreign turn.
+   */
+  handleRemote(payload: RemoteAgentEventPayload): void {
+    const { projectId, threadId, event } = payload
+    if (projectId && threadId && 'sessionId' in event) {
+      if (!this.cache.conversationForSession(event.sessionId)) {
+        this.cache.setSessionId(projectId, threadId, event.sessionId)
+      }
+    }
+    this.handle(event)
+  }
+
   handle(event: AgentEvent): void {
     if (event.type === 'artifact.rendered') {
       this.cache.mergePage(event.projectId, event.threadId, [event.message])
@@ -402,22 +432,24 @@ export class ThreadMessagesEvents {
         )
         break
       case 'session.status':
-        if (event.status.state === 'working' || event.status.state === 'waiting') {
+        if (event.status.state === 'working') {
           this.cache.setRunIssue(projectId, threadId, null)
-          // Track the scheduled reset so the header's activity badge can drop a
-          // thread whose auto-retry is parked beyond the wake window; a working
-          // status means no retry is pending anymore.
-          agentRuns.setRetryAt(
-            projectId,
-            threadId,
-            event.status.state === 'waiting' ? (event.status.issue.retryAt ?? null) : null
-          )
           agentRuns.setBusy(
             projectId,
             threadId,
             true,
             this.cache.latestUserMessageId(projectId, threadId)
           )
+          // A live run has no pending retry left; clear the deadline after the
+          // run is established so a resumed retry starts a fresh clock.
+          agentRuns.setRetryAt(projectId, threadId, null)
+        } else if (event.status.state === 'waiting') {
+          // Parked on a provider wait (a reset window, or a connection the
+          // device lost). Nothing is being produced, so the conversation must
+          // show the waiting card rather than a live trace with no steps; the
+          // deadline stays on the entry for the auto-retry that follows.
+          this.cache.setRunIssue(projectId, threadId, null)
+          agentRuns.setWaiting(projectId, threadId, event.status.issue.retryAt ?? null)
         } else if (event.status.state === 'idle') {
           agentRuns.setRetryAt(projectId, threadId, null)
           agentRuns.completeSession(projectId, threadId)

@@ -20,6 +20,9 @@ import {
   type UtilityDefinition
 } from '$shared/types'
 import { normalizePlanDelivery, normalizePlanPriority } from '$shared/assistant-reporting'
+import type { ComposerAssistantTag } from '../chats/composer-mentions'
+import { assistantAccentColor } from '../../assistant-icons'
+import { assistantTagIconHtml } from './assistant-tag-badge'
 import {
   parseAssistantPlanJson,
   type AssistantPlan,
@@ -1096,7 +1099,7 @@ export function handoffSummary(
   ]
   if (assistant) lines.push(`Assistant: ${assistant.name}`)
   const knowledge = assistant?.knowledge?.trim()
-  if (knowledge) lines.push('', 'How-to:', knowledge)
+  if (knowledge) lines.push('', 'Assistant behavior:', knowledge)
   if (task.lastRunAt !== undefined) {
     lines.push('', `Last scheduled run: ${formatDateTime(task.lastRunAt)}`)
   }
@@ -1324,4 +1327,81 @@ export function connectionsFromPlan(
     )
   }
   return merged
+}
+
+export interface AssistantTagCandidateInput {
+  assistants: readonly Assistant[]
+  /** The Assistant tab's threads: tasks, runs and Getting started conversations. */
+  threads: readonly Thread[]
+  /** The composer's own thread, which has nothing to tell itself. */
+  excludeThreadId?: string
+  /** Stored icon images by assistant id, so a tag draws the assistant's own icon. */
+  assistantIcons?: ReadonlyMap<string, string>
+}
+
+/**
+ * What the Assistant tab's composers offer behind an `@`.
+ *
+ * Assistants come first, then their threads newest-first, because a message
+ * usually points at a thread and the assistant beside it is the group that
+ * thread belongs to. A candidate carries only ids, names and the mark it wears:
+ * the token a pick inserts is the id, and the agent tails the thread for the
+ * content.
+ *
+ * The list is unbounded on purpose. It is both what the menu filters and what
+ * the composer resolves a badge through, so a tag restored from a draft keeps
+ * its thread's title instead of falling back to a raw id.
+ */
+export function buildAssistantTagCandidates({
+  assistants,
+  threads,
+  excludeThreadId,
+  assistantIcons
+}: AssistantTagCandidateInput): ComposerAssistantTag[] {
+  const assistantById = new Map(assistants.map((assistant) => [assistant.id, assistant]))
+  const candidates: ComposerAssistantTag[] = []
+
+  for (const assistant of assistants) {
+    const threadCount = threads.filter((thread) => thread.assistantId === assistant.id).length
+    candidates.push({
+      kind: 'assistant',
+      id: assistant.id,
+      name: assistant.name,
+      detail: threadCount === 1 ? 'Assistant · 1 thread' : `Assistant · ${threadCount} threads`,
+      iconHtml: assistantTagIconHtml(assistant, assistantIcons?.get(assistant.id)),
+      color: assistantAccentColor(assistant),
+      keywords: ['assistant', 'assistants']
+    })
+  }
+
+  const orderedThreads = [...threads].sort((left, right) => right.lastActivity - left.lastActivity)
+  for (const thread of orderedThreads) {
+    if (thread.id === excludeThreadId) continue
+    const assistant = thread.assistantId ? assistantById.get(thread.assistantId) : undefined
+    const kindLabel = thread.assistantTaskId
+      ? 'Run'
+      : isAssistantSetupThread(thread)
+        ? 'Getting started'
+        : 'Task'
+    candidates.push({
+      kind: 'thread',
+      id: thread.id,
+      name: thread.title.trim() || 'Untitled thread',
+      detail: assistant ? `${kindLabel} · ${assistant.name}` : kindLabel,
+      // A thread is identified by the assistant it belongs to, not by the work
+      // item: an assistant-less task has no icon of its own to draw.
+      iconHtml: assistantTagIconHtml(assistant ?? {}, assistantIcons?.get(assistant?.id ?? '')),
+      color: assistantAccentColor(assistant ?? {}),
+      run: thread.assistantTaskId !== undefined,
+      keywords: [
+        'thread',
+        'threads',
+        'assistant',
+        kindLabel.toLocaleLowerCase(),
+        ...(assistant ? [assistant.name.toLocaleLowerCase()] : [])
+      ]
+    })
+  }
+
+  return candidates
 }

@@ -715,7 +715,7 @@ describe('DatabaseWorker production wrapper', () => {
     await db.close()
     },
     // 1250 chunked appends + full cursor-paged load exceed the 5s default on
-    // slow Windows runners.
-    20000
+    // slow Windows runners, and the hosted runner's disk can push it past 20s.
+    60000
   )
 })

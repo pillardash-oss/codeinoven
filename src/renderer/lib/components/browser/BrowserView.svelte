@@ -17,9 +17,10 @@
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
   import { storeExtensionOffer } from '$lib/stores/browser-extension-store-offer'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { contextSidebarState, contextSidebarMaxWidth } from '$lib/stores/context-sidebar.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { DEFAULT_BOX_ID } from '$lib/stores/global-browser-types'
+  import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { browserAssistant } from '$lib/stores/browser-assistant.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
@@ -270,6 +271,29 @@
   )
 
   /**
+   * The painted width of the rail, which is the store's width capped by the room
+   * the page keeps for itself.
+   *
+   * The page column is the point of this view, so the rail may never widen until
+   * the page is gone. Two boxes share the row with it: the browser's own left
+   * sidebar, which only costs layout space while it is docked, and the page,
+   * which keeps the same 360px floor a conversation does. The stored width is a
+   * preference that outlives a window resize, so it is read through
+   * `widthForViewport` at paint time instead of being trusted raw, and the
+   * viewport width is tracked here because a shrink has to close the rail
+   * immediately rather than only on the next drag.
+   */
+  let viewportWidth = $state(typeof window === 'undefined' ? 0 : window.innerWidth)
+  /** The browser's own left sidebar, which only costs layout space while it is
+   *  docked rather than floating over the page. */
+  const leftSidebarWidth = $derived(sidebarState.docked ? sidebarState.width : 0)
+  /** The room the row leaves for everything but the rail: the left sidebar and
+   *  the page's own floor. Both the painted width and every drag write stay
+   *  inside it. */
+  const railCeiling = $derived(contextSidebarMaxWidth(viewportWidth - leftSidebarWidth))
+  const railWidth = $derived(contextSidebarState.widthForViewport(viewportWidth - leftSidebarWidth))
+
+  /**
    * True while the user drags the rail's edge, so the track skips its width
    * transition for the duration of the drag.
    *
@@ -285,12 +309,14 @@
   )
 
   /** Move the rail: a drag writes the width straight through, everything else
-   *  is the open/close transition above. */
+   *  is the open/close transition above. The write is held to the same ceiling
+   *  the rail is painted at, so the stored preference never runs ahead of what
+   *  the user actually saw and a page's floor cannot be traded away. */
   function handleRailWidthChange(width: number): void {
     railDragging = true
     clearTimeout(railDragTimer)
     railDragTimer = setTimeout(() => (railDragging = false), motionDuration(160))
-    contextSidebarState.setWidth(width)
+    contextSidebarState.setWidth(Math.min(width, railCeiling))
   }
 
   /**
@@ -360,8 +386,16 @@
     // to open the downloads panel first.
     void browserDownloads.load(GLOBAL_BROWSER_PROJECT_ID)
     const unsubscribePanelShortcut = subscribe('browser:panelShortcut', handlePanelShortcut)
+    // The rail's ceiling follows the window, so a narrower window closes the rail
+    // onto the page instead of letting the page keep a width the window no longer
+    // has. Only a resize recomputes it; nothing polls.
+    const trackViewport = (): void => {
+      viewportWidth = window.innerWidth
+    }
+    window.addEventListener('resize', trackViewport)
     return () => {
       unsubscribePanelShortcut()
+      window.removeEventListener('resize', trackViewport)
       clearTimeout(railDragTimer)
     }
   })
@@ -438,11 +472,12 @@
        at zero width and left the page beside it half open. -->
   <div
     class="context-rail flex h-full min-h-0 shrink-0 overflow-hidden"
-    style:width="{railShown ? contextSidebarState.width : 0}px"
+    style:width="{railShown ? railWidth : 0}px"
     style:transition-duration={railTrackDuration}
   >
     {#if railShown}
       <BrowserContextSidebar
+        width={railWidth}
         onClose={() => globalBrowser.toggleContextSidebar()}
         onWidthChange={handleRailWidthChange}
       />

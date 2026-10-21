@@ -1,3 +1,5 @@
+import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+import { archiveItem } from '$lib/archive-actions'
 import CioBoard from '@pdslng/cio-icon/CioBoard.svelte'
 import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
 import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
@@ -163,7 +165,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
       ...(knowledgeThread
         ? [
             {
-              label: 'Hide knowledge thread',
+              label: 'Hide assistant behavior thread',
               icon: CioEyeOff,
               onClick: () => config.onHideKnowledge?.(thread)
             }
@@ -216,7 +218,16 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
         : []),
       // A knowledge thread cannot be deleted: hiding is the only way to get it out
       // of the list, and it can always be revealed again from the knowledge panel.
-      ...(knowledgeThread ? [] : [{ label: '', divider: true }]),
+      ...(knowledgeThread
+        ? []
+        : [
+            {
+              label: 'Archive thread',
+              icon: CioArchive,
+              onClick: () => void archiveItem('thread', thread.id, thread.title)
+            },
+            { label: '', divider: true }
+          ]),
       ...(knowledgeThread
         ? []
         : [{ label: 'Delete', icon: CioTrash, onClick: startDelete, danger: true }])

@@ -1,3 +1,4 @@
+import { syncWindowControls } from '$lib/window-controls'
 import type { ResolvedTheme } from '$lib/theme'
 
 /**
@@ -33,6 +34,7 @@ class SchemeState {
   /** Record the scheme a surface just painted. */
   sync(theme: ResolvedTheme): void {
     this.#scheme = theme
+    syncWindowControls()
   }
 }
 

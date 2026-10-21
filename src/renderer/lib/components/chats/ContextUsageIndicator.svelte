@@ -268,7 +268,7 @@
           {@render modelRows(entry.models)}
         {/if}
         {#if entry.rateLimits.length > 0}
-          <UsageWindowList limits={entry.rateLimits} preferAmount />
+          <UsageWindowList limits={entry.rateLimits} preferAmount animate={false} />
         {:else if !creditsLabel(entry) && !entry.tokens && !entry.models?.length}
           <p class="text-[0.625rem] text-dimmed">No quota reported for this harness.</p>
         {/if}
@@ -357,7 +357,7 @@
       {#if harnessUsage[0]?.models?.length}
         {@render modelRows(harnessUsage[0].models)}
       {/if}
-      <UsageWindowList limits={harnessUsage[0].rateLimits} preferAmount />
+      <UsageWindowList limits={harnessUsage[0].rateLimits} preferAmount animate={false} />
       {#if harnessUsage[0]?.bankedResets?.availableCount}
         {@render bankedResetRow(harnessUsage[0].bankedResets)}
       {/if}

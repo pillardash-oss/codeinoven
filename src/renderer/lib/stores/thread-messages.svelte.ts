@@ -33,6 +33,7 @@ import type {
   PromptAssignmentTaskReference,
   PromptProjectReference,
   PromptReference,
+  RemoteAgentEventPayload,
   SpecActionIntent,
   ThreadSettings,
   UserMessagePresentation
@@ -99,6 +100,13 @@ class ThreadMessagesStore {
     subscribeGuarded('thread:messagesChanged', (projectId: string, threadId: string) => {
       if (!this.loaded(projectId, threadId)) return
       void this.mergeTurnAlignedTail(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
+    })
+    // Another instance runs a thread this window may be showing. Its stream
+    // reaches this process over the cross-instance bus, and applying it here is
+    // what makes the conversation look like one room instead of two: the same
+    // deltas, the same run state, the same trace the owning window renders.
+    subscribeGuarded('agent:remoteEvent', (payload: RemoteAgentEventPayload) => {
+      this.events.handleRemote(payload)
     })
   }
 

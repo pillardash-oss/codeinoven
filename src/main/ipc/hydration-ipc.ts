@@ -1,3 +1,4 @@
+import { unarchivedThreadSql } from '../../lib/archives'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { registerRendererLogIpcHandler } from './renderer-log-ipc'
 import type { Database } from '../database/database'
@@ -34,6 +35,11 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // off the post-paint feature graph instead of serializing the whole first
   // usable frame behind it. Idempotent: it upserts only when the row is absent.
   void projectManager.ensureAssistantSpace()
+  // The renderer warms the provider catalog for the inbox as soon as the first
+  // paint settles, which is before any New chat resolves `project:ensureInbox`.
+  // On a cold data root that pass used to discover against a project row that
+  // did not exist yet, so the row is created here, ahead of every renderer read.
+  void projectManager.ensureInboxProject()
   const threadManager = new ThreadManager(database)
   // The global browser's per-tab agent sidebar is a side chat whose scope
   // resolves against this reserved hidden project and its single thread, so
@@ -64,6 +70,12 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
   )
   ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+    const visible = await database.queryViaWorker(
+      `SELECT id FROM threads WHERE id = ? AND project_id = ? AND ${unarchivedThreadSql()}`,
+      [threadId, projectId],
+      1
+    )
+    if (!visible.ok || visible.rows.length === 0) return null
     const thread = await threadManager.getThreadViaWorker(projectId, threadId)
     // A thread whose creation-time branch settle never completed (restart or a
     // transient git failure) heals lazily on its next open   off this read's

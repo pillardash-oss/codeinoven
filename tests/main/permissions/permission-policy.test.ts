@@ -84,6 +84,71 @@ describe('permission policy', () => {
     expect(result.approved).toBe(true)
   })
 
+  it('never prompts for work confined to a scratch folder, deletes included', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    expect(policy.evaluate({ permission: 'delete', path: '.cio/tmp/pkg.tgz' })).toMatchObject({
+      decision: 'auto_review',
+      approved: true
+    })
+    expect(
+      policy.evaluate({ permission: 'Bash', commands: ['rm -rf .cio/tmp/cio-oven-pkg'] })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    expect(
+      policy.evaluate({
+        permission: 'Bash',
+        commands: ['cd .cio/tmp && rm -rf cio-oven-pkg && mkdir -p cio-oven-pkg']
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    expect(
+      policy.evaluate({ permission: 'Bash', commands: ['cd .cio/tmp && npm pack --silent 2>&1'] })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+  })
+
+  it('still asks when a scratch-rooted request can leave scratch', () => {
+    const scratch = resolve(projectRoot, '.cio')
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'auto_review',
+      scratchPaths: [scratch]
+    })
+
+    // Platform-owned folders inside scratch stay gated.
+    expect(
+      policy.evaluate({ permission: 'delete', path: '.cio/specs/login/spec.md' }).approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({ permission: 'Bash', commands: ['rm -rf .cio/git/pr/12'] }).approved
+    ).toBe(false)
+    // Traversal, absolute paths, and another shell stay gated.
+    expect(
+      policy.evaluate({ permission: 'Bash', commands: ['cd .cio/tmp && rm -rf ../../src'] })
+        .approved
+    ).toBe(false)
+    expect(
+      policy.evaluate({ permission: 'Bash', commands: ['rm -rf /Users/me/Documents'] }).approved
+    ).toBe(false)
+    // A command that acts on its working directory is only scratch-confined once
+    // the chain has entered scratch.
+    expect(policy.evaluate({ permission: 'Bash', commands: ['git clean -fdx'] }).approved).toBe(
+      false
+    )
+    // A wrapper that evaluates another command cannot make a destructive request
+    // scratch-confined, so the destructive permission itself still asks.
+    expect(
+      policy.evaluate({
+        permission: 'delete',
+        paths: ['.cio/tmp/pkg'],
+        commands: ['bash -c "rm -rf pkg"']
+      }).approved
+    ).toBe(false)
+  })
+
   it('runs every operation in yolo mode under full_access, including home directory paths', () => {
     const policy = new PermissionPolicy({ projectRoot, mode: 'full_access', now: () => 1000 })
 

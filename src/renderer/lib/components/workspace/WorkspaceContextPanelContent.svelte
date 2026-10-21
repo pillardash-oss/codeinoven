@@ -8,6 +8,7 @@
   import type { Thread } from '$shared/types'
   import { panelReveal } from '$lib/components/layout/page-reveal'
   import { appPanelSlot } from '$lib/app-panel-portal'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
   import { logRendererError } from '$lib/system/renderer-logger'
   // BrowserPanel is a dynamic import: terminal and browser panels are the dock's
@@ -22,6 +23,7 @@
   import { assistants } from '$lib/stores/assistants.svelte'
   import {
     contextSidebarState,
+    type FilesContextTab,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import {
@@ -199,7 +201,38 @@
       : null
   )
 
+  const lastFilesTab = new LastKnown<FilesContextTab>()
+  let filesTab = $derived(
+    lastFilesTab.get(activeContextTab?.kind === 'files' ? activeContextTab : null)
+  )
+  /** The same key `activePanelKey` builds for a files tab, taken from the tab
+   *  this panel stays mounted on rather than the one in front: the file reader
+   *  outlives its own tab while its temporary chat is the active one. */
+  let filesPanelKey = $derived.by(() => {
+    if (!filesTab) return ''
+    const mount =
+      usesThreadWorkspaceMount(filesTab.projectId) ||
+      (selectedThread?.settings?.ovenId && selectedThread.settings.ovenId !== 'local')
+        ? `${filesTab.threadId}:${selectedThread?.settings?.ovenId}`
+        : 'project'
+    return `files:${filesTab.projectId}:${mount}`
+  })
+  let filesVisible = $derived(activeContextTab?.kind === 'files')
+  let keepFilesMounted = $derived(
+    filesVisible ||
+      Boolean(filesTab && projectFilesWorkspace.getState(filesTab.projectId).fullscreenActive)
+  )
+
   let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
+
+  function leavePanel(node: HTMLElement) {
+    // An outro keeps the outgoing browser mounted and its native-view claim
+    // alive. Switching back can revive that old block ahead of the newer claim,
+    // leaving the selected tab hidden behind the page it replaced. Release a
+    // browser synchronously; other tools can keep their ordinary cross-fade.
+    if (node.dataset.panelKind === 'browser') return { duration: 0 }
+    return fly(node, panelReveal(true))
+  }
 
   /** The thread whose own workspace the file tree mounts. Only a chat or an
    *  assistant task has one; a real project always reads the project root. */
@@ -302,8 +335,29 @@
     {/await}
   {/key}
 {/if}
-{#if activeContextTab}
-  <!-- Cross-fades the panel body when the active tool changes. Both the
+{#if keepFilesMounted && filesTab}
+  <div class="h-full" style:display={filesVisible ? 'block' : 'none'}>
+    {#key `${filesPanelKey}:${panelReloadNonce}`}
+      {#await loadPanelModule(PANEL_KEYS.projectFiles, () => import('../files/ProjectFilesPanel.svelte'))}
+        {@render panelLoading('Files')}
+      {:then { default: ProjectFilesPanel }}
+        <ProjectFilesPanel
+          projectId={filesTab.projectId}
+          projectName={filesRootIdentity.name}
+          projectLabel={filesRootIdentity.label}
+          assistantRoot={filesRootIdentity.assistant}
+          projectIconUrl={filesRootIdentity.iconUrl}
+          projectAccentColor={filesRootIdentity.accentColor}
+        />
+      {:catch error}
+        {@render panelLoadFailed(PANEL_KEYS.projectFiles, 'Files', error)}
+      {/await}
+    {/key}
+  </div>
+{/if}
+{#if activeContextTab && !filesVisible}
+  <!-- Browser panels leave immediately to release their native-view claims.
+       Other tools cross-fade when the active tool changes. Both the
        out-going and the in-coming panel are absolutely placed in the same cell,
        so they overlap for the length of the switch instead of one blinking off
        before the other appears. Only the incoming panel rises: the outgoing one
@@ -317,7 +371,7 @@
         class="absolute inset-0"
         data-panel-kind={activeContextTab.kind}
         in:fly={panelReveal(activePanelIsBrowser)}
-        out:fly={panelReveal(true)}
+        out:leavePanel
       >
         {#if activeContextTab.kind === 'oven'}
           {#await loadPanelModule(PANEL_KEYS.oven, () => import('../threads/OvenSidebarPanel.svelte'))}
@@ -331,20 +385,7 @@
           <!-- Rendered by the persistent, keep-mounted Git panel above: an Oven
                thread has no local turn checkpoints to diff. -->
         {:else if activeContextTab.kind === 'files'}
-          {#await loadPanelModule(PANEL_KEYS.projectFiles, () => import('../files/ProjectFilesPanel.svelte'))}
-            {@render panelLoading('Files')}
-          {:then { default: ProjectFilesPanel }}
-            <ProjectFilesPanel
-              projectId={activeContextTab.projectId}
-              projectName={filesRootIdentity.name}
-              projectLabel={filesRootIdentity.label}
-              assistantRoot={filesRootIdentity.assistant}
-              projectIconUrl={filesRootIdentity.iconUrl}
-              projectAccentColor={filesRootIdentity.accentColor}
-            />
-          {:catch error}
-            {@render panelLoadFailed(PANEL_KEYS.projectFiles, 'Files', error)}
-          {/await}
+          <!-- The file reader stays mounted above while its chat is active. -->
         {:else if activeContextTab.kind === 'diff'}
           {#await loadPanelModule(PANEL_KEYS.diffSidebar, () => import('../files/DiffSidebarPanel.svelte'))}
             {@render panelLoading('Changes')}
@@ -396,7 +437,14 @@
             {#await loadPanelModule(PANEL_KEYS.browser, () => import('$lib/components/browser/BrowserPanel.svelte'))}
               {@render panelLoading('Browser')}
             {:then { default: BrowserPanel }}
-              <BrowserPanel tab={activeContextTab} />
+              <!-- BrowserPanel captures its tab identity at construction. Key
+                   the lazy panel directly to browser selection on every revisit. -->
+              {#key contextSidebarState.activeBrowserTabId}
+                {@const browserTab = contextSidebarState.sidebarActiveTab}
+                {#if browserTab?.kind === 'browser'}
+                  <BrowserPanel tab={browserTab} />
+                {/if}
+              {/key}
             {:catch error}
               {@render panelLoadFailed(PANEL_KEYS.browser, 'Browser', error)}
             {/await}

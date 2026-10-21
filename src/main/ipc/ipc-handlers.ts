@@ -1,3 +1,4 @@
+import { registerArchiveHandlers } from './handlers/archive-handlers'
 import { resolveOvenThreadRoot } from '../ovens/oven-thread-root'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
@@ -532,6 +533,7 @@ export function registerIpcHandlers(
   registerNotesHandlers(ctx)
   registerHistoryHandlers(ctx)
   registerSearchHandlers(ctx)
+  registerArchiveHandlers(ctx)
   registerPlanHandlers(ctx)
   registerUpdaterHandlers(ctx)
   registerAssistantHandlers(ctx)

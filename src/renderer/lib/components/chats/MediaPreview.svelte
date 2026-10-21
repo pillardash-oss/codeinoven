@@ -3,6 +3,7 @@
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import type { Snippet } from 'svelte'
+  import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -50,6 +51,9 @@
 
   let { src, filename, mime, onClose, onLoadError, revealUrl, pager, onReveal, annotate }: Props =
     $props()
+
+  let annotationToolbar = $state<HTMLDivElement>()
+  setAnnotationToolbarHost({ target: () => annotationToolbar })
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 
@@ -120,6 +124,17 @@
     <span class="min-w-0 flex-1 truncate text-xs font-semibold text-white/90">
       {filename}
     </span>
+    {#if annotate}
+      <div
+        class="titlebar-no-drag min-w-0"
+        {@attach (node) => {
+          annotationToolbar = node
+          return () => {
+            annotationToolbar = undefined
+          }
+        }}
+      ></div>
+    {/if}
     {#if revealable}
       <button
         type="button"
@@ -155,7 +170,8 @@
     class="relative flex min-h-0 flex-1 items-center justify-center"
     onclick={onClose}
     onkeydown={(e: KeyboardEvent) => {
-      if (keymapState.matches('ui-activate', e)) onClose()
+      // Keys from annotation editors and media controls belong to their target.
+      if (e.target === e.currentTarget && keymapState.matches('ui-activate', e)) onClose()
     }}
   >
     <div

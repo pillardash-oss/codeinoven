@@ -32,6 +32,23 @@ export interface SearchSummaryRequest {
 
 export type SearchSummaryExecutor = (request: SearchSummaryRequest) => Promise<string>
 
+/**
+ * No account of this machine could summarize a thread for search.
+ *
+ * Reported apart from a summary that simply came back unusable, because the
+ * caller answers differently: one bad answer is worth retrying on a later sweep,
+ * while every account failing means no credential here serves that model at all.
+ * The thread is then indexed directly instead, which keeps it findable through
+ * the keyword index and its own window embeddings, and the summary stage stands
+ * down so it stops paying one dead end per thread.
+ */
+export class SearchSummaryUnavailableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SearchSummaryUnavailableError'
+  }
+}
+
 /** One message of a thread, with its offset in the thread's conversation text. */
 export interface ThreadTextPart {
   id: string

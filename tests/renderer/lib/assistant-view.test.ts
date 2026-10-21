@@ -858,7 +858,7 @@ describe('hand-off summary', () => {
     )
     expect(summary).toContain('Task: Slack drain')
     expect(summary).toContain('Assistant: Slack checkup drain')
-    expect(summary).toContain('How-to:\nGOAL\nSweep Slack.')
+    expect(summary).toContain('Assistant behavior:\nGOAL\nSweep Slack.')
     expect(summary).toContain('Last scheduled run:')
   })
 

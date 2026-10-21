@@ -1,8 +1,11 @@
 <script lang="ts">
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
+  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
+  import { RunChangesState } from './run-changes-state.svelte'
   import { fly, slide } from 'svelte/transition'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import HoverDiffPopover from '../files/HoverDiffPopover.svelte'
@@ -43,22 +46,24 @@
   let undoing = $state(false)
   let redoing = $state(false)
 
-  const additionsTotal = $derived(
-    checkpoint.changes.reduce((total, change) => total + (change.additions ?? 0), 0)
+  const aggregation = new RunChangesState(() => checkpoint)
+  const additionsTotal = $derived(aggregation.summary?.additions)
+  const deletionsTotal = $derived(aggregation.summary?.deletions)
+  const PAGE_SIZE = 20
+  let page = $state(0)
+  const pageCount = $derived(Math.max(1, Math.ceil(checkpoint.changes.length / PAGE_SIZE)))
+  const pageStart = $derived(Math.min(page, pageCount - 1) * PAGE_SIZE)
+  const visibleChanges = $derived(
+    checkpoint.changes.slice(showAll ? pageStart : 0, showAll ? pageStart + PAGE_SIZE : 3)
   )
-  const deletionsTotal = $derived(
-    checkpoint.changes.reduce((total, change) => total + (change.deletions ?? 0), 0)
-  )
-  const remainingChanges = $derived(
-    checkpoint.changes.filter((change) => !checkpoint.rolledBackPaths?.includes(change.path))
-  )
-  const visibleChanges = $derived(showAll ? checkpoint.changes : checkpoint.changes.slice(0, 3))
   const hiddenCount = $derived(Math.max(0, checkpoint.changes.length - 3))
   const rolledBack = $derived(
     checkpoint.status === 'rolled_back' ||
-      (checkpoint.changes.length > 0 && remainingChanges.length === 0)
+      (checkpoint.changes.length > 0 && aggregation.summary?.remaining === false)
   )
-  const canUndo = $derived(checkpoint.changes.length > 0 && !rolledBack)
+  const canUndo = $derived(
+    checkpoint.changes.length > 0 && aggregation.summary !== null && !rolledBack
+  )
   const canRedo = $derived(checkpoint.changes.length > 0 && rolledBack)
   /** A block above the file list already separates itself from the head. */
   const hasLeadBlock = $derived(
@@ -67,7 +72,7 @@
   /** The state the card is honestly in, not a duration it does not track. */
   const chip = $derived(rolledBack ? { text: 'Undone', tone: 'paused' as const } : undefined)
   const title = $derived(
-    `${checkpoint.changes.every((change) => change.sources?.length) ? 'Edited' : 'Detected'} ${checkpoint.changes.length} ${checkpoint.changes.length === 1 ? 'file' : 'files'}`
+    `${aggregation.summary?.edited ? 'Edited' : 'Detected'} ${checkpoint.changes.length} ${checkpoint.changes.length === 1 ? 'file' : 'files'}`
   )
 
   function statusLabel(kind: TurnCheckpointChangeSummary['kind']): string {
@@ -109,9 +114,13 @@
       ? canRedo
         ? 'Redo this turn’s file changes'
         : 'This turn did not change any files'
-      : canUndo
-        ? 'Undo this turn’s file changes'
-        : 'This turn did not change any files'
+      : !aggregation.summary && checkpoint.changes.length > 0
+        ? aggregation.error
+          ? 'Review changes to restore files'
+          : 'Calculating file change summary'
+        : canUndo
+          ? 'Undo this turn’s file changes'
+          : 'This turn did not change any files'
   )
 
   /**
@@ -153,9 +162,9 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
     <CardHead {title} icon={CioDiff} {chip} foldLabel="changed files" bind:folded>
       {#snippet meta()}
         <span class="flex shrink-0 gap-1.5 text-xs font-medium tabular-nums">
-          <span class="text-success">+{additionsTotal}</span>
-          <span class="text-danger">−{deletionsTotal}</span>
-          {#if checkpoint.changes.some((change) => change.lineCountsTruncated)}
+          <span class="text-success">+{additionsTotal ?? '…'}</span>
+          <span class="text-danger">−{deletionsTotal ?? '…'}</span>
+          {#if aggregation.summary?.partial}
             <span class="font-normal text-dimmed">partial count</span>
           {/if}
         </span>
@@ -207,7 +216,7 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
         {#if checkpoint.skippedFiles && checkpoint.skippedFiles.length > 0}
           <p
             class="px-3 py-2.5 text-[0.6875rem] leading-relaxed text-dimmed"
-            title={checkpoint.skippedFiles.join('\n')}
+            title={checkpoint.skippedFiles.slice(0, 12).join('\n')}
           >
             {checkpoint.skippedFiles.length}
             {checkpoint.skippedFiles.length === 1 ? 'file is' : 'files are'} too large to checkpoint,
@@ -219,10 +228,15 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
           <p class="px-3 py-2.5 text-[0.6875rem] text-dimmed">No file changes detected.</p>
         {:else}
           <div class={hasLeadBlock ? 'border-t border-border' : ''}>
-            {#each visibleChanges as change (`${change.kind}:${change.path}`)}
+            {#each visibleChanges as change, index (`${change.kind}:${change.path}`)}
               {@const added = additions(change)}
               {@const removed = deletions(change)}
-              {@const changeRolledBack = checkpoint.rolledBackPaths?.includes(change.path)}
+              {@const sourceIndex = (showAll ? pageStart : 0) + index}
+              {@const changeRolledBack =
+                rolledBack ||
+                Boolean(
+                  (aggregation.summary?.restored[sourceIndex >>> 3] ?? 0) & (1 << (sourceIndex & 7))
+                )}
               <!-- A row arrives where it belongs and moves nothing else: the row
                  animates transform and opacity only, so expanding the list never
                  steps on the fold's scroll compensation above. -->
@@ -291,7 +305,10 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
               type="button"
               class="flex min-h-9 w-full items-center gap-1 border-t border-border px-3 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
               aria-expanded={showAll}
-              onclick={() => (showAll = !showAll)}
+              onclick={() => {
+                page = 0
+                showAll = !showAll
+              }}
             >
               {#if showAll}
                 Show fewer
@@ -300,6 +317,35 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
               {/if}
             </button>
           {/if}
+          {#if showAll && pageCount > 1}
+            <div
+              class="flex items-center justify-end gap-2 border-t border-border px-3 py-2 text-xs text-muted"
+            >
+              <span
+                >{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, checkpoint.changes.length)} of {checkpoint
+                  .changes.length} files</span
+              >
+              <button
+                type="button"
+                class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+                title="Previous files"
+                aria-label="Previous files"
+                disabled={pageStart === 0}
+                onclick={() => (page = Math.max(0, page - 1))}><CioBack size={13} /></button
+              >
+              <button
+                type="button"
+                class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-30"
+                title="Next files"
+                aria-label="Next files"
+                disabled={pageStart + PAGE_SIZE >= checkpoint.changes.length}
+                onclick={() => (page += 1)}><CioForward size={13} /></button
+              >
+            </div>
+          {/if}
+        {/if}
+        {#if aggregation.error}
+          <p class="px-3 py-2 text-xs text-muted" role="status">{aggregation.error}</p>
         {/if}
       </div>
     {/if}

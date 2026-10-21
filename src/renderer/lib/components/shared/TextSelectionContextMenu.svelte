@@ -436,13 +436,28 @@
 </script>
 
 {#if target}
+  <!--
+    The menu is drawn above every modal, not merely above the panels.
+
+    It is a window-level surface: the terminal it serves can be a full screen
+    action's output, an Oven's own shell or a provider's sign-in, and all of
+    those live inside `ui/Modal.svelte`, whose panel stacks at `z-60` (and `z-80`
+    over a browser page). At `z-50` the menu opened *behind* that panel and was
+    invisible to the user, which read as the terminal having no context menu at
+    all. `data-layer-above-modal` is the other half of the contract: a modal locks
+    the page with `body { pointer-events: none }` and treats an outside press as a
+    backdrop press, so this layer opts back into pointer events in `app.css` and
+    `lib/layer-above-modal.ts` keeps a press on it from dismissing the modal
+    underneath.
+  -->
   <div
     {@attach captureMenu}
     bind:clientWidth={menuWidth}
     bind:clientHeight={menuHeight}
-    class="fixed z-50 min-w-44 border border-border bg-surface p-1 shadow-xl"
+    class="fixed z-90 min-w-44 border border-border bg-surface p-1 shadow-xl"
     style={positionStyle}
     role="menu"
+    data-layer-above-modal
   >
     {#if target.kind === 'editable'}
       <button

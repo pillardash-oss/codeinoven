@@ -109,11 +109,20 @@ export const invokeAssistantContract = {
    */
   'assistant:listBackgroundRuns': {} as Contract<[], BackgroundRun[]>,
   /**
-   * Acknowledge one unattended run, removing its durable ledger entry so it
-   * leaves the "While you were away" surface and every assistant history.
+   * Acknowledge one unattended run, so it leaves the "While you were away"
+   * surface while the assistant run history keeps the entry as evidence.
    */
   'assistant:dismissBackgroundRun': {} as Contract<[id: string], void>,
   'assistant:dismissMissedRun': {} as Contract<[id: string], void>,
+  /**
+   * Acknowledge several runs at once: the missed scheduled fires and the
+   * unattended-run ledger entries a surface is clearing. The notification panel's
+   * clear-all uses it so its Assistants tab never retires one row per call.
+   */
+  'assistant:dismissRuns': {} as Contract<
+    [missedRunIds: string[], backgroundRunIds: string[]],
+    void
+  >,
   /**
    * Gates the app resolved without the user (a question whose timer answered
    * it, a secret card that expired, an image-descriptor decision that timed

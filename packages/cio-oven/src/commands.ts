@@ -26,6 +26,19 @@ import { blank, code as copyBlock, fail, field, note, out, section, step, warn }
 const MINIMUM_NODE = 22
 /** The port SSH uses unless the machine is configured otherwise. */
 const DEFAULT_SSH_PORT = 22
+/**
+ * The port Termux serves SSH on.
+ *
+ * Android refuses ports below 1024 to an unprivileged process, and a Termux
+ * session is exactly that, so its OpenSSH package is built to use 8022. Offering
+ * 22 on a phone is an endpoint no `sshd` there can ever bind.
+ */
+const TERMUX_SSH_PORT = 8022
+
+/** The SSH port to offer when nothing on the machine says otherwise. */
+export function defaultSshPortFor(platform: string): number {
+  return platform === 'android' ? TERMUX_SSH_PORT : DEFAULT_SSH_PORT
+}
 
 export interface CommonOptions {
   dataRoot: string
@@ -54,7 +67,9 @@ async function detectSshPort(): Promise<number | null> {
   const candidates =
     process.platform === 'win32'
       ? [`${process.env['ProgramData'] ?? 'C:\\ProgramData'}\\ssh\\sshd_config`]
-      : ['/etc/ssh/sshd_config']
+      : process.platform === 'android'
+        ? [`${process.env['PREFIX'] ?? '/data/data/com.termux/files/usr'}/etc/ssh/sshd_config`]
+        : ['/etc/ssh/sshd_config']
   for (const file of candidates) {
     try {
       const match = /^\s*Port\s+(\d+)\s*$/mu.exec(await readFile(file, 'utf8'))
@@ -99,10 +114,13 @@ async function sshServing(port: number): Promise<boolean> {
  * The ports worth dialling for SSH, most specific claim first.
  *
  * The reported port leads because it is the more specific claim, and the
- * standard one follows so a wrong answer still finds the live server.
+ * platform's standard one follows so a wrong answer still finds the live server.
  */
-export function sshPortCandidates(preferred: number | null): number[] {
-  return [...new Set([preferred, DEFAULT_SSH_PORT])].filter(
+export function sshPortCandidates(
+  preferred: number | null,
+  fallback: number = DEFAULT_SSH_PORT
+): number[] {
+  return [...new Set([preferred, fallback])].filter(
     (port): port is number =>
       port !== null && Number.isSafeInteger(port) && port >= 1 && port <= 65535
   )
@@ -119,15 +137,16 @@ export function sshPortCandidates(preferred: number | null): number[] {
  */
 export async function resolveServingSshPort(
   preferred: number | null,
-  serving: (port: number) => Promise<boolean>
+  serving: (port: number) => Promise<boolean>,
+  fallback: number = DEFAULT_SSH_PORT
 ): Promise<number | null> {
-  for (const port of sshPortCandidates(preferred)) if (await serving(port)) return port
+  for (const port of sshPortCandidates(preferred, fallback)) if (await serving(port)) return port
   return null
 }
 
 /** The port SSH is really served on, among the ports worth trying. */
-async function servingSshPort(preferred: number | null): Promise<number | null> {
-  return resolveServingSshPort(preferred, sshServing)
+async function servingSshPort(preferred: number | null, fallback: number): Promise<number | null> {
+  return resolveServingSshPort(preferred, sshServing, fallback)
 }
 
 export interface SettledSshPort {
@@ -148,16 +167,25 @@ export interface SettledSshPort {
 export async function settleSshPort(
   port: number,
   explicit: boolean,
-  serving: (port: number) => Promise<boolean>
+  serving: (port: number) => Promise<boolean>,
+  fallback: number = DEFAULT_SSH_PORT
 ): Promise<SettledSshPort | null> {
   if (explicit) return (await serving(port)) ? { port } : null
-  const resolved = await resolveServingSshPort(port, serving)
+  const resolved = await resolveServingSshPort(port, serving, fallback)
   if (resolved === null) return null
   return resolved === port ? { port } : { port: resolved, correctedFrom: port }
 }
 
 /** What to do when the machine is not serving SSH on the port that was chosen. */
 function sshUnavailable(port: number): string {
+  if (process.platform === 'android') {
+    const prefix = process.env['PREFIX'] ?? '/data/data/com.termux/files/usr'
+    return [
+      `Nothing is serving SSH on port ${port} on this machine, so a registration code now would only time out later.`,
+      `Install OpenSSH with "pkg install openssh" if it is missing, start the server with "sshd", then run this command again.`,
+      `Termux serves SSH on port ${TERMUX_SSH_PORT} by default, because Android does not let an unprivileged process bind a port below 1024; if you changed it, pass --port with the port in ${prefix}/etc/ssh/sshd_config.`
+    ].join(' ')
+  }
   const config =
     process.platform === 'win32' ? 'C:\\ProgramData\\ssh\\sshd_config' : '/etc/ssh/sshd_config'
   const restart =
@@ -187,15 +215,18 @@ async function resolveInputs(options: StartOptions): Promise<ResolvedInputs> {
     options.name ?? (attachable ? await askText('Oven name', defaultName()) : defaultName())
   let port = options.port
   let portExplicit = options.port !== undefined
+  const fallbackPort = defaultSshPortFor(process.platform)
   if (port === undefined) {
     const configured = await detectSshPort()
     // Offer the port something is really serving on. The sshd configuration is
     // the machine's own claim; a live listener is the fact, and the fact wins.
-    const offered = (await servingSshPort(configured)) ?? configured ?? DEFAULT_SSH_PORT
+    const offered = (await servingSshPort(configured, fallbackPort)) ?? configured ?? fallbackPort
     if (attachable) {
-      if (offered === DEFAULT_SSH_PORT && configured === null)
+      if (offered === fallbackPort && configured === null)
         note(
-          'No SSH server or configuration was found, so port 22 is offered. Change it if needed.'
+          process.platform === 'android'
+            ? `No SSH server or configuration was found, so port ${fallbackPort} is offered, which is the port Termux serves SSH on. Change it if needed.`
+            : `No SSH server or configuration was found, so port ${fallbackPort} is offered. Change it if needed.`
         )
       const answer = await askPort('SSH port the app should connect on', offered)
       port = answer.port
@@ -250,6 +281,11 @@ async function publish(
   field('Node', descriptor.nodeVersion)
   field('Protocol', String(protocolVersion))
   field('Identity', identity ? `${identity.fingerprint} (${identity.keyPath})` : 'SSH agent')
+  if (identity) {
+    field('SSH account', identity.account === 'administrator' ? 'administrator' : 'standard user')
+    field('Keys read from', identity.requiredFile)
+    field('Key authorized', identity.verified ? 'verified' : 'needs the step below')
+  }
   section('Register it in CodeInOven')
   note('Open Settings, then Ovens, then Add via agent, and paste this code:')
   copyBlock(registrationCode(descriptor))
@@ -274,7 +310,12 @@ export async function start(options: StartOptions): Promise<void> {
   // Settle the port against what the machine actually serves before anything is
   // installed or published. A code for a port that was not honoured is worse
   // than no code: it registers an Oven that can only time out.
-  const settled = await settleSshPort(inputs.port, inputs.portExplicit, sshServing)
+  const settled = await settleSshPort(
+    inputs.port,
+    inputs.portExplicit,
+    sshServing,
+    defaultSshPortFor(process.platform)
+  )
   if (settled === null) fail(sshUnavailable(inputs.port))
   if (settled.correctedFrom !== undefined)
     warn(
@@ -283,24 +324,38 @@ export async function start(options: StartOptions): Promise<void> {
   inputs.port = settled.port
 
   const before = await serviceState(layout)
+  // A service that cannot answer a probe, or answers with another revision, is
+  // out of date by definition. Treating it as "already running" is what left
+  // machines on a bundle that could not serve requests while the release that
+  // fixes it was already published, so this is the case that replaces it by
+  // default rather than with a warning.
+  const outdated =
+    before.running && (before.probe === null || before.probe.serviceRevision !== bundle.revision)
 
   if (before.running && !options.force) {
-    const restart =
-      promptsAvailable() && !options.yes
-        ? await askConfirm('An Oven service is already running here. Restart it?', false)
-        : false
-    if (!restart) {
+    const replace =
+      !promptsAvailable() || options.yes
+        ? outdated
+        : await askConfirm(
+            outdated
+              ? 'This machine runs a different Oven service release. Replace it with this one?'
+              : 'An Oven service is already running here. Restart it?',
+            outdated
+          )
+    if (!replace) {
       const revision = before.probe?.serviceRevision ?? bundle.revision
-      if (revision !== bundle.revision)
+      if (outdated)
         warn(
-          'The running Oven service was installed by a different release. Run start with --force to replace it.'
+          'This machine still runs the Oven service it had, which is not this release. Run start with --force to replace it.'
         )
+      const existing = inputs.identity ? await readIdentity(identityKeyPath()) : null
+      for (const message of existing?.warnings ?? []) warn(message)
       await publish(
         layout,
         inputs,
         revision,
         before.probe?.protocolVersion ?? OVEN_PROTOCOL_VERSION,
-        inputs.identity ? await readIdentity(identityKeyPath()) : null
+        existing
       )
       return
     }
@@ -315,7 +370,13 @@ export async function start(options: StartOptions): Promise<void> {
         ? `Created a dedicated SSH key at ${identity.keyPath}.`
         : `Reusing the dedicated SSH key at ${identity.keyPath}.`
     )
-    if (identity.warning) warn(identity.warning)
+    step(
+      process.platform === 'win32'
+        ? `This Windows account is ${identity.account === 'administrator' ? 'an administrator' : 'a standard user'}, so sshd reads keys from ${identity.requiredFile}.`
+        : `sshd reads this account's keys from ${identity.requiredFile}.`
+    )
+    if (identity.verified) step(`The key is authorized there: ${identity.authorized.join(', ')}.`)
+    for (const message of identity.warnings) warn(message)
   } else step('No dedicated key: the app will connect with your existing SSH identity.')
 
   step('Installing the Oven service bundle.')
@@ -323,6 +384,14 @@ export async function start(options: StartOptions): Promise<void> {
 
   step('Starting the Oven service in the background.')
   const probe = await ensureService(layout, bundle)
+  // The install is only finished when this release is the one answering. The
+  // bundle's own `ensure` already replaces a service it finds in the way;
+  // this makes a machine that still would not switch over say so plainly
+  // instead of reporting the old service's behaviour as success.
+  if (probe.serviceRevision !== bundle.revision)
+    fail(
+      'This machine kept the Oven service it was running instead of the one this release installs. Run cio-oven stop, then cio-oven start again.'
+    )
 
   await publish(
     layout,

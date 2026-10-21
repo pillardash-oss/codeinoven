@@ -1,9 +1,13 @@
 import { SvelteMap } from 'svelte/reactivity'
 import {
   COMPOSER_BUILT_IN_TAGS,
+  composerAssistantTagToken,
   spaceOutProjectReferences,
+  type ComposerAssistantTag,
   type ComposerBuiltInTag
 } from '../chats/composer-mentions'
+import { assistantTagIconHtml } from '$lib/components/assistant/assistant-tag-badge'
+import { assistantAccentColor } from '$lib/assistant-icons'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -14,11 +18,13 @@ import { recordedTokenRate } from '$shared/usage-rate'
 import type {
   AgentMessage,
   AgentPart,
+  Assistant,
   PromptProjectReference,
   ProviderCatalog,
   ProviderModel,
   SpecActionIntent,
   ThinkingLevel,
+  Thread,
   UserMessagePresentation
 } from '$shared/types'
 
@@ -157,8 +163,88 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
   return `<span class="inline-flex max-w-full items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
 }
 
+function inlineAssistantTagChipHtml(tag: ComposerAssistantTag, title: string): string {
+  const safeTitle = escapeHtmlForChip(`Open ${tag.detail}: ${title}`)
+  // The same assistant icon the composer badge wears, so a tagged thread reads
+  // the same before the send and after it. The chip is a control: it carries the
+  // tag it names, and the conversation opens that thread from it.
+  // The assistant's accent edges the chip, exactly like the badge in the
+  // composer and the assistant's own rows, so the same tag reads the same
+  // before and after the send.
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" style="border-left:2px solid ${escapeHtmlForChip(tag.color)}" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(`${tag.kind}:${tag.id}`)}">${tag.iconHtml}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
+}
+
+/** The assistant-space names a sent tag can render with. */
+export interface AssistantTagLookup {
+  threads: readonly Thread[]
+  assistants: readonly Assistant[]
+  /** Stored icon images by assistant id, so a chip draws the assistant's own icon. */
+  assistantIcons?: ReadonlyMap<string, string>
+}
+
+/**
+ * Chips for the assistant and assistant-thread tags a sent message carries.
+ *
+ * A tag is only an id, so the readable name comes from the live lists: a thread
+ * by its title, an assistant by its name. A tag whose thread or assistant is
+ * gone stays as the literal text it was, because a wrong name would be worse
+ * than the id.
+ */
+function assistantTagChips(
+  text: string,
+  lookup: AssistantTagLookup
+): Array<{ token: string; html: string }> {
+  const chips: Array<{ token: string; html: string }> = []
+  const assistantById = new Map(lookup.assistants.map((assistant) => [assistant.id, assistant]))
+  for (const thread of lookup.threads) {
+    const token = composerAssistantTagToken({ kind: 'thread', id: thread.id })
+    if (!text.includes(token)) continue
+    const title = thread.title.trim() || 'Untitled thread'
+    const tag: ComposerAssistantTag = {
+      kind: 'thread',
+      id: thread.id,
+      name: title,
+      detail: thread.assistantTaskId
+        ? 'Assistant run'
+        : thread.assistantGettingStarted
+          ? 'Getting started'
+          : 'Assistant task',
+      iconHtml: assistantTagIconHtml(
+        (thread.assistantId ? assistantById.get(thread.assistantId) : undefined) ?? {},
+        thread.assistantId ? lookup.assistantIcons?.get(thread.assistantId) : undefined
+      ),
+      color: assistantAccentColor(
+        (thread.assistantId ? assistantById.get(thread.assistantId) : undefined) ?? {}
+      ),
+      keywords: []
+    }
+    chips.push({ token, html: inlineAssistantTagChipHtml(tag, title) })
+  }
+  for (const assistant of lookup.assistants) {
+    const token = composerAssistantTagToken({ kind: 'assistant', id: assistant.id })
+    if (!text.includes(token)) continue
+    const tag: ComposerAssistantTag = {
+      kind: 'assistant',
+      id: assistant.id,
+      name: assistant.name,
+      detail: 'Assistant',
+      iconHtml: assistantTagIconHtml(assistant, lookup.assistantIcons?.get(assistant.id)),
+      color: assistantAccentColor(assistant),
+      keywords: []
+    }
+    chips.push({ token, html: inlineAssistantTagChipHtml(tag, assistant.name) })
+  }
+  return chips
+}
+
 export function inlineFileTagsForMessage(
-  msg: AgentMessage
+  msg: AgentMessage,
+  /**
+   * The Assistant tab's assistants and threads, when this message is rendered
+   * in Assistant View. A tag carries only an id, so the readable name comes
+   * from here.
+   */
+  assistantTags?: AssistantTagLookup
 ): Array<{ token: string; html: string }> {
   const text = messageText(msg)
   const tags: Array<{ token: string; html: string }> = []
@@ -167,6 +253,7 @@ export function inlineFileTagsForMessage(
   for (const tag of COMPOSER_BUILT_IN_TAGS) {
     if (text.includes(tag.token)) tags.push({ token: tag.token, html: inlineTagChipHtml(tag) })
   }
+  if (assistantTags) tags.push(...assistantTagChips(text, assistantTags))
   if (!msg.projectReferences?.length) return tags
   // Only inline references that actually appear as `@path` in the stored text;
   // remaining references will still render as the legacy top pills so no tag

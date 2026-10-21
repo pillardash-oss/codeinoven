@@ -74,10 +74,14 @@
   async function submitViaChat(): Promise<void> {
     if (busy || !onCreateViaChat) return
     busy = true
+    // Setup includes the opening agent turn; let the user see its thread immediately.
+    open = false
     try {
       await onCreateViaChat()
-      open = false
       resetForm()
+    } catch (error) {
+      open = true
+      throw error
     } finally {
       busy = false
     }

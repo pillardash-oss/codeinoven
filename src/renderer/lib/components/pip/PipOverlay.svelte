@@ -350,6 +350,11 @@
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return
+    // A press that starts on a control inside the drag strip must stay a click.
+    // Capturing the pointer on the strip retargets the pointerup to the strip, and
+    // the browser then dispatches the click to the pair's common ancestor (the
+    // strip) instead of the control, which is what left the close button dead.
+    if (event.target instanceof Element && event.target.closest('button') !== null) return
     dragging = true
     dragStart = { x: event.clientX, y: event.clientY }
     dragOrigin = { ...position }

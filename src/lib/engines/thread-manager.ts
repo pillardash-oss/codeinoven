@@ -1321,11 +1321,36 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
     const ovenChanged =
-      (existing.settings?.ovenId ?? 'local') !== (settings.ovenId ?? 'local') ||
-      existing.settings?.ovenPath !== settings.ovenPath
+      this.ovenIdChanged(existing, settings) || existing.settings?.ovenPath !== settings.ovenPath
     if (ovenChanged && isThreadBusyStatus(existing.status))
       throw new Error('Stop or finish the active turn before changing Ovens.')
+    return this.persistSettings(existing, settings)
+  }
 
+  /**
+   * Record the checkout a running Oven turn resolved for its own thread.
+   *
+   * `OvenChat.send` marks the thread executing before the checkout resolves, so
+   * the write that stores `ovenPath` arrives while the thread is busy and must
+   * not trip the guard above, which protects a user switching Ovens. Only a real
+   * Oven identity change is still refused.
+   */
+  async bindOvenCheckout(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    if (this.ovenIdChanged(existing, settings) && isThreadBusyStatus(existing.status))
+      throw new Error('Stop or finish the active turn before changing Ovens.')
+    return this.persistSettings(existing, settings)
+  }
+
+  private ovenIdChanged(existing: Thread, settings: ThreadSettings): boolean {
+    return (existing.settings?.ovenId ?? 'local') !== (settings.ovenId ?? 'local')
+  }
+
+  private async persistSettings(existing: Thread, settings: ThreadSettings): Promise<Thread> {
     // The independent audit owns the thread's workflow: engineering modes are
     // locked out for the thread's lifetime once it is enabled.
     if (
@@ -1712,6 +1737,22 @@ export class ThreadManager {
     options: ThreadSearchOptions = {}
   ): Promise<import('../types').ThreadSearchResult[]> {
     return this.searchService.search(query, options)
+  }
+
+  /**
+   * Hybrid search that waits for the semantic half, bounded by `timeoutMs`.
+   *
+   * Used by the app-diagnostics tool so an agent gathering context can search
+   * the user's threads by meaning, not only by the words they happen to share.
+   * A cold or unready embedding model, a timeout and a failure all fall back to
+   * the keyword answer, and `semantic` says which one the caller got.
+   */
+  async searchThreadsWithIntent(
+    query: string,
+    options: ThreadSearchOptions = {},
+    timeoutMs = 12_000
+  ): Promise<{ results: import('../types').ThreadSearchResult[]; semantic: boolean }> {
+    return this.searchService.searchWithIntent(query, options, timeoutMs)
   }
 
   /**

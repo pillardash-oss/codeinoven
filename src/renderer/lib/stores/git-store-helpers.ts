@@ -138,11 +138,11 @@ export const PR_PRELOAD_RETRY_MS = 30_000
  * Whether a `git push` failure was a non-fast-forward rejection (the remote
  * contains commits we don't have) rather than an actual error. Matches git's
  * standard stderr phrasing across versions.
+ * "Failed to push some refs" alone names no cause and also accompanies access
+ * denials and hook failures, which must reach the panel's existing notices.
  */
 export function isPushRejected(message: string): boolean {
-  return /non-fast-forward|fetch first|updates were rejected|failed to push some refs/iu.test(
-    message
-  )
+  return /non-fast-forward|fetch first|updates were rejected/iu.test(message)
 }
 
 export type GitPushResult =

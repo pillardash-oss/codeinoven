@@ -119,9 +119,9 @@ static char *electron_path(void) {
   char *separator = strrchr(executable, '/');
   if (separator == NULL) return NULL;
   *separator = '\0';
-  const size_t size = strlen(executable) + strlen("/codeinoven-electron") + 1;
+  const size_t size = strlen(executable) + strlen(CODEINOVEN_RUNTIME_EXECUTABLE) + 2;
   char *path = malloc(size);
-  if (path != NULL) snprintf(path, size, "%s/codeinoven-electron", executable);
+  if (path != NULL) snprintf(path, size, "%s/%s", executable, CODEINOVEN_RUNTIME_EXECUTABLE);
   return path;
 }
 

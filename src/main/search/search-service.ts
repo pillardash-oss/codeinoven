@@ -30,6 +30,7 @@ import { ThreadEmbeddingIndex, composeDocument } from './thread-embedding-index'
 import type { ThreadIndexOptions } from './thread-embedding-index'
 import { SearchStorage } from './search-storage'
 import {
+  SearchSummaryUnavailableError,
   ThreadSearchSummaries,
   type SearchSummaryExecutor,
   type SearchSummaryThread
@@ -37,6 +38,17 @@ import {
 
 /** Interval between light staleness sweeps while intent search is enabled. */
 const PERIODIC_SWEEP_MS = 5 * 60 * 1000
+
+/**
+ * How long the summary stage stands down after no account could produce one.
+ *
+ * A summary is an optional refinement: without it a thread is still found through
+ * the keyword index and its own window embeddings, so indexing continues either
+ * way. The stand-down is bounded rather than permanent because the cause is a
+ * credential that can be renewed, and it is long enough that a sweep of hundreds
+ * of threads does not re-ask every one of them.
+ */
+const SUMMARY_STANDDOWN_MS = 30 * 60 * 1000
 
 /**
  * How long after a run settles its thread is indexed.
@@ -135,6 +147,8 @@ export class SearchService {
   private summaryWorker: Promise<void> | null = null
   private summaryController = new AbortController()
   private summaryDetail: SearchIndexStatus['progress'] = null
+  /** Epoch ms the summary stage may try again after no account could answer. */
+  private summariesBlockedUntil = 0
   private generation = 0
 
   constructor(
@@ -157,12 +171,13 @@ export class SearchService {
       this.host.subscribeCorpus?.({
         updated: (thread) => this.updateCorpusThread(thread),
         deleted: (thread) => this.removeCorpusThread(thread.id),
-        draftUpdated: (projectId, threadId, drafting) => {
-          if (drafting) this.removeCorpusThread(threadId)
-          else
-            void this.reloadCorpusThread(projectId, threadId).catch((error) => {
-              Logger.error('Search corpus draft update failed:', error)
-            })
+        // A composer draft never changes what a thread means, so it never
+        // changes corpus membership either. The flag is only refreshed here so
+        // membership follows the thread row, not the keystrokes in it.
+        draftUpdated: (projectId, threadId) => {
+          void this.reloadCorpusThread(projectId, threadId).catch((error) => {
+            Logger.error('Search corpus draft update failed:', error)
+          })
         }
       }) ?? null
     await this.storage.initialize()
@@ -210,7 +225,11 @@ export class SearchService {
   private updateCorpusThread(thread: Thread): void {
     const previousStatus = this.threadStatuses.get(thread.id)
     this.threadStatuses.set(thread.id, thread.status)
-    if (thread.drafting || thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
+    // `drafting` means the composer holds unsent text, not that the thread is an
+    // unfinished draft: an old conversation with a saved draft is still a
+    // conversation, and dropping it made it unfindable by meaning until the
+    // draft was cleared. Only the browser project stays out of the corpus.
+    if (thread.projectId === GLOBAL_BROWSER_PROJECT_ID) {
       this.removeCorpusThread(thread.id)
       return
     }
@@ -344,7 +363,7 @@ export class SearchService {
 
   private async reloadCorpusThread(projectId: string, id: string): Promise<void> {
     const result = await this.db.queryViaWorker(
-      'SELECT title, last_activity, updated_at FROM threads WHERE id = ? AND project_id = ? AND drafting = 0',
+      'SELECT title, last_activity, updated_at FROM threads WHERE id = ? AND project_id = ?',
       [id, projectId],
       1
     )
@@ -785,6 +804,11 @@ export class SearchService {
 
   private async stopSweep(): Promise<void> {
     this.cancelSummaries()
+    // Every caller of this path is a person asking for the index again (a new
+    // model, a rebuild, search switched back on), which is also the moment a
+    // renewed credential becomes worth trying: the stand-down only exists to
+    // stop a sweep from asking the same dead accounts once per thread.
+    this.summariesBlockedUntil = 0
     this.sweepController?.abort()
     this.settledIndexController?.abort()
     await this.sweep
@@ -875,7 +899,8 @@ export class SearchService {
       this.disposed ||
       !this.settings.enabled ||
       this.summaryWorker ||
-      this.summaryJobs.size === 0
+      this.summaryJobs.size === 0 ||
+      Date.now() < this.summariesBlockedUntil
     )
       return
     this.summaryWorker = this.drainSummaries().finally(() => {
@@ -887,12 +912,17 @@ export class SearchService {
   }
 
   private async drainSummaries(): Promise<void> {
-    while (!this.disposed && this.settings.enabled && this.summaryJobs.size > 0) {
+    while (
+      !this.disposed &&
+      this.settings.enabled &&
+      this.summaryJobs.size > 0 &&
+      Date.now() >= this.summariesBlockedUntil
+    ) {
       const entry = this.summaryJobs.entries().next().value
       if (!entry) return
       const [id, job] = entry
       this.summaryJobs.delete(id)
-      if (job.generation !== this.generation) continue
+      if (job.generation !== this.generation || this.index.isParked(id)) continue
       const signal = this.summaryController.signal
       const startedAt = performance.now()
       try {
@@ -903,7 +933,8 @@ export class SearchService {
         }
         this.emitStatus()
         const summary = await this.summaries.get(job.thread, signal)
-        if (signal.aborted || job.generation !== this.generation) continue
+        if (signal.aborted || job.generation !== this.generation || this.index.isParked(id))
+          continue
         this.summaryDetail = {
           threadTitle: job.thread.title.slice(0, 100),
           stage: 'embedding',
@@ -916,7 +947,8 @@ export class SearchService {
           composeDocument(job.model.documentPrefix, job.thread.title, summary),
           signal
         )
-        if (signal.aborted || job.generation !== this.generation) continue
+        if (signal.aborted || job.generation !== this.generation || this.index.isParked(id))
+          continue
         await this.index.applySummary(
           job.thread,
           vector,
@@ -924,15 +956,36 @@ export class SearchService {
           modelSignatureOf(job.model, embeddingWorkingContext(this.settings.contextTokens))
         )
       } catch (error) {
-        if (!signal.aborted)
-          Logger.dev('Optional search summary failed; keeping the window embeddings.', {
-            threadId: id,
-            error: error instanceof Error ? error.message : String(error)
-          })
+        if (!signal.aborted) {
+          if (error instanceof SearchSummaryUnavailableError) this.standDownSummaries(error)
+          else
+            Logger.dev('Optional search summary failed; keeping the window embeddings.', {
+              threadId: id,
+              error: error instanceof Error ? error.message : String(error)
+            })
+        }
       }
       if (this.summaryJobs.size > 0 && !signal.aborted)
         await paceIndexing(startedAt, signal).catch(() => undefined)
     }
+  }
+
+  /**
+   * Index threads directly when no account on this machine can summarize them.
+   *
+   * The summarizer already tried every account that serves the model, so a
+   * failure here is the machine's credentials, not this thread: queueing the
+   * remaining jobs would spend a harness process and a provider round trip per
+   * account per thread to learn the same thing. The queued jobs stay in place, so
+   * the stage resumes on the next sweep once the window has passed.
+   */
+  private standDownSummaries(error: SearchSummaryUnavailableError): void {
+    this.summariesBlockedUntil = Date.now() + SUMMARY_STANDDOWN_MS
+    this.summaryDetail = null
+    Logger.info('Search summaries stood down; indexing threads without them', {
+      reason: error.message,
+      retryAt: new Date(this.summariesBlockedUntil).toISOString()
+    })
   }
 
   private async loadSettings(): Promise<void> {

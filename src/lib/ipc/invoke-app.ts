@@ -165,6 +165,7 @@ export const invokeAppContract = {
   'app:transferInstanceControl': {} as Contract<[], boolean>,
   /** Resolves after post-paint feature IPC and harness services are registered. */
   'app:waitForFeatures': {} as Contract<[], void>,
+  'app:setWindowControls': {} as Contract<[symbolColor: string, headerHeight: number], void>,
   /**
    * Signalled by the renderer after its initial hydration completes so the main
    * process can timestamp the `renderer:hydrated` / `workspace:ready` startup

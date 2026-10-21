@@ -27,6 +27,10 @@
 ; after the launcher is stopped. Match exact paths, not every app with that name.
 !macro customCheckAppRunning
   InitPluginsDir
+  ; Ownership proof for bounded cleanup of abandoned installer directories.
+  FileOpen $R0 "$PLUGINSDIR\codeinoven-update-owner" w
+  FileWrite $R0 "CodeInOven"
+  FileClose $R0
   File /oname=$PLUGINSDIR\close-windows-app.ps1 "${CIO_CLOSE_APP_SCRIPT}"
   StrCpy $R3 "0"
   ${If} ${isUpdated}
@@ -53,7 +57,7 @@
       ${EndIf}
     ${EndIf}
     DetailPrint "$R2"
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY +2
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)$\r$\n$\r$\n$R2" /SD IDCANCEL IDRETRY +2
     Quit
   ${Loop}
 !macroend

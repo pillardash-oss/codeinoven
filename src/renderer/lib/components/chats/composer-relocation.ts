@@ -19,7 +19,13 @@ import {
 import { MAX_PROMPT_ATTACHMENTS } from '$shared/types'
 
 /**
- * Carrying composer content from one chat to another in the same project.
+ * Carrying composer content from one chat to another in the same project, or
+ * from one task of an assistant to another task of that same assistant.
+ *
+ * An assistant's tasks read one workspace (`assistant-cwd/<assistantId>`), so a
+ * file, a doc comment and an inspector comment mean exactly the same thing in
+ * all of them. Another assistant's tasks read a different directory, so they are
+ * never offered as a destination.
  *
  * Three kinds of composer chip hold content that belongs to the project rather
  * than to the conversation: an attached file, a doc comment (a passage

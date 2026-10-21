@@ -36,9 +36,9 @@
   const scheduleAt = $derived(
     !scheduled || nextRunAt === null ? null : `Next ${formatDateTime(nextRunAt)}`
   )
-  const knowledgePreview = $derived.by(() => {
+  const behaviorPreview = $derived.by(() => {
     const text = assistant.knowledge.trim().replace(/\s+/g, ' ')
-    if (text.length === 0) return 'No knowledge written yet.'
+    if (text.length === 0) return 'No behavior written yet.'
     return text.length > 180 ? `${text.slice(0, 180)}…` : text
   })
   const description = $derived(assistant.description?.trim() ?? '')
@@ -117,10 +117,10 @@
     </dd>
   </div>
   <div class="flex gap-2">
-    <dt class="w-16 shrink-0 text-dimmed">Knows</dt>
+    <dt class="w-16 shrink-0 text-dimmed">Behavior</dt>
     <dd class="flex min-w-0 items-start gap-1 text-muted">
       <CioLink size={12} class="mt-0.5 shrink-0" />
-      <span class="min-w-0 break-words">{knowledgePreview}</span>
+      <span class="min-w-0 break-words">{behaviorPreview}</span>
     </dd>
   </div>
   <div class="flex gap-2">

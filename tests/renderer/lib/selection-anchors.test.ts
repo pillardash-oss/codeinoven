@@ -6,6 +6,7 @@ import {
   applyAnnotationHighlights,
   placeSelectionMenu,
   rangeForAnnotation,
+  selectionMenuAnchor,
   releaseAnnotationHighlights
 } from '$lib/selection-anchors'
 
@@ -222,5 +223,72 @@ describe('placeSelectionMenu', () => {
   it('places a right-click at the cursor, with no preference for sitting above', () => {
     const placement = placeSelectionMenu({ x: 300, y: 260 }, size, viewport)
     expect(placement).toEqual({ left: 300, top: 260 })
+  })
+})
+
+describe('selectionMenuAnchor', () => {
+  /**
+   * jsdom has no layout, so the boxes are derived from the range's own offsets.
+   * That is all the anchor needs to prove: which end of the selection it read.
+   */
+  function box(range: Range): DOMRect {
+    const left = range.startOffset * 10
+    return {
+      left,
+      right: left + (range.collapsed ? 0 : 50),
+      top: 100,
+      bottom: 116,
+      width: range.collapsed ? 0 : 50,
+      height: 16
+    } as DOMRect
+  }
+
+  function select(anchor: number, focus: number): Selection {
+    document.body.innerHTML = '<p id="passage">alpha bravo charlie delta echo foxtrot</p>'
+    const node = document.getElementById('passage')?.firstChild as Text
+    const selection = document.getSelection() as Selection
+    selection.setBaseAndExtent(node, anchor, node, focus)
+    return selection
+  }
+
+  // jsdom defines neither method, so the test installs them and puts the
+  // prototype back afterwards.
+  const geometry = Range.prototype as unknown as {
+    getBoundingClientRect?: (this: Range) => DOMRect
+    getClientRects?: (this: Range) => DOMRectList
+  }
+  let previousRect: typeof geometry.getBoundingClientRect
+  let previousRects: typeof geometry.getClientRects
+
+  beforeEach(() => {
+    previousRect = geometry.getBoundingClientRect
+    previousRects = geometry.getClientRects
+    geometry.getBoundingClientRect = function (this: Range) {
+      return box(this)
+    }
+    geometry.getClientRects = function (this: Range) {
+      return [box(this)] as unknown as DOMRectList
+    }
+  })
+
+  afterEach(() => {
+    geometry.getBoundingClientRect = previousRect
+    geometry.getClientRects = previousRects
+  })
+
+  it('anchors at the point the selection stopped at, not where it began', () => {
+    const selection = select(0, 17)
+    const anchor = selectionMenuAnchor(selection, selection.getRangeAt(0))
+    // The selection runs 0..17 left to right, so it ended at offset 17.
+    expect(anchor.x).toBe(170)
+    expect(anchor.selectionTop).toBe(100)
+    expect(anchor.y).toBe(116 + 6)
+  })
+
+  it('anchors at the left end of a selection made right to left', () => {
+    const selection = select(24, 12)
+    const anchor = selectionMenuAnchor(selection, selection.getRangeAt(0))
+    // Made backwards: the focus is the left end, which is where it stopped.
+    expect(anchor.x).toBe(120)
   })
 })

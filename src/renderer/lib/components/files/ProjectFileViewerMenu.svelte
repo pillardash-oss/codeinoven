@@ -3,11 +3,13 @@
   import CioBraces from '@pdslng/cio-icon/CioBraces.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioFind from '@pdslng/cio-icon/CioFind.svelte'
   import CioListOrdered from '@pdslng/cio-icon/CioListOrdered.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioRedo from '@pdslng/cio-icon/CioRedo.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioReplace from '@pdslng/cio-icon/CioReplace.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
@@ -38,6 +40,12 @@
     beautifyLabel?: string | null
     /** The viewer already fills the window, so it no longer offers fullscreen. */
     fullscreen?: boolean
+    /** Whether the viewer can search what it is showing. */
+    findDisabled?: boolean
+    /** Replace needs a draft, so only the source editor offers it. */
+    replaceDisabled?: boolean
+    onSearch: () => void
+    onSearchReplace: () => void
     onUndo: () => void
     onRedo: () => void
     onReload: () => void
@@ -60,6 +68,10 @@
     canRedo = false,
     beautifyLabel = null,
     fullscreen = false,
+    findDisabled = false,
+    replaceDisabled = false,
+    onSearch,
+    onSearchReplace,
     onInfo,
     infoDisabled = false,
     onUndo,
@@ -126,70 +138,96 @@
     <CioMaximize size={13} />
   </button>
 {/if}
-{#if !diffView}
-  <DropdownMenu.Root bind:open>
-    <DropdownMenu.Trigger
-      class={btnClass}
-      aria-label="File viewer actions"
-      title="File viewer actions"
-      oncontextmenu={(e: MouseEvent) => {
-        e.preventDefault()
-        open = true
-      }}
+<!--
+  The menu is offered in every view, including a diff: the search commands are
+  the reason, since a rendered document or a diff is exactly what a reader wants
+  to search. The editor toggles below it are the ones a diff has no use for, so
+  they grey out instead of the menu disappearing.
+-->
+<DropdownMenu.Root bind:open>
+  <DropdownMenu.Trigger
+    class={btnClass}
+    aria-label="File viewer actions"
+    title="File viewer actions"
+    oncontextmenu={(e: MouseEvent) => {
+      e.preventDefault()
+      open = true
+    }}
+  >
+    <CioEllipsis size={13} />
+  </DropdownMenu.Trigger>
+  <DropdownMenu.Portal>
+    <DropdownMenu.Content
+      side="bottom"
+      align="end"
+      sideOffset={5}
+      avoidCollisions
+      collisionPadding={10}
+      class="z-90 min-w-52 border border-border bg-surface p-1 shadow-lg"
     >
-      <CioEllipsis size={13} />
-    </DropdownMenu.Trigger>
-    <DropdownMenu.Portal>
-      <DropdownMenu.Content
-        side="bottom"
-        align="end"
-        sideOffset={5}
-        avoidCollisions
-        collisionPadding={10}
-        class="z-90 min-w-52 border border-border bg-surface p-1 shadow-lg"
+      <DropdownMenu.Item
+        class={itemClass}
+        disabled={findDisabled}
+        title={findDisabled
+          ? 'This surface cannot be searched from the reader'
+          : `Search ${keymapState.labelFor('nav-find')}`}
+        onSelect={onSearch}
       >
-        <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
-          <CioRefresh size={13} class="text-muted" />
-          Reload file
-        </DropdownMenu.Item>
-        <DropdownMenu.Item class={itemClass} onSelect={onToggleLineNumbers}>
-          <CioListOrdered size={13} class="text-muted" />
-          <span class="flex-1">{lineNumbers ? 'Hide line numbers' : 'Show line numbers'}</span>
-          {#if lineNumbers}
-            <CioCheck size={12} class="text-primary" />
-          {/if}
-        </DropdownMenu.Item>
-        <DropdownMenu.Item class={itemClass} onSelect={onToggleWrap}>
-          <CioWrapText size={13} class="text-muted" />
-          <span class="flex-1">Wrap</span>
-          {#if wrap}
-            <CioCheck size={12} class="text-primary" />
-          {/if}
-        </DropdownMenu.Item>
-        {#if beautifyLabel}
-          <DropdownMenu.Item class={itemClass} onSelect={onBeautify}>
-            <CioBraces size={13} class="text-muted" />
-            Beautify {beautifyLabel}
-          </DropdownMenu.Item>
+        <CioFind size={13} class="text-muted" />
+        <span class="flex-1">Search</span>
+        <span class="text-[0.625rem] text-dimmed">{keymapState.labelFor('nav-find')}</span>
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class={itemClass}
+        disabled={replaceDisabled}
+        title={replaceDisabled ? 'Replace works in the source view' : undefined}
+        onSelect={onSearchReplace}
+      >
+        <CioReplace size={13} class="text-muted" />
+        Search and replace
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      <DropdownMenu.Item class={itemClass} disabled={reloadDisabled} onSelect={onReload}>
+        <CioRefresh size={13} class="text-muted" />
+        Reload file
+      </DropdownMenu.Item>
+      <DropdownMenu.Item class={itemClass} disabled={diffView} onSelect={onToggleLineNumbers}>
+        <CioListOrdered size={13} class="text-muted" />
+        <span class="flex-1">{lineNumbers ? 'Hide line numbers' : 'Show line numbers'}</span>
+        {#if lineNumbers}
+          <CioCheck size={12} class="text-primary" />
         {/if}
-        <DropdownMenu.Item class={itemClass} disabled={infoDisabled} onSelect={onInfo}>
-          <CioTabInfo size={13} class="text-muted" />
-          File info
+      </DropdownMenu.Item>
+      <DropdownMenu.Item class={itemClass} disabled={diffView} onSelect={onToggleWrap}>
+        <CioWrapText size={13} class="text-muted" />
+        <span class="flex-1">Wrap</span>
+        {#if wrap}
+          <CioCheck size={12} class="text-primary" />
+        {/if}
+      </DropdownMenu.Item>
+      {#if beautifyLabel}
+        <DropdownMenu.Item class={itemClass} disabled={diffView} onSelect={onBeautify}>
+          <CioBraces size={13} class="text-muted" />
+          Beautify {beautifyLabel}
         </DropdownMenu.Item>
-        <DropdownMenu.Separator class="my-1 h-px bg-border" />
-        <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
-          <CioPencil size={13} class="text-muted" />
-          Rename
-        </DropdownMenu.Item>
-        <DropdownMenu.Item
-          class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
-          disabled={mutationDisabled}
-          onSelect={onDelete}
-        >
-          <CioTrash size={13} />
-          Delete
-        </DropdownMenu.Item>
-      </DropdownMenu.Content>
-    </DropdownMenu.Portal>
-  </DropdownMenu.Root>
-{/if}
+      {/if}
+      <DropdownMenu.Item class={itemClass} disabled={infoDisabled} onSelect={onInfo}>
+        <CioTabInfo size={13} class="text-muted" />
+        File info
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator class="my-1 h-px bg-border" />
+      <DropdownMenu.Item class={itemClass} disabled={mutationDisabled} onSelect={onRename}>
+        <CioPencil size={13} class="text-muted" />
+        Rename
+      </DropdownMenu.Item>
+      <DropdownMenu.Item
+        class="{itemClass} text-danger data-[highlighted]:bg-danger/10"
+        disabled={mutationDisabled}
+        onSelect={onDelete}
+      >
+        <CioTrash size={13} />
+        Delete
+      </DropdownMenu.Item>
+    </DropdownMenu.Content>
+  </DropdownMenu.Portal>
+</DropdownMenu.Root>

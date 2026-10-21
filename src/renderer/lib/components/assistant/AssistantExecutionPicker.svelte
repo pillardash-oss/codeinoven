@@ -33,7 +33,7 @@
   </div>
   <p class="text-[0.6875rem] leading-relaxed text-dimmed">
     {execution
-      ? 'Every run of this assistant executes on this Oven. A task that picks its own Oven overrides it.'
-      : 'Runs execute on this computer. Pick an Oven to keep scheduled work off your device.'}
+      ? 'Tasks use this Oven by default. A task can override this choice.'
+      : 'Tasks use this computer by default. Choose an Oven to run them on another machine.'}
   </p>
 </div>

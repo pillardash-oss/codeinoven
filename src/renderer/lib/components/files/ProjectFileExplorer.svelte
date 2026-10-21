@@ -497,6 +497,13 @@
   }
 
   let locatedTabPath = seedLocatedTabPath()
+  let treeNavigation = $state<{ path: string; tabPath: string | null } | null>(null)
+  const treeNavigationPath = $derived(
+    treeNavigation &&
+      (selectedPath === treeNavigation.tabPath || selectedPath === treeNavigation.path)
+      ? treeNavigation.path
+      : null
+  )
 
   /** Locate a file tab in the tree: load the folders above it, select its row,
    *  and let the reveal effect below scroll it into view. A file inside a folded
@@ -535,6 +542,7 @@
     }
     if (tabPath === locatedTabPath) return
     locatedTabPath = tabPath
+    if (operationPending || tabPath === treeNavigationPath) return
     // Activating a file tab outranks a search result the tree was still
     // pointing at: the tree now follows the file the user is editing.
     if (revealedSearchPath && revealedSearchPath !== tabPath) revealedSearchPath = null
@@ -545,6 +553,7 @@
   })
 
   $effect(() => {
+    if (operationPending) return
     const focusRequest = projectState.focusRequest
     const revealedPath = projectState.revealedPath
     const searchPath = revealedSearchPath
@@ -559,7 +568,7 @@
     const explicitReveal = focusRequest !== consumedFocusRequest
     const path = explicitReveal
       ? (revealedPath ?? searchPath ?? tabPath)
-      : (searchPath ?? tabPath ?? revealedPath)
+      : (searchPath ?? treeNavigationPath ?? tabPath ?? revealedPath)
     if (!path || !projectState.entriesByDirectory[parentDirectory(path)]) return
     if (suppressRevealScroll) return
     // Consumed only once the reveal is actually scheduled: a suppressed scroll
@@ -623,6 +632,7 @@
     entry: ProjectFileEntry,
     mode: 'normal' | 'preview' = 'preview'
   ): Promise<void> {
+    treeNavigation = null
     suppressScrollForPointer()
     projectFilesWorkspace.setRevealedPath(projectId, entry.path)
     projectFilesWorkspace.setSelection(projectId, [entry.path])
@@ -638,6 +648,13 @@
       await toggleDirectoryRow(entry)
     }
 
+    await previewEntry(entry, mode)
+  }
+
+  async function previewEntry(
+    entry: ProjectFileEntry,
+    mode: 'normal' | 'preview' = 'preview'
+  ): Promise<void> {
     if (entry.kind === 'file') {
       if (onFileSelect) {
         onFileSelect(entry.path, mode)
@@ -658,6 +675,7 @@
 
   function isRowActive(path: string): boolean {
     if (projectState.selectedPaths.length > 0) return projectState.selectedPaths.includes(path)
+    if (treeNavigationPath !== null) return treeNavigationPath === path
     if (revealedSearchPath === path) return true
     if (selectedPath) return selectedPath === path
     return projectState.revealedPath === path
@@ -670,14 +688,26 @@
     if (anchorIndex === undefined || targetIndex === undefined) {
       projectFilesWorkspace.setSelection(projectId, [path])
       projectFilesWorkspace.setSelectionAnchor(projectId, path)
+      previewRangeEnd(path)
       return
     }
     const start = Math.min(anchorIndex, targetIndex)
     const end = Math.max(anchorIndex, targetIndex)
-    projectFilesWorkspace.setSelection(
-      projectId,
-      visibleRows.slice(start, end + 1).map((entry) => entry.path)
-    )
+    projectFilesWorkspace.setSelection(projectId, [
+      ...visibleRows
+        .slice(start, end + 1)
+        .map((entry) => entry.path)
+        .filter((candidate) => candidate !== path),
+      path
+    ])
+    previewRangeEnd(path)
+  }
+
+  function previewRangeEnd(path: string): void {
+    treeNavigation = { path, tabPath: selectedPath }
+    projectFilesWorkspace.setRevealedPath(projectId, path)
+    const entry = visibleRows.find((candidate) => candidate.path === path)
+    if (entry) void previewEntry(entry)
   }
 
   function handleRowClick(entry: ProjectFileEntry, event: MouseEvent): void {
@@ -724,6 +754,7 @@
       void selectEntry(entry, 'preview')
     } else {
       // Moving onto a folder selects it without toggling its expansion.
+      treeNavigation = null
       projectFilesWorkspace.setRevealedPath(projectId, entry.path)
       projectFilesWorkspace.setSelection(projectId, [entry.path])
       projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
@@ -1160,10 +1191,32 @@
   async function deleteSelected(): Promise<void> {
     if (!deleteTarget || operationPending) return
     operationPending = true
-    const count = deleteTarget.paths.length
+    const paths = [...deleteTarget.paths]
+    const count = paths.length
+    const deleted = (path: string): boolean =>
+      paths.some((target) => path === target || path.startsWith(`${target}/`))
+    const target = paths.find((path) => path === projectState.selectedPaths.at(-1)) ?? paths[0]
+    const parent = parentDirectory(target)
+    const siblings = visibleRows.filter((entry) => parentDirectory(entry.path) === parent)
+    const index = siblings.findIndex((entry) => entry.path === target)
+    const neighbor =
+      siblings.slice(index + 1).find((entry) => !deleted(entry.path)) ??
+      siblings
+        .slice(0, index)
+        .reverse()
+        .find((entry) => !deleted(entry.path))
+    let fallback = neighbor?.path ?? parent
+    while (fallback && deleted(fallback)) fallback = parentDirectory(fallback)
     try {
-      await projectFilesWorkspace.deletePaths(projectId, deleteTarget.paths)
-      projectFilesWorkspace.clearSelection(projectId)
+      await projectFilesWorkspace.deletePaths(projectId, paths)
+      revealedSearchPath = null
+      treeNavigation = { path: fallback, tabPath: selectedPath }
+      projectFilesWorkspace.setRevealedPath(projectId, fallback)
+      projectFilesWorkspace.setSelection(projectId, fallback ? [fallback] : [])
+      projectFilesWorkspace.setSelectionAnchor(projectId, fallback)
+      if (neighbor) await previewEntry(neighbor)
+      await tick()
+      if (fallback) focusRow(fallback)
       deleteTarget = null
       toast.success(count === 1 ? 'Item moved to Trash' : `${count} items moved to Trash`)
     } catch (error) {

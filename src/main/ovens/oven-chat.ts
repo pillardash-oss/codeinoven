@@ -219,7 +219,7 @@ export class OvenChat {
       const { root, dataRoot, sessionsRoot } = prepared
       if (prepared.branch && prepared.branch !== thread.branch)
         await this.threads.setBranch(thread.projectId, thread.id, prepared.branch)
-      await this.threads.updateSettings(thread.projectId, thread.id, {
+      await this.threads.bindOvenCheckout(thread.projectId, thread.id, {
         ...settings,
         ovenPath: root
       })

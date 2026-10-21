@@ -13,8 +13,8 @@ installed, since the Oven service runs on it.
 
 ## Commands
 
-| Command                    | What it does                                                                            |
-| -------------------------- | --------------------------------------------------------------------------------------- |
+| Command                        | What it does                                                                            |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
 | `npx @pdslng/cio-oven start`   | Install and start the Oven service in the background, then print the registration code. |
 | `npx @pdslng/cio-oven stop`    | Stop the Oven service.                                                                  |
 | `npx @pdslng/cio-oven status`  | Show whether the service is installed and running.                                      |
@@ -59,9 +59,15 @@ than beside it, and exactly where CodeInOven keeps its own Oven state:
 With a dedicated key it also creates `~/.ssh/codeinoven-oven-agent` and
 authorizes the public half in `~/.ssh/authorized_keys`. It never reads or
 changes your existing `~/.ssh/config`, `authorized_keys`, or login identity. On
-Windows, when the account is an administrator, OpenSSH reads the machine-wide
-`administrators_authorized_keys` instead, so the key is authorized there too;
-when that file needs an elevated shell, the command prints the exact line to add.
+Windows the account's group membership decides the file OpenSSH reads, not
+whether the shell is elevated: OpenSSH ships a `Match Group administrators`
+block, so an administrator who opened an ordinary PowerShell still gets the
+machine-wide `administrators_authorized_keys` and sshd skips that account's own
+`authorized_keys`. `start` therefore asks `whoami /groups`, writes the key into
+the file sshd actually reads, restricts that file to the account plus SYSTEM and
+Administrators, and reads the key back. It prints the account class and the file
+it authorized; when the machine-wide file needs an elevated shell it prints the
+two commands to run.
 
 The service keeps running after the command exits, after you log out, and after
 CodeInOven closes. `npx @pdslng/cio-oven stop` is what stops it.

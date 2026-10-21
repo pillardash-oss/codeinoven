@@ -2,7 +2,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { onDestroy, tick } from 'svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
-  import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
   import {
@@ -42,14 +42,23 @@
     path: string
     /** Source being rendered, which is the file's draft while it is edited. */
     content: string
-    /** True when this view is the fullscreen reader. Its sidebar is behind the
-     *  modal, so an action that lands there has to give the modal up. */
+    /** True when this view is the fullscreen reader. */
     fullscreen?: boolean
-    /** Dismiss the fullscreen reader. Required to leave it from an action. */
+    /** Reveal the existing temporary chat inside the fullscreen reader. */
+    onOpenTemporaryChat?: () => void
+    /** Dismiss the fullscreen reader when opening a separate thread. */
     onExitFullscreen?: () => void
   }
 
-  let { projectId, threadId, path, content, fullscreen = false, onExitFullscreen }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    path,
+    content,
+    fullscreen = false,
+    onOpenTemporaryChat,
+    onExitFullscreen
+  }: Props = $props()
 
   /** Highlight registry name for document annotations. A conversation
    *  publishes its own name, so both a conversation and a document can be
@@ -337,9 +346,7 @@
       mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
     closeSelection()
-    // The side chat opens in the sidebar, which the fullscreen reader covers.
-    // Leaving fullscreen is what makes the action visible at all.
-    if (fullscreen) onExitFullscreen?.()
+    if (fullscreen) onOpenTemporaryChat?.()
   }
 
   /** Spin the selected passage into a thread of its own, seeded as its draft. */
@@ -436,16 +443,20 @@
 {#each annotations as reference (reference.id)}
   {@const position = bubblePositions[reference.id]}
   {#if position?.visible}
-    <ResponseAnnotationBubble
-      x={position.x}
-      y={position.y}
+    <AnnotationIndicator
+      id={reference.id}
+      surface={`file:${path}`}
+      left={`${position.x}px`}
+      top={`${position.y}px`}
+      fixed
       number={annotationNumber(reference.id)}
       hasComment={Boolean(reference.comment)}
       active={editingId === reference.id}
       title={reference.comment
-        ? `Edit the note on this passage of ${path}`
-        : `Add a note to this passage of ${path}`}
-      onClick={() => (editingId = reference.id)}
+        ? `Edit the note on this passage of ${path}. Drag to move it, click to edit.`
+        : `Add a note to this passage of ${path}. Drag to move it, click to write.`}
+      class="z-40"
+      onOpen={() => (editingId = reference.id)}
     />
   {/if}
 {/each}

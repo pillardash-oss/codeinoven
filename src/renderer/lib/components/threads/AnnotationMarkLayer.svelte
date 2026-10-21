@@ -6,11 +6,12 @@
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
 
-  import Modal from '../ui/Modal.svelte'
+  import { getAnnotationToolbarHost, hasAnnotationToolbarHost } from '$lib/annotation-toolbar'
+  import { Popover } from 'bits-ui'
+  import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
   import ColorSwatches from '../shared/ColorSwatches.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
   import {
-    MARK_BADGE_SIZE,
     MARK_FRAME_TOLERANCE_SECONDS,
     MARK_MAX_STROKE_WIDTH,
     MARK_MIN_STROKE_WIDTH,
@@ -114,6 +115,14 @@
     activeSeconds = null,
     onFocusMark
   }: Props = $props()
+
+  const toolbarHost = hasAnnotationToolbarHost() ? getAnnotationToolbarHost() : undefined
+  const toolbarAttachment: Attachment<HTMLDivElement> = (node) => {
+    const target = toolbarHost?.target()
+    if (!target) return
+    target.appendChild(node)
+    return () => node.remove()
+  }
 
   /** The stroke being drawn, in normalized coordinates. */
   let draftPoints = $state<MarkPoint[]>([])
@@ -287,7 +296,7 @@
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Escape') return
     // The comment field owns Escape while it is open, so disarming here would
-    // fight the editor for the same key. The pen panel is a modal and owns its
+    // fight the editor for the same key. The pen dropdown owns its
     // own Escape for the same reason.
     if (activeEditingId || penOpen) return
     drawing = false
@@ -321,13 +330,6 @@
   const visibleMarks = $derived(marks.filter(marksThisPicture))
 
   /** The badge's wording, naming a frame's moment when it has one. */
-  function badgeLabel(mark: ResponseReferenceAnchor, number: number): string {
-    const at = markMoment(mark)
-    return mark.comment
-      ? `Edit comment on mark ${number}${at}: ${mark.comment}`
-      : `Comment on mark ${number}${at}`
-  }
-
   function badgeHint(mark: ResponseReferenceAnchor, number: number): string {
     const at = markMoment(mark)
     return mark.comment
@@ -376,20 +378,19 @@
   {#each visibleMarks as mark, index (mark.id)}
     {@const badge = markBadgePoint(mark.points ?? [])}
     {@const number = referenceLabelNumber(mark.label, index)}
-    <button
-      type="button"
-      class="absolute z-20 flex -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-white bg-accent text-[0.625rem] font-semibold text-on-accent shadow-md transition-transform hover:scale-110"
-      style:left={`${badge.x * 100}%`}
-      style:top={`${badge.y * 100}%`}
-      style:width={`${MARK_BADGE_SIZE}px`}
-      style:height={`${MARK_BADGE_SIZE}px`}
-      title={badgeHint(mark, number)}
-      aria-label={badgeLabel(mark, number)}
-      onclick={() => requestEdit(mark.id)}
-      {@attach badgeAttachment(mark.id)}
-    >
+    <AnnotationIndicator
+      id={mark.id}
+      surface={`mark:${threadId}`}
+      left={`${badge.x * 100}%`}
+      top={`${badge.y * 100}%`}
+      centre
       {number}
-    </button>
+      hasComment={Boolean(mark.comment)}
+      title={badgeHint(mark, number)}
+      class="z-20"
+      attach={badgeAttachment(mark.id)}
+      onOpen={() => requestEdit(mark.id)}
+    />
   {/each}
 {/if}
 
@@ -404,29 +405,90 @@
   ></div>
 {/if}
 
-<div class="absolute top-1.5 right-1.5 z-40 flex items-center gap-1">
+<div
+  class={['flex items-center gap-1', toolbarHost ? 'relative' : 'absolute top-1.5 right-1.5 z-40']}
+  {@attach toolbarAttachment}
+>
   {#if armed}
     <span
-      class="bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white"
+      class="hidden bg-black/60 px-1.5 py-0.5 text-[0.625rem] font-medium text-white sm:inline"
       aria-live="polite"
     >
       {hint}
     </span>
   {/if}
-  <button
-    type="button"
-    class="relative flex h-7 w-7 items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white"
-    title="Annotation pen: colour and stroke width"
-    aria-label="Annotation pen: colour and stroke width"
-    onclick={() => (penOpen = true)}
-  >
-    <CioPalette size={13} />
-    <span
-      class="absolute -right-0.5 -bottom-0.5 h-3 w-3 border border-white"
-      style:background-color={annotationTool.color}
-      aria-hidden="true"
-    ></span>
-  </button>
+  <Popover.Root bind:open={penOpen}>
+    <Popover.Trigger
+      class="relative flex h-7 w-7 items-center justify-center border border-black/10 bg-white/85 text-black shadow-sm transition-all hover:bg-white"
+      title="Annotation pen: colour and stroke width"
+      aria-label="Annotation pen: colour and stroke width"
+    >
+      <CioPalette size={13} />
+      <span
+        class="absolute -right-0.5 -bottom-0.5 h-3 w-3 border border-white"
+        style:background-color={annotationTool.color}
+        aria-hidden="true"
+      ></span>
+    </Popover.Trigger>
+    <Popover.Portal>
+      <Popover.Content
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        collisionPadding={12}
+        class="z-70 w-72 max-w-[calc(100vw-1.5rem)] space-y-4 border bg-surface p-4 text-foreground shadow-xl"
+        aria-label="Annotation pen"
+      >
+        <div>
+          <span class="mb-2 block text-xs font-medium text-muted">Colour</span>
+          <ColorSwatches
+            size="sm"
+            allowNone={false}
+            value={annotationTool.color}
+            oncolorchange={(color) => {
+              if (color) annotationTool.setColor(color)
+            }}
+          />
+        </div>
+        <div>
+          <label
+            class="mb-2 flex items-center justify-between text-xs font-medium text-muted"
+            for={`annotation-stroke-${threadId}`}
+          >
+            <span>Stroke width</span>
+            <span class="font-mono text-foreground">{annotationTool.strokeWidth}px</span>
+          </label>
+          <input
+            id={`annotation-stroke-${threadId}`}
+            type="range"
+            min={MARK_MIN_STROKE_WIDTH}
+            max={MARK_MAX_STROKE_WIDTH}
+            step={1}
+            class="w-full"
+            bind:value={annotationTool.strokeWidth}
+          />
+          <div class="mt-3 flex h-10 items-center border bg-elevated px-2">
+            <svg
+              viewBox="0 0 120 40"
+              class="h-full w-full"
+              aria-hidden="true"
+              preserveAspectRatio="none"
+            >
+              <line
+                x1="6"
+                y1="20"
+                x2="114"
+                y2="20"
+                stroke={annotationTool.color}
+                stroke-width={annotationTool.strokeWidth}
+                stroke-linecap="round"
+              />
+            </svg>
+          </div>
+        </div>
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
   <button
     type="button"
     class={[
@@ -463,54 +525,3 @@
     onClose={closeEditor}
   />
 {/if}
-
-<Modal
-  open={penOpen}
-  title="Annotation pen"
-  onClose={() => (penOpen = false)}
-  panelWidth="max-w-[320px]"
-  contentClass="space-y-4 p-4"
->
-  <div>
-    <span class="mb-2 block text-xs font-medium text-muted">Colour</span>
-    <ColorSwatches
-      size="sm"
-      allowNone={false}
-      value={annotationTool.color}
-      oncolorchange={(color) => {
-        if (color) annotationTool.setColor(color)
-      }}
-    />
-  </div>
-  <div>
-    <label
-      class="mb-2 flex items-center justify-between text-xs font-medium text-muted"
-      for={`annotation-stroke-${threadId}`}
-    >
-      <span>Stroke width</span>
-      <span class="font-mono text-foreground">{annotationTool.strokeWidth}px</span>
-    </label>
-    <input
-      id={`annotation-stroke-${threadId}`}
-      type="range"
-      min={MARK_MIN_STROKE_WIDTH}
-      max={MARK_MAX_STROKE_WIDTH}
-      step={1}
-      class="w-full"
-      bind:value={annotationTool.strokeWidth}
-    />
-    <div class="mt-3 flex h-10 items-center border bg-elevated px-2">
-      <svg viewBox="0 0 120 40" class="h-full w-full" aria-hidden="true" preserveAspectRatio="none">
-        <line
-          x1="6"
-          y1="20"
-          x2="114"
-          y2="20"
-          stroke={annotationTool.color}
-          stroke-width={annotationTool.strokeWidth}
-          stroke-linecap="round"
-        />
-      </svg>
-    </div>
-  </div>
-</Modal>

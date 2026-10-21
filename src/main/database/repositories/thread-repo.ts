@@ -1,3 +1,4 @@
+import { unarchivedSubtreeSql, unarchivedThreadSql } from '../../../lib/archives'
 import { ledgerContextUsageSql } from '../thread-context-usage-sql'
 import type { Database } from '../database'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
@@ -402,7 +403,7 @@ function buildAlwaysVisibleClauses(scopedBucketIds: ReadonlySet<string>): {
     params.push(...bucketIds)
   }
   return {
-    where: `WHERE archived = 0 AND ${only.where} AND ${visibility}`,
+    where: `WHERE ${unarchivedThreadSql()} AND ${only.where} AND ${visibility}`,
     params
   }
 }
@@ -413,8 +414,8 @@ function buildListClauses(
   options: ThreadListOptions
 ): { where: string; params: unknown[]; limit: string } {
   const clauses = [...filters]
-  if (options.includeArchived === false) {
-    clauses.push('archived = 0')
+  if (options.includeArchived !== true) {
+    clauses.push(unarchivedThreadSql())
   }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
   const limitClause =
@@ -822,7 +823,7 @@ export class ThreadRepo {
   async listDraftingThreadsViaWorker(): Promise<Thread[]> {
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads
-       WHERE archived = 0
+       WHERE ${unarchivedThreadSql()}
          AND drafting = 1
          AND assignment_role IS NOT 'worker'
          AND achievement_role IS NOT 'auditor'
@@ -910,13 +911,18 @@ export class ThreadRepo {
   /**
    * Read only the fields needed to enforce per-project capacity on the worker.
    * Orchestration children do not count toward the user-visible thread bound.
+   *
+   * An archived thread is invincible: it is never a candidate, it never occupies
+   * one of the project's slots, and neither is a thread whose subtree holds one,
+   * because deleting that thread would take the archived conversation with it.
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
       `SELECT id, pinned, status, last_activity, scope_bucket_id, assignment_role, achievement_role
        FROM threads
        WHERE project_id = ?
-         AND archived = 0
+         AND ${unarchivedThreadSql()}
+         AND ${unarchivedSubtreeSql()}
          AND assignment_role IS NOT 'worker'
          AND achievement_role IS NOT 'auditor'
          AND coordinator_thread_id IS NULL
@@ -1099,7 +1105,7 @@ export class ThreadRepo {
     if (unique.length === 0) return []
     const placeholders = unique.map(() => '?').join(',')
     const result = await this.db.queryViaWorker(
-      `SELECT * FROM threads WHERE id IN (${placeholders})`,
+      `SELECT * FROM threads WHERE id IN (${placeholders}) AND ${unarchivedThreadSql()}`,
       unique,
       0
     )
@@ -1175,7 +1181,7 @@ export class ThreadRepo {
            ORDER BY pinned DESC, pinned_at DESC, last_activity DESC, id ASC
          ) AS rn
          FROM threads
-         WHERE archived = 0
+         WHERE ${unarchivedThreadSql()}
            AND project_id != ?
            AND (
              pinned = 1
@@ -1210,7 +1216,7 @@ export class ThreadRepo {
   listActive(): Array<Thread & { status: 'planning' | 'executing' }> {
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads
-       WHERE archived = 0 AND status IN ('planning', 'executing')
+       WHERE ${unarchivedThreadSql()} AND status IN ('planning', 'executing')
        ORDER BY last_activity DESC, id ASC`
     )
     return rows
@@ -1227,7 +1233,7 @@ export class ThreadRepo {
       this.db.get<{ active: number }>(
         `SELECT 1 AS active
          FROM threads
-         WHERE archived = 0 AND status IN ('planning', 'executing')
+         WHERE ${unarchivedThreadSql()} AND status IN ('planning', 'executing')
          LIMIT 1`
       ) !== undefined
     )
@@ -1248,7 +1254,7 @@ export class ThreadRepo {
     const result = await this.db.queryViaWorker(
       `SELECT COUNT(*) AS active
        FROM threads
-       WHERE archived = 0 AND status IN ('planning', 'executing')`,
+       WHERE ${unarchivedThreadSql()} AND status IN ('planning', 'executing')`,
       [],
       1
     )
@@ -1572,9 +1578,12 @@ function threadSearchScopeClause(
   const assistantId = options.assistantId ?? null
   switch (options.family) {
     case 'chats':
-      return { sql: `${alias}.project_id = ?`, params: [INBOX_PROJECT_ID] }
+      return {
+        sql: `${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`,
+        params: [INBOX_PROJECT_ID]
+      }
     case 'assistant': {
-      const clauses = [`${alias}.project_id = ?`]
+      const clauses = [`${alias}.project_id = ?`, unarchivedThreadSql(alias)]
       const params: unknown[] = [ASSISTANT_SPACE_ID]
       if (assistantId) {
         clauses.push(`${alias}.assistant_id = ?`)
@@ -1586,6 +1595,7 @@ function threadSearchScopeClause(
       // Every engineering project, never the hidden inbox/assistant/browser
       // containers that share the same table.
       const clauses = [
+        unarchivedThreadSql(alias),
         `${alias}.project_id != ?`,
         `${alias}.project_id != ?`,
         `${alias}.project_id != ?`
@@ -1600,7 +1610,7 @@ function threadSearchScopeClause(
     default: {
       // Unscoped/global: every family except the hidden browser-chat container,
       // optionally narrowed to one project.
-      const clauses = [`${alias}.project_id != ?`]
+      const clauses = [`${alias}.project_id != ?`, unarchivedThreadSql(alias)]
       const params: unknown[] = [GLOBAL_BROWSER_PROJECT_ID]
       if (projectId) {
         clauses.push(`${alias}.project_id = ?`)

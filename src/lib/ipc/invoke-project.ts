@@ -33,6 +33,14 @@ import type { Contract } from './contract-helpers'
 import type { CustomIconImage } from '../custom-icon'
 
 export const invokeProjectContract = {
+  'archive:list': {} as Contract<
+    [tab: import('../archives').ArchiveTab, offset?: number],
+    import('../archives').ArchiveEntry[]
+  >,
+  'archive:set': {} as Contract<
+    [kind: import('../archives').ArchiveKind, id: string, archived: boolean],
+    void
+  >,
   'icon-library:list': {} as Contract<[], CustomIcon[]>,
   'icon-library:add': {} as Contract<[svg: string], CustomIcon>,
   /** Open the app-owned data directory in the operating system's file manager. */
@@ -178,7 +186,7 @@ export const invokeProjectContract = {
     ProjectFileEntry[]
   >,
   'projectFiles:resolveCitationPaths': {} as Contract<
-    [projectId: string, candidates: string[], scopeBucketId?: string],
+    [projectId: string, candidates: string[], scopeBucketId?: string, threadId?: string],
     Record<string, string | null>
   >,
   'projectFiles:resolveExternalCitationPaths': {} as Contract<

@@ -169,7 +169,11 @@ function resolveCheckpointOwners(
     const start = startId === undefined ? undefined : indexByMessageId.get(startId)
     if (start === undefined) continue
     const prompt = messages[start]
-    if (!prompt || prompt.role !== 'user' || !isTurnStartIndex(messages, start)) continue
+    // A turn's prompt normally follows the previous turn's answer, so it is
+    // never a "turn start" in the render path's sense. Requiring that here
+    // rejected every prompt after the first one, and the first checkpoint then
+    // spanned the whole transcript and took every later turn's card with it.
+    if (!prompt || prompt.role !== 'user' || isTurnTransparentUserMessage(prompt)) continue
     const current = anchors.get(start)
     if (!current || current.createdAt <= checkpoint.createdAt) anchors.set(start, checkpoint)
   }

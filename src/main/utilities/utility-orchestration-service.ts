@@ -11,7 +11,8 @@ import type {
   UtilityKind,
   PermissionLevel,
   AgentUtilitySuggestionEntry,
-  UtilityDefinitionInput
+  UtilityDefinitionInput,
+  ThreadSearchResult
 } from '../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID, UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -249,6 +250,8 @@ export interface UtilityTurnRequest {
    * answers rather than at the end of the interview.
    */
   saveAssistantIdentity?: (identity: { name?: string; personality?: string }) => Promise<void>
+  /** Persist the clock choice during the live setup interview. */
+  saveAssistantSchedule?: (scheduled: boolean) => Promise<void>
   /** Persist settled reporting choices during the live setup interview. */
   saveAssistantReporting?: (reporting: AssistantReportingPatch) => Promise<void>
   budgetContext: UtilityTurnBudgetContext
@@ -648,6 +651,22 @@ export class UtilityOrchestrationService {
     this.vault = new SecretVault(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
     this.structuredRoutes = this.buildStructuredRoutes()
+  }
+
+  /**
+   * Hybrid thread search, wired by the engine that owns the thread manager.
+   *
+   * The diagnostics tool is the one app capability every turn carries, so this
+   * is how an agent reaches the user's other conversations: keyword and semantic
+   * matching over titles and content, bounded by the caller's own timeout.
+   */
+  private threadSearch: ((query: string) => Promise<ThreadSearchResult[]>) | null = null
+
+  /** Attach the hybrid thread search used by the diagnostics `search_threads` action. */
+  setThreadSearchProvider(
+    provider: ((query: string) => Promise<ThreadSearchResult[]>) | null
+  ): void {
+    this.threadSearch = provider
   }
 
   /**
@@ -1299,6 +1318,7 @@ export class UtilityOrchestrationService {
     const toolInstructions = [
       GATEWAY_DISCOVERY_INSTRUCTION,
       'Use available code mode to batch independent tool calls in one model request. Run independent reads with bounded parallelism and inspect every result; keep dependent operations, mutations, approvals and retries sequential. Filter large results before returning them to the model. Reuse loaded documentation and activated utilities. Read workstation targets only when dispatching work, and the app catalog only when driving the app.',
+      'When you need more than one MCP request or tool call, ALWAYS batch them in ONE code mode script: MAKING EACH REQUEST ONE AT A TIME IS FORBIDDEN, and a burst of individual MCP or tool calls that could have been batched is as good as failing the task. NEVER break this rule, it is of the most importance.',
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
@@ -1835,8 +1855,10 @@ export class UtilityOrchestrationService {
 
   /** Read-only app diagnostics, granted on every turn that carries the gateway. */
   private async runDiagnostics(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
-    state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
-      this.projectNames()
+    state.diagnostics ??= new CioDiagnosticsService(
+      requiredDatabase(this.database),
+      () => this.projectNames(),
+      this.threadSearch ?? undefined
     )
     const diagnostics = state.diagnostics
     const action = input['action']
@@ -2623,7 +2645,17 @@ export class UtilityOrchestrationService {
       )
       result = await state.request.saveBrainstormNotes(markdown)
     } else if (resolved.utility.id === ASSISTANT_AUTHORING_UTILITY_ID) {
-      if (operation === 'save_reporting') {
+      if (operation === 'save_schedule') {
+        if (!state.request.saveAssistantSchedule) {
+          throw new Error('Scheduling can only be saved in an assistant setup conversation')
+        }
+        const scheduled = operationInput['scheduled']
+        if (typeof scheduled !== 'boolean') {
+          throw new Error('save_schedule needs a boolean scheduled value')
+        }
+        await state.request.saveAssistantSchedule(scheduled)
+        result = { status: 'saved', scheduled }
+      } else if (operation === 'save_reporting') {
         if (!state.request.saveAssistantReporting) {
           throw new Error('Reporting can only be saved in an assistant setup conversation')
         }
@@ -2680,7 +2712,7 @@ export class UtilityOrchestrationService {
         result = await state.request.saveAssistantIdentity(identity)
       } else {
         throw new Error(
-          'The getting-started capability exposes save_checkpoint, save_identity and save_reporting'
+          'The getting-started capability exposes save_checkpoint, save_identity, save_schedule and save_reporting'
         )
       }
     } else if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {

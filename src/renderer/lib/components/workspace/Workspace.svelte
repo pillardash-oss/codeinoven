@@ -66,11 +66,7 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
-  import {
-    assistantEffectiveSettings,
-    chatEffectiveSettings,
-    threadSettings
-  } from '$lib/stores/thread-settings.svelte'
+  import { assistantEffectiveSettings, threadSettings } from '$lib/stores/thread-settings.svelte'
   import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
   import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import {
@@ -90,6 +86,7 @@
     inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewAssistantTask,
+    settingsForNewChat,
     settingsForNewThread,
     threadWithInheritedSettings,
     withProjectOven
@@ -129,7 +126,7 @@
     threadTracksReadStatus,
     usesThreadWorkspaceMount
   } from '$shared/types'
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { cubicOut } from 'svelte/easing'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -148,6 +145,7 @@
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import ChangeSummaryFlyout from '../layout/ChangeSummaryFlyout.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import { fullscreenFileChatHost } from '$lib/fullscreen-file-chat-portal'
   import { ScopeActionsController } from '../scope/ScopeActionsController.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
@@ -1195,7 +1193,7 @@
       ? [
           {
             id: 'assistant-knowledge',
-            label: 'How to',
+            label: 'Assistant behavior',
             icon: AssistantKnowledgeIcon,
             active: dockKindActive('assistant-knowledge'),
             onSelect: () =>
@@ -1704,9 +1702,7 @@
   let sidebarWasVisible = false
   /** Whether the sidebar's own panel is the one hosting a window-sized surface,
    *  which has to outlive `sidebarVisible` going false (see above). */
-  let sidebarHostsFullscreenEditor = $derived(
-    contextSidebarState.sidebarActiveTab?.kind === 'files' && projectFilesWorkspace.fullscreenOpen
-  )
+  let sidebarHostsFullscreenEditor = $derived(projectFilesWorkspace.fullscreenOpen)
   $effect(() => {
     if (sidebarVisible || sidebarHostsFullscreenEditor) {
       sidebarWasVisible = true
@@ -2478,6 +2474,30 @@
       listed.authoredWorkKinds = [...kinds]
     })
   })
+
+  onMount(() =>
+    subscribe('archive:changed', (kind, id, archived) => {
+      if (archived) {
+        const matches = (thread: Thread): boolean =>
+          kind === 'project'
+            ? thread.projectId === id
+            : kind === 'assistant'
+              ? thread.assistantId === id
+              : thread.id === id ||
+                thread.assistantTaskId === id ||
+                thread.coordinatorThreadId === id
+        allThreads = allThreads.filter((thread) => !matches(thread))
+        scopeState.archiveVisibilityChanged(matches)
+        notificationPanelState.hideArchived(kind, id)
+        const selected = workspaceState.selectedThread
+        if (selected && matches(selected)) workspaceState.clearThread()
+        if (kind === 'project') projects = projects.filter((project) => project.id !== id)
+        scopeState.setScopesFromProjects(projects, projectIcons)
+      }
+      if (!archived) scopeState.archiveVisibilityChanged()
+      void refreshListData()
+    })
+  )
 
   $effect(() => {
     return subscribe('thread:deleted', (projectId, threadId) => {
@@ -3846,6 +3866,12 @@
     return projects.find((candidate) => candidate.id === INBOX_PROJECT_ID) ?? null
   }
 
+  /** The chat a new chat is minted from: the thread in focus when it is a chat. */
+  function selectedChatThread(): Thread | null {
+    const selected = workspaceState.selectedThread
+    return selected?.projectId === INBOX_PROJECT_ID ? selected : null
+  }
+
   /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(
     project: Project,
@@ -3874,13 +3900,25 @@
     // The assistant space is its own model-memory family: a new task inherits
     // the assistant task in focus, and nothing else, so a chat or project
     // thread that happens to be selected never leaks into the assistant space.
+    // A task of another assistant is not a source either: it carries that
+    // assistant's Oven and workspace, which do not belong to this one.
     const assistantFocus =
-      project.id === ASSISTANT_SPACE_ID && activeThread?.projectId === ASSISTANT_SPACE_ID
+      project.id === ASSISTANT_SPACE_ID &&
+      activeThread?.projectId === ASSISTANT_SPACE_ID &&
+      (assistantId === undefined || activeThread.assistantId === assistantId)
         ? activeThread
         : null
+    const assistantRecord =
+      assistantId === undefined
+        ? null
+        : (assistants.assistants.find((candidate) => candidate.id === assistantId) ?? null)
     const inheritedSettings =
       project.id === ASSISTANT_SPACE_ID
-        ? settingsForNewAssistantTask(assistantFocus, threadSettings.lastUsed)
+        ? settingsForNewAssistantTask(
+            assistantFocus,
+            threadSettings.lastUsed,
+            assistantRecord?.execution
+          )
         : withProjectOven(
             settingsForNewThread(activeThread, threadSettings.lastUsed),
             project,
@@ -4078,15 +4116,25 @@
    */
   function startNewChat(): void {
     const existing = findEmptyNewThread(allThreads, INBOX_PROJECT_ID, undefined)
+    // A blank row that predates this click is refreshed from the chat in focus,
+    // so a reused row never stands on the Oven it happened to be created with.
+    const source = existing ? selectedChatThread() : null
+    const inherited = source?.settings ? settingsForNewChat(source, threadSettings.lastUsed) : null
     if (existing) {
+      const thread = inherited ? threadWithInheritedSettings(existing, inherited) : existing
       threadMessages.seedEmpty(INBOX_PROJECT_ID, existing.id)
+      upsertThreadInList(thread)
+      if (inherited) {
+        void invoke('thread:updateSettings', INBOX_PROJECT_ID, existing.id, inherited)
+          .then((updated) => upsertThreadInList(updated))
+          .catch(() => {})
+      }
       // The blank row is already the chat the click asked for.
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
         return
       }
-      upsertThreadInList(existing)
-      workspaceState.openThread(existing, inboxProject())
+      workspaceState.openThread(thread, inboxProject())
       return
     }
     openNewChatThread()
@@ -4100,7 +4148,7 @@
    */
   function openNewChatThread(): void {
     const optimisticId = newOptimisticThreadId()
-    const settings = chatEffectiveSettings(threadSettings.lastUsed)
+    const settings = settingsForNewChat(selectedChatThread(), threadSettings.lastUsed)
     const optimisticThread: Thread = {
       id: optimisticId,
       projectId: INBOX_PROJECT_ID,
@@ -4163,7 +4211,7 @@
       providerId: 'pi',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: '',
-      settings: chatEffectiveSettings(threadSettings.lastUsed)
+      settings: settingsForNewChat(selectedChatThread(), threadSettings.lastUsed)
     })
     return { thread, inbox }
   }
@@ -4669,7 +4717,7 @@
       upsertThreadInList(updated)
       scopeState.updateThread(updated)
     } catch (error) {
-      reportError(error, 'Could not hide the knowledge thread')
+      reportError(error, 'Could not hide the assistant behavior thread')
     }
   }
 
@@ -5043,18 +5091,19 @@
       thread.id,
       `${thread.title} (fork)`
     )
-    upsertThreadInList(forked)
     scopeState.updateThread(forked)
     if (scopeState.sidebarContext?.projectId === forked.projectId) {
       scopeState.showSidebarForThread(forked, scopeState.sidebarContext.bucketId)
     }
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    // Land the fork in the view that owns it, exactly like every other created
+    // thread: an assistant fork belongs in Assistant View, not in whatever view
+    // happened to be on screen when it was made.
+    openCreatedThread(forked)
   }
 
   /** A message-level fork succeeded inside the thread view   surface and open it. */
   function handleForkedThread(forked: Thread): void {
-    upsertThreadInList(forked)
-    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+    openCreatedThread(forked)
   }
 
   /** Register a thread that arrived from another view, then hand it to the shell
@@ -5228,6 +5277,7 @@
         onContinueInProject={handleContinuedInProject}
         onProjectCreated={handleChatProjectCreated}
         onOpenScopeView={(thread) => void openThreadScopeView(thread)}
+        onOpenAssistantThread={openAssistantTask}
         onSendChat={createStandaloneChat}
         onStartChatDraft={startChatDraft}
         onRequestAddProject={(kind) => {
@@ -5273,27 +5323,34 @@
             easing: cubicOut
           }}
         >
-          <ContextSidebar
-            tabs={contextSidebarState.sidebarTabs}
-            activeTabId={contextSidebarState.sidebarActiveTabId}
-            width={contextSidebarState.width}
-            height={contextSidebarState.terminalHeight}
-            placement="right"
-            content={contextSidebarContent}
-            {tabPresentation}
-            onSelect={(id) => contextSidebarState.focus(id)}
-            onClose={closeContextTab}
-            onFullscreenTab={openTabFullscreen}
-            onMoveTab={(id, targetId, position) =>
-              contextSidebarState.reorder(id, targetId, position)}
-            onWidthChange={(width) => handleRailWidthChange(width)}
-            onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
-            onTerminalPlacementChange={(placement) =>
-              contextSidebarState.setTerminalPlacement(placement)}
-            onNewTerminal={openNewTerminal}
-            onNewBrowser={() => openNewBrowserTab()}
-            onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
-          />
+          <div
+            class="h-full min-h-0"
+            {@attach active && contextSidebarState.sidebarActiveTab?.kind === 'temporary-chat'
+              ? fullscreenFileChatHost
+              : undefined}
+          >
+            <ContextSidebar
+              tabs={contextSidebarState.sidebarTabs}
+              activeTabId={contextSidebarState.sidebarActiveTabId}
+              width={contextSidebarState.width}
+              height={contextSidebarState.terminalHeight}
+              placement="right"
+              content={contextSidebarContent}
+              {tabPresentation}
+              onSelect={(id) => contextSidebarState.focus(id)}
+              onClose={closeContextTab}
+              onFullscreenTab={openTabFullscreen}
+              onMoveTab={(id, targetId, position) =>
+                contextSidebarState.reorder(id, targetId, position)}
+              onWidthChange={(width) => handleRailWidthChange(width)}
+              onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
+              onTerminalPlacementChange={(placement) =>
+                contextSidebarState.setTerminalPlacement(placement)}
+              onNewTerminal={openNewTerminal}
+              onNewBrowser={() => openNewBrowserTab()}
+              onTabContextMenu={(id, event) => void browser.openTabMenu(id, event, closeContextTab)}
+            />
+          </div>
         </div>
       {/if}
       {#if terminalDockVisible}
