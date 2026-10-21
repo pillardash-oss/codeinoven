@@ -39,6 +39,7 @@ export interface MultiplexIdentity {
   host: string
   port: number
   user?: string
+  allowClassicalKeyExchange?: boolean
 }
 
 /**
@@ -60,7 +61,15 @@ export function multiplexSupported(): boolean {
  */
 export function multiplexControlPath(storage: MultiplexStorage, oven: MultiplexIdentity): string {
   const digest = createHash('sha256')
-    .update([oven.id, oven.host, String(oven.port), oven.user ?? ''].join('\u0000'))
+    .update(
+      [
+        oven.id,
+        oven.host,
+        String(oven.port),
+        oven.user ?? '',
+        oven.allowClassicalKeyExchange ? 'classical-allowed' : 'post-quantum-required-v1'
+      ].join('\u0000')
+    )
     .digest('hex')
     .slice(0, 16)
   return join(storage.resolve(CONTROL_DIRECTORY), `${digest}.sock`)

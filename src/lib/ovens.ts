@@ -29,6 +29,8 @@ export interface OvenConnection {
   port: number
   authentication: 'agent' | 'identity' | 'vault' | 'password'
   identityFile?: string
+  /** Explicit compatibility exception. Omission requires hybrid post-quantum SSH. */
+  allowClassicalKeyExchange?: boolean
 }
 
 export interface Oven {
@@ -83,6 +85,7 @@ export interface OvenConnectionStatus {
   checkedAt: number
   latencyMs?: number
   error?: string
+  sshProtection?: OvenSshProtection
   specs?: {
     hostname: string
     platform: string
@@ -95,6 +98,12 @@ export interface OvenConnectionStatus {
     /** Seconds the Oven has been powered on, as the Oven reports it. */
     uptimeSeconds: number
   }
+}
+
+export interface OvenSshProtection {
+  state: 'post-quantum' | 'classical' | 'unverified'
+  keyExchange?: string
+  serverVersion?: string
 }
 
 export interface OvenHarnessInventoryItem {
@@ -160,6 +169,8 @@ export interface OvenPeek {
   ovenId: string
   checkedAt: number
   durationMs: number
+  /** Verified on a fresh authenticated SSH handshake, never inferred from a server version. */
+  sshProtection?: OvenSshProtection
   /** Live service probe: specs, service revision, and active runs. Null when the Oven did not answer. */
   probe: OvenProbe | null
   /** Enriched harness rows: installed version plus update availability. */
