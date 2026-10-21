@@ -2,18 +2,27 @@
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { modelKey } from '$lib/model-keys'
   import { ovens } from '$lib/stores/ovens.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { applyModelProfile } from '$shared/model-profiles'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import type {
     HarnessAccount,
+    ModelProfile,
     ModelRuntimeSettings,
     PermissionLevel,
     ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
+  import {
+    withModelSelection,
+    withPermissionLevel,
+    withThinkingLevel
+  } from '../chats/chat-composer-settings'
   import Modal from '../ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import AgentAssistOvenField from './AgentAssistOvenField.svelte'
@@ -105,19 +114,40 @@
     }
   })
 
+  /**
+   * Record a model in the project's own memory, so this picker and the project
+   * composer's are one list rather than two that drift apart.
+   */
+  function recordModelUse(harnessId: string, providerId: string, modelId: string): void {
+    rendererRecovery.addModelRecentFor('project', modelKey(harnessId, providerId, modelId))
+  }
+
   function selectModel(
     providerId: string,
     modelId: string,
     harnessId: string,
     accountId?: string
   ): void {
-    settings = {
-      ...settings,
+    recordModelUse(harnessId, providerId, modelId)
+    settings = withModelSelection(settings, providers, {
       providerId,
       modelId,
       harnessId,
-      ...(accountId ? { accountId } : {})
-    }
+      accountId
+    })
+  }
+
+  /**
+   * Apply a saved profile whole.
+   *
+   * A profile is the user's answer to every setup question at once, so it sets
+   * the harness, model, account, thinking level, speed, context window and
+   * permission level together. Anything less would let a profile called "full
+   * access review" run under auto review because only its model was copied.
+   */
+  function applyProfile(profile: ModelProfile): void {
+    recordModelUse(profile.harnessId, profile.providerId, profile.modelId)
+    settings = applyModelProfile(settings, profile, providers)
   }
 
   function selectAccount(account: HarnessAccount): void {
@@ -125,11 +155,11 @@
   }
 
   function selectThinking(level: ThinkingLevel): void {
-    settings = { ...settings, thinkingLevel: level }
+    settings = withThinkingLevel(settings, level)
   }
 
   function selectPermission(level: PermissionLevel): void {
-    settings = { ...settings, permissionLevel: level }
+    settings = withPermissionLevel(settings, level)
   }
 
   function selectRuntime(runtime: ModelRuntimeSettings): void {
@@ -212,10 +242,22 @@
             {unavailableHarnessReason}
             thinkingLevel={settings.thinkingLevel}
             runtimeSettings={settings}
+            permissionLevel={settings.permissionLevel}
             onSelect={selectModel}
             onSelectAccount={selectAccount}
             onSelectThinking={selectThinking}
             onSelectRuntime={selectRuntime}
+            onApplyProfile={applyProfile}
+            favoriteModels={rendererRecovery.modelFavoritesFor('project')}
+            recentModels={rendererRecovery.modelRecentsFor('project')}
+            onRemoveRecent={(key) => rendererRecovery.removeModelRecentFor('project', key)}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleModelFavoriteFor(
+                'project',
+                modelKey(harnessId, providerId, modelId)
+              )}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderModelFavoriteFor('project', draggedKey, targetKey, position)}
             variant="field"
             side="bottom"
             fullWidth
