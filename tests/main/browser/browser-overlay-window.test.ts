@@ -85,8 +85,29 @@ afterEach(() => {
   windows.length = 0
   vi.clearAllMocks()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 describe('native browser overlay window', () => {
+  it('keeps Linux tooltips in the renderer without creating an overlay window', () => {
+    vi.stubGlobal('process', { ...process, platform: 'linux' })
+    const { host } = setup()
+    expect(
+      host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', modal: false, passive: true })
+    ).toBe(false)
+    expect(windows).toHaveLength(1)
+    expect(host.applyDock('app-tooltip', null)).toBe(true)
+    expect(host.applyDock(request.id, request)).toBe(true)
+  })
+
+  it('still accepts native tooltips on macOS', () => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' })
+    const { host } = setup()
+    expect(
+      host.applyDock('app-tooltip', { ...request, id: 'app-tooltip', modal: false, passive: true })
+    ).toBe(true)
+    expect(windows).toHaveLength(2)
+  })
+
   it('loads a secure native child and reveals it without hiding or focusing the browser', () => {
     const { parent, host } = setup()
     expect(host.applyDock(request.id, request)).toBe(true)

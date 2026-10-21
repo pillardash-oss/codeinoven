@@ -349,6 +349,10 @@ export class BrowserOverlayWindow {
   }
 
   applyDock(id: string, request: NativeDockRequest | null): boolean {
+    // Keep Linux tooltips independent of compositor-specific child-window
+    // stacking and hover delivery. Refusing the projection keeps the renderer's
+    // DOM host visible and avoids mapping another window during the hover.
+    if (process.platform === 'linux' && id === 'app-tooltip' && request !== null) return false
     const leaving = this.leavingDocks.get(id)
     if (request === null && leaving && !this.docks.has(id)) return true
     if (leaving) clearTimeout(leaving.timer)
