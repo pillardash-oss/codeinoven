@@ -59,6 +59,19 @@ function serviceNotRunning(message: string): boolean {
   return /service\.sock/u.test(message) || /codeinoven-oven-/u.test(message)
 }
 
+/**
+ * Whether an answer proves the channel is older than the bundle on disk.
+ *
+ * A bundle from before file work moved into the channel forwards it to the daemon,
+ * which knows nothing about it and used to blame a run id that was never sent. A
+ * later bundle names the unknown method outright. Both mean the same thing: the
+ * process answering is not the code this app installed.
+ */
+function staleChannelAnswer(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /Invalid run ID|Unknown Oven request method/iu.test(message)
+}
+
 /** How one request should travel when the warm channel cannot carry it. */
 interface SendOptions {
   /** How long the warm channel waits before it is judged wedged. */
@@ -446,6 +459,14 @@ export class OvenService {
           (await this.refreshService(id, 'The Oven service is not running.'))
         )
           return await this.channel.request(id, data, options.timeoutMs)
+        return await this.oneShot(id, data, mode)
+      }
+      // A channel opened before the installed bundle was replaced keeps running
+      // the code it started with, so file work that bundle cannot answer comes
+      // back naming a run that was never sent. The channel is stale, not the
+      // request: close it and run the operation against the bundle on disk.
+      if (mode === 'root-operation' && staleChannelAnswer(error)) {
+        this.channel.dispose(id)
         return await this.oneShot(id, data, mode)
       }
       if (!(error instanceof OvenServiceMissingError)) throw error

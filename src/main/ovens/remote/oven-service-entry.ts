@@ -254,6 +254,8 @@ const MAX_REQUEST = 1024 * 1024
 const MAX_RUNS = 64
 const MAX_ACTIVE = 4
 const MAX_JOURNAL = 64 * 1024 * 1024
+/** The requests that address one run, and so need a run id before anything else. */
+const RUN_REQUEST_METHODS = new Set(['events', 'stop', 'write', 'remove'])
 
 function stopChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' && child.pid) {
@@ -859,6 +861,15 @@ async function dispatch(raw: unknown): Promise<unknown> {
     return null
   }
   if (request.method === 'start') return start(request.input)
+  // A channel opened by an earlier bundle forwards file work here instead of
+  // answering it in its own process. Looking it up as a run made that answer
+  // "Invalid run ID.", which named nothing and sent people after a run id that
+  // was never involved, so the daemon answers the request the same way the
+  // channel does while the app replaces that bundle.
+  if (request.method === 'root-operation') return ovenRootOperation(request.input)
+  const method = String(request.method)
+  if (!RUN_REQUEST_METHODS.has(method))
+    throw new Error(`Unknown Oven request method: ${method}. Install the current Oven service.`)
   const job = jobs.get(id(request.runId))
   if (!job) throw new Error('The remote run does not exist.')
   if (request.method === 'events') return events(job, request.after)

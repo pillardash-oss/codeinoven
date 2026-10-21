@@ -231,6 +231,51 @@ export async function ovenGitEnvironment(
   }
 }
 
+/** Whether one directory is already this exact repository, verified as a clone is. */
+async function isScopeCheckout(root: string, url: string): Promise<boolean> {
+  try {
+    if (!(await lstat(root)).isDirectory()) return false
+    const origin = (await command('git', ['remote', 'get-url', 'origin'], root)).trim()
+    const top = (await command('git', ['rev-parse', '--show-toplevel'], root)).trim()
+    // Compared as real paths: a Git top level is reported with every symlink in
+    // the path resolved, so the same directory reached through a link (a macOS
+    // temporary folder, a linked home) would otherwise look like another one.
+    return origin === url && (await realpath(top)) === (await realpath(root))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Publish a finished clone at its final path.
+ *
+ * Windows refuses to rename a directory while anything holds a handle inside it,
+ * and an antivirus or the search indexer starts scanning a fresh clone the moment
+ * Git finishes writing it. That is a momentary lock, not a broken checkout, so it
+ * is retried with a growing pause instead of failing the scope a person is waiting
+ * to work in. A destination that appeared while this clone was still copying is
+ * adopted by the caller, which verifies it before trusting it.
+ */
+async function publishClone(staged: string, root: string): Promise<void> {
+  const pauses = [50, 100, 200, 400, 800, 1600]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(staged, root)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'ENOTEMPTY')
+        throw error
+      if (attempt >= pauses.length)
+        throw new Error(
+          `The Oven could not move the new checkout into place (${code}). Something on the Oven is holding a file in it open; close it and retry.`,
+          { cause: error }
+        )
+      await new Promise((wait) => setTimeout(wait, pauses[attempt]))
+    }
+  }
+}
+
 /** Clone once into a sibling staging directory and publish only a verified repo. */
 async function cloneIntoScope(
   root: string,
@@ -247,19 +292,18 @@ async function cloneIntoScope(
   await previous.catch(() => undefined)
   try {
     await mkdir(dirname(root), { recursive: true, mode: 0o700 })
-    try {
-      const existing = await lstat(root)
+    const existing = await lstat(root).then(
+      (value) => value,
+      () => null
+    )
+    if (existing) {
       if (!existing.isDirectory())
         throw new Error('The scope checkout path already exists and is not a directory.')
-      const origin = (await command('git', ['remote', 'get-url', 'origin'], root)).trim()
-      const top = (await command('git', ['rev-parse', '--show-toplevel'], root)).trim()
-      if (origin !== url || resolve(top) !== resolve(root))
+      if (!(await isScopeCheckout(root, url)))
         throw new Error(
           'The existing scope checkout belongs to a different repository. It was left untouched.'
         )
       return root
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
 
     const staged = `${root}.codeinoven-${randomUUID()}.tmp`
@@ -272,9 +316,17 @@ async function cloneIntoScope(
       )
       const origin = (await command('git', ['remote', 'get-url', 'origin'], staged)).trim()
       const top = (await command('git', ['rev-parse', '--show-toplevel'], staged)).trim()
-      if (origin !== url || resolve(top) !== resolve(staged))
+      if (origin !== url || (await realpath(top)) !== (await realpath(staged)))
         throw new Error('The cloned repository failed scope verification.')
-      await rename(staged, root)
+      try {
+        await publishClone(staged, root)
+      } catch (error) {
+        // Another pass of this app finished the same clone first. Adopting it is
+        // correct only when it really is this repository, which is verified here
+        // rather than assumed from the directory's existence.
+        if (await isScopeCheckout(root, url)) return root
+        throw error
+      }
       return root
     } finally {
       await rm(staged, { recursive: true, force: true })
