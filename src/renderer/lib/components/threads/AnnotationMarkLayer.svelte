@@ -304,8 +304,20 @@
     onArmedChange(false)
   }
 
+  /**
+   * Whether any mark on this picture has a comment the reader can open again.
+   *
+   * A saved mark is an annotation the user made, and its numbered badge is how
+   * they find it: hiding the badge the moment the comment is written leaves the
+   * stroke on the picture with nothing to click, which is the opposite of what a
+   * numbered mark is for.
+   */
+  const hasSavedMarks = $derived(marks.some((mark) => (mark.comment ?? '').trim() !== ''))
+
   /** Whether the numbered badges are on screen right now. */
-  const showBadges = $derived(badgeVisibility === 'always' || armed || activeEditingId !== null)
+  const showBadges = $derived(
+    badgeVisibility === 'always' || armed || activeEditingId !== null || hasSavedMarks
+  )
 
   /** Badge wording names a frame's moment, which a still mark has none of. */
   function markMoment(mark: ResponseReferenceAnchor): string {

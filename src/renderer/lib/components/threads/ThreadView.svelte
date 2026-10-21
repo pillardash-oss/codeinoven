@@ -245,6 +245,7 @@
   import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
+  import { compositionFrameFocusState } from '$lib/stores/composition-frame-focus.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
@@ -3208,6 +3209,47 @@
       seconds,
       directory
     })
+    openCompositionAt(
+      directory,
+      seconds,
+      'The composition this note was written on could not be opened.'
+    )
+  }
+
+  /**
+   * Reopen the composition frame a mark was drawn on and open its comment.
+   *
+   * A mark on a captured frame is drawn on a picture the app produced from the
+   * composition, not on a part of the conversation, so there is no message to
+   * jump to: the edit action opens the video board on that composition and asks
+   * the surface that draws frames to put the mark's moment back on screen, which
+   * is where its badge and its comment live.
+   */
+  function editCompositionFrameMark(reference: ResponseReferenceAnchor): void {
+    const seconds = reference.markSeconds ?? 0
+    const directory = reference.directory ?? ''
+    compositionFrameFocusState.request({
+      projectId: thread.projectId,
+      threadId: thread.id,
+      referenceId: reference.id,
+      seconds,
+      directory
+    })
+    openCompositionAt(
+      directory,
+      seconds,
+      'The composition this mark was drawn on could not be opened.'
+    )
+  }
+
+  /**
+   * Show the video board on one composition with its playhead on one second.
+   *
+   * Opening the composition is what moves the board onto that folder, and every
+   * surface that lands there reads its own request store, so the order matters:
+   * the request is made by the caller before this opens anything.
+   */
+  function openCompositionAt(directory: string, seconds: number, failure: string): void {
     designCoordinatorState.openBoard(thread.projectId, thread.id, 'video')
     if (!directory) return
     void invoke('design:open', thread.projectId, thread.id, directory, null, true, 'video')
@@ -3216,9 +3258,7 @@
         return invoke('browser:transport', opened.tabId, 'seek', seconds).catch(() => undefined)
       })
       .catch(() => {
-        toast.error('The composition this note was written on could not be opened.', {
-          description: directory
-        })
+        toast.error(failure, { description: directory })
       })
   }
 
@@ -3351,8 +3391,14 @@
     }
     // A mark on an inline picture is drawn by the picture's own surface, so its
     // edit action brings that picture back on screen and lets the surface open
-    // the comment: the reference has no text range to jump to.
+    // the comment: the reference has no text range to jump to. A mark drawn on a
+    // captured composition frame has no part to bring back, so it opens the
+    // composition at its moment instead.
     if (reference.kind === 'image') {
+      if (reference.markSeconds !== undefined && (reference.directory ?? '') !== '') {
+        editCompositionFrameMark(reference)
+        return
+      }
       await editMediaMark(reference)
       return
     }

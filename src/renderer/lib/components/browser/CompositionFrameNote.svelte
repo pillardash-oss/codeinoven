@@ -3,7 +3,10 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import type { CompositionFrameSnapshot } from '$shared/ipc-contract'
   import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
-  import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import {
+    responseReferencesState,
+    type ResponseReferenceAnchor
+  } from '$lib/stores/response-references.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import Modal from '../ui/Modal.svelte'
   import ArtifactImageAnnotator from '../threads/ArtifactImageAnnotator.svelte'
@@ -34,10 +37,39 @@
     snapshot: CompositionFrameSnapshot
     /** Whether the pen starts armed: the pen button opens this surface to draw. */
     armed: boolean
+    /**
+     * The mark whose comment is open, when the surface was opened on one.
+     *
+     * A composer jump names the mark it wants edited; the layer opens that
+     * mark's editor once its badge is measured, which is the same path a badge
+     * clicked on the picture takes.
+     */
+    editingId?: string | null
+    /** That editor closed, so the caller can drop the request it came from. */
+    onEditClosed?: () => void
+    /**
+     * The marks to draw, when the surface was opened on a moment that already
+     * has them.
+     *
+     * A capture writes a new picture at a new path, so the strokes drawn on an
+     * earlier capture of the same second do not name this URL. The caller that
+     * reopened the moment hands them over instead, and they are drawn on the
+     * picture because they are about this frame, not about that file.
+     */
+    marks?: ResponseReferenceAnchor[]
     onClose: () => void
   }
 
-  let { projectId, threadId, snapshot, armed, onClose }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    snapshot,
+    armed,
+    editingId = null,
+    onEditClosed = () => {},
+    marks: openedMarks,
+    onClose
+  }: Props = $props()
 
   /**
    * The band where the mark layer's own controls are mounted.
@@ -59,9 +91,10 @@
    * the composer holds for this picture.
    */
   const marks = $derived(
-    responseReferencesState
-      .forThread(projectId, threadId)
-      .filter((entry) => entry.kind === 'image' && entry.mediaUrl === snapshot.url)
+    openedMarks ??
+      responseReferencesState
+        .forThread(projectId, threadId)
+        .filter((entry) => entry.kind === 'image' && entry.mediaUrl === snapshot.url)
   )
 
   /** What the agent reads about the moment, in the same shape a video note uses. */
@@ -135,14 +168,15 @@
       url={snapshot.url}
       filename={snapshot.path}
       {marks}
-      editingId={null}
-      onEditClosed={() => {}}
       moment={{
         seconds: snapshot.seconds,
         timecode: snapshot.timecode,
-        detail
+        detail,
+        directory: snapshot.directory
       }}
       startArmed={armed}
+      {editingId}
+      {onEditClosed}
     />
   </div>
 </Modal>

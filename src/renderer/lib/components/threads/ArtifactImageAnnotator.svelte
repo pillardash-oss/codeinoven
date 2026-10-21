@@ -37,7 +37,7 @@
      * millisecond and the frame index. A still artifact has no moment and passes
      * nothing.
      */
-    moment?: { seconds: number; timecode: string; detail: string }
+    moment?: { seconds: number; timecode: string; detail: string; directory?: string }
     /**
      * Whether the pen starts armed.
      *
@@ -113,6 +113,16 @@
         markColor: capture.style.color,
         markStrokeWidth: capture.style.strokeWidth,
         markSurfaceEdge: capture.surfaceEdge,
+        // A mark on a frame names its moment as well as its picture: the second
+        // is what lets the composer's jump seek the composition back to it and
+        // what lets the surface find the mark again on a later capture of the
+        // same frame. The folder is what names the composition it belongs to.
+        ...(moment
+          ? {
+              markSeconds: moment.seconds,
+              ...(moment.directory ? { directory: moment.directory } : {})
+            }
+          : {}),
         ...(messageId ? { messageId } : {}),
         points: capture.points
       }
