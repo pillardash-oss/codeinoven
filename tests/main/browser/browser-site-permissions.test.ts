@@ -5,6 +5,7 @@ import {
   permissionKey,
   permissionKeysForRequest,
   screenCaptureDeniedInLedger,
+  sitePermissionRequestSummary,
   sitePermissionState
 } from '../../../src/lib/browser/site-permissions'
 import { validateSiteMenuOrigin } from '../../../src/main/browser/browser-service/browser-validation'
@@ -66,6 +67,17 @@ describe('site permission catalog', () => {
 })
 
 describe('permissionKeysForRequest', () => {
+  it.each([['video'], ['audio'], ['video', 'audio'], []].map((mediaTypes) => ({ mediaTypes })))(
+    'recognizes Electron 45 display capture with media types $mediaTypes',
+    ({ mediaTypes }) => {
+      expect(isScreenCaptureRequest('display-capture', mediaTypes)).toBe(true)
+      expect(
+        permissionKeysForRequest({ origin: ORIGIN, permission: 'display-capture', mediaTypes })
+      ).toEqual([permissionKey(ORIGIN, 'display-capture')])
+      expect(sitePermissionRequestSummary('display-capture', mediaTypes)).toBe('your screen')
+    }
+  )
+
   it('maps a screen-share request (bare media) onto the display-capture key', () => {
     expect(
       permissionKeysForRequest({ origin: ORIGIN, permission: 'media', mediaTypes: [] })
