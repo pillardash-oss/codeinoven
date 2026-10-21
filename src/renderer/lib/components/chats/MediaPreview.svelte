@@ -170,7 +170,8 @@
     class="relative flex min-h-0 flex-1 items-center justify-center"
     onclick={onClose}
     onkeydown={(e: KeyboardEvent) => {
-      if (keymapState.matches('ui-activate', e)) onClose()
+      // Keys from annotation editors and media controls belong to their target.
+      if (e.target === e.currentTarget && keymapState.matches('ui-activate', e)) onClose()
     }}
   >
     <div
