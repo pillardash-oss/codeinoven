@@ -418,6 +418,13 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     return updated
   })
   ipcMain.handle('cioPrompts:list', () => storage.getCioPromptSettings())
+  // The runtime text of one prompt, resolved the same way the agent gets it, so
+  // a surface that composes its own brief (the PR review handoff) sends exactly
+  // what the user sees and edits in Settings.
+  ipcMain.handle('cioPrompts:get', async (_, id: unknown) => {
+    if (typeof id !== 'string' || !isCioPromptId(id)) throw new TypeError('Invalid CIO prompt ID')
+    return storage.getCioPrompt(id)
+  })
   ipcMain.handle('cioPrompts:save', async (_, id: unknown, template: unknown) => {
     if (typeof id !== 'string' || !isCioPromptId(id)) throw new TypeError('Invalid CIO prompt ID')
     const safeTemplate = validateBoundedString(template, 'CIO prompt', 1, CIO_PROMPT_MAX_LENGTH)

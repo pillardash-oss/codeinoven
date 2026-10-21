@@ -53,6 +53,74 @@ describe('oven setup assessment', () => {
     expect(nodeSatisfiesServiceRequirement(null)).toBe(false)
   })
 
+  it('tells a Windows Oven whose SSH server starts manually how to fix it', () => {
+    const manual = assessPreflight(
+      report({
+        platform: 'win32',
+        osName: 'Windows',
+        packageManager: 'winget',
+        sshStartsAtBoot: false
+      })
+    )
+    const issue = manual.issues.find((entry) => entry.code === 'windows-ssh-manual')
+    expect(issue?.blocking).toBe(false)
+    // The message has to carry the command: without elevation the app cannot run it.
+    expect(issue?.message).toContain('Set-Service -Name sshd -StartupType Automatic')
+  })
+
+  it('says nothing about SSH startup on a Windows Oven that starts it at boot', () => {
+    const automatic = assessPreflight(
+      report({
+        platform: 'win32',
+        osName: 'Windows',
+        packageManager: 'winget',
+        sshStartsAtBoot: true
+      })
+    )
+    expect(automatic.issues.some((entry) => entry.code === 'windows-ssh-manual')).toBe(false)
+    const unknown = assessPreflight(
+      report({ platform: 'win32', osName: 'Windows', packageManager: 'winget' })
+    )
+    expect(unknown.issues.some((entry) => entry.code === 'windows-ssh-manual')).toBe(false)
+  })
+
+  it('plans the SSH start-type repair before a Windows Oven reports itself set up', () => {
+    const configuration = {
+      selectedHarnesses: [],
+      synchronizeAccounts: false,
+      synchronizeConfiguration: false,
+      git: { enabled: false, host: 'github' as const },
+      packageUpgrades: false
+    }
+    const manual = assessPreflight(
+      report({
+        platform: 'win32',
+        osName: 'Windows',
+        packageManager: 'winget',
+        sshStartsAtBoot: false
+      })
+    )
+    const plan = buildSetupPlan(manual, configuration)
+    const step = plan.steps.find((entry) => entry.id === 'sshd-autostart')
+    expect(step).toMatchObject({ phase: 'finalize', handledByApp: true })
+    // A machine that refuses the change must still finish: the step is not blocking.
+    expect(step?.requiresElevation).toBe(false)
+    expect(plan.steps.findIndex((entry) => entry.id === 'sshd-autostart')).toBeLessThan(
+      plan.steps.findIndex((entry) => entry.id === 'verify')
+    )
+    const automatic = assessPreflight(
+      report({
+        platform: 'win32',
+        osName: 'Windows',
+        packageManager: 'winget',
+        sshStartsAtBoot: true
+      })
+    )
+    expect(
+      buildSetupPlan(automatic, configuration).steps.some((entry) => entry.id === 'sshd-autostart')
+    ).toBe(false)
+  })
+
   it('upgrades packages before bootstrapping a missing Node runtime', () => {
     const assessment = assessPreflight(
       report({ node: { installed: false, version: null, path: null } })

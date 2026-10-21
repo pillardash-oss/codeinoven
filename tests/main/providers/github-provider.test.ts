@@ -201,18 +201,32 @@ describe('GitHubProvider', () => {
       ])
     )
 
-    const overview = await provider.getDeploymentOverview({ owner: 'acme', repo: 'app' })
+    const runPage = await provider.listWorkflowRunPage({
+      owner: 'acme',
+      repo: 'app',
+      filter: 'all',
+      page: 1,
+      perPage: 20
+    })
+    const deploymentPage = await provider.listDeploymentPage({
+      owner: 'acme',
+      repo: 'app',
+      page: 1,
+      perPage: 20
+    })
 
-    expect(overview.workflowRuns[0]).toMatchObject({
+    expect(runPage.items[0]).toMatchObject({
       id: 91,
       displayTitle: 'Publish desktop build',
       conclusion: 'success'
     })
-    expect(overview.deployments[0]).toMatchObject({
+    expect(runPage.hasMore).toBe(false)
+    expect(deploymentPage.items[0]).toMatchObject({
       id: 42,
       environment: 'production',
       latestStatus: { state: 'success', environmentUrl: 'https://app.example.com' }
     })
+    expect(deploymentPage.hasMore).toBe(false)
   })
 
   it('maps a workflow run and its jobs into the run detail model', async () => {

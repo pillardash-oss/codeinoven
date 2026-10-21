@@ -1,12 +1,17 @@
-import { randomUUID } from 'node:crypto'
 import { access, mkdir, rename, rm, statfs } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
 import type {
+  SpeechDownloadMode,
   SpeechDownloadState,
   SpeechModelArtifact,
   SpeechModelCatalog
 } from '../../../lib/speech/types'
-import { downloadFileResumable } from '../../util/resumable-download'
+import {
+  discardLegacyStagingDirectories,
+  discardStagedArtifact,
+  downloadStagedArtifact,
+  stagedArtifactBytes
+} from '../../util/staged-artifact-download'
 import { toSpeechError } from './speech-error-mapping'
 
 /** Storage access the downloader needs to stage and install an artifact. */
@@ -25,6 +30,13 @@ export interface SpeechArtifactDownloaderHost {
 /**
  * Streams catalog artifacts into their model directories with resumable,
  * checksum-verified downloads and progress reporting.
+ *
+ * A stopped download is a pause, not a dead end: the bytes it already fetched
+ * stay in the artifact's own staging directory (the same path every attempt
+ * uses), so the user is offered a resume from them or a restart that discards
+ * them. Nothing here requires the application to be restarted, and a resume also
+ * works across launches because the staging path is derived from the artifact id
+ * alone.
  */
 export class SpeechArtifactDownloader {
   private readonly controllers = new Map<string, AbortController>()
@@ -34,7 +46,7 @@ export class SpeechArtifactDownloader {
     private readonly host: SpeechArtifactDownloaderHost
   ) {}
 
-  async download(artifactId: string): Promise<void> {
+  async download(artifactId: string, mode: SpeechDownloadMode = 'resume'): Promise<void> {
     if (this.controllers.has(artifactId)) throw new Error('Model download is already active.')
     const artifact = this.host.catalog().artifacts.find((item) => item.id === artifactId)
     if (!artifact) throw new Error('Model artifact was not found.')
@@ -43,54 +55,55 @@ export class SpeechArtifactDownloader {
     }
     const controller = new AbortController()
     this.controllers.set(artifactId, controller)
-    const staging = this.storage.stagingFile(`${artifactId}.${randomUUID()}.download`)
     const destination = this.storage.modelDirectory(artifactId)
-    let received = 0
+    // One staging directory per artifact, never per attempt, so an interrupted
+    // or cancelled download leaves bytes a later attempt can continue from.
+    const staging = this.storage.stagingFile(`${artifactId}.download`)
+    if (mode === 'restart') await discardStagedArtifact(staging)
+    else await discardLegacyStagingDirectories(staging, artifact.id)
+    const kept = mode === 'restart' ? 0 : await stagedArtifactBytes(staging, artifact.files)
     try {
-      await this.assertDiskSpace(staging, artifact.byteSize)
-      await mkdir(staging, { recursive: true })
+      await mkdir(dirname(staging), { recursive: true })
+      await this.assertDiskSpace(staging, Math.max(0, artifact.byteSize - kept))
       this.host.emitDownload(artifact, {
         state: 'downloading',
-        bytesReceived: 0,
-        totalBytes: artifact.byteSize
+        bytesReceived: kept,
+        totalBytes: artifact.byteSize,
+        ...(kept > 0 ? { resumedFromBytes: kept } : {})
       })
       let lastEmitAt = 0
-      for (const file of artifact.files) {
-        const target = join(staging, file.path)
-        await mkdir(dirname(target), { recursive: true })
-        received += await this.downloadFile(
-          file.sourceUrl,
-          target,
-          file.byteSize,
-          file.sha256,
-          controller.signal,
-          (fileReceivedSoFar) => {
-            const now = Date.now()
-            if (now - lastEmitAt < 120) return
-            lastEmitAt = now
-            this.host.emitDownload(artifact, {
-              state: 'downloading',
-              bytesReceived: received + fileReceivedSoFar,
-              totalBytes: artifact.byteSize
-            })
-          }
-        )
-        this.host.emitDownload(artifact, {
-          state: 'downloading',
-          bytesReceived: received,
-          totalBytes: artifact.byteSize
-        })
-      }
+      const received = await downloadStagedArtifact({
+        stagingDirectory: staging,
+        files: artifact.files,
+        restart: mode === 'restart',
+        signal: controller.signal,
+        onProgress: (receivedSoFar) => {
+          const now = Date.now()
+          if (now - lastEmitAt < 120) return
+          lastEmitAt = now
+          this.host.emitDownload(artifact, {
+            state: 'downloading',
+            bytesReceived: receivedSoFar,
+            totalBytes: artifact.byteSize,
+            ...(kept > 0 ? { resumedFromBytes: kept } : {})
+          })
+        }
+      })
       this.host.emitDownload(artifact, {
         state: 'verifying',
         bytesReceived: received,
         totalBytes: artifact.byteSize
       })
-      const previous = `${destination}.${randomUUID()}.previous`
+      const previous = `${destination}.previous`
       const hadPrevious = await access(destination)
         .then(() => true)
         .catch(() => false)
-      if (hadPrevious) await rename(destination, previous)
+      if (hadPrevious) {
+        // A previous run that died mid-install leaves this path behind, and a
+        // rename onto an existing directory would fail.
+        await rm(previous, { recursive: true, force: true })
+        await rename(destination, previous)
+      }
       try {
         await rename(staging, destination)
       } catch (cause) {
@@ -102,16 +115,25 @@ export class SpeechArtifactDownloader {
       await this.host.recordInstalled(artifact, installedAt)
       this.host.emitDownload(artifact, { state: 'installed', installedAt })
     } catch (cause) {
-      await rm(staging, { recursive: true, force: true })
+      // The staged bytes are deliberately kept: a cancellation or a dropped
+      // connection is exactly what the resume path continues from.
       const cancelled = controller.signal.aborted
+      const keptBytes = await stagedArtifactBytes(staging, artifact.files)
       this.host.emitDownload(
         artifact,
         cancelled
-          ? { state: 'cancelled', cancelledAt: Date.now() }
+          ? {
+              state: 'cancelled',
+              cancelledAt: Date.now(),
+              bytesReceived: keptBytes,
+              totalBytes: artifact.byteSize
+            }
           : {
               state: 'failed',
               failedAt: Date.now(),
-              error: toSpeechError(cause, 'download-failed')
+              error: toSpeechError(cause, 'download-failed'),
+              bytesReceived: keptBytes,
+              totalBytes: artifact.byteSize
             }
       )
       throw cause
@@ -136,20 +158,22 @@ export class SpeechArtifactDownloader {
   /**
    * Preflight a model download against the available disk space so a nearly
    * full disk produces a clear, actionable error up front instead of a raw
-   * ENOSPC failure midway through writing gigabytes of model files.
+   * ENOSPC failure midway through writing gigabytes of model files. It is
+   * measured against the bytes still missing, since resumed bytes already occupy
+   * the disk.
    */
-  private async assertDiskSpace(path: string, byteSize: number): Promise<void> {
-    if (!Number.isFinite(byteSize) || byteSize <= 0) return
+  private async assertDiskSpace(path: string, remainingBytes: number): Promise<void> {
+    if (!Number.isFinite(remainingBytes) || remainingBytes <= 0) return
     try {
-      const stats = await statfs(path)
+      const stats = await statfs(dirname(path))
       const available = Number(stats.bavail) * Number(stats.bsize)
       // Require the artifact size plus a small working margin (the app
       // database, logs, and temp files share the same volume).
-      const margin = Math.min(Math.max(byteSize * 0.05, 64 * 1024 * 1024), 1_073_741_824)
-      if (available < byteSize + margin) {
+      const margin = Math.min(Math.max(remainingBytes * 0.05, 64 * 1024 * 1024), 1_073_741_824)
+      if (available < remainingBytes + margin) {
         throw new Error(
           `Not enough disk space to download this model: ${Math.round(
-            (byteSize + margin) / (1024 * 1024)
+            (remainingBytes + margin) / (1024 * 1024)
           )} MB is needed, ${Math.round(available / (1024 * 1024))} MB is available. Free up space and try again.`
         )
       }
@@ -158,23 +182,5 @@ export class SpeechArtifactDownloader {
       // statfs itself failing must never block a download; the streaming write
       // below still surfaces a real error if the disk is genuinely unwritable.
     }
-  }
-
-  private downloadFile(
-    url: string,
-    destination: string,
-    expectedBytes: number,
-    expectedSha256: string,
-    signal: AbortSignal,
-    onProgress?: (receivedSoFar: number) => void
-  ): Promise<number> {
-    return downloadFileResumable({
-      url,
-      destination,
-      expectedBytes,
-      checksum: { algorithm: 'sha256', encoding: 'hex', digest: expectedSha256 },
-      signal,
-      onProgress
-    })
   }
 }

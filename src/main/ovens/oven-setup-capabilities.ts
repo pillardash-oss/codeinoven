@@ -7,6 +7,7 @@ import {
   type OvenPreflightReport,
   type OvenPackageManager
 } from '../../lib/ovens'
+import { WINDOWS_SSHD_STARTUP_COMMAND } from './remote/oven-windows-sshd'
 
 /** Every platform CodeInOven can set up. Anything else is recorded, not attempted. */
 export const OVEN_SETUP_PLATFORMS = ['linux', 'darwin', 'win32'] as const
@@ -184,6 +185,18 @@ export function assessPreflight(report: OvenPreflightReport): OvenPreflightAsses
         'This Oven needs a reboot before package changes take effect. Reboot it yourself, then run setup again.',
       blocking: false
     })
+  // Windows installs OpenSSH as a manual service, so an Oven that works now is
+  // unreachable after the next restart until someone starts SSH by hand. Say so
+  // with the exact command: this is the one Oven failure the app cannot fix for
+  // the user, because changing a service's start type needs elevation.
+  if (report.platform === 'win32' && report.sshStartsAtBoot === false)
+    issues.push({
+      code: 'windows-ssh-manual',
+      message:
+        'Windows starts this Oven\u2019s SSH server only when someone starts it by hand, so the Oven stops answering after a restart. Setup can fix this when it runs with administrator rights; otherwise run this once in an elevated PowerShell: ' +
+        WINDOWS_SSHD_STARTUP_COMMAND,
+      blocking: false
+    })
 
   const harnesses = assessHarnesses(report.harnesses)
   for (const harness of harnesses) {
@@ -223,7 +236,8 @@ export function assessPreflight(report: OvenPreflightReport): OvenPreflightAsses
     timezone: report.timezone,
     osUpdateRequired: report.osUpdateRequired,
     ...(report.osUpdateDetail ? { osUpdateDetail: report.osUpdateDetail } : {}),
-    rebootRequired: report.rebootRequired
+    rebootRequired: report.rebootRequired,
+    sshStartsAtBoot: report.sshStartsAtBoot ?? null
   }
 }
 

@@ -213,6 +213,18 @@ export function issueTimelineLine(event: IssueTimelineEvent): IssueTimelineLine 
       return event.commitId
         ? { lead: 'merged commit', commitId: event.commitId }
         : { lead: 'merged this' }
+    case 'committed':
+      return { lead: 'added commit', commitId: event.commitId ?? undefined }
+    case 'head_ref_force_pushed':
+      return { lead: 'force-pushed the head branch', commitId: event.commitId ?? undefined }
+    case 'base_ref_force_pushed':
+      return { lead: 'force-pushed the base branch', commitId: event.commitId ?? undefined }
+    case 'base_ref_changed':
+      return { lead: 'changed the base branch' }
+    case 'head_ref_restored':
+      return { lead: 'restored the head branch' }
+    case 'review_dismissed':
+      return { lead: 'dismissed a review' }
     case 'head_ref_deleted':
       return { lead: 'deleted the head branch' }
     case 'marked_as_duplicate':

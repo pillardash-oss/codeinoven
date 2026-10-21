@@ -56,6 +56,12 @@ mac:
   extendInfo:
     NSCameraUsageDescription: Allow browser pages you approve to use the camera for local app testing.
     NSMicrophoneUsageDescription: Record audio for local dictation and transcription in CodeInOven.
+    # macOS 15 and later refuse every connection to another device on the local
+    # network until the app asks for it, and ask only when this description is
+    # present. Without it the system denies the request silently, so an Oven on
+    # the same Wi-Fi or on this Mac's virtual machine answers every other program
+    # on the machine and looks unreachable to CodeInOven alone.
+    NSLocalNetworkUsageDescription: CodeInOven connects to the Ovens you add, such as a tablet on your Wi-Fi or a virtual machine on this Mac, over SSH.
     # "Open in CodeInOven" from Finder. Declaring folders and generic document
     # data is what makes CodeInOven appear in the Finder context menu's
     # "Open With" list (and lets a folder be dropped on the Dock icon).

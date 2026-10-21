@@ -295,7 +295,6 @@ export const IPC_EVENT_CONTRACT = {
    */
   'computerUse:activity': [] as unknown as [activity: ComputerUseActivity],
   'browser:state': [] as unknown as [state: BrowserPageState],
-  'gateway:state': [] as unknown as [status: import('../gateway-types').GatewayStatus],
   /** Live provider connection health/status snapshot. */
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
   /** DevTools open state changed for a browser tab (open/closed). */

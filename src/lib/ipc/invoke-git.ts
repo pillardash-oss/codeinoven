@@ -11,7 +11,8 @@ import type {
   GitHubAvatarRequest,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
-  GitHubDeploymentOverviewResult,
+  GitHubDeploymentActivityResult,
+  GitHubDeploymentPage,
   GitHubDeviceCode,
   GitHubMutationResult,
   GitHubNotificationPageInput,
@@ -19,6 +20,7 @@ import type {
   GitHubNotificationTabCounts,
   GitHubPollResult,
   GitHubWorkflowRunDetail,
+  GitHubWorkflowRunPage,
   GitIdentity,
   GitIdentityInput,
   GitInvocation,
@@ -71,7 +73,8 @@ import type {
   ThreadSettings,
   WorkflowCancelResult,
   WorkflowRerunMode,
-  WorkflowRerunResult
+  WorkflowRerunResult,
+  WorkflowRunFilter
 } from '../types'
 import type { Contract } from './contract-helpers'
 
@@ -586,9 +589,17 @@ export const invokeGitContract = {
     ],
     GitHubMutationResult<PrReactionGroup[]>
   >,
-  'deployment:overview': {} as Contract<
+  'deployment:activity': {} as Contract<
     [projectId: string, owner: string, repo: string],
-    GitHubDeploymentOverviewResult
+    GitHubDeploymentActivityResult
+  >,
+  'deployment:runs': {} as Contract<
+    [projectId: string, owner: string, repo: string, filter: WorkflowRunFilter, page: number],
+    GitHubWorkflowRunPage
+  >,
+  'deployment:deployments': {} as Contract<
+    [projectId: string, owner: string, repo: string, page: number],
+    GitHubDeploymentPage
   >,
   'deployment:detail': {} as Contract<
     [projectId: string, owner: string, repo: string, deploymentId: number],

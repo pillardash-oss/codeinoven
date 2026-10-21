@@ -18,15 +18,48 @@ import {
   validatePrNumber,
   validatePrPage,
   validatePrState,
+  validateDeploymentPage,
+  validateWorkflowRunFilter,
   validateWorkflowRerunMode
 } from '../ipc-validation'
 import { canonicalGitHubBranch, resolveGitHubRemoteIdentity, runGitHubMutation } from './shared'
 import { GITHUB_REPOSITORY_ACCESS_MESSAGE, GITHUB_TRANSIENT_MESSAGE } from './shared'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
-import type { GitHubDeploymentOverview } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 
 const PR_PAGE_SIZE = 20
+/** How many runs, or deployments, one Deployments page carries. */
+const DEPLOYMENT_PAGE_SIZE = 20
+
+/**
+ * One listing read, with the two failures that are answers rather than rejections.
+ *
+ * A repository the App cannot see and a transport outage travel back as values,
+ * exactly as `pr:page` reports them, so the Deployments view keeps the rows it was
+ * already showing and still says why they may be stale.
+ */
+async function readDeploymentListing<Item>(
+  page: number,
+  read: () => Promise<{ items: Item[]; page: number; hasMore: boolean }>
+): Promise<{
+  items: Item[]
+  page: number
+  hasMore: boolean
+  accessError?: string
+  transientError?: string
+}> {
+  try {
+    return await read()
+  } catch (error) {
+    if (error instanceof ProviderHttpError && (error.status === 403 || error.status === 404)) {
+      return { items: [], page, hasMore: false, accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE }
+    }
+    if (isNetworkError(error)) {
+      return { items: [], page, hasMore: false, transientError: GITHUB_TRANSIENT_MESSAGE }
+    }
+    throw error
+  }
+}
 
 export function registerPrHandlers(ctx: IpcHandlerContext): void {
   const {
@@ -382,36 +415,72 @@ export function registerPrHandlers(ctx: IpcHandlerContext): void {
   )
 
   ipcMain.handle(
-    'deployment:overview',
+    'deployment:activity',
     async (_, projectId: unknown, owner: unknown, repo: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const provider = await providerForProject(safeProjectId)
       if (!provider) throw new Error('Sign in to GitHub to monitor deployments')
-      let overview: GitHubDeploymentOverview
+      let hasDeployments: boolean
       try {
-        overview = await provider.getDeploymentOverview({
+        hasDeployments = await provider.hasDeploymentActivity({
           owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
           repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
         })
       } catch (error) {
         if (error instanceof ProviderHttpError && (error.status === 403 || error.status === 404)) {
-          return {
-            workflowRuns: [],
-            deployments: [],
-            fetchedAt: Date.now(),
-            hasDeployments: false,
-            accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
-          }
+          return { hasDeployments: false, accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE }
         }
         throw error
       }
       // The repo either deploys or it doesn't   persist that fact so the
       // Deployments tab only ever appears when there is something to show.
-      const hasDeployments = overview.deployments.length > 0 || overview.workflowRuns.length > 0
       if (hasDeployments) {
         await projectManager.setHasDeployments(safeProjectId, true).catch(() => undefined)
       }
-      return { ...overview, hasDeployments }
+      return { hasDeployments }
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:runs',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      filter: unknown,
+      page: unknown
+    ) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to monitor deployments')
+      const safePage = validateDeploymentPage(page)
+      const safeFilter = validateWorkflowRunFilter(filter)
+      return readDeploymentListing(safePage, () =>
+        provider.listWorkflowRunPage({
+          owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+          repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+          filter: safeFilter,
+          page: safePage,
+          perPage: DEPLOYMENT_PAGE_SIZE
+        })
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:deployments',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, page: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to monitor deployments')
+      const safePage = validateDeploymentPage(page)
+      return readDeploymentListing(safePage, () =>
+        provider.listDeploymentPage({
+          owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+          repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+          page: safePage,
+          perPage: DEPLOYMENT_PAGE_SIZE
+        })
+      )
     }
   )
 

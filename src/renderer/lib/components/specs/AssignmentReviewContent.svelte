@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -755,7 +755,7 @@
                   title={`This worker runs in its own scope: ${workerScopeName}`}
                   aria-label={`This worker runs in its own scope: ${workerScopeName}`}
                 >
-                  <CioFiles size={10} class="shrink-0 text-warning" />
+                  <CioFolderGit size={11} class="shrink-0 text-warning" />
                   <span class="min-w-0 truncate">{workerScopeName}</span>
                 </span>
               {/if}

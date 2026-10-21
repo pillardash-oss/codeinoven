@@ -548,7 +548,7 @@ root `.env` files are copied by creation (section 5).
 
 ### 10.5 Concurrent-instance caveats
 
-- Settings, logs, the gateway plugin data directory, and the speech process
-  journal are single files under the config root, so two instances writing them
+- Settings, logs, the speech process journal, and the design and video data are
+  single files under the config root, so two instances writing them
   concurrently is last-write-wins. Give an instance its own
   `CODEINOVEN_CONFIG_ROOT` when that matters.

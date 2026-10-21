@@ -56,9 +56,66 @@ if (!existsSync(pathTxt) || readFileSync(pathTxt, 'utf8').trim() !== development
   writeFileSync(pathTxt, developmentPath)
 }
 
-const current = readFileSync(plistPath, 'utf8')
-let plist = current
-for (const [key, value] of [
+/**
+ * Read the bundle's Info.plist as a plain object through `plutil`.
+ *
+ * Editing the XML text is the obvious way to write this, and it is the way that
+ * once dropped `NSLocalNetworkUsageDescription` into a nested asar integrity
+ * dictionary instead of the top level. The bundle then carried the key and macOS
+ * still refused the app every local network connection, which is indistinguishable
+ * from an Oven that is switched off. Converting through `plutil` edits the real
+ * top-level dictionary, so a key cannot land somewhere the system never reads.
+ */
+function readPlistObject(path: string): Record<string, unknown> {
+  const json = execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', path], {
+    encoding: 'utf8'
+  })
+  const parsed: unknown = JSON.parse(json)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new TypeError('The dev bundle Info.plist did not parse into a dictionary.')
+  return parsed as Record<string, unknown>
+}
+
+/**
+ * Compare two plist dictionaries by value.
+ *
+ * A raw `JSON.stringify` comparison is order-sensitive while a plist is not: an
+ * object that a previous pass already wrote correctly comes back from `plutil`
+ * with its keys in a different order, so a string comparison reports a change
+ * that does not exist, rewrites the file with identical bytes, and then fails
+ * its own "did the write land" guard because the text never differed.
+ */
+function plistValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((entry, index) => plistValuesEqual(entry, right[index]))
+  }
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null)
+    return false
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const leftKeys = Object.keys(leftRecord)
+  if (leftKeys.length !== Object.keys(rightRecord).length) return false
+  return leftKeys.every(
+    (key) =>
+      Object.hasOwn(rightRecord, key) && plistValuesEqual(leftRecord[key], rightRecord[key])
+  )
+}
+
+/** Remove one key everywhere it appears, including any copy left nested. */
+function removeKeyEverywhere(value: unknown, key: string): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) removeKeyEverywhere(entry, key)
+    return
+  }
+  if (typeof value !== 'object' || value === null) return
+  const record = value as Record<string, unknown>
+  delete record[key]
+  for (const nested of Object.values(record)) removeKeyEverywhere(nested, key)
+}
+
+const managedKeys: [string, string][] = [
   ['CFBundleDisplayName', developmentName],
   ['CFBundleName', developmentName],
   ['CFBundleIdentifier', developmentId],
@@ -66,15 +123,34 @@ for (const [key, value] of [
   [
     'NSMicrophoneUsageDescription',
     `Record audio for local dictation and transcription in ${developmentName}.`
+  ],
+  // macOS 15 and later deny every local-network connection from an app that
+  // carries no local-network description, and a development run that cannot
+  // reach a Wi-Fi tablet or a local virtual machine looks exactly like an Oven
+  // that is down. A packaged build gets the same key from electron-builder.yml.
+  [
+    'NSLocalNetworkUsageDescription',
+    `${developmentName} connects to the Ovens you add, such as a tablet on your Wi-Fi or a virtual machine on this Mac, over SSH.`
   ]
-]) {
-  const entry = new RegExp(`(<key>${key}</key>\\s*<string>)[^<]*(</string>)`)
-  plist = entry.test(plist)
-    ? plist.replace(entry, `$1${value}$2`)
-    : plist.replace('</dict>', `\t<key>${key}</key>\n\t<string>${value}</string>\n</dict>`)
+]
+const before = readPlistObject(plistPath)
+const after: Record<string, unknown> = JSON.parse(JSON.stringify(before)) as Record<string, unknown>
+for (const [key, value] of managedKeys) {
+  // A key left nested by an older branding pass is removed first, so exactly one
+  // copy remains and it is the one the system reads.
+  removeKeyEverywhere(after, key)
+  after[key] = value
 }
-if (plist !== current) {
-  writeFileSync(plistPath, plist, 'utf8')
+if (!plistValuesEqual(after, before)) {
+  const converted = join(dirname(plistPath), 'Info.plist.converted')
+  writeFileSync(converted, JSON.stringify(after), 'utf8')
+  try {
+    execFileSync('/usr/bin/plutil', ['-convert', 'xml1', '-o', plistPath, converted])
+  } finally {
+    rmSync(converted, { force: true })
+  }
+  if (!plistValuesEqual(readPlistObject(plistPath), after))
+    throw new Error('Info.plist was not updated.')
   resourcesChanged = true
 }
 

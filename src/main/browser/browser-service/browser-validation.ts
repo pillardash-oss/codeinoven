@@ -620,7 +620,7 @@ export const FRAME_RENDER_TIMEOUT_MS = 4_000
  * that answers it cannot drift apart: a command the union declares but the page
  * does not define would be an eval of an unknown name.
  */
-const TRANSPORT_COMMANDS = ['play', 'pause', 'toggle', 'stop', 'seek', 'loop'] as const
+const TRANSPORT_COMMANDS = ['play', 'pause', 'toggle', 'stop', 'seek', 'freeze', 'loop'] as const
 
 /** Ceiling on a playback error, so a page that throws a novel on every frame
  *  cannot push an unbounded message into published tab state. */
@@ -650,7 +650,7 @@ export function validateTransportValue(
   command: BrowserTransportCommand,
   value: unknown
 ): number | boolean {
-  if (command === 'seek') {
+  if (command === 'seek' || command === 'freeze') {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       throw new TypeError('A browser seek must name a non-negative number of seconds')
     }

@@ -29,6 +29,8 @@ export interface OvenConnection {
   port: number
   authentication: 'agent' | 'identity' | 'vault' | 'password'
   identityFile?: string
+  /** Explicit compatibility exception. Omission requires hybrid post-quantum SSH. */
+  allowClassicalKeyExchange?: boolean
 }
 
 export interface Oven {
@@ -83,6 +85,7 @@ export interface OvenConnectionStatus {
   checkedAt: number
   latencyMs?: number
   error?: string
+  sshProtection?: OvenSshProtection
   specs?: {
     hostname: string
     platform: string
@@ -95,6 +98,12 @@ export interface OvenConnectionStatus {
     /** Seconds the Oven has been powered on, as the Oven reports it. */
     uptimeSeconds: number
   }
+}
+
+export interface OvenSshProtection {
+  state: 'post-quantum' | 'classical' | 'unverified'
+  keyExchange?: string
+  serverVersion?: string
 }
 
 export interface OvenHarnessInventoryItem {
@@ -160,6 +169,8 @@ export interface OvenPeek {
   ovenId: string
   checkedAt: number
   durationMs: number
+  /** Verified on a fresh authenticated SSH handshake, never inferred from a server version. */
+  sshProtection?: OvenSshProtection
   /** Live service probe: specs, service revision, and active runs. Null when the Oven did not answer. */
   probe: OvenProbe | null
   /** Enriched harness rows: installed version plus update availability. */
@@ -415,6 +426,14 @@ export interface OvenPreflightReport {
   osUpdateRequired: boolean
   osUpdateDetail?: string
   rebootRequired: boolean
+  /**
+   * Whether this Windows Oven's OpenSSH server starts with the machine.
+   *
+   * Windows installs `sshd` as a manual service, so a restart leaves the Oven
+   * answering nothing until someone starts SSH by hand. `null` means the Oven
+   * is not Windows, or the service could not be read.
+   */
+  sshStartsAtBoot?: boolean | null
   durationMs: number
 }
 
@@ -432,6 +451,7 @@ export interface OvenPreflightIssue {
     | 'harness-broken'
     | 'os-update-pending'
     | 'reboot-required'
+    | 'windows-ssh-manual'
   message: string
   /** Blocks setup outright rather than merely warning. */
   blocking: boolean
@@ -457,6 +477,12 @@ export interface OvenPreflightAssessment {
   osUpdateRequired: boolean
   osUpdateDetail?: string
   rebootRequired: boolean
+  /**
+   * Whether this Windows Oven's SSH server starts with the machine.
+   *
+   * `null` means the Oven is not Windows, or its service could not be read.
+   */
+  sshStartsAtBoot?: boolean | null
 }
 
 export type OvenSetupStepStatus =

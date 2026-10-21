@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioFolderInput from '@pdslng/cio-icon/CioFolderInput.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioGitCompare from '@pdslng/cio-icon/CioGitCompare.svelte'
@@ -152,7 +153,7 @@
       if (!isManaged && bucket.id !== DEFAULT_SCOPE_BUCKET_ID) {
         list.push({
           label: 'Create Git worktree',
-          icon: CioTabGit,
+          icon: CioFolderGit,
           run: () => actions.askCreateWorktree(bucket),
           ...(scopeHasLiveSession ? { disabledReason: liveSessionReason } : {})
         })

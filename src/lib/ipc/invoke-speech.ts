@@ -93,7 +93,7 @@ export const invokeSpeechContract = {
     import('../speech/types').SpeechResult<void>
   >,
   'speech:downloadArtifact': {} as Contract<
-    [artifactId: string],
+    [artifactId: string, mode?: import('../speech/types').SpeechDownloadMode],
     import('../speech/types').SpeechResult<void>
   >,
   'speech:cancelDownload': {} as Contract<

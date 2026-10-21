@@ -14,6 +14,9 @@ import {
 } from '../../lib/video/studio'
 import { currentWorkRoot } from '../design/work-roots-state'
 import { videoBoundedSeconds } from '../../lib/video/timeline'
+import { snapVideoFrame } from '../../lib/video/frame-grid'
+import { VideoFramePreview } from './video-frame-preview'
+import { resolveServedEntry, servedFileUrl } from '../preview/served-folder'
 import {
   readVideoStudio,
   writeVideoStudio,
@@ -79,6 +82,7 @@ function revision(document: VideoStudioDocument): string {
 }
 
 export class VideoStudioService {
+  private readonly framePreviews = new VideoFramePreview()
   readonly jobs = new VideoJobs()
   /** The optional GPU matting stack, installed on demand from Settings. */
   readonly packages = new VideoPackagesService()
@@ -404,6 +408,34 @@ export class VideoStudioService {
     })
   }
   registerIpc(): void {
+    ipcMain.handle('video:frameStrip', async (_event, projectId, directory, times: unknown) => {
+      if (
+        !Array.isArray(times) ||
+        times.length > 24 ||
+        times.some(
+          (time: unknown) => typeof time !== 'number' || !Number.isFinite(time) || time < 0
+        )
+      )
+        throw new Error('Frame previews require up to 24 valid times')
+      if (!times.length) return []
+      const { folder } = await this.folder(id(projectId), directory)
+      const manifest = await readCompositionManifest(folder)
+      if (
+        !manifest ||
+        manifest.width > 8192 ||
+        manifest.height > 8192 ||
+        manifest.width * manifest.height > 3840 * 2160
+      )
+        return []
+      const entry = await resolveServedEntry(folder, 'index.html')
+      if (!entry) return []
+      const registration = await this.options.previews.open(folder)
+      return this.framePreviews.render(servedFileUrl(registration.url, entry), manifest, [
+        ...new Set(
+          (times as number[]).map((time) => snapVideoFrame(time, manifest.duration, manifest.fps))
+        )
+      ])
+    })
     const id = (value: unknown): string => videoText(value, 'identifier', 128)
     ipcMain.handle('video:studio', (_event, projectId, directory) =>
       this.read(id(projectId), directory)
@@ -442,6 +474,7 @@ export class VideoStudioService {
     app.once('before-quit', () => {
       stopPackProgress()
       this.jobs.dispose()
+      this.framePreviews.dispose()
     })
   }
 }

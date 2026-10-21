@@ -124,7 +124,6 @@
     <div class="flex items-center justify-between border-t border-border pt-3">
       <span class="text-xs text-dimmed">New project</span>
       <ProjectCreateControl
-        {projects}
         onProjectCreated={handleCreated}
         title="Add a project to continue in"
       />

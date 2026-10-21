@@ -5,8 +5,8 @@
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
@@ -617,7 +617,7 @@
                     aria-label="Managed Git worktree scope on {scopeBucket.root.branch}"
                     title="Managed Git worktree scope on {scopeBucket.root.branch}"
                   >
-                    <CioFiles size={12} class="text-warning" />
+                    <CioFolderGit size={12} class="text-warning" />
                   </span>
                 {/if}
                 <!-- The scope itself is the menu trigger: click or right-click it to
@@ -745,7 +745,7 @@
                             aria-label="Managed Git worktree scope on {bucket.root.branch}"
                             title="Managed Git worktree scope on {bucket.root.branch}"
                           >
-                            <CioFiles size={10} class="text-warning" />
+                            <CioFolderGit size={11} class="text-warning" />
                           </span>
                         {/if}
                         <span class="truncate">{bucket.name}</span>

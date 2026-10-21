@@ -75,3 +75,31 @@ describe('windows Oven task commands', () => {
     )
   })
 })
+
+describe('windows oven executable name', () => {
+  it('starts the runtime through the Oven name so Task Manager can show it', () => {
+    const launcher = windowsLauncherScript({
+      nodePath: 'C:\\Program Files\\nodejs\\node.exe',
+      executablePath:
+        'C:\\Users\\dev\\.config\\pillardash\\codeinoven\\ovens\\codeinoven-oven connect.exe',
+      servicePath: 'C:\\Users\\dev\\.config\\pillardash\\codeinoven\\ovens\\service.mjs',
+      dataRoot: 'C:\\Users\\dev\\.config\\pillardash\\codeinoven\\ovens'
+    })
+    expect(launcher).toContain('codeinoven-oven connect.exe')
+    expect(launcher).toContain('" daemon"')
+    // The node directory still leads PATH, or the daemon's own tooling loses it.
+    expect(launcher).toContain('C:\\Program Files\\nodejs;')
+    // Windows would show a window for a console program started any other way.
+    expect(launcher).toContain(', 0, False')
+  })
+
+  it('falls back to the plain runtime when no named copy exists', () => {
+    const launcher = windowsLauncherScript({
+      nodePath: 'C:\\Program Files\\nodejs\\node.exe',
+      servicePath: 'C:\\Users\\dev\\.config\\pillardash\\codeinoven\\ovens\\service.mjs',
+      dataRoot: 'C:\\Users\\dev\\.config\\pillardash\\codeinoven\\ovens'
+    })
+    // VBScript doubles the quotes around the command it runs.
+    expect(launcher).toContain('shell.Run """C:\\Program Files\\nodejs\\node.exe""')
+  })
+})

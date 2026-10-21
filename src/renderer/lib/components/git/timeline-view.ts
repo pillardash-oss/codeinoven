@@ -59,18 +59,24 @@ export function timelineEventIcon(event: Pick<IssueTimelineEvent, 'kind'>): type
       return CioPin
     case 'unpinned':
       return CioPinOff
+    case 'committed':
+    case 'head_ref_force_pushed':
+    case 'base_ref_force_pushed':
     case 'referenced':
       return CioCommit
     case 'cross-referenced':
       return CioSwap
     case 'marked_as_duplicate':
       return CioCopy
+    case 'base_ref_changed':
+    case 'head_ref_restored':
     case 'connected':
       return CioTabGit
     case 'fields':
       return CioTabSettings
     case 'merged':
       return CioMerge
+    case 'review_dismissed':
     case 'review_requested':
     case 'review_request_removed':
       return CioUserCheck

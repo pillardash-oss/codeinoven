@@ -7,8 +7,6 @@
     headIsCurrent: boolean
     pushErrorDetails: string
     recoverMode: 'merge' | 'rebase' | null
-    resolveThreadError: string
-    openingResolveThread: boolean
     onRecover: (mode: 'merge' | 'rebase') => void
     onResolveWithAgent: () => void
   }
@@ -18,8 +16,6 @@
     headIsCurrent,
     pushErrorDetails,
     recoverMode,
-    resolveThreadError,
-    openingResolveThread,
     onRecover,
     onResolveWithAgent
   }: Props = $props()
@@ -79,21 +75,13 @@
     </div>
   </div>
   <div class="mt-2 border-t border-warning/20 pt-2">
-    {#if resolveThreadError}
-      <p class="mb-2 text-[0.5625rem] leading-relaxed text-danger">{resolveThreadError}</p>
-    {/if}
     <button
       type="button"
       class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 border border-warning/40 bg-surface px-3 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-      title="Open a new thread with this branch-divergence issue prefilled"
-      disabled={openingResolveThread}
+      title="Choose a model and scope, then hand this branch divergence to an agent"
       onclick={onResolveWithAgent}
     >
-      {#if openingResolveThread}
-        <CioSpinner size={12} class="animate-spin" />
-      {:else}
-        <CioSubagent size={12} />
-      {/if}
+      <CioSubagent size={12} />
       Resolve with agent
     </button>
   </div>

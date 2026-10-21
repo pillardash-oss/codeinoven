@@ -1,8 +1,53 @@
+/**
+ * Wheel travel, in pixels, that counts as one mouse notch.
+ *
+ * A wheel event is not a tick. A mouse notch reports about 100px, an Electron
+ * pinch reports a handful of pixels with `ctrlKey` set, and a trackpad swipe
+ * reports a long stream of 1-5px events. Treating every event as one full step
+ * made those streams zoom dozens of times inside a single gesture.
+ */
+const WHEEL_NOTCH_PIXELS = 100
+/** Pinch deltas are much smaller than wheel ones for the same intent. */
+const PINCH_NOTCH_PIXELS = 24
+/** Browsers that report lines or pages instead of pixels (`deltaMode`). */
+const DELTA_MODE_LINE = 1
+const DELTA_MODE_PAGE = 2
+const WHEEL_LINE_PIXELS = 16
+const WHEEL_PAGE_PIXELS = 800
+/** A single event never moves more than one wheel step, however large its delta. */
+const MAX_WHEEL_STEPS = 1
+
+function wheelPixels(event: WheelEvent): number {
+  const scale =
+    event.deltaMode === DELTA_MODE_LINE
+      ? WHEEL_LINE_PIXELS
+      : event.deltaMode === DELTA_MODE_PAGE
+        ? WHEEL_PAGE_PIXELS
+        : 1
+  return event.deltaY * scale
+}
+
+/** What a plain wheel, with no modifier held, means to a zoomable surface. */
+export type PanZoomWheelMode = 'zoom' | 'scroll'
+
 export interface PanZoomOptions {
   min?: number
   max?: number
-  /** Multiplier applied per wheel tick. */
+  /** Multiplier applied per wheel notch and per toolbar zoom click. */
   step?: number
+  /**
+   * What the plain wheel does, without the zoom modifier.
+   *
+   * `zoom` (the default) suits a picture, where there is nothing to scroll: the
+   * wheel is the only direct way to look closer. `scroll` leaves the wheel to the
+   * surface, so a document artifact scrolls like a page and only a deliberate
+   * gesture zooms it: the zoom modifier held down, or a toolbar button. Holding
+   * the modifier zooms either way.
+   *
+   * A getter is accepted so a surface that can draw either kind of artifact reads
+   * the mode its artifact has now rather than the one it had at construction.
+   */
+  wheel?: PanZoomWheelMode | (() => PanZoomWheelMode)
   /**
    * Pointer travel, in pixels, before a press becomes a pan.
    *
@@ -35,6 +80,13 @@ export class PanZoom {
   readonly min: number
   readonly max: number
   private readonly step: number
+  /**
+   * Zoom factor applied per wheel notch. Half a toolbar click, because a wheel
+   * or pinch gesture delivers its travel continuously and a full click-sized
+   * jump per notch reads as hypersensitive.
+   */
+  private readonly wheelStep: number
+  private readonly wheelMode: PanZoomWheelMode | (() => PanZoomWheelMode)
   private readonly dragThreshold: number
   private target?: HTMLElement
   private panStart = { x: 0, y: 0, panX: 0, panY: 0 }
@@ -45,6 +97,8 @@ export class PanZoom {
     this.min = options.min ?? 0.5
     this.max = options.max ?? 6
     this.step = options.step ?? 1.15
+    this.wheelStep = Math.sqrt(this.step)
+    this.wheelMode = options.wheel ?? 'zoom'
     this.dragThreshold = Math.max(0, options.dragThreshold ?? 0)
   }
 
@@ -70,6 +124,10 @@ export class PanZoom {
     return Math.min(this.max, Math.max(this.min, value))
   }
 
+  private currentWheelMode(): PanZoomWheelMode {
+    return typeof this.wheelMode === 'function' ? this.wheelMode() : this.wheelMode
+  }
+
   private zoomAt(clientX: number, clientY: number, nextZoom: number): void {
     const rect = this.target?.getBoundingClientRect()
     if (!rect || rect.width === 0 || rect.height === 0) {
@@ -86,10 +144,28 @@ export class PanZoom {
     this.zoom = nextZoom
   }
 
+  /**
+   * Zoom on a deliberate wheel gesture, proportional to the wheel travel.
+   *
+   * One notch of zoom per `WHEEL_NOTCH_PIXELS` of travel keeps a mouse wheel
+   * deliberate while letting a trackpad stream zoom smoothly instead of
+   * multiplying itself by a whole step on every 2px event.
+   *
+   * A wheel with no modifier held is left to the surface in `scroll` mode, so a
+   * document artifact scrolls like the page it is. The event is not consumed in
+   * that case: the scroll container under the pointer needs its default action.
+   */
   onWheel = (event: WheelEvent): void => {
+    // `ctrlKey` is also what a trackpad pinch reports, which is a zoom on every
+    // platform, so the pinch gesture keeps working here.
+    const zooming = this.currentWheelMode() === 'zoom' || event.metaKey || event.ctrlKey
+    if (!zooming) return
     event.preventDefault()
-    const factor = event.deltaY < 0 ? this.step : 1 / this.step
-    this.zoomAt(event.clientX, event.clientY, this.clamp(this.zoom * factor))
+    const pixels = wheelPixels(event)
+    if (pixels === 0) return
+    const notchPixels = event.ctrlKey ? PINCH_NOTCH_PIXELS : WHEEL_NOTCH_PIXELS
+    const notches = Math.max(-MAX_WHEEL_STEPS, Math.min(MAX_WHEEL_STEPS, -pixels / notchPixels))
+    this.zoomAt(event.clientX, event.clientY, this.clamp(this.zoom * this.wheelStep ** notches))
   }
 
   /** Zooms toward the center of `viewport` — for toolbar zoom in/out buttons. */

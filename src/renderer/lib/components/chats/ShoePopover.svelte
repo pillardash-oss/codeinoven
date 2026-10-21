@@ -15,6 +15,13 @@
     onReveal?: () => void
     /** Called as the panel is hidden. */
     onHide?: () => void
+    /**
+     * A request to open the panel from outside its trigger, as a token that
+     * changes on every request. A reading the user asks for by command has no
+     * pointer to hover, so the command bumps the token and the panel opens the
+     * same way a hover would; clearing the token closes it again.
+     */
+    openRequest?: number
     /** The panel frame's own padding, since its content is what differs. */
     panelClass?: string
     /** The trigger's own markup. `props` carries bits-ui's own trigger contract
@@ -28,6 +35,7 @@
     openOnHover = true,
     onReveal,
     onHide,
+    openRequest,
     panelClass = 'p-3',
     trigger,
     children
@@ -49,6 +57,25 @@
     if (next) onReveal?.()
     else onHide?.()
   }
+
+  /** Whether a request has ever reached this panel, so the cleared request it
+   *  mounts with is not read as a dismissal of a panel nobody opened. */
+  let requestedOnce = false
+
+  $effect(() => {
+    const request = openRequest
+    if (request === undefined && !requestedOnce) return
+    // Every request carries a new token, and the token of a reading is cleared
+    // when the other reading is asked for: a number opens this panel, and
+    // clearing it closes whatever it opened, so the two readings are never on
+    // screen together.
+    //
+    // This effect only assigns `open`. It never calls `onReveal` or `onHide`: the
+    // owners flush live readings there, which reads and writes the very state an
+    // effect tracks, and doing it from here is an update-depth loop.
+    requestedOnce = request !== undefined
+    open = request !== undefined
+  })
 </script>
 
 <!--

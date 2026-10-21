@@ -22,6 +22,7 @@ interface MockAutoUpdater {
   logger: unknown
   autoDownload: boolean
   autoInstallOnAppQuit: boolean
+  setFeedURL: ReturnType<typeof vi.fn>
   channel: string | null
   allowPrerelease: boolean
   checkForUpdates: ReturnType<typeof vi.fn>
@@ -39,6 +40,7 @@ const { autoUpdater, autoUpdaterHandlers } = vi.hoisted(() => {
     logger: null,
     autoDownload: false,
     autoInstallOnAppQuit: false,
+    setFeedURL: vi.fn(),
     allowPrerelease: false,
     get channel(): string | null {
       return channel

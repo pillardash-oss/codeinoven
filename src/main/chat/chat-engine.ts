@@ -1394,6 +1394,7 @@ export class ChatEngine {
 
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
   private retryScheduler: RetrySchedulerService | null = null
+  private stopRemoteRetryReconciliation: (() => void) | null = null
   /** Verified device connectivity; null only before boot attaches it. */
   private connectivity: ConnectivitySource | null = null
 
@@ -3887,6 +3888,8 @@ export class ChatEngine {
 
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
+    this.stopRemoteRetryReconciliation?.()
+    this.stopRemoteRetryReconciliation = null
     for (const [requestId, pending] of this.pendingPermissions) {
       if (!pending.settleBrowserAction) continue
       this.pendingPermissions.delete(requestId)
@@ -7975,7 +7978,19 @@ export class ChatEngine {
     // The Sr. Engineer planning surface owns failed initial-spec presentation
     // and its Retry specification action. Do not rehydrate a provider card.
     if (pendingSpec?.state === 'failed') return null
-    const live = this.sessionStatuses.get(thread.sessionId)
+    let live = this.sessionStatuses.get(thread.sessionId)
+    if (thread.status === 'completed' || thread.status === 'interrupted') {
+      // The shared row also repairs missed pub-sub frames and stale launch ledgers.
+      if (live?.state === 'waiting' || live?.state === 'error') {
+        this.sessionStatuses.delete(thread.sessionId)
+        live = undefined
+      }
+      if (this.retryScheduler?.getPendingRetry(thread.sessionId)) {
+        this.retryScheduler.clear(thread.sessionId)
+      }
+      this.retryScheduler?.resumed(thread.sessionId)
+      return live ?? { state: 'idle' }
+    }
     if (live?.state === 'waiting' || live?.state === 'error') return live
     // After an app restart the in-memory status is gone, but a persisted
     // auto-resume record is authoritative: reconstruct the waiting card so the
@@ -24434,12 +24449,7 @@ export class ChatEngine {
         return
       }
       const currentStatus = this.sessionStatuses.get(event.sessionId)
-      if (
-        event.status.state === 'idle' &&
-        currentStatus?.state === 'waiting' &&
-        currentStatus.issue.kind === 'network'
-      )
-        return
+      if (event.status.state === 'idle' && this.isAutomaticRetryWaitActive(event.sessionId)) return
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
         this.sessionStatuses.set(event.sessionId, event.status)
       }
@@ -26187,6 +26197,23 @@ export class ChatEngine {
    */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
+    this.stopRemoteRetryReconciliation?.()
+    this.stopRemoteRetryReconciliation = instanceEventBus.onRemoteEvent(({ event }) => {
+      // Observe recovery without feeding foreign events through local run actions.
+      // A sibling's resumed/settled session invalidates this process's saved wait.
+      if (
+        event.type !== 'session.status' ||
+        (event.status.state !== 'working' && event.status.state !== 'idle')
+      )
+        return
+      if (event.status.state === 'idle' && this.isAutomaticRetryWaitActive(event.sessionId)) return
+      const previous = this.sessionStatuses.get(event.sessionId)
+      if (previous?.state === 'waiting' || previous?.state === 'error') {
+        this.sessionStatuses.delete(event.sessionId)
+      }
+      if (scheduler.getPendingRetry(event.sessionId)) scheduler.clear(event.sessionId)
+      scheduler.resumed(event.sessionId)
+    })
     scheduler.attachNetworkTest(() => this.deviceOnline())
     scheduler.attachStoppedThreadTest(async (projectId, threadId) => {
       const visible = await this.database.queryViaWorker(
@@ -27196,7 +27223,15 @@ export class ChatEngine {
     const threadId = validateEntityId(record.threadId, 'Thread ID')
     const { sessionId } = record
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) {
+    if (
+      !thread ||
+      thread.archived ||
+      !thread.sessionId ||
+      thread.sessionId !== sessionId ||
+      thread.status !== 'working-paused'
+    ) {
+      // The shared row must still be paused on a retry. A sibling can finish
+      // the same session while this process retains an old in-memory wait.
       // The thread moved on (a newer session, an archive, a delete). This wait
       // can never be admitted, and leaving it in the ledger turns every tick
       // into a no-op attempt for a thread that is no longer waiting.

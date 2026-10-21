@@ -81,7 +81,7 @@ export function videoStudioTools(): McpTool[] {
     ),
     tool(
       'export',
-      'Export index.html and composition.json to MP4 with mixed audio, through a dedicated hidden renderer. Supports up to 4K pixel count. The renderer encodes H.264 for the canvas the composition names with CIOVideo.useCanvas, at the manifest size; a composition without that canvas falls back to capturing the window frame by frame. Await media seeks in cioRenderFrame.' +
+      'Use only when the user explicitly requests an export or downloadable video file. The default deliverable is an editable composition and live preview; do not export automatically after creation, edits or critique. Export index.html and composition.json to MP4 with mixed audio, through a dedicated hidden renderer. Supports up to 4K pixel count. The renderer encodes H.264 for the canvas the composition names with CIOVideo.useCanvas, at the manifest size; a composition without that canvas falls back to capturing the window frame by frame. Await media seeks in cioRenderFrame.' +
         jobNote,
       { directory },
       ['directory']

@@ -8,6 +8,7 @@ import type { VideoCapabilityExecutor } from '../utilities/utility-orchestration
 import { currentWorkRoot, projectWorkRootPaths } from '../design/work-roots-state'
 import { openVideoPreview } from './video-preview-session'
 import { DesignRepo } from '../database/repositories/design-repo'
+import { runDesignReview } from '../design/design-review-service'
 
 /**
  * What the video capability's `preview` operation needs from the app.
@@ -55,6 +56,8 @@ export function createVideoPreviewExecutor(
   options: VideoPreviewExecutorOptions
 ): VideoCapabilityExecutor {
   return async (operation, input, context) => {
+    if (operation === 'critique')
+      return runDesignReview(options.database, context, input, true, 'video')
     if (operation !== 'preview' && operation !== 'checkpoint' && options.studio)
       return options.studio(operation, input, context)
     if (operation === 'checkpoint')

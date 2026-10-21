@@ -14,9 +14,11 @@
   interface Props {
     tabs: PanelTab[]
     activeTabId: string | null
-    trailingLabel: string
-    trailingIcon: Snippet
-    onTrailingAction: () => void
+    /** The strip's last control, belonging to the caller: an overflow menu for a
+     *  note, the way out of a full screen surface. It is wrapped like every
+     *  other strip control, so it stays clickable when this strip is drawn
+     *  inside the window's drag region. */
+    trailing: Snippet
     onSelect: (id: string) => void
     newLabel?: string
     icon?: Snippet
@@ -33,9 +35,7 @@
   let {
     tabs,
     activeTabId,
-    trailingLabel,
-    trailingIcon,
-    onTrailingAction,
+    trailing,
     onSelect,
     newLabel,
     icon,
@@ -194,15 +194,11 @@
     </button>
   {/if}
 
-  <button
-    type="button"
+  <div
     class={titlebar
-      ? 'titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
-      : 'flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground'}
-    aria-label={trailingLabel}
-    title={trailingLabel}
-    onclick={onTrailingAction}
+      ? 'titlebar-no-drag flex shrink-0 items-center gap-1'
+      : 'flex shrink-0 items-center gap-1'}
   >
-    {@render trailingIcon()}
-  </button>
+    {@render trailing()}
+  </div>
 </div>

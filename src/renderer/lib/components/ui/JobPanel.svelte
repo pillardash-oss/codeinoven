@@ -48,6 +48,7 @@
     storageKey: string
     dragLabel?: string
     defaultHeight?: number
+    layer?: 'surface' | 'top'
   }
 
   let {
@@ -65,7 +66,8 @@
     onClose,
     storageKey,
     dragLabel = 'Drag to move this run',
-    defaultHeight = 420
+    defaultHeight = 420,
+    layer = 'surface'
   }: Props = $props()
 
   const running = $derived(status === 'running')
@@ -73,6 +75,7 @@
 </script>
 
 <DockableModal
+  {layer}
   open
   {title}
   {minimized}

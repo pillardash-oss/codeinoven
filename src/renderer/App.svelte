@@ -95,6 +95,8 @@
   import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
+  import { agentAssist } from '$lib/components/assist/agent-assist-store.svelte'
+  import { agentAssistJobs } from '$lib/components/assist/agent-assist-jobs.svelte'
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
@@ -2165,7 +2167,6 @@
         mode="spotlight"
         open={newProjectSpotlightOpen}
         onClose={closeNewProjectSpotlight}
-        projects={scopeState.projectRecords}
         onProjectCreated={handleSpotlightProjectCreated}
         onExisting={handleSpotlightExistingProject}
       />
@@ -2285,6 +2286,13 @@
     <!-- Floats above every view   survives thread/project/view and sidebar visibility. -->
     {#await import('$lib/components/git/PrDockHost.svelte') then { default: PrDockHost }}
       <PrDockHost />
+    {/await}
+  {/if}
+
+  {#if agentAssist.request || agentAssistJobs.jobs.length}
+    <!-- Every "with agent" control opens this one setup panel, wherever it lives. -->
+    {#await import('$lib/components/assist/AgentAssistHost.svelte') then { default: AgentAssistHost }}
+      <AgentAssistHost />
     {/await}
   {/if}
 

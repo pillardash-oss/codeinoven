@@ -15,6 +15,7 @@ import { isShippedBuild } from '../bootstrap/app-resources'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
+import { UpdaterReleaseProvider } from './updater-release-provider'
 import {
   INSTALL_ATTEMPT_LIMIT,
   INSTALL_DISPATCH_FILE,
@@ -129,7 +130,7 @@ export class UpdaterService {
   } | null = null
   /** Feed info of the newest available update, captured for the resumable seed. */
   private pendingUpdateInfo: UpdateArtifactInfo | null = null
-  /** Channel the last check resolved, so the seed picks the matching mirror directory. */
+  /** Selected release's channel, so the seed picks the matching mirror directory. */
   private activeChannel: ReleaseChannel = 'stable'
   /** True while a download (seed or electron-updater) is in flight. */
   private downloadInFlight = false
@@ -184,8 +185,7 @@ export class UpdaterService {
       // Resources directory, where no packaged feed config exists (ENOENT).
       // Nothing updates during development anyway, so the app's own shipped
       // build signal decides.
-      canAutoUpdate:
-        isShippedBuild() && autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
+      canAutoUpdate: isShippedBuild() && autoUpdater.isUpdaterActive() && !isWindowsStorePackage(),
       state: 'idle',
       currentVersion: app.getVersion()
     }
@@ -200,6 +200,9 @@ export class UpdaterService {
     }
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = false
+    if (this._status.canAutoUpdate) {
+      autoUpdater.setFeedURL({ provider: 'custom', updateProvider: UpdaterReleaseProvider })
+    }
 
     autoUpdater.on('checking-for-update', () => {
       Logger.dev('Updater: checking for update')
@@ -222,6 +225,9 @@ export class UpdaterService {
         return
       }
       Logger.dev('Updater: update available', info)
+      // A nightly preference may select its stable promotion. Download from
+      // that release's mirror directory, rather than the preference's channel.
+      this.activeChannel = info.version.includes('-nightly') ? 'nightly' : 'stable'
       this.pendingUpdateInfo = {
         version: info.version,
         files: info.files
@@ -543,8 +549,8 @@ export class UpdaterService {
 
   /**
    * Point the auto-updater at the configured release channel before checking.
-   * `nightly` resolves the GitHub provider's `nightly-*.yml` feed; the default
-   * (stable) uses the published release feed.
+   * Nightly considers both prereleases and stable releases; stable only
+   * considers the published stable feed.
    */
   private async applyConfiguredChannel(): Promise<void> {
     try {
@@ -566,7 +572,6 @@ export class UpdaterService {
       // got: null", which the catch below swallowed and left the updater on
       // whatever channel the previous run had set.
       const channel = nightly ? 'nightly' : 'latest'
-      this.activeChannel = nightly ? 'nightly' : 'stable'
       // Nightlies are published as semver-lower prereleases on a non-latest tag
       // (`vX.Y.Z-nightly.N`), so the GitHub provider only finds their feed file
       // when prereleases are allowed. Without this it resolves the latest stable

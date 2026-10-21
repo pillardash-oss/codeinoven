@@ -127,12 +127,31 @@ export const DEFAULT_SEARCH_SETTINGS: SearchSettings = {
   contextTokens: SEARCH_CONTEXT_TOKENS_DEFAULT
 }
 
+/**
+ * What a download request does with the bytes an earlier attempt left on disk:
+ * `resume` continues from them (the default), `restart` starts from zero.
+ */
+export type SearchDownloadMode = 'resume' | 'restart'
+
 export type SearchDownloadState =
-  | { state: 'downloading'; bytesReceived: number; totalBytes: number }
+  | {
+      state: 'downloading'
+      bytesReceived: number
+      totalBytes: number
+      /** Bytes kept from an earlier attempt that this download continues from. */
+      resumedFromBytes?: number
+    }
   | { state: 'verifying'; bytesReceived: number; totalBytes: number }
   | { state: 'installed'; installedAt: number }
-  | { state: 'cancelled'; cancelledAt: number }
-  | { state: 'failed'; failedAt: number; message: string }
+  /** A stopped download that keeps its bytes on disk for a resume. */
+  | { state: 'cancelled'; cancelledAt: number; bytesReceived: number; totalBytes: number }
+  | {
+      state: 'failed'
+      failedAt: number
+      message: string
+      bytesReceived: number
+      totalBytes: number
+    }
 
 /** Live indexing + capability status for the Search settings page. */
 export interface SearchIndexStatus {

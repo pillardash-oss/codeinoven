@@ -79,7 +79,7 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioClipboardCheck from '@pdslng/cio-icon/CioClipboardCheck.svelte'
   import CioClipboardX from '@pdslng/cio-icon/CioClipboardX.svelte'
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
@@ -107,6 +107,7 @@
   import ComposerIdentity from './ComposerIdentity.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ShoePopover from './ShoePopover.svelte'
+  import type { ComposerReadingSurface } from './chat-composer-slash.svelte'
   import { uniqueScopeName } from '$shared/scope-naming'
 
   interface Props {
@@ -276,6 +277,32 @@
     void scopeState.ensureBoardLoaded(projectId)
   }
 
+  /** The reading the user last asked for by command, and the token that makes a
+   *  repeated request for the same reading read as a new one. Both are asked for
+   *  while the run is live, so neither is ever gated on the shoe being idle. */
+  let readingRequest = $state<{ surface: ComposerReadingSurface; token: number } | null>(null)
+  let readingToken = 0
+
+  /** Opens the context battery or the generation rate from outside the shoe (the
+   *  composer's `/status` and `/tps` commands, which have no pointer to hover).
+   *  The reveal and hide work rides this call rather than the panel's own effect,
+   *  because it runs on the user's action: flushing a live reading reads and
+   *  writes the state the reading is drawn from, which no effect may do. */
+  export function openReading(surface: ComposerReadingSurface): void {
+    const previous = readingRequest?.surface
+    if (previous === 'context' && surface !== 'context') usage.onHide?.()
+    if (surface === 'context') usage.onReveal?.()
+    readingToken += 1
+    readingRequest = { surface, token: readingToken }
+  }
+
+  const contextOpenRequest = $derived(
+    readingRequest?.surface === 'context' ? readingRequest.token : undefined
+  )
+  const rateOpenRequest = $derived(
+    readingRequest?.surface === 'rate' ? readingRequest.token : undefined
+  )
+
   /** The single close path for the scope menu: every dismissal   Escape, a
    *  pick, the click-away overlay, or toggling the shoe again   routes through
    *  here so the composer's focus restoration sees exactly one transition. */
@@ -405,7 +432,7 @@
             aria-label="Managed Git worktree scope on {bucket.root.branch}"
             title="Managed Git worktree scope on {bucket.root.branch}"
           >
-            <CioFiles size={12} class="text-warning" />
+            <CioFolderGit size={12} class="text-warning" />
           </span>
         {/if}
         <ScopeBadge {bucket} size="sm" variant="mark" />
@@ -592,6 +619,7 @@
     onActivateBankedReset={usage.onActivateBankedReset}
     onReveal={usage.onReveal}
     onHide={usage.onHide}
+    openRequest={contextOpenRequest}
     refreshing={usage.refreshing ?? false}
   />
 
@@ -624,7 +652,7 @@
     {@const vendorMarkShown =
       providerName !== undefined &&
       (attribution?.harnessId === undefined || !vendorMatches(attribution.harnessId, providerName))}
-    <ShoePopover label="Generation speed details">
+    <ShoePopover label="Generation speed details" openRequest={rateOpenRequest}>
       {#snippet trigger({ props })}
         <button
           {...props}

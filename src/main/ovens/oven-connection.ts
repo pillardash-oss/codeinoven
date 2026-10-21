@@ -48,6 +48,7 @@ export async function inspectOvenConnection(
       state: 'connected',
       checkedAt: Date.now(),
       latencyMs: Date.now() - start,
+      sshProtection: await ssh.inspectProtection(id),
       specs: {
         hostname: lines[0],
         platform: lines[1],
@@ -64,6 +65,7 @@ export async function inspectOvenConnection(
     return {
       state: 'disconnected',
       checkedAt: Date.now(),
+      sshProtection: { state: 'unverified' },
       error: error instanceof Error ? error.message : 'Could not connect to this Oven.'
     }
   }

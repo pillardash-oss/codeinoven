@@ -13,6 +13,7 @@ import {
   type IntentThreadMatch,
   type InstalledSearchModel,
   type SearchArchitecture,
+  type SearchDownloadMode,
   type SearchDownloadState,
   type SearchIndexStatus,
   type SearchModelArtifact,
@@ -396,8 +397,8 @@ export class SearchService {
     }
   }
 
-  async downloadArtifact(artifactId: string): Promise<void> {
-    await this.downloader.download(artifactId)
+  async downloadArtifact(artifactId: string, mode: SearchDownloadMode = 'resume'): Promise<void> {
+    await this.downloader.download(artifactId, mode)
   }
 
   cancelDownload(artifactId: string): boolean {

@@ -8,7 +8,7 @@
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import { onDestroy } from 'svelte'
   import { artifactThemeStyles } from './artifact-theme'
-  import { artifactKeyFor } from '$lib/artifact-element-reference'
+  import { artifactKeyFor, artifactReferenceKind } from '$lib/artifact-element-reference'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import ArtifactInspector from './ArtifactInspector.svelte'
@@ -31,10 +31,10 @@
     /**
      * The conversation this artifact is drawn in.
      *
-     * An SVG artifact can be inspected for an element when this is present: a
-     * pick has to be stored against a conversation, so an artifact rendered
-     * somewhere without one (a document preview, a spec studio) stays a plain
-     * preview with no pick affordance.
+     * An artifact can be inspected for an element when this is present: a pick
+     * has to be stored against a conversation, so an artifact rendered somewhere
+     * without one (a document preview, a spec studio) stays a plain preview with
+     * no pick affordance.
      */
     annotationScope?: { projectId: string; threadId: string }
   }
@@ -64,15 +64,19 @@
   )
   const wrapped = $derived(wrapTextState.wrapped)
   const artifactKey = $derived(artifactKeyFor(kind, code))
-  /** Inspection is an SVG-only affair: an HTML artifact has no element contract
-   *  to send, and audio/video artifacts have nothing to point at. */
-  const canInspect = $derived(kind === 'svg' && annotationScope !== undefined)
+  /** Inspection is offered on both kinds: an element of a picture or of a
+   *  document is the same decision, and both send a CSS path to that element. */
+  const canInspect = $derived(annotationScope !== undefined)
 
   const picks = $derived(
     annotationScope
       ? responseReferencesState
           .forThread(annotationScope.projectId, annotationScope.threadId)
-          .filter((reference) => reference.kind === 'svg' && reference.artifactKey === artifactKey)
+          .filter(
+            (reference) =>
+              reference.kind === artifactReferenceKind(kind) &&
+              reference.artifactKey === artifactKey
+          )
       : []
   )
 
@@ -109,9 +113,17 @@
    */
   const inspecting = $derived(viewerOpen && (manualInspecting || focusRequest !== null))
   const inspectorEditingId = $derived(focusRequest?.referenceId ?? null)
-  // Keep the SVG in one document across mode changes. Its gestures reach the
-  // viewer directly; sandboxed iframe previews need a gesture overlay instead.
-  const viewerUsesSvgSurface = $derived(canInspect)
+  /**
+   * Whether the viewer draws the artifact inline, in its own shadow document.
+   *
+   * It does whenever a pick can be made on it, which is every artifact in a
+   * conversation. That inline document is also what makes a document artifact
+   * behave like one: it is the scroll container, so the wheel scrolls it, and it
+   * reaches this viewer's own handlers, so a deliberate gesture can still zoom.
+   * A sandboxed iframe preview keeps the gesture overlay instead, because a wheel
+   * inside it never reaches this surface.
+   */
+  const inlineSurface = $derived(canInspect)
 
   /**
    * The expanded viewer's zoom.
@@ -119,8 +131,16 @@
    * One instance for the whole viewer, so the preview the user zoomed into is
    * the surface they pick in. The threshold is what lets both work: a press that
    * does not move is a pick on the artifact, and a press that moves is a pan.
+   *
+   * A document artifact keeps the wheel for scrolling and zooms only on a
+   * deliberate gesture (the zoom modifier held, or a toolbar button), while a
+   * picture has nothing to scroll and keeps plain wheel zoom. The mode is read
+   * through a getter, so the card follows the artifact it is drawing.
    */
-  const panZoom = new PanZoom({ dragThreshold: 4 })
+  const panZoom = new PanZoom({
+    dragThreshold: 4,
+    wheel: () => (kind === 'html' ? 'scroll' : 'zoom')
+  })
   let viewerViewport = $state<HTMLElement | undefined>(undefined)
   const viewerViewportAttachment = (node: HTMLElement): (() => void) => {
     viewerViewport = node
@@ -175,10 +195,11 @@
     <div class="[&>div]:border-0 [&>div]:border-t">
       <CodeBlock {code} lang={kind === 'html' ? 'artifact-html' : 'artifact-svg'} hideHeader />
     </div>
-  {:else if canInspect && annotationScope && fullscreen}
+  {:else if annotationScope && fullscreen && inlineSurface}
     <div class="h-full min-h-0">
       <ArtifactInspector
         {code}
+        {kind}
         enabled={inspecting}
         {artifactKey}
         projectId={annotationScope.projectId}
@@ -239,9 +260,11 @@
     ondblclick={() => panZoom.reset()}
   >
     {@render artifactBody(true)}
-    {#if !viewerUsesSvgSurface}
+    {#if !inlineSurface && panZoom.zoom !== 1}
       <!-- The preview frame is a document of its own: a gesture inside it never
-           reaches this surface, so a pan over it is taken here instead. -->
+           reaches this surface, so a pan over it is taken here instead. Only
+           while zoomed, though: at its own size the frame is left alone, so a
+           document in it keeps its own scrolling. -->
       <div class="absolute inset-0" role="presentation"></div>
     {/if}
   </div>
@@ -328,7 +351,7 @@
         : 'text-muted hover:bg-elevated hover:text-foreground'
     ]}
     aria-pressed={inspecting}
-    title={inspecting ? 'Stop inspecting this SVG' : 'Inspect: pick an element to comment on'}
+    title={inspecting ? 'Stop inspecting this artifact' : 'Inspect: pick an element to comment on'}
     onclick={toggleInspect}
   >
     <CioMarquee size={14} />

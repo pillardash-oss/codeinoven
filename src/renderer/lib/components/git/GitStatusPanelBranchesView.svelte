@@ -1,6 +1,6 @@
 <script lang="ts">
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { ContextMenu, DropdownMenu } from 'bits-ui'
   import type { GitBranchInfo } from '$shared/types'
@@ -150,7 +150,7 @@
                     ]}
                   >
                     {#if inWorktree}
-                      <CioFiles size={11} />
+                      <CioFolderGit size={11} />
                     {:else}
                       <CioTabGit size={11} />
                     {/if}

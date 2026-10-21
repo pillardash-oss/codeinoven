@@ -108,6 +108,7 @@ export const invokeProviderContract = {
   'capabilities:listAll': {} as Contract<[], AgentCapabilityCatalog>,
   'visionModels:list': {} as Contract<[], VisionModelRecord[]>,
   'cioPrompts:list': {} as Contract<[], CioPromptSetting[]>,
+  'cioPrompts:get': {} as Contract<[id: CioPromptId], string>,
   'cioPrompts:save': {} as Contract<[id: CioPromptId, template: string], CioPromptSetting[]>,
   'cioPrompts:reset': {} as Contract<[id: CioPromptId], CioPromptSetting[]>,
   'workerNames:getSettings': {} as Contract<[], WorkerNameSettings>,
@@ -213,20 +214,6 @@ export const invokeProviderContract = {
   'baseUrlProviders:previewUsage': {} as Contract<
     [input: BaseUrlProviderUsagePreviewRequest],
     BaseUrlProviderUsagePreview
-  >,
-  'gateway:list': {} as Contract<[], import('../gateway-types').GatewayStatus[]>,
-  'gateway:setEnabled': {} as Contract<
-    [pluginId: string, enabled: boolean],
-    import('../gateway-types').GatewayStatus
-  >,
-  'gateway:start': {} as Contract<[pluginId: string], import('../gateway-types').GatewayStatus>,
-  'gateway:stop': {} as Contract<[pluginId: string], import('../gateway-types').GatewayStatus>,
-  'gateway:uninstall': {} as Contract<[pluginId: string], import('../gateway-types').GatewayStatus>,
-  'gateway:update': {} as Contract<[pluginId: string], import('../gateway-types').GatewayStatus>,
-  'gateway:copyDashboardPassword': {} as Contract<[pluginId: string], void>,
-  'gateway:refreshCatalog': {} as Contract<
-    [pluginId: string],
-    import('../gateway-types').GatewayModelInfo[]
   >,
   'utilities:list': {} as Contract<[options?: UtilitySearchOptions], UtilityCatalog>,
   'utilities:get': {} as Contract<[id: string], UtilityDefinition | null>,

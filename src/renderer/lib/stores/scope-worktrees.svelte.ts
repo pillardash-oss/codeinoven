@@ -71,6 +71,7 @@ export class ScopeWorktrees {
           runSetup: input.runSetup,
           environmentMode: input.environmentMode,
           ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
+          ...(input.pullRequest === undefined ? {} : { pullRequest: input.pullRequest }),
           ...(input.setupCommands === undefined ? {} : { setupCommands: input.setupCommands })
         }
       )

@@ -57,6 +57,7 @@
   import ThreadDropdown from '../shared/ThreadDropdown.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
 
   const fieldClass = 'w-full border bg-elevated px-3 py-2 text-sm text-foreground'
 
@@ -95,6 +96,7 @@
   let baselineColor = $state('#22c55e')
   let address = $state('ubuntu@')
   let authentication = $state<SaveOvenInput['connection']['authentication']>('agent')
+  let allowClassicalKeyExchange = $state(false)
   let identityFile = $state('')
   let identityValidation = $state('')
   let privateKey = $state('')
@@ -141,7 +143,12 @@
     const peek = ovenPeeks.peek(oven.id)
     if (!peek) return health[oven.id]
     if (peek.probe)
-      return { state: 'connected', checkedAt: peek.checkedAt, specs: peek.probe.specs }
+      return {
+        state: 'connected',
+        checkedAt: peek.checkedAt,
+        specs: peek.probe.specs,
+        sshProtection: peek.sshProtection ?? health[oven.id]?.sshProtection
+      }
     return {
       state: 'disconnected',
       checkedAt: peek.checkedAt,
@@ -569,9 +576,11 @@
   // user lands in the creation form rather than an empty list. The request is
   // claimed exactly once, so remounting this page never reopens an editor the
   // user already dismissed.
-  $effect(() => {
-    if (settingsUiState.takeNewOvenRequest()) openEditor()
-  })
+  function consumeNewOvenRequest(request: number): Attachment {
+    return () => {
+      if (request > 0 && settingsUiState.takeNewOvenRequest()) openEditor()
+    }
+  }
 
   let lastOvenFocus = 0
   /**
@@ -689,6 +698,7 @@
       ? `${connection.user ? `${connection.user}@` : ''}${host}${connection.port !== 22 ? `:${connection.port}` : ''}`
       : 'ubuntu@'
     authentication = connection?.authentication ?? 'agent'
+    allowClassicalKeyExchange = connection?.allowClassicalKeyExchange === true
     identityFile = connection?.identityFile ?? ''
     identityValidation = ''
     privateKey = ''
@@ -751,6 +761,7 @@
       connection: {
         ...parseOvenAddress(address),
         authentication,
+        allowClassicalKeyExchange,
         ...(authentication === 'identity' ? { identityFile } : {})
       },
       ...(privateKey.trim() ? { privateKey } : {}),
@@ -807,8 +818,12 @@
       }
       const input = draftInput()
       const saved = await invoke('oven:save', input)
-      if (connectionResult?.state === 'connected')
-        health = { ...health, [saved.id]: connectionResult }
+      ovenPeeks.forget(saved.id)
+      health = {
+        ...health,
+        [saved.id]: connectionResult ??
+          saved.connectionStatus ?? { state: 'disconnected', checkedAt: Date.now() }
+      }
       privateKey = ''
       passphrase = ''
       password = ''
@@ -912,7 +927,7 @@
   }
 </script>
 
-<div class="p-6 pb-24">
+<div class="p-6 pb-24" {@attach consumeNewOvenRequest(settingsUiState.newOvenRequest)}>
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
       <h1 class="text-xl font-bold tracking-tight">Ovens</h1>
@@ -1018,6 +1033,22 @@
                           class="shrink-0"
                         />{:else}<CioCircle size={12} class="shrink-0" />{/if}
                     </SettingsStatusBadge>
+                    {#if oven.id !== LOCAL_OVEN_ID}
+                      <SettingsStatusBadge
+                        label={status?.sshProtection?.state === 'post-quantum'
+                          ? 'Post-quantum SSH'
+                          : status?.sshProtection?.state === 'classical'
+                            ? 'Classical SSH'
+                            : 'SSH protection unchecked'}
+                        classes={status?.sshProtection?.state === 'post-quantum'
+                          ? 'border-success/30 bg-success/10 text-success'
+                          : 'border-warning/30 bg-warning/10 text-warning'}
+                      >
+                        {#if status?.sshProtection?.state === 'post-quantum'}
+                          <CioCheckCircle size={12} class="shrink-0" />
+                        {:else}<CioAlertCircle size={12} class="shrink-0" />{/if}
+                      </SettingsStatusBadge>
+                    {/if}
                     <SettingsStatusBadge
                       label={configured ? 'Configured' : 'Not configured'}
                       classes={configured
@@ -1158,6 +1189,20 @@
                 {#if status?.error}<p class="text-xs text-danger" role="status">
                     {status.error}
                   </p>{/if}
+                {#if status?.sshProtection?.keyExchange}
+                  <p class="break-words text-xs text-muted">
+                    SSH key exchange:
+                    <span class="font-mono">{status.sshProtection.keyExchange}</span>
+                    {#if status.sshProtection.serverVersion}
+                      <span class="font-mono">{status.sshProtection.serverVersion}</span>
+                    {/if}
+                  </p>
+                {/if}
+                {#if oven.connection?.allowClassicalKeyExchange}
+                  <p class="text-xs text-warning">
+                    Classical key exchange is allowed for this Oven.
+                  </p>
+                {/if}
                 <dl class="grid grid-cols-1 gap-4 border-t border-border pt-3 sm:grid-cols-3">
                   <div class="space-y-1.5">
                     <dt class="flex items-center gap-1.5 text-xs text-dimmed">
@@ -1436,6 +1481,44 @@
       {#if authentication !== 'password'}The matching public key must already be authorized on the
         Oven.{/if}
     </p>
+    <div class="space-y-2 border border-border p-3">
+      <p class="text-xs font-medium text-foreground">SSH protection</p>
+      <p class="text-xs text-muted">
+        Post-quantum key exchange is required by default. Upgrade the Oven’s SSH server if it cannot
+        negotiate a hybrid post-quantum algorithm, then test the connection again.
+      </p>
+      <Switch
+        checked={allowClassicalKeyExchange}
+        disabled={Boolean(busy)}
+        label="Allow classical key exchange for this Oven"
+        aria-label="Allow classical SSH key exchange for this Oven"
+        onchange={(checked) => {
+          allowClassicalKeyExchange = checked
+          connectionResult = null
+        }}
+      />
+      {#if allowClassicalKeyExchange}
+        <p class="text-xs text-warning" role="status">
+          Compatibility exception enabled. Recorded traffic may be decrypted by a future quantum
+          computer. Upgrade the SSH server and turn this off when possible.
+        </p>
+      {/if}
+    </div>
+    {#if connectionResult?.state === 'connected' && connectionResult.sshProtection}
+      <p class="text-xs text-muted" role="status">
+        {connectionResult.sshProtection.state === 'post-quantum'
+          ? 'Post-quantum key exchange verified.'
+          : connectionResult.sshProtection.state === 'classical'
+            ? 'Classical key exchange verified. Post-quantum protection is unavailable.'
+            : 'SSH protection could not be verified. Test the connection again.'}
+        {#if connectionResult.sshProtection.keyExchange}
+          <span class="font-mono">{connectionResult.sshProtection.keyExchange}</span>
+        {/if}
+        {#if connectionResult.sshProtection.serverVersion}
+          <span class="font-mono">{connectionResult.sshProtection.serverVersion}</span>
+        {/if}
+      </p>
+    {/if}
     {#if connectionResult}<p
         class="text-xs"
         class:text-success={connectionResult.state === 'connected'}

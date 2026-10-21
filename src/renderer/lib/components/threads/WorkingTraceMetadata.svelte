@@ -4,6 +4,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../lib/custom-svg-tint'
+  import { vendorMatches } from '$lib/components/shared/model-picker-helpers'
   import type { ThinkingLevel } from '$shared/types'
   import type { OvenAppearance } from '$shared/ovens'
   import {
@@ -43,21 +44,34 @@
     ovenIsLocal = false,
     ovenAppearance
   }: Props = $props()
+
+  // When the harness is its own vendor (OpenCode run through an OpenCode
+  // provider) the harness mark already carries the brand, and drawing the vendor
+  // mark beside it only repeats the same glyph on the same line.
+  const harnessOwnsBrand = $derived.by(() => {
+    const id = harnessId
+    if (!id) return false
+    return [providerName, providerId].some((name) => vendorMatches(id, name ?? ''))
+  })
 </script>
 
 <!-- The trace's attribution, read left to right: harness, model, then the
      conditions that shape the run (fast, thinking, account, oven). It lives in
-     the trace header so it stays on screen whether the trace is folded or not. -->
-<span class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[0.625rem] text-dimmed">
+     the trace header so it stays on screen whether the trace is folded or not.
+     One nowrap cluster that truncates its longest label: letting it break
+     inside itself split the attribution over two rules. -->
+<span class="flex min-w-0 items-center gap-x-1.5 whitespace-nowrap text-[0.5625rem] text-dimmed">
   {#if harnessId}
     <span class="flex shrink-0 items-center gap-1">
       <AgentIcon agentId={harnessId} size={14} />
-      {#if harnessName}<span class="truncate">{harnessName}</span>{/if}
+      {#if harnessName}<span>{harnessName}</span>{/if}
     </span>
-    <span>·</span>
+    <span class="shrink-0">·</span>
   {/if}
-  <span class="flex shrink-0 items-center gap-1">
-    <VendorIcon name={providerName ?? modelLabel ?? ''} id={providerId ?? undefined} size={11} />
+  <span class="flex min-w-0 items-center gap-1">
+    {#if !harnessOwnsBrand}
+      <VendorIcon name={providerName ?? modelLabel ?? ''} id={providerId ?? undefined} size={11} />
+    {/if}
     <span class="truncate">{modelLabel}</span>
   </span>
   {#if isFast}

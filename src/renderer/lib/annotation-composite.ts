@@ -58,26 +58,41 @@ interface MarkGroup {
  * A frame annotation groups by its second as well, because one video holds many
  * moments: two marks four seconds apart are two pictures, and composing them onto
  * one frame would show the agent something the user never saw.
+ *
+ * A mark on a captured composition frame groups by the composition and the second
+ * rather than by the file it was drawn on: every capture of a moment writes a new
+ * picture, so a mark written on an earlier one and a stroke added on a later one
+ * are two marks on the same frame. Grouping by the moment composes them onto one
+ * picture instead of sending that frame twice.
  */
 function groupMarks(references: readonly ResponseReferenceAnchor[]): MarkGroup[] {
   const groups = new Map<string, MarkGroup>()
   references.forEach((reference, position) => {
     if (reference.kind !== 'image' || !reference.mediaUrl) return
-    const points = reference.points
-    if (!points || points.length === 0) return
+    const points = reference.points ?? []
     const seconds =
       reference.markSeconds !== undefined && Number.isFinite(reference.markSeconds)
         ? Math.max(0, reference.markSeconds)
         : null
-    const key = `${reference.mediaUrl}\u0000${seconds === null ? '' : seconds.toFixed(3)}`
+    const momentKey =
+      seconds !== null && reference.directory
+        ? `frame:${reference.directory}\u0000${seconds.toFixed(3)}`
+        : null
+    const key =
+      momentKey ?? `${reference.mediaUrl}\u0000${seconds === null ? '' : seconds.toFixed(3)}`
     const group = groups.get(key) ?? { url: reference.mediaUrl, seconds, marks: [] }
-    group.marks.push({
-      color: markColor(reference.markColor),
-      number: referenceLabelNumber(reference.label, position),
-      points: [...points],
-      strokeWidth: clampMarkStrokeWidth(reference.markStrokeWidth),
-      surfaceEdge: reference.markSurfaceEdge
-    })
+    // A frame note that carries no stroke is still a picture the user asked to
+    // send: a captured frame with a written comment is evidence, and the picture
+    // is the half the agent cannot otherwise see.
+    if (points.length > 0) {
+      group.marks.push({
+        color: markColor(reference.markColor),
+        number: referenceLabelNumber(reference.label, position),
+        points: [...points],
+        strokeWidth: clampMarkStrokeWidth(reference.markStrokeWidth),
+        surfaceEdge: reference.markSurfaceEdge
+      })
+    }
     groups.set(key, group)
   })
   return [...groups.values()]

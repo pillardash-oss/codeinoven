@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   /**
    * The scope chooser panel shared by the composer shoe and the Assignment
    * worker scope picker, so both surfaces offer the exact same menu. This
@@ -210,7 +210,7 @@
     onclick={() => onSelect({ mode: 'inherit' })}
   >
     {#if target.bucket?.root.kind === 'worktree'}
-      <CioFiles size={12} class="shrink-0 text-warning" />
+      <CioFolderGit size={12} class="shrink-0 text-warning" />
     {/if}
     <span class="min-w-0 flex-1 truncate">{inheritName}</span>
     <span class="shrink-0 text-[0.625rem] text-dimmed">{target.hint}</span>
@@ -265,7 +265,7 @@
       onclick={() => onSelect({ mode: 'scope', bucketId: candidate.id })}
     >
       {#if candidate.root.kind === 'worktree'}
-        <CioFiles size={12} class="shrink-0 text-warning" />
+        <CioFolderGit size={12} class="shrink-0 text-warning" />
       {/if}
       <span class="min-w-0 flex-1 truncate">{candidate.name}</span>
     </button>

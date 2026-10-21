@@ -5,6 +5,7 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import { onMount } from 'svelte'
+  import SeekBar from '$lib/components/ui/SeekBar.svelte'
 
   import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
@@ -43,9 +44,10 @@
   )
   // Full block range: past audio is real, future lines are calibrated estimates.
   const trackLength = $derived(Math.max(speechController.estimatedTotalDurationSeconds, 0.1))
-  const fillPercent = $derived.by(() => {
+  /** How much of the block is synthesized, which is what the track fills to. */
+  const synthesized = $derived.by(() => {
     if (trackLength <= 0) return 0
-    return Math.min(100, (speechController.generatedFrontierSeconds / trackLength) * 100)
+    return Math.min(1, speechController.generatedFrontierSeconds / trackLength)
   })
   const thumbPosition = $derived(speechController.elapsedPlaybackSeconds)
   let scrubbing = $state(false)
@@ -73,15 +75,9 @@
     void speechController.togglePlayback(messageId, markdown, scope)
   }
 
-  function beginScrub(event: PointerEvent): void {
-    const input = event.currentTarget as HTMLInputElement
+  function beginScrub(value: number): void {
     scrubbing = true
-    scrubValue = Number(input.value)
-  }
-
-  function onScrubInput(event: Event): void {
-    const input = event.currentTarget as HTMLInputElement
-    scrubValue = Number(input.value)
+    scrubValue = value
   }
 
   function commitScrub(): void {
@@ -118,63 +114,24 @@
     </button>
     {#if seekExpanded}
       <div transition:slide={{ duration: 160 }}>
-        <input
-          class="tts-seek block w-28 cursor-pointer"
-          style="--fill:{fillPercent}%"
-          type="range"
-          min="0"
-          max={trackLength}
-          step="0.1"
+        <SeekBar
+          class="block w-28"
           value={scrubbing ? scrubValue : Math.min(thumbPosition, trackLength)}
+          min={0}
+          max={trackLength}
+          step={0.1}
+          fillRatio={synthesized}
+          label="Seek spoken audio"
           title="Seek spoken audio"
-          aria-label="Seek spoken audio"
           disabled={disabled || playbackState.state === 'preparing'}
-          onpointerdown={beginScrub}
-          onpointerup={() => {
+          onScrubStart={beginScrub}
+          onScrubEnd={() => {
             scrubbing = false
           }}
-          oninput={onScrubInput}
-          onchange={commitScrub}
+          onInput={(value) => (scrubValue = value)}
+          onCommit={() => commitScrub()}
         />
       </div>
     {/if}
   </div>
 {/if}
-
-<style>
-  /* Two-tone track: filled (generated audio) vs unfilled (not yet synthesized). */
-  .tts-seek {
-    appearance: none;
-    -webkit-appearance: none;
-    height: 4px;
-    background: linear-gradient(
-      to right,
-      var(--color-primary) 0%,
-      var(--color-primary) var(--fill, 0%),
-      var(--color-border) var(--fill, 0%),
-      var(--color-border) 100%
-    );
-    outline-offset: 3px;
-  }
-  .tts-seek:focus-visible {
-    outline: 2px solid var(--color-info);
-  }
-  .tts-seek::-webkit-slider-thumb {
-    appearance: none;
-    -webkit-appearance: none;
-    height: 10px;
-    width: 10px;
-    background: var(--color-primary);
-    border: none;
-    box-shadow: 0 0 0 1px var(--color-app);
-    cursor: pointer;
-  }
-  .tts-seek::-moz-range-thumb {
-    height: 10px;
-    width: 10px;
-    background: var(--color-primary);
-    border: none;
-    box-shadow: 0 0 0 1px var(--color-app);
-    cursor: pointer;
-  }
-</style>

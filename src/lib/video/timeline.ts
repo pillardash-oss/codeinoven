@@ -69,17 +69,24 @@ export interface VideoTimelineTick {
  * step would make one of them either empty or unreadable. The steps stay on the
  * familiar 1/2/5/10/15/30 minute ladder so a label lands on a round time.
  */
-export function videoTimelineTicks(duration: number, target = 8): VideoTimelineTick[] {
+export function videoTimelineTicks(
+  duration: number,
+  target = 8,
+  window?: { start: number; end: number; fps: number }
+): VideoTimelineTick[] {
   const total = Number.isFinite(duration) && duration > 0 ? duration : 0
   if (total === 0) return []
-  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
-  const wanted = total / Math.max(1, target)
+  const steps = [1 / Math.max(window?.fps ?? 30, 1), 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].sort((a, b) => a - b)
+  const start = Math.min(total, Math.max(0, window?.start ?? 0))
+  const end = Math.min(total, Math.max(start, window?.end ?? total))
+  const wanted = (end - start) / Math.min(100, Math.max(1, target))
   const step = steps.find((candidate) => candidate >= wanted) ?? steps[steps.length - 1]
   const ticks: VideoTimelineTick[] = []
-  for (let seconds = 0; seconds <= total + 1e-6; seconds += step) {
+  for (let index = Math.ceil(start / step); index * step <= end + 1e-6 && ticks.length < 102; index += 1) {
+    const seconds = index * step
     ticks.push({
       seconds,
-      label: videoClockLabel(seconds),
+      label: step < 1 ? videoTimecode(seconds) : videoClockLabel(seconds),
       fraction: seconds / total
     })
   }

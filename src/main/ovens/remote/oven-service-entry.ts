@@ -47,6 +47,15 @@ import {
   windowsLauncherScript,
   windowsTaskAction
 } from './oven-windows-task'
+import { prepareOvenExecutable } from './oven-windows-executable'
+import {
+  installTermuxSupervision,
+  startSystemdSupervision,
+  startTermuxSupervision,
+  supervisionTarget,
+  type OvenSupervisionInput,
+  type SupervisionCommandRunner
+} from './oven-service-supervision'
 
 const PROTOCOL = 1
 const revision = process.env['CODEINOVEN_OVEN_REVISION'] ?? 'development'
@@ -246,6 +255,8 @@ const MAX_REQUEST = 1024 * 1024
 const MAX_RUNS = 64
 const MAX_ACTIVE = 4
 const MAX_JOURNAL = 64 * 1024 * 1024
+/** The requests that address one run, and so need a run id before anything else. */
+const RUN_REQUEST_METHODS = new Set(['events', 'stop', 'write', 'remove'])
 
 function stopChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
   if (process.platform !== 'win32' && child.pid) {
@@ -851,6 +862,15 @@ async function dispatch(raw: unknown): Promise<unknown> {
     return null
   }
   if (request.method === 'start') return start(request.input)
+  // A channel opened by an earlier bundle forwards file work here instead of
+  // answering it in its own process. Looking it up as a run made that answer
+  // "Invalid run ID.", which named nothing and sent people after a run id that
+  // was never involved, so the daemon answers the request the same way the
+  // channel does while the app replaces that bundle.
+  if (request.method === 'root-operation') return ovenRootOperation(request.input)
+  const method = String(request.method)
+  if (!RUN_REQUEST_METHODS.has(method))
+    throw new Error(`Unknown Oven request method: ${method}. Install the current Oven service.`)
   const job = jobs.get(id(request.runId))
   if (!job) throw new Error('The remote run does not exist.')
   if (request.method === 'events') return events(job, request.after)
@@ -939,10 +959,63 @@ async function migrateLegacyRoot(): Promise<void> {
     await rm(legacyRoot, { recursive: true, force: true }).catch(() => undefined)
 }
 
+/** Supervision commands are local process control, never a long-running job. */
+const SUPERVISION_COMMAND_TIMEOUT_MS = 20_000
+
+/** Run one supervision command, resolving to whether it succeeded. */
+const runSupervisionCommand: SupervisionCommandRunner = (program, args, environment) =>
+  new Promise((resolve) => {
+    let settled = false
+    let child: ChildProcess
+    try {
+      child = spawn(program, [...args], {
+        stdio: 'ignore',
+        windowsHide: true,
+        env: environment ?? process.env
+      })
+    } catch {
+      resolve(false)
+      return
+    }
+    const finish = (ok: boolean): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(ok)
+    }
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      finish(false)
+    }, SUPERVISION_COMMAND_TIMEOUT_MS)
+    timer.unref()
+    child.once('error', () => finish(false))
+    child.once('close', (code) => finish(code === 0))
+  })
 /**
- * Launch the daemon so it outlives whatever started it and shows no window.
+ * Whether this Linux Oven runs a systemd user manager this account can drive.
  *
- * POSIX can simply detach. Windows cannot: a console program a Windows shell
+ * Both halves matter: `systemctl --user` needs a runtime directory to talk to,
+ * and without `/run/systemd/system` there is no systemd at all (a container, a
+ * WSL distribution without systemd, a Termux device before systemd even applies).
+ */
+async function hasSystemdUserManager(): Promise<boolean> {
+  if (!process.env['XDG_RUNTIME_DIR']) return false
+  return await access('/run/systemd/system').then(
+    () => true,
+    () => false
+  )
+}
+
+/**
+ * Launch the daemon under the machine's own supervisor, so a restart brings it
+ * back, and fall back to a detached process only where no supervisor exists.
+ *
+ * POSIX has two supervisors worth using, and both install a script that outlives
+ * this SSH session: runit on Termux (with `~/.termux/boot` restoring it after the
+ * device restarts) and a systemd user unit on Linux. Detaching alone was the
+ * reason an Oven disappeared after a reboot, so it is now the last resort.
+ *
+ * Windows cannot: a console program a Windows shell
  * starts owns a visible window, and OpenSSH there ends the whole process tree
  * when the session closes, so a detached child both flashes a window and dies
  * with the connection. A scheduled task started through the hidden launcher
@@ -953,6 +1026,29 @@ async function migrateLegacyRoot(): Promise<void> {
  */
 async function startDaemon(): Promise<void> {
   if (process.platform !== 'win32') {
+    const revision = process.env['CODEINOVEN_OVEN_REVISION']
+    const supervision: OvenSupervisionInput = {
+      nodePath: process.execPath,
+      servicePath: process.argv[1],
+      dataRoot: root,
+      ...(revision ? { revision } : {}),
+      home: homedir(),
+      ...(process.env['PREFIX'] ? { prefix: process.env['PREFIX'] } : {})
+    }
+    const target = supervisionTarget({
+      platform: process.platform,
+      prefix: process.env['PREFIX'],
+      systemdUserManager: await hasSystemdUserManager()
+    })
+    if (target.termux) {
+      await installTermuxSupervision(supervision)
+      if (await startTermuxSupervision(supervision, runSupervisionCommand)) return
+    } else if (target.systemd) {
+      if (await startSystemdSupervision(supervision, runSupervisionCommand)) return
+    }
+    // No supervisor took the service: detach it, so this release still works on
+    // a machine that has neither runit nor systemd, and the caller's health wait
+    // can still see it answer.
     const child = spawn(process.execPath, [process.argv[1], 'daemon'], {
       detached: true,
       stdio: 'ignore',
@@ -962,11 +1058,17 @@ async function startDaemon(): Promise<void> {
     return
   }
   const revision = process.env['CODEINOVEN_OVEN_REVISION']
+  // A daemon that appears as `node` in Task Manager cannot be told apart from every
+  // other Node program on the machine, and this Oven is a scheduled task rather
+  // than a Windows service, so the Services list never shows it either. The runtime
+  // is started through this app's own name instead.
+  const executable = await prepareOvenExecutable(process.execPath, root)
   const launcher = join(root, WINDOWS_LAUNCHER_FILE)
   await writeFile(
     launcher,
     windowsLauncherScript({
       nodePath: process.execPath,
+      executablePath: executable,
       servicePath: process.argv[1],
       dataRoot: root,
       ...(revision ? { revision } : {})

@@ -7,7 +7,6 @@ import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
 import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
 import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
-import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
 import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
 import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
 import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
@@ -193,14 +192,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Installed utilities and the skills marketplace.',
     keywords: ['skills', 'marketplace', 'plugins'],
     icon: feature('utilities').icon
-  },
-  {
-    id: 'gateways',
-    section: 'gateways',
-    title: 'Gateways',
-    description: 'Gateway routing and endpoints.',
-    keywords: ['routing', 'endpoints'],
-    icon: CioNetwork
   },
   {
     id: 'computer-use',

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { isMacPlatform } from '$lib/shortcut-display'
+  import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioAudioLines from '@pdslng/cio-icon/CioAudioLines.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -244,6 +245,7 @@
   import { documentAnnotationFocusState } from '$lib/stores/document-annotation-focus.svelte'
   import { artifactElementFocusState } from '$lib/stores/artifact-element-focus.svelte'
   import { videoNoteFocusState } from '$lib/stores/video-note-focus.svelte'
+  import { compositionFrameFocusState } from '$lib/stores/composition-frame-focus.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
@@ -3207,6 +3209,47 @@
       seconds,
       directory
     })
+    openCompositionAt(
+      directory,
+      seconds,
+      'The composition this note was written on could not be opened.'
+    )
+  }
+
+  /**
+   * Reopen the composition frame a mark was drawn on and open its comment.
+   *
+   * A mark on a captured frame is drawn on a picture the app produced from the
+   * composition, not on a part of the conversation, so there is no message to
+   * jump to: the edit action opens the video board on that composition and asks
+   * the surface that draws frames to put the mark's moment back on screen, which
+   * is where its badge and its comment live.
+   */
+  function editCompositionFrameMark(reference: ResponseReferenceAnchor): void {
+    const seconds = reference.markSeconds ?? 0
+    const directory = reference.directory ?? ''
+    compositionFrameFocusState.request({
+      projectId: thread.projectId,
+      threadId: thread.id,
+      referenceId: reference.id,
+      seconds,
+      directory
+    })
+    openCompositionAt(
+      directory,
+      seconds,
+      'The composition this mark was drawn on could not be opened.'
+    )
+  }
+
+  /**
+   * Show the video board on one composition with its playhead on one second.
+   *
+   * Opening the composition is what moves the board onto that folder, and every
+   * surface that lands there reads its own request store, so the order matters:
+   * the request is made by the caller before this opens anything.
+   */
+  function openCompositionAt(directory: string, seconds: number, failure: string): void {
     designCoordinatorState.openBoard(thread.projectId, thread.id, 'video')
     if (!directory) return
     void invoke('design:open', thread.projectId, thread.id, directory, null, true, 'video')
@@ -3215,9 +3258,7 @@
         return invoke('browser:transport', opened.tabId, 'seek', seconds).catch(() => undefined)
       })
       .catch(() => {
-        toast.error('The composition this note was written on could not be opened.', {
-          description: directory
-        })
+        toast.error(failure, { description: directory })
       })
   }
 
@@ -3315,14 +3356,14 @@
    * scrolled to.
    */
   /**
-   * Bring a commented SVG element back in front of the reader.
+   * Bring a commented artifact element back in front of the reader.
    *
    * The pin and the comment editor are drawn by the artifact card that renders
-   * the SVG, so the edit action scrolls that card into view and hands it the
+   * the artifact, so the edit action scrolls that card into view and hands it the
    * pick. The key an artifact carries is derived from its own source and is
    * always `[a-z0-9-]`, so it needs no selector escaping.
    */
-  function editSvgElement(reference: ResponseReferenceAnchor): void {
+  function editArtifactElement(reference: ResponseReferenceAnchor): void {
     const key = reference.artifactKey
     if (!key) return
     const card = document.querySelector(`[data-artifact-key="${key}"]`)
@@ -3350,16 +3391,22 @@
     }
     // A mark on an inline picture is drawn by the picture's own surface, so its
     // edit action brings that picture back on screen and lets the surface open
-    // the comment: the reference has no text range to jump to.
+    // the comment: the reference has no text range to jump to. A mark drawn on a
+    // captured composition frame has no part to bring back, so it opens the
+    // composition at its moment instead.
     if (reference.kind === 'image') {
+      if (reference.markSeconds !== undefined && (reference.directory ?? '') !== '') {
+        editCompositionFrameMark(reference)
+        return
+      }
       await editMediaMark(reference)
       return
     }
-    // An element picked inside an inline SVG is pinned by the artifact card that
-    // draws it, so its edit action brings that card up and lets it open the
+    // An element picked inside an inline artifact is pinned by the artifact card
+    // that draws it, so its edit action brings that card up and lets it open the
     // comment.
-    if (reference.kind === 'svg') {
-      editSvgElement(reference)
+    if (reference.kind === 'svg' || reference.kind === 'html') {
+      editArtifactElement(reference)
       return
     }
     if (!isResponseSelection(reference)) return
@@ -3477,11 +3524,11 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser, may have annotated passages of a project document in the file panel, may have noted moments on a video composition timeline in the video board, and may have drawn numbered marks on a picture you rendered in the conversation. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. An image reference names a picture you rendered, describes the area the user marked on it, and is attached as the same picture with every mark drawn on it as its number, so read that attachment and change the picture where each numbered mark points rather than treating the mark as a separate request. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
+      'The user quoted excerpts from your earlier response as references, may have picked elements from a design open in the app browser or from an HTML or SVG artifact you rendered in this conversation, may have annotated passages of a project document in the file panel, may have noted moments on a video composition timeline in the video board, and may have drawn numbered marks on a picture you rendered in the conversation. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address   if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. A design element reference points at an element in the design by its CSS path, so change that element where it is defined rather than a page that merely resembles it. An artifact element reference names the artifact it was picked in, the CSS path of the element inside it and the text of the element, so change the markup of that artifact at that element rather than a different render that happens to look alike. A file reference names the document it came from and quotes the passage the user marked, so read that file and address each annotation. A video note names a composition and a timecode on it, so change what the composition draws at that moment   the frame function, the timeline placement or the caption that covers it   rather than the file as a whole. An image reference names a picture you rendered, describes the area the user marked on it, and is attached as the same picture with every mark drawn on it as its number, so read that attachment and change the picture where each numbered mark points rather than treating the mark as a separate request. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         const tag =
-          reference.kind === 'design' || reference.kind === 'svg'
+          reference.kind === 'design' || reference.kind === 'svg' || reference.kind === 'html'
             ? 'element'
             : reference.kind === 'file'
               ? 'file'
@@ -5467,6 +5514,11 @@
         // planning turn awaiting a choice) cannot strand the remote prompt.
         void refreshMessages()
         restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
+        if (updatedThread.status === 'completed' || updatedThread.status === 'interrupted') {
+          // A persisted settle repairs a missed remote recovery frame too.
+          providerStatus = null
+          errorMessage = ''
+        }
       }
       // A durable auditor child (independent or Achievement audit) owns its own
       // lifecycle; mirror status transitions so the coordinator panel and the
@@ -5505,7 +5557,26 @@
       'agent:remoteEvent',
       (payload: RemoteAgentEventPayload) => {
         if (payload.projectId !== thread.projectId || payload.threadId !== thread.id) return
-        const type = payload.event.type
+        const event = payload.event
+        const type = event.type
+        // Remote lifecycle updates are observations only. Applying the local
+        // event handler would also dispatch queues and pending attention actions.
+        if (event.type === 'session.status') {
+          providerStatus = event.status
+          errorMessage = ''
+        } else if (
+          (event.type === 'message.part.updated' || event.type === 'message.part.delta') &&
+          !(
+            event.type === 'message.part.updated' &&
+            event.part.type === 'subagent' &&
+            subagentStatusIsTerminal(event.part.activity.status)
+          )
+        ) {
+          providerStatus = null
+          errorMessage = ''
+        } else if (event.type === 'session.error' && event.issue) {
+          providerStatus = { state: 'error', issue: event.issue }
+        }
         if (type === 'message.completed') {
           void refreshStreamTailAfterTurn()
           return

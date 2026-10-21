@@ -80,7 +80,6 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import DesignAssignmentsSettings from './DesignAssignmentsSettings.svelte'
-  import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
@@ -1536,8 +1535,6 @@
       <SoundSettingsTab settings={config.sound} {settingsReady} {updateConfig} />
     {:else if section === 'search'}
       <SearchSettingsTab />
-    {:else if section === 'gateways'}
-      <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
     {:else if section === 'ovens'}

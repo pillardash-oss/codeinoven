@@ -16,9 +16,7 @@ export type ScopeSlice = 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'don
  * two rather than the renderer.
  */
 export type ScopeChoice =
-  | { mode: 'inherit' }
-  | { mode: 'dedicated' }
-  | { mode: 'scope'; bucketId: string }
+  { mode: 'inherit' } | { mode: 'dedicated' } | { mode: 'scope'; bucketId: string }
 
 export interface ScopeBucket {
   id: string
@@ -129,6 +127,8 @@ export interface ScopeWorktreeCreateInput {
   environmentMode: ScopeEnvironmentMode
   /** Source branch the worktree forks from; defaults to the current branch. */
   baseBranch?: string
+  /** Fetch the PR head from a configured remote before creating a review checkout. */
+  pullRequest?: { number: number; remote: string }
   /** Setup commands to execute for this worktree; falls back to project defaults. */
   setupCommands?: ScopeSetupCommandSpec[]
 }

@@ -54,8 +54,8 @@
    * What the edit action promises, which depends on where the reference lives.
    *
    * A selection is edited in place, a document annotation in the file panel, a
-   * design element in the browser, an inline SVG element in its artifact card
-   * and a mark on the picture it was drawn on, so the label has to name the
+   * design element in the browser, an inline artifact element in its artifact
+   * card and a mark on the picture it was drawn on, so the label has to name the
    * surface the click actually brings up.
    */
   function editTitle(reference: PromptReference): string {
@@ -69,6 +69,7 @@
       case 'image':
         return `Show ${reference.label} on its picture and edit its comment`
       case 'svg':
+      case 'html':
         return `Show ${reference.label} in its artifact and edit its comment`
       default:
         return `Edit comment on ${reference.label}`
@@ -101,7 +102,7 @@
     {#each references as reference, referenceIndex (reference.id)}
       {@const number = referenceIndex + 1}
       {@const isElement = reference.kind === 'design'}
-      {@const isArtifactElement = reference.kind === 'svg'}
+      {@const isArtifactElement = reference.kind === 'svg' || reference.kind === 'html'}
       {@const isAnnotation = reference.kind === 'file'}
       {@const isNote = reference.kind === 'video'}
       {@const isMark = reference.kind === 'image'}

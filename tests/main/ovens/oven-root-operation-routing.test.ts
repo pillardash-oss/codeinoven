@@ -14,9 +14,8 @@ vi.mock('../../../src/main/ovens/oven-local-git-identity', () => ({
 }))
 
 const { OvenService } = await import('../../../src/main/ovens/oven-service')
-const { OvenChannelUnavailable, OvenRequestChannel, OvenServiceOutdated } = await import(
-  '../../../src/main/ovens/oven-request-channel'
-)
+const { OvenChannelUnavailable, OvenRequestChannel, OvenServiceOutdated } =
+  await import('../../../src/main/ovens/oven-request-channel')
 const { OvenSsh } = await import('../../../src/main/ovens/oven-ssh')
 const { OVEN_PROTOCOL_VERSION } = await import('../../../src/lib/ovens')
 
@@ -36,22 +35,29 @@ describe('oven root operations', () => {
       .mockResolvedValue(JSON.stringify({ ok: true, value: { path: 'notes.md' } }))
     const execute = vi.spyOn(OvenSsh.prototype, 'execute').mockResolvedValue('')
 
-    const result = await oven.rootOperation('oven-a', '/checkout', 'project-1', 'projectFiles:create', [
-      'docs',
-      'notes.md'
-    ])
+    const result = await oven.rootOperation(
+      'oven-a',
+      '/checkout',
+      'project-1',
+      'projectFiles:create',
+      ['docs', 'notes.md']
+    )
 
     expect(result).toEqual({ path: 'notes.md' })
     expect(request).toHaveBeenCalledOnce()
     const [id, payload, timeoutMs] = request.mock.calls[0] ?? []
     expect(id).toBe('oven-a')
+    // The session reads envelopes. A bare input carries no `method`, so the
+    // channel handed it to the daemon, which answered first "Invalid run ID."
+    // and then named the missing method: every file action took that detour.
     expect(JSON.parse(String(payload))).toMatchObject({
-      root: '/checkout',
-      projectId: 'project-1',
-      channel: 'projectFiles:create',
-      // The Oven's session refuses file work without this, and the app used to
-      // omit it: every file action then answered "Oven protocol version mismatch".
-      protocolVersion: OVEN_PROTOCOL_VERSION
+      method: 'root-operation',
+      protocolVersion: OVEN_PROTOCOL_VERSION,
+      input: {
+        root: '/checkout',
+        projectId: 'project-1',
+        channel: 'projectFiles:create'
+      }
     })
     // A Git command on a large checkout may legitimately take a minute, so the
     // session must not be judged wedged at the 30 s control-message timeout.
@@ -124,7 +130,9 @@ describe('oven root operations', () => {
     const install = vi.spyOn(oven, 'install').mockResolvedValue({} as never)
     const execute = vi
       .spyOn(OvenSsh.prototype, 'execute')
-      .mockRejectedValue(new Error('ssh: connect to host 192.168.64.10 port 22: Connection timed out'))
+      .mockRejectedValue(
+        new Error('ssh: connect to host 192.168.64.10 port 22: Connection timed out')
+      )
 
     await expect(
       oven.rootOperation('oven-a', '/checkout', 'project-1', 'projectFiles:list', [''])
@@ -173,5 +181,71 @@ describe('oven root operations', () => {
     await expect(
       oven.rootOperation('oven-a', '/checkout', 'project-1', 'projectFiles:list', [''])
     ).rejects.toThrow('runs an older service')
+  })
+
+  it('replaces a channel an older bundle opened instead of failing every action', async () => {
+    const oven = service()
+    // A bundle from before file work moved into the channel forwards it to the
+    // daemon, which answered "Invalid run ID." for a run id that was never sent.
+    vi.spyOn(OvenRequestChannel.prototype, 'request').mockRejectedValue(
+      new Error('Invalid run ID.')
+    )
+    const dispose = vi
+      .spyOn(OvenRequestChannel.prototype, 'dispose')
+      .mockImplementation(() => undefined)
+    const execute = vi
+      .spyOn(OvenSsh.prototype, 'execute')
+      .mockResolvedValue(JSON.stringify({ ok: true, value: { path: 'notes.md' } }))
+
+    const result = await oven.rootOperation(
+      'oven-a',
+      '/checkout',
+      'project-1',
+      'projectFiles:create',
+      ['docs', 'notes.md']
+    )
+
+    expect(result).toEqual({ path: 'notes.md' })
+    // The stale channel is closed, and the work runs against the bundle on disk.
+    expect(dispose).toHaveBeenCalledWith('oven-a')
+    expect(
+      execute.mock.calls.some(([, command]) => String(command).includes('root-operation'))
+    ).toBe(true)
+  })
+
+  it('reruns the operation on a fresh process when a stale channel refuses the request', async () => {
+    const oven = service()
+    // A well-formed answer, so the failure surfaces when the envelope is decoded
+    // rather than as a thrown channel error.
+    vi.spyOn(OvenRequestChannel.prototype, 'request').mockResolvedValue(
+      JSON.stringify({
+        ok: false,
+        error: 'Unknown Oven request method: undefined. Install the current Oven service.'
+      })
+    )
+    const dispose = vi
+      .spyOn(OvenRequestChannel.prototype, 'dispose')
+      .mockImplementation(() => undefined)
+    const execute = vi
+      .spyOn(OvenSsh.prototype, 'execute')
+      .mockResolvedValue(JSON.stringify({ ok: true, value: { path: 'notes.md' } }))
+
+    const result = await oven.rootOperation(
+      'oven-a',
+      '/checkout',
+      'project-1',
+      'projectFiles:create',
+      ['docs', 'notes.md']
+    )
+
+    expect(result).toEqual({ path: 'notes.md' })
+    expect(dispose).toHaveBeenCalledWith('oven-a')
+    // The one-shot mode reads the input itself, never the envelope around it.
+    const [, , input] = execute.mock.calls.at(-1) ?? []
+    expect(JSON.parse(String(input))).toMatchObject({
+      root: '/checkout',
+      channel: 'projectFiles:create',
+      protocolVersion: OVEN_PROTOCOL_VERSION
+    })
   })
 })

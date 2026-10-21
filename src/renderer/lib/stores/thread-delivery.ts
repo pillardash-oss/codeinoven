@@ -32,6 +32,14 @@ export interface HeadlessThreadMessage {
   promptReferences?: PromptReference[]
   projectReferences?: PromptProjectReference[]
   taskReferences?: PromptAssignmentTaskReference[]
+  /**
+   * The configuration this turn runs with, when the caller already holds it.
+   *
+   * A caller that has just minted the thread passes its own settings: a fresh
+   * thread's row may not be readable yet, and the read's fallback would both
+   * run the turn on the wrong model and persist that fallback over the row.
+   */
+  settings?: ThreadSettings
 }
 
 /** The thread's persisted settings, else the appropriate defaults. */
@@ -39,11 +47,18 @@ export async function resolveThreadDeliverySettings(
   projectId: string,
   threadId: string
 ): Promise<ThreadSettings> {
-  try {
-    const thread = await invoke('thread:get', projectId, threadId)
-    if (thread?.settings) return { ...DEFAULT_SETTINGS, ...thread.settings }
-  } catch {
-    // Fall through to the defaults when the thread record cannot be read.
+  // A just-created thread is durable a moment after its optimistic create, and
+  // this settings read is what the turn is dispatched with, so give the row a
+  // brief chance to appear before falling back: the fallback is defaults, and
+  // the send persists the settings it ran with.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const thread = await invoke('thread:get', projectId, threadId)
+      if (thread?.settings) return { ...DEFAULT_SETTINGS, ...thread.settings }
+    } catch {
+      // Fall through to the next attempt, then to the family defaults.
+    }
+    await new Promise((done) => setTimeout(done, 150))
   }
   return projectId === INBOX_PROJECT_ID ? { ...CHAT_DEFAULT_SETTINGS } : { ...DEFAULT_SETTINGS }
 }
@@ -98,7 +113,7 @@ export async function sendThreadMessageHeadless(
   threadId: string,
   message: HeadlessThreadMessage
 ): Promise<string> {
-  const settings = await resolveThreadDeliverySettings(projectId, threadId)
+  const settings = message.settings ?? (await resolveThreadDeliverySettings(projectId, threadId))
   const sessionId = await invoke('agent:ensureSession', projectId, threadId, settings.harnessId)
   if (sessionId) threadMessages.setSessionId(projectId, threadId, sessionId)
   return threadMessages.send(

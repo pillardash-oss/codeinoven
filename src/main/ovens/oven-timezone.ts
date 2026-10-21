@@ -5,6 +5,7 @@ import type {
   OvenTimezoneSyncResult
 } from '../../lib/ovens'
 import { sshQuote, type OvenSsh } from './oven-ssh'
+import { windowsTimeZoneFor } from './windows-timezones'
 
 /**
  * The clock-zone fields the shared preflight scripts emit.
@@ -164,16 +165,21 @@ export function timezoneSetCommands(input: {
  * at all. The last line the script prints is the zone it ended on.
  */
 function windowsTimezoneCommand(zone: string): OvenTimezoneCommand {
+  const known = windowsTimeZoneFor(zone)
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    `$iana = '${zone}'`,
-    '$windows = $null',
-    'if ($PSVersionTable.PSVersion.Major -ge 6) { [void][System.TimeZoneInfo]::TryConvertIanaIdToWindowsId($iana, [ref]$windows) }',
-    'if (-not $windows) {',
-    '  $exact = Get-TimeZone -ListAvailable | Where-Object { $_.Id -eq $iana } | Select-Object -First 1',
-    '  if ($exact) { $windows = $exact.Id }',
-    '}',
-    'if (-not $windows) { throw "This Windows Oven cannot convert the IANA time zone $iana. Install PowerShell 7 on it, or set its clock zone by hand." }',
+    ...(known
+      ? [`$windows = '${known.replace(/'/gu, "''")}'`]
+      : [
+          `$iana = '${zone}'`,
+          '$windows = $null',
+          'if ($PSVersionTable.PSVersion.Major -ge 6) { [void][System.TimeZoneInfo]::TryConvertIanaIdToWindowsId($iana, [ref]$windows) }',
+          'if (-not $windows) {',
+          '  $exact = Get-TimeZone -ListAvailable | Where-Object { $_.Id -eq $iana } | Select-Object -First 1',
+          '  if ($exact) { $windows = $exact.Id }',
+          '}',
+          'if (-not $windows) { throw "This Windows Oven does not know the time zone $iana. Set its clock zone by hand." }'
+        ]),
     'Set-TimeZone -Id $windows',
     '(Get-TimeZone).Id'
   ].join('\n')
@@ -365,7 +371,14 @@ export async function syncOvenTimezone(
   observation: OvenClockObservation
 ): Promise<OvenTimezoneSyncResult> {
   const before = observation.timezone.current
-  if (observation.platform !== 'win32' && before === zone)
+  // Windows names the same zone differently, so "already right" has to be judged
+  // on the Windows id rather than on the IANA id this computer uses.
+  const expectedWindowsZone = observation.platform === 'win32' ? windowsTimeZoneFor(zone) : null
+  const alreadyAligned =
+    observation.platform === 'win32'
+      ? expectedWindowsZone !== null && before === expectedWindowsZone
+      : before === zone
+  if (alreadyAligned)
     return {
       status: 'current',
       zone: before,
@@ -405,6 +418,10 @@ export async function syncOvenTimezone(
       .split(/\r?\n/u)
       .filter(Boolean)
       .pop()
+    if (expectedWindowsZone !== null && after !== expectedWindowsZone)
+      throw new Error(
+        `The Oven still reports ${after ?? 'an unreadable clock zone'} after CodeInOven set ${zone}.`
+      )
     return {
       status: after && after === before ? 'current' : 'updated',
       zone: after ?? null,
