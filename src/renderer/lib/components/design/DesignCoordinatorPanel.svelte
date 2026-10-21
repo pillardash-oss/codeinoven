@@ -2252,15 +2252,18 @@
           {@render videoStage()}
         </div>
         <!--
-          The split between the picture and the editor. The divider is the whole
-          control: there is no grabber to aim at and no chrome around it, and
-          hovering it lights the one rule it draws. It is a button so the split can
-          be moved from the keyboard, and it draws one hairline rather than a
-          framed handle.
+          The split between the picture and the editor.
+
+          The band belongs to the bottom of the picture, not to the top of the
+          timeline: the picture's own frame already draws the line between the two
+          halves, so the band draws nothing and a second hairline here would read
+          as an extra rule floating above the timeline. The whole band is the
+          control, there is no grabber to aim at, its cursor is the row resize it
+          performs, and it is a button so the split can be moved from the keyboard.
         -->
         <button
           type="button"
-          class="group flex h-2 w-full shrink-0 cursor-row-resize touch-none items-center px-2.5 outline-none"
+          class="flex h-2 w-full shrink-0 cursor-row-resize touch-none items-center px-2.5 outline-none"
           aria-label="Resize the composition editor"
           title="Drag to resize the timeline, or use the arrow keys"
           onpointerdown={startEditorResize}
@@ -2268,11 +2271,7 @@
           onpointerup={finishEditorResize}
           onpointercancel={finishEditorResize}
           onkeydown={resizeEditorWithKeyboard}
-        >
-          <span
-            class="h-px w-full bg-border transition-colors group-hover:bg-primary/40 group-focus-visible:bg-primary"
-          ></span>
-        </button>
+        ></button>
         <div class="flex min-h-0 shrink-0 flex-col pb-2 pl-2.5" style:height={`${editorHeight}px`}>
           {#key `${projectId}:${threadId}:${selected.directory}:${boardRevision}`}
             <VideoTimeline
