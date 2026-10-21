@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import CardTag from './CardTag.svelte'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
 
   interface Props {
     /** Option label, the line the user picks by. */
@@ -81,9 +82,6 @@
         <CardTag text={badge.text} tone={badge.tone ?? 'ok'} />
       {/if}
     </span>
-    {#if description}
-      <span class="mt-0.5 block text-[0.6875rem] leading-relaxed text-muted">{description}</span>
-    {/if}
     {@render children?.()}
   </span>
 {/snippet}
@@ -91,20 +89,27 @@
 <!-- The design's option box: one framed choice with its label and its explanation,
 and the selected state carried by the frame rather than by a fill. -->
 <div class={frameClass}>
-  {#if onclick}
-    <button
-      type="button"
-      class="{bodyClass} {!selected ? 'hover:bg-elevated' : ''}"
-      {disabled}
-      aria-pressed={selected}
-      {onclick}
-    >
-      {@render optionBody()}
-    </button>
-  {:else}
-    <div class={bodyClass}>
-      {@render optionBody()}
-    </div>
-  {/if}
+  <div class="min-w-0 flex-1">
+    {#if onclick}
+      <button
+        type="button"
+        class="{bodyClass} w-full {!selected ? 'hover:bg-elevated' : ''}"
+        {disabled}
+        aria-pressed={selected}
+        {onclick}
+      >
+        {@render optionBody()}
+      </button>
+    {:else}
+      <div class={bodyClass}>
+        {@render optionBody()}
+      </div>
+    {/if}
+    {#if description}
+      <div class="px-2.5 pb-2.5 text-[0.6875rem] leading-relaxed text-muted">
+        <MarkdownView text={description} class="markdown-body-card" />
+      </div>
+    {/if}
+  </div>
   {@render trailing?.()}
 </div>
