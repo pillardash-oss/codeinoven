@@ -121,6 +121,7 @@
   let pendingFrame = $state<number | null>(null)
   let seekRevision = 0
   let scrubSeconds = $state(0)
+  let scrubOffset = 0
   let error = $state('')
   /**
    * Whether this timeline is still on the page.
@@ -361,9 +362,10 @@
     void zoomBy(factor, event.clientX)
   }
 
-  function beginScrub(event: PointerEvent): void {
+  function beginScrub(event: PointerEvent, grabPlayhead = false): void {
     if (!tab) return
-    scrubSeconds = secondsAt(event.clientX)
+    scrubOffset = grabPlayhead ? shown - secondsAt(event.clientX) : 0
+    scrubSeconds = clamp(secondsAt(event.clientX) + scrubOffset)
     scrubbing = true
     bandArea?.setPointerCapture(event.pointerId)
     void goTo(scrubSeconds)
@@ -371,7 +373,7 @@
 
   function moveScrub(event: PointerEvent): void {
     if (!scrubbing) return
-    scrubSeconds = secondsAt(event.clientX)
+    scrubSeconds = clamp(secondsAt(event.clientX) + scrubOffset)
     void goTo(scrubSeconds)
   }
 
@@ -379,7 +381,8 @@
     if (!scrubbing) return
     scrubbing = false
     bandArea?.releasePointerCapture(event.pointerId)
-    const target = event.type === 'pointercancel' ? scrubSeconds : secondsAt(event.clientX)
+    const target =
+      event.type === 'pointercancel' ? scrubSeconds : clamp(secondsAt(event.clientX) + scrubOffset)
     scrubSeconds = target
     void goTo(target)
   }
@@ -903,11 +906,20 @@
                   {/each}
                 </div>
 
-                <span
-                  class="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-primary"
-                  style={`left: ${playhead}`}
-                  aria-hidden="true"
-                ></span>
+                <button
+                  type="button"
+                  class="playhead-handle absolute top-0 bottom-0 z-20"
+                  style:left={playhead}
+                  data-dragging={scrubbing}
+                  title="Drag the playhead to scrub frames"
+                  aria-label="Drag the playhead to scrub frames"
+                  onpointerdown={(event) => {
+                    event.stopPropagation()
+                    beginScrub(event, true)
+                  }}
+                >
+                  <span class="playhead-line" aria-hidden="true"></span>
+                </button>
               </div>
             </div>
           </div>
@@ -942,3 +954,34 @@
     onClose={closeEditor}
   />
 {/if}
+
+<style>
+  .playhead-handle {
+    width: 1rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    transform: translateX(-50%);
+    cursor: ew-resize;
+  }
+
+  .playhead-line {
+    position: absolute;
+    inset-block: 0;
+    left: 50%;
+    width: 0.0625rem;
+    transform: translateX(-50%);
+    background: var(--color-primary);
+    transition:
+      width 120ms ease,
+      box-shadow 120ms ease;
+    pointer-events: none;
+  }
+
+  .playhead-handle:hover .playhead-line,
+  .playhead-handle:focus-visible .playhead-line,
+  .playhead-handle[data-dragging='true'] .playhead-line {
+    width: 0.1875rem;
+    box-shadow: 0 0 0 0.25rem color-mix(in srgb, var(--color-primary) 20%, transparent);
+  }
+</style>
