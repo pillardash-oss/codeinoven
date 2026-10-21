@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRawSnippet, flushSync, mount, unmount } from 'svelte'
 import DockRow from '$lib/components/ui/DockRow.svelte'
 import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
+import { logRendererError } from '$lib/system/renderer-logger'
 import type { NativeDockNode, NativeDockRequest } from '$shared/native-dock'
 vi.mock('$lib/components/ui/tooltip-manager.svelte', () => ({
   TOOLTIP_ID: 'tooltip-test',
@@ -40,7 +41,10 @@ vi.mock('$lib/stores/browser-visibility.svelte', () => ({
     clearOcclusion: bridge.clear
   }
 }))
-vi.mock('$lib/system/renderer-logger', () => ({ logRendererError: vi.fn() }))
+vi.mock('$lib/system/renderer-logger', () => ({
+  logRendererError: vi.fn(),
+  logRendererDev: vi.fn()
+}))
 let instance: ReturnType<typeof mount> | undefined
 const restore = vi.fn()
 const children = createRawSnippet(() => ({
@@ -54,9 +58,11 @@ const children = createRawSnippet(() => ({
 const key = 'test-dock'
 beforeEach(() => {
   vi.useFakeTimers()
-  bridge.invoke.mockClear()
+  bridge.invoke.mockReset()
+  bridge.invoke.mockResolvedValue(true)
   bridge.publish.mockClear()
   bridge.listeners.clear()
+  vi.mocked(logRendererError).mockClear()
   restore.mockClear()
   localStorage.clear()
   vi.stubGlobal(
@@ -163,6 +169,7 @@ describe('native dock chips', () => {
 
 describe('native tooltip source', () => {
   it('projects tooltip content passively without hiding the browser or claiming focus', async () => {
+    vi.stubGlobal('api', { windowInfo: { platform: 'darwin' } })
     const target = document.createElement('div')
     document.body.append(target)
     instance = mount(TooltipHost, { target })
@@ -176,14 +183,58 @@ describe('native tooltip source', () => {
     const request = call![2] as NativeDockRequest
     expect(request.passive).toBe(true)
     expect(request.modal).toBe(false)
+    const host = target.querySelector<HTMLElement>('[data-tooltip-host]')
+    expect(host?.style.opacity).toBe('1')
     bridge.listeners.get('browser:overlay:dockDrawn')?.({
       id: request.id,
       revision: request.revision
     })
     flushSync()
+    // The native document owns the tooltip once it has proved it drew it.
+    expect(host?.style.opacity).toBe('0')
     expect(bridge.invoke).not.toHaveBeenCalledWith('browser:focusDockOverlay', request.id)
     expect(bridge.publish).not.toHaveBeenCalled()
     expect(target.querySelector('[role="tooltip"]')?.textContent?.trim()).toBe('Restore the panel')
+  })
+  it('keeps Linux tooltips in the DOM without publishing or waiting on a host', async () => {
+    vi.stubGlobal('api', { windowInfo: { platform: 'linux' } })
+    const target = document.createElement('div')
+    document.body.append(target)
+    instance = mount(TooltipHost, { target })
+    flushSync()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(bridge.invoke).not.toHaveBeenCalled()
+    const host = target.querySelector<HTMLElement>('[data-tooltip-host]')
+    expect(host?.style.opacity).toBe('1')
+    expect(target.querySelector('[role="tooltip"]')?.textContent?.trim()).toBe('Restore the panel')
+    // Six seconds is past every acknowledgement deadline: a tooltip here never
+    // armed one, so nothing has to expire or fall back.
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(bridge.invoke).not.toHaveBeenCalled()
+    expect(logRendererError).not.toHaveBeenCalled()
+    expect(host?.style.opacity).toBe('1')
+  })
+  it('keeps the DOM tooltip visible when a host refuses the projection', async () => {
+    vi.stubGlobal('api', { windowInfo: { platform: 'darwin' } })
+    bridge.invoke.mockImplementation(
+      async (channel: string) => channel !== 'browser:setDockOverlay'
+    )
+    const target = document.createElement('div')
+    document.body.append(target)
+    instance = mount(TooltipHost, { target })
+    flushSync()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(logRendererError).toHaveBeenCalledWith(
+      "The native dock 'app-tooltip' fell back to the app window: its host could not take the projection"
+    )
+    expect(bridge.invoke).toHaveBeenCalledWith('browser:setDockOverlay', 'app-tooltip', null)
+    const host = target.querySelector<HTMLElement>('[data-tooltip-host]')
+    expect(host?.style.opacity).toBe('1')
+    expect(target.querySelector('[role="tooltip"]')?.textContent?.trim()).toBe('Restore the panel')
+    await vi.advanceTimersByTimeAsync(10_000)
+    // A refused dock is never retried, so a dead host cannot keep a tooltip
+    // waiting or flood the log on every hover.
+    expect(logRendererError).toHaveBeenCalledOnce()
   })
   it('avoids recursively projecting a tooltip already inside a native renderer', async () => {
     const target = document.createElement('div')
