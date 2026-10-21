@@ -1,7 +1,7 @@
 <script lang="ts">
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
@@ -190,7 +190,7 @@
           class="flex shrink-0 items-center gap-1 border border-overlay bg-overlay px-1 py-0.5 font-mono text-[0.5625rem] leading-none text-muted"
           title="Managed Git worktree scope on {bucket.root.branch}"
         >
-          <CioFiles size={9} class="text-warning" />
+          <CioFolderGit size={11} class="text-warning" />
           {bucket.root.branch}
         </span>
       {/if}

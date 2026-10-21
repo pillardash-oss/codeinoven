@@ -1,5 +1,5 @@
 <script lang="ts">
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   /**
    * Assignment review: the trigger and bubble a worker task uses to choose the
    * Git scope it will run in, mirroring the model picker's popover mechanism so
@@ -101,7 +101,7 @@
       {disabled}
     >
       <span class="flex shrink-0 items-center" aria-hidden="true">
-        <CioFiles size={12} class={worktreeTone} />
+        <CioFolderGit size={12} class={worktreeTone} />
       </span>
       {#if selectedBucket}
         <ScopeBadge bucket={selectedBucket} size="sm" />

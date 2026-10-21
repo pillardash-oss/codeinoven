@@ -79,7 +79,7 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioClipboardCheck from '@pdslng/cio-icon/CioClipboardCheck.svelte'
   import CioClipboardX from '@pdslng/cio-icon/CioClipboardX.svelte'
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
@@ -405,7 +405,7 @@
             aria-label="Managed Git worktree scope on {bucket.root.branch}"
             title="Managed Git worktree scope on {bucket.root.branch}"
           >
-            <CioFiles size={12} class="text-warning" />
+            <CioFolderGit size={12} class="text-warning" />
           </span>
         {/if}
         <ScopeBadge {bucket} size="sm" variant="mark" />

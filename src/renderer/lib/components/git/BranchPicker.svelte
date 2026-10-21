@@ -1,7 +1,7 @@
 <script lang="ts">
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
@@ -317,7 +317,7 @@
               class="flex w-full items-center gap-2 px-3 py-1.5 text-[0.6875rem] outline-none"
               title={`Checked out in worktree ${branch.worktreePath ?? ''}`}
             >
-              <CioFiles size={11} class="shrink-0 text-warning" />
+              <CioFolderGit size={11} class="shrink-0 text-warning" />
               <span class="min-w-0 flex-1 truncate text-left text-muted">{branch.name}</span>
               {#if branch.ahead > 0 || branch.behind > 0}
                 <span class="flex shrink-0 items-center gap-0.5 text-[0.5625rem] tabular-nums">

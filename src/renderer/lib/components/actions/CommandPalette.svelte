@@ -2,7 +2,7 @@
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioEnter from '@pdslng/cio-icon/CioEnter.svelte'
-  import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import { Command } from 'bits-ui'
@@ -361,7 +361,7 @@
                       aria-label="Managed Git worktree scope on {scope.root.branch}"
                       title="Managed Git worktree scope on {scope.root.branch}"
                     >
-                      <CioFiles size={11} class="text-warning" />
+                      <CioFolderGit size={11} class="text-warning" />
                     </span>
                   {/if}
                   <ScopeBadge bucket={scope} size="xs" />
