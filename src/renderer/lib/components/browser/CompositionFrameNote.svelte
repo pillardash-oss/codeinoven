@@ -1,29 +1,32 @@
 <script lang="ts">
   import CioClapper from '@pdslng/cio-icon/CioClapper.svelte'
-  import { onMount } from 'svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import type { CompositionFrameSnapshot } from '$shared/ipc-contract'
-  import Modal from '../ui/Modal.svelte'
-  import AnnotationCommentForm from '../chats/AnnotationCommentForm.svelte'
-  import ArtifactImageAnnotator from '../threads/ArtifactImageAnnotator.svelte'
+  import { setAnnotationToolbarHost } from '$lib/annotation-toolbar'
   import { responseReferencesState } from '$lib/stores/response-references.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import Modal from '../ui/Modal.svelte'
+  import ArtifactImageAnnotator from '../threads/ArtifactImageAnnotator.svelte'
 
   /**
    * A note on one frame of a composition.
    *
    * A composition is a page, not a file, so "that moment there" has nowhere to
    * live on disk until someone captures it. The transport pauses the playhead,
-   * main draws and keeps the frame, and this surface is where the user says what
-   * is wrong with it: circle the area, and/or write the comment.
+   * main draws and keeps the frame, and this surface is where the user circles
+   * the area they mean and says what is wrong with it.
    *
-   * Both halves reach the agent as one reference. The picture is what it looks at
-   * (the send composes the marks onto it), and the descriptor names the moment to
-   * the millisecond, so the frame it sees and the frame it must fix are the same
-   * one even after the edit moves the timeline.
+   * It is a media lightbox, not a form: the frame at full size, the same pen and
+   * the same comment bubble every artifact picture already uses, and the band
+   * naming the moment sitting where an artifact's header sits. The pen, its
+   * colour and the control that finishes annotating are drawn by the mark layer
+   * itself and mounted inside that band, which is how an artifact picture in the
+   * conversation gets them: one toolbar, one comment editor, two kinds of picture.
    *
-   * The comment is written here rather than only in a mark's bubble, because not
-   * every comment about a frame is about a place on it: "the caption is still the
-   * old one" is about the whole frame, and dragging a circle around the entire
-   * picture to say so would be noise on the screenshot.
+   * The strokes are what reach the agent, and each one carries the moment: the
+   * descriptor names the composition, the timecode to the millisecond, the exact
+   * second and the frame index, so the frame it sees and the frame it must fix
+   * stay the same one after the edit moves the timeline.
    */
   interface Props {
     projectId: string
@@ -37,126 +40,95 @@
   let { projectId, threadId, snapshot, armed, onClose }: Props = $props()
 
   /**
-   * The reference that names the frame itself.
+   * The band where the mark layer's own controls are mounted.
    *
-   * Minted once per open surface, because the frame is one reference however many
-   * marks are drawn on it: the marks are their own references, and this one is
-   * the picture plus the moment plus the comment.
+   * A full screen picture is the only place a mark is big enough to draw, and
+   * this header is where the app puts the controls that belong to it, so the
+   * layer appends its pen here instead of floating a second toolbar over the
+   * picture.
    */
-  const frameId = crypto.randomUUID()
+  let annotationToolbar = $state<HTMLDivElement>()
+  setAnnotationToolbarHost({ target: () => annotationToolbar })
 
   /**
-   * The capture this surface was opened for.
+   * The strokes already drawn on this frame.
    *
-   * A note is about one frame, and a surface opened on it is opened once: the
-   * descriptor below names that frame, so it is built from this value rather
-   * than from a prop that a later capture could replace mid-edit.
+   * A capture is written to its own path, so a surface is normally opened with
+   * nothing on it. Reading them rather than assuming empty keeps a reopened
+   * frame honest: the strokes are in the composer, and the layer draws whatever
+   * the composer holds for this picture.
    */
-  // svelte-ignore state_referenced_locally
-  const frame = snapshot
+  const marks = $derived(
+    responseReferencesState
+      .forThread(projectId, threadId)
+      .filter((entry) => entry.kind === 'image' && entry.mediaUrl === snapshot.url)
+  )
 
   /** What the agent reads about the moment, in the same shape a video note uses. */
   const detail = [
-    `Composition: ${frame.directory}`,
-    `timecode: ${frame.timecode}`,
-    `seconds: ${frame.seconds.toFixed(3)}`,
-    `frame: ${frame.frame} (at ${frame.fps} fps)`,
-    `duration: ${frame.duration}`,
-    `frame picture: ${frame.path}`
+    `Composition: ${snapshot.directory}`,
+    `timecode: ${snapshot.timecode}`,
+    `seconds: ${snapshot.seconds.toFixed(3)}`,
+    `frame: ${snapshot.frame} (at ${snapshot.fps} fps)`,
+    `duration: ${snapshot.duration}`,
+    `frame picture: ${snapshot.path}`
   ].join('\n')
-
-  const references = $derived(responseReferencesState.forThread(projectId, threadId))
-  const frameNote = $derived(references.find((entry) => entry.id === frameId) ?? null)
-  /**
-   * The strokes drawn on this frame.
-   *
-   * The frame's own reference is excluded: it names a picture, not a place on it,
-   * so it has no badge and nothing to edit from the pen surface.
-   */
-  const marks = $derived(
-    references.filter(
-      (entry) => entry.kind === 'image' && entry.mediaUrl === snapshot.url && entry.id !== frameId
-    )
-  )
-
-  // The reference exists from the moment the surface opens, so the composer lists
-  // the frame while the user is writing about it rather than only on Done. It is
-  // written once, after mount, because the composer is another component's render
-  // and a mount is where a new surface announces what it brought.
-  onMount(() => {
-    responseReferencesState.setForThread(projectId, threadId, [
-      ...responseReferencesState.forThread(projectId, threadId),
-      {
-        id: frameId,
-        label: '',
-        text: `Frame of "${snapshot.directory}" at ${snapshot.timecode}\n${detail}`,
-        kind: 'image',
-        mediaUrl: snapshot.url
-      }
-    ])
-  })
-
-  function saveComment(comment: string): void {
-    responseReferencesState.updateComment(projectId, threadId, frameId, comment)
-    close()
-  }
-
-  function draftComment(comment: string): void {
-    responseReferencesState.updateCommentDraft(projectId, threadId, frameId, comment)
-  }
-
-  function removeFrame(): void {
-    drop()
-    onClose()
-  }
-
-  /** Remove this frame's own reference, leaving the marks drawn on it alone. */
-  function drop(): void {
-    responseReferencesState.setForThread(
-      projectId,
-      threadId,
-      responseReferencesState.forThread(projectId, threadId).filter((entry) => entry.id !== frameId)
-    )
-  }
-
-  /**
-   * Close the surface, dropping a note the user left without a comment.
-   *
-   * A frame reference with neither a comment nor a stroke in it is a capture
-   * nobody asked to keep, and leaving it would put an empty `Mark N` in the
-   * composer every time someone looked at a frame and changed their mind.
-   */
-  function close(): void {
-    const current = responseReferencesState
-      .forThread(projectId, threadId)
-      .find((entry) => entry.id === frameId)
-    const hasComment = (current?.comment ?? '').trim() !== ''
-    if (!hasComment && marks.length === 0) drop()
-    onClose()
-  }
 </script>
 
 <Modal
   open
   title={`Frame ${snapshot.timecode}`}
-  onClose={close}
+  {onClose}
   placement="fullscreen"
-  panelClass="bg-app"
-  contentClass="flex flex-col overflow-hidden p-0"
+  chrome={false}
+  panelClass="bg-black/70"
+  claimInitialFocus={(panel) => {
+    panel.querySelector<HTMLElement>('button')?.focus()
+    return true
+  }}
 >
+  <!-- A chrome-less lightbox, so this band is the header: it reserves the same
+       inset the app header occupies over the top-left corner, names the exact
+       moment, and carries the pen and the close control. -->
   <div
-    class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-surface px-3 py-1.5 text-[0.6875rem] text-muted"
+    class="titlebar-drag flex h-12 shrink-0 items-center gap-2 border-b border-white/10 pr-3"
+    style={trafficLightInsetStyle()}
   >
-    <span class="flex items-center gap-1.5 font-mono text-foreground">
-      <CioClapper size={12} class="text-accent" />
+    <span
+      class="flex shrink-0 items-center gap-1.5 font-mono text-xs font-semibold text-white/90"
+      title={`Frame ${snapshot.frame} of ${snapshot.directory}`}
+    >
+      <CioClapper size={12} class="text-white/60" />
       {snapshot.timecode}
     </span>
-    <span class="tabular-nums">frame {snapshot.frame}</span>
-    <span class="tabular-nums">{snapshot.fps} fps</span>
-    <span class="min-w-0 truncate" title={snapshot.directory}>{snapshot.directory}</span>
-    <span class="tabular-nums text-dimmed">{snapshot.width}×{snapshot.height}</span>
+    <span class="shrink-0 tabular-nums text-xs text-white/60">frame {snapshot.frame}</span>
+    <span class="shrink-0 tabular-nums text-xs text-white/60">{snapshot.fps} fps</span>
+    <span class="min-w-0 truncate text-xs text-white/50" title={snapshot.directory}>
+      {snapshot.directory}
+    </span>
+    <span class="shrink-0 tabular-nums text-xs text-white/40">
+      {snapshot.width}×{snapshot.height}
+    </span>
+    <div
+      class="titlebar-no-drag ml-auto min-w-0"
+      {@attach (node) => {
+        annotationToolbar = node
+        return () => {
+          annotationToolbar = undefined
+        }
+      }}
+    ></div>
+    <button
+      type="button"
+      class="titlebar-no-drag ml-1 flex h-7 w-7 shrink-0 items-center justify-center text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      aria-label="Close the frame note"
+      title="Close (Esc)"
+      onclick={onClose}
+    >
+      <CioClose size={14} />
+    </button>
   </div>
-  <div class="min-h-0 flex-1">
+  <div class="relative flex min-h-0 flex-1 items-center justify-center">
     <ArtifactImageAnnotator
       {projectId}
       {threadId}
@@ -171,21 +143,6 @@
         detail
       }}
       startArmed={armed}
-    />
-  </div>
-  <div class="shrink-0 border-t border-border bg-surface p-2">
-    <AnnotationCommentForm
-      initialComment={frameNote?.comment ?? ''}
-      targetId={`frame-note-${threadId}-${frameId}`}
-      scope={{ kind: 'project', projectId }}
-      placeholder="What should change at this frame?"
-      fieldClass="h-16 min-h-16"
-      doneTitle="Attach this frame note"
-      removeTitle="Remove this frame note and its picture"
-      onDraftChange={draftComment}
-      onDone={saveComment}
-      onRemove={removeFrame}
-      onClose={close}
     />
   </div>
 </Modal>

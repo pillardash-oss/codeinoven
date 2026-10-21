@@ -257,8 +257,10 @@
   <button
     type="button"
     class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-    aria-label="Comment on this frame"
-    title={canNote ? 'Comment on this frame' : 'Comment on a frame from the video panel'}
+    aria-label="Copy this frame as a note"
+    title={canNote
+      ? 'Open this frame to comment on it'
+      : 'Open a frame to comment on it from the video panel'}
     disabled={!canNote || capturing}
     onclick={() => void noteFrame(false)}
   >
