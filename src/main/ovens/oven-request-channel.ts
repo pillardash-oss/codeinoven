@@ -44,6 +44,20 @@ export class OvenChannelUnavailable extends Error {}
  */
 export class OvenServiceOutdated extends Error {}
 
+/** How one request is allowed to travel to the service on the Oven. */
+export interface ChannelRequestOptions {
+  /**
+   * Talk to the service the Oven already runs, whatever revision it reports.
+   *
+   * Run control exists in every bundle this app speaks to, and it is the only
+   * way to end the active run that makes an Oven refuse a service replacement.
+   * Holding those requests to the current revision is a deadlock the user cannot
+   * break: the run cannot be stopped, so the service cannot be replaced, so
+   * nothing on that Oven can run.
+   */
+  acceptOutdated?: boolean
+}
+
 interface Pending {
   resolve: (value: string) => void
   reject: (error: Error) => void
@@ -80,6 +94,9 @@ interface Channel {
 export class OvenRequestChannel {
   private readonly channels = new Map<string, Channel>()
   private readonly starting = new Map<string, Promise<Channel>>()
+  /** Channels opened against whatever bundle the Oven runs, for run control. */
+  private readonly controlChannels = new Map<string, Channel>()
+  private readonly controlStarting = new Map<string, Promise<Channel>>()
   /** Per Oven: how many starts failed in a row, and when the last one did. */
   private readonly startFailures = new Map<string, { count: number; at: number }>()
   private disposed = false
@@ -119,8 +136,13 @@ export class OvenRequestChannel {
    * `timeoutMs` lets an operation that legitimately runs long (a Git command on a
    * large checkout) wait without being mistaken for a wedged channel.
    */
-  async request(id: string, payload: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<string> {
-    const channel = await this.acquire(id)
+  async request(
+    id: string,
+    payload: string,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+    options: ChannelRequestOptions = {}
+  ): Promise<string> {
+    const channel = await this.acquire(id, options.acceptOutdated === true)
     return this.send(id, channel, payload, timeoutMs)
   }
 
@@ -153,21 +175,31 @@ export class OvenRequestChannel {
   /** Close one Oven's channel, e.g. after it was removed or reconfigured. */
   dispose(id: string): void {
     this.startFailures.delete(id)
-    const channel = this.channels.get(id)
-    if (channel) this.drop(id, channel, 'The Oven channel closed.')
+    for (const channel of [this.channels.get(id), this.controlChannels.get(id)])
+      if (channel) this.drop(id, channel, 'The Oven channel closed.')
   }
 
   /** Close every channel, as the app does on quit. */
   disposeAll(): void {
     this.disposed = true
-    for (const [id, channel] of [...this.channels]) this.drop(id, channel, 'The app is closing.')
+    for (const [id, channel] of [...this.channels, ...this.controlChannels])
+      this.drop(id, channel, 'The app is closing.')
   }
 
-  private async acquire(id: string): Promise<Channel> {
+  /**
+   * The open channel for this Oven, starting one when it is missing.
+   *
+   * `acceptOutdated` selects the control channels: a second, separate process,
+   * because the same session cannot be both the bundle this app installed and
+   * the older one the Oven still runs.
+   */
+  private async acquire(id: string, acceptOutdated = false): Promise<Channel> {
     if (this.disposed) throw new OvenChannelUnavailable('The app is closing.')
-    const pending = this.starting.get(id)
+    const channels = acceptOutdated ? this.controlChannels : this.channels
+    const starting = acceptOutdated ? this.controlStarting : this.starting
+    const pending = starting.get(id)
     if (pending) return pending
-    const existing = this.channels.get(id)
+    const existing = channels.get(id)
     if (existing && !existing.dead) return existing
     const failures = this.startFailures.get(id)
     if (
@@ -176,7 +208,7 @@ export class OvenRequestChannel {
       Date.now() - failures.at < START_RETRY_COOLDOWN_MS
     )
       throw new OvenChannelUnavailable('The Oven channel could not be started.')
-    const start = this.start(id)
+    const start = this.start(id, acceptOutdated)
       .catch((error: unknown) => {
         // An outdated bundle is not a broken channel: counting it would retire a
         // connection that works and is about to be replaced.
@@ -187,12 +219,12 @@ export class OvenRequestChannel {
           error instanceof Error ? error.message : 'The Oven did not answer.'
         )
       })
-      .finally(() => this.starting.delete(id))
-    this.starting.set(id, start)
+      .finally(() => starting.delete(id))
+    starting.set(id, start)
     return start
   }
 
-  private async start(id: string): Promise<Channel> {
+  private async start(id: string, acceptOutdated = false): Promise<Channel> {
     const shell = await remoteShell(this.ssh, id)
     const launch = await this.ssh.prepare(id, remoteServiceCommand(shell, ['attach']), false)
     if (this.disposed) {
@@ -236,7 +268,8 @@ export class OvenRequestChannel {
       this.drop(id, channel, reason)
     })
     // Track startup too, so closing an Oven or quitting cancels its probe.
-    this.channels.set(id, channel)
+    const tracked = acceptOutdated ? this.controlChannels : this.channels
+    tracked.set(id, channel)
     try {
       // Spawning SSH does not prove that the installed bundle supports attach.
       // Older bundles print an error and exit. Probe before sending user work,
@@ -257,7 +290,7 @@ export class OvenRequestChannel {
       const running = response.value?.serviceRevision
       if (typeof running === 'string') {
         const expected = await this.serviceRevision().catch(() => null)
-        if (expected && running !== expected)
+        if (expected && running !== expected && !acceptOutdated)
           throw new OvenServiceOutdated('The Oven is running an older service.')
       }
       if (this.disposed || channel.dead) throw new Error('The Oven channel closed.')
@@ -310,6 +343,7 @@ export class OvenRequestChannel {
     channel.parts.length = 0
     channel.bytes = 0
     if (this.channels.get(id) === channel) this.channels.delete(id)
+    if (this.controlChannels.get(id) === channel) this.controlChannels.delete(id)
     for (const pending of channel.pending.splice(0)) {
       clearTimeout(pending.timer)
       pending.reject(new Error(reason))

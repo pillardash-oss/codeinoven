@@ -213,7 +213,7 @@ export class OvenService {
   }
 
   async runs(id: string): Promise<OvenRun[]> {
-    return this.decode<OvenRun[]>(await this.request(id, { method: 'runs' }))
+    return this.decode<OvenRun[]>(await this.control(id, { method: 'runs' }))
   }
 
   async start(id: string, input: StartOvenRunInput): Promise<OvenRun> {
@@ -230,15 +230,15 @@ export class OvenService {
     runId: string,
     after: number
   ): Promise<{ run: OvenRun; events: OvenRunEvent[] }> {
-    return this.decode(await this.request(id, { method: 'events', runId, after }))
+    return this.decode(await this.control(id, { method: 'events', runId, after }))
   }
 
   async write(id: string, runId: string, input: string, closeInput = false): Promise<void> {
-    this.decode(await this.request(id, { method: 'write', runId, input, closeInput }))
+    this.decode(await this.control(id, { method: 'write', runId, input, closeInput }))
   }
 
   async stop(id: string, runId: string): Promise<void> {
-    this.decode(await this.request(id, { method: 'stop', runId }))
+    this.decode(await this.control(id, { method: 'stop', runId }))
   }
 
   /**
@@ -383,6 +383,32 @@ export class OvenService {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
     return await this.withServiceRepair(id, () => this.send(id, data))
+  }
+
+  /**
+   * Run control: the run inventory, its events, its steering input, its stop.
+   *
+   * Every bundle this app speaks to answers these, and stopping the run is the
+   * only way to release the Oven for the service replacement it is waiting for.
+   * Repairing the service first is what made Stop impossible exactly when it was
+   * needed: an Oven refuses to replace its service while a run is active, so a
+   * guard that requires the current service here can never be satisfied. These
+   * requests therefore go to whatever service the Oven is already running, and
+   * the update happens on the next ordinary request once the run is gone.
+   */
+  private async control(id: string, input: Record<string, unknown>): Promise<string> {
+    const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
+    if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
+    try {
+      return await this.channel.request(id, data, undefined, { acceptOutdated: true })
+    } catch (error) {
+      // A channel that will not open is not a refused request. Stopping a run is
+      // worth one process, which is also the path an Oven without a warm session
+      // would take anyway.
+      if (error instanceof OvenChannelUnavailable || error instanceof OvenServiceMissingError)
+        return await this.oneShot(id, data)
+      throw error
+    }
   }
 
   /**

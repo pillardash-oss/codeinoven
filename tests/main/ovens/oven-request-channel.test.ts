@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { OvenRequestChannel, OvenServiceOutdated } from '../../../src/main/ovens/oven-request-channel'
+import {
+  OvenRequestChannel,
+  OvenServiceOutdated
+} from '../../../src/main/ovens/oven-request-channel'
 import type { OvenSsh } from '../../../src/main/ovens/oven-ssh'
 
 /**
@@ -124,6 +127,25 @@ describe('oven request channel', () => {
     expect(prepare).toHaveBeenCalledOnce()
   })
 
+  it('answers a run-control request from the service the Oven already runs', async () => {
+    const { channel, prepare } = open({}, 'an-older-revision')
+    // Run control exists in every bundle this app speaks to, and ending a run is
+    // the only way to release an Oven for the update it is waiting for.
+    const answer = await channel.request(
+      'oven-a',
+      JSON.stringify({ method: 'echo', value: 1 }),
+      undefined,
+      { acceptOutdated: true }
+    )
+    expect(JSON.parse(answer).value).toBe(1)
+    // The working bundle and the older one are different processes, so opening
+    // the control session never reuses or replaces the current session.
+    await expect(
+      channel.request('oven-a', JSON.stringify({ method: 'echo', value: 2 }))
+    ).rejects.toBeInstanceOf(OvenServiceOutdated)
+    expect(prepare).toHaveBeenCalledTimes(2)
+  })
+
   it('retries a session that failed to start once the outage is over', async () => {
     let asleep = true
     const prepare = vi.fn(async () => {
@@ -138,8 +160,7 @@ describe('oven request channel', () => {
     const ssh = { prepare, execute: vi.fn(async () => 'Linux') } as unknown as OvenSsh
     const channel = new OvenRequestChannel(ssh, async () => 'current')
     opened.push(channel)
-    const attempt = () =>
-      channel.request('oven-a', JSON.stringify({ method: 'echo', value: 1 }))
+    const attempt = () => channel.request('oven-a', JSON.stringify({ method: 'echo', value: 1 }))
 
     await expect(attempt()).rejects.toThrow('The Oven is asleep.')
     await expect(attempt()).rejects.toThrow('The Oven is asleep.')
