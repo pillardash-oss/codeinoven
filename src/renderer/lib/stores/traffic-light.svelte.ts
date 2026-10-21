@@ -71,6 +71,15 @@ export interface TrafficLightInsetOptions {
   mirrorRightInset?: boolean
   /** Minimum right gutter when reserving the Windows caption overlay. */
   rightPadding?: string
+  /**
+   * Extra left gutter when reserving the Windows caption overlay.
+   *
+   * Controls on the right leave the left edge of a title bar with nothing but
+   * its own small padding, so a heading there reads as glued to the window
+   * edge next to macOS, where the traffic lights push it inward. Surfaces that
+   * want that same breathing room opt in with this gutter.
+   */
+  leftPadding?: string
   /** Only reserve controls on this edge, for an edge-aligned panel. */
   controlSide?: Exclude<TrafficLightSide, null>
 }
@@ -80,7 +89,8 @@ export function trafficLightInsetStyle(options: TrafficLightInsetOptions = {}): 
   if (trafficLightState.usesCaptionOverlay) {
     if (options.controlSide === 'left') return ''
     const gutter = options.rightPadding ?? '1.25rem'
-    return `padding-right: max(${gutter}, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)))`
+    const right = `padding-right: max(${gutter}, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)))`
+    return options.leftPadding ? `padding-left: ${options.leftPadding}; ${right}` : right
   }
   if (!trafficLightState.present || trafficLightState.side === null) return ''
   if (options.controlSide && options.controlSide !== trafficLightState.side) return ''
