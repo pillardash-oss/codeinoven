@@ -13,6 +13,7 @@ import {
 } from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
 import { unreachableHostIssue } from './oven-network-hint'
+import { plainPowerShellStderr } from './oven-powershell-output'
 import { validateIdentityPath } from './oven-validation'
 import {
   ensureMultiplexDirectory,
@@ -93,7 +94,10 @@ function remoteFailureDetail(stderr: string): string {
 }
 
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
-function remoteCommandIssue(stderr: string): string {
+function remoteCommandIssue(rawStderr: string): string {
+  // A Windows PowerShell failure arrives as CLIXML, where the reason is one record
+  // inside an envelope of progress noise.
+  const stderr = plainPowerShellStderr(rawStderr)
   const nodeVersion = /Node\.js 22 or later is required on this Oven \(found (v[\d.]+)\)/u.exec(
     stderr
   )

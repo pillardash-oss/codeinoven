@@ -17,6 +17,7 @@ import {
 } from '../../agents/harness-install-service'
 import { stepRequiresElevation } from '../oven-setup-capabilities'
 import { OVEN_SETUP_SCRIPT_VERSION, planNodeInstall } from '../oven-setup-bootstrap'
+import { windowsTimeZoneFor } from '../windows-timezones'
 import { windowsSshdStepDetail } from './oven-windows-sshd'
 
 /**
@@ -375,7 +376,12 @@ function timezoneStep(assessment: OvenPreflightAssessment, deviceZone: string | 
       detail: 'The Oven reports no supported way to change its clock zone.',
       skippedReason: 'The Oven reports no supported way to change its clock zone.'
     }
-  const zoneMatches = assessment.platform !== 'win32' && assessment.timezone.current === deviceZone
+  // Windows reports its own name for the same zone, so the comparison is made on
+  // that name. A zone Windows has no name for is always offered for correction.
+  const zoneMatches =
+    assessment.platform === 'win32'
+      ? windowsTimeZoneFor(deviceZone) === assessment.timezone.current
+      : assessment.timezone.current === deviceZone
   return {
     ...base,
     timezoneZone: deviceZone,
