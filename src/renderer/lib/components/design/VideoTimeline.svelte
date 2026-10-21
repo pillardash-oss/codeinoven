@@ -527,10 +527,10 @@
           {@const Icon = entry.icon}
           <!--
             The open tab names itself and its neighbours do not. The strip shares
-            one row with the timecode, the frame and the comment button, and a row
-            of words for the three tabs pushes those off the panel at its default
-            width. An icon still says which half of the editor is closed, and its
-            title says the word when the pointer rests on it.
+            one row with the timecode and the frame, and a row of words for the
+            three tabs pushes those off the panel at its default width. An icon
+            still says which half of the editor is closed, and its title says the
+            word when the pointer rests on it.
           -->
           <button
             type="button"
