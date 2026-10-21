@@ -1,5 +1,11 @@
 import { isUsageLimitNoticeText } from './provider-issue'
-import type { AgentMessage, AgentPart, PromptAttachment } from './types'
+import type {
+  AgentMessage,
+  AgentPart,
+  PromptAttachment,
+  PromptReference,
+  PromptProjectReference
+} from './types'
 
 /**
  * The user request a continuation turn has to carry.
@@ -23,6 +29,9 @@ export interface PendingContinuationRequest {
   text: string
   /** Files the request carried, in the order the user attached them. */
   attachments: PromptAttachment[]
+  /** Annotation comments and selected context belong to the request too. */
+  references?: PromptReference[]
+  projectReferences?: PromptProjectReference[]
 }
 
 /**
@@ -119,16 +128,29 @@ export function pendingContinuationRequest(
     if (isActivityOnlyUserMessage(message) || isAppActionChip(message)) continue
     const text = userRequestText(message).trim()
     const attachments = userRequestAttachments(message)
-    if (text || attachments.length > 0) requests.push({ text, attachments })
+    const references = message.references ?? []
+    const projectReferences = message.projectReferences ?? []
+    if (text || attachments.length > 0 || references.length > 0 || projectReferences.length > 0) {
+      requests.push({
+        text,
+        attachments,
+        ...(references.length > 0 ? { references } : {}),
+        ...(projectReferences.length > 0 ? { projectReferences } : {})
+      })
+    }
   }
   if (requests.length === 0) return undefined
   requests.reverse()
+  const references = requests.flatMap((request) => request.references ?? [])
+  const projectReferences = requests.flatMap((request) => request.projectReferences ?? [])
   return {
     text: requests
       .map((request) => request.text)
       .filter(Boolean)
       .join('\n\n'),
-    attachments: requests.flatMap((request) => request.attachments)
+    attachments: requests.flatMap((request) => request.attachments),
+    ...(references.length > 0 ? { references } : {}),
+    ...(projectReferences.length > 0 ? { projectReferences } : {})
   }
 }
 
@@ -168,7 +190,13 @@ export function continuationRequestPrompt(
   nudge = 'Continue'
 ): string {
   const relayed = request.text.trim()
-  if (!relayed && request.attachments.length === 0) return nudge
+  if (
+    !relayed &&
+    request.attachments.length === 0 &&
+    !request.references?.length &&
+    !request.projectReferences?.length
+  )
+    return nudge
   const room = Math.max(
     1,
     CONTINUATION_PROMPT_CHARACTER_LIMIT -

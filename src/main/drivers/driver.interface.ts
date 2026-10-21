@@ -518,6 +518,9 @@ export interface HarnessDriver {
    */
   releaseProjectResources?(projectPath: string): Promise<void> | void
 
+  /** Whether this process already holds the native session writer. */
+  hasSessionWriter?(projectPath: string, sessionId: string): boolean
+
   /**
    * Release an idle native session before another app instance resumes it.
    * Drivers that do not hold cross-process native writers omit this operation.

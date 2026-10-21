@@ -935,6 +935,15 @@ export class CodexDriver extends PersistentCliDriver {
     this.stopResidentHostForPathIfIdle(projectPath)
   }
 
+  /** Check the resident writer without starting a host or loading history. */
+  hasSessionWriter(projectPath: string, sessionId: string): boolean {
+    if (!this.hostsByProjectPath.has(projectPath)) return false
+    for (const binding of this.threadSessionsByNativeId.values()) {
+      if (binding.sessionId === sessionId && binding.projectPath === projectPath) return true
+    }
+    return false
+  }
+
   /**
    * Transfer a settled app session. An idle host exits to release the exact
    * native writer. A busy host stays alive for unrelated turns; the receiving

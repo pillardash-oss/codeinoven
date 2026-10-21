@@ -9884,8 +9884,15 @@ export class ChatEngine {
         settings.harnessId)
       : undefined
     if (targetThread?.sessionId && targetSessionDriverId === 'codex') {
-      const transfer = await this.threadTransferPreflight?.(projectId, threadId)
-      if (transfer && !transfer.ok) throw new Error(transfer.reason)
+      const accountId =
+        this.sessionRegistry.get(targetThread.sessionId)?.accountId ?? targetThread.sessionAccountId
+      const { driver, projectPath } = await this.resolve(projectId, 'codex', threadId, accountId)
+      // A locally held writer needs no peer handoff. Asking every peer here
+      // made ordinary follow-ups fail when an unrelated instance did not answer.
+      if (!driver.hasSessionWriter?.(projectPath, targetThread.sessionId)) {
+        const transfer = await this.threadTransferPreflight?.(projectId, threadId)
+        if (transfer && !transfer.ok) throw new Error(transfer.reason)
+      }
     }
     // This process is about to drive the workflow this thread belongs to, so it
     // records ownership for the whole group now. A peer launching between two of
@@ -21937,8 +21944,8 @@ export class ChatEngine {
       resumesSpecContract ? 'implement' : undefined,
       createMessageId(),
       undefined,
-      undefined,
-      undefined,
+      continuation.references,
+      continuation.projectReferences,
       'internal'
     )
     return true
@@ -27137,7 +27144,7 @@ export class ChatEngine {
       )
       const request = pendingContinuationRequest(page.messages)
       return request
-        ? { text: continuationRequestPrompt(request, nudge), attachments: request.attachments }
+        ? { ...request, text: continuationRequestPrompt(request, nudge) }
         : { text: nudge, attachments: [] }
     } catch (error) {
       // A continuation must still run when the mirror read fails: the harness
@@ -27263,8 +27270,8 @@ export class ChatEngine {
       undefined,
       createMessageId(),
       undefined,
-      undefined,
-      undefined,
+      continuation.references,
+      continuation.projectReferences,
       'internal'
     )
   }

@@ -6131,8 +6131,8 @@
         undefined,
         true,
         undefined,
-        [],
-        [],
+        request?.references ?? [],
+        request?.projectReferences ?? [],
         { action: 'Retry connection' }
       )
     } catch (error) {
