@@ -47,13 +47,17 @@ describe('oven root operations', () => {
     expect(request).toHaveBeenCalledOnce()
     const [id, payload, timeoutMs] = request.mock.calls[0] ?? []
     expect(id).toBe('oven-a')
+    // The session reads envelopes. A bare input carries no `method`, so the
+    // channel handed it to the daemon, which answered first "Invalid run ID."
+    // and then named the missing method: every file action took that detour.
     expect(JSON.parse(String(payload))).toMatchObject({
-      root: '/checkout',
-      projectId: 'project-1',
-      channel: 'projectFiles:create',
-      // The Oven's session refuses file work without this, and the app used to
-      // omit it: every file action then answered "Oven protocol version mismatch".
-      protocolVersion: OVEN_PROTOCOL_VERSION
+      method: 'root-operation',
+      protocolVersion: OVEN_PROTOCOL_VERSION,
+      input: {
+        root: '/checkout',
+        projectId: 'project-1',
+        channel: 'projectFiles:create'
+      }
     })
     // A Git command on a large checkout may legitimately take a minute, so the
     // session must not be judged wedged at the 30 s control-message timeout.
@@ -207,5 +211,41 @@ describe('oven root operations', () => {
     expect(
       execute.mock.calls.some(([, command]) => String(command).includes('root-operation'))
     ).toBe(true)
+  })
+
+  it('reruns the operation on a fresh process when a stale channel refuses the request', async () => {
+    const oven = service()
+    // A well-formed answer, so the failure surfaces when the envelope is decoded
+    // rather than as a thrown channel error.
+    vi.spyOn(OvenRequestChannel.prototype, 'request').mockResolvedValue(
+      JSON.stringify({
+        ok: false,
+        error: 'Unknown Oven request method: undefined. Install the current Oven service.'
+      })
+    )
+    const dispose = vi
+      .spyOn(OvenRequestChannel.prototype, 'dispose')
+      .mockImplementation(() => undefined)
+    const execute = vi
+      .spyOn(OvenSsh.prototype, 'execute')
+      .mockResolvedValue(JSON.stringify({ ok: true, value: { path: 'notes.md' } }))
+
+    const result = await oven.rootOperation(
+      'oven-a',
+      '/checkout',
+      'project-1',
+      'projectFiles:create',
+      ['docs', 'notes.md']
+    )
+
+    expect(result).toEqual({ path: 'notes.md' })
+    expect(dispose).toHaveBeenCalledWith('oven-a')
+    // The one-shot mode reads the input itself, never the envelope around it.
+    const [, , input] = execute.mock.calls.at(-1) ?? []
+    expect(JSON.parse(String(input))).toMatchObject({
+      root: '/checkout',
+      channel: 'projectFiles:create',
+      protocolVersion: OVEN_PROTOCOL_VERSION
+    })
   })
 })

@@ -78,6 +78,14 @@ interface SendOptions {
   timeoutMs?: number
   /** The service mode the one-request fallback has to run. */
   mode?: 'request' | 'root-operation'
+  /**
+   * The payload the one-request fallback has to receive, when it differs.
+   *
+   * The warm channel reads envelopes (`method` plus `input`), while the one-shot
+   * `root-operation` mode reads the input itself, so one body cannot be correct
+   * for both. This is the body the fallback sends.
+   */
+  fallbackData?: string
 }
 
 /**
@@ -310,15 +318,34 @@ export class OvenService {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > ROOT_OPERATION_LIMIT_BYTES)
       throw new Error('The Oven operation exceeds 8 MiB.')
-    if (!network)
-      return this.decode<unknown>(
-        await this.withServiceRepair(id, () =>
-          this.send(id, data, {
-            timeoutMs: ROOT_OPERATION_TIMEOUT_MS,
-            mode: 'root-operation'
-          })
-        )
+    if (!network) {
+      // The warm channel reads envelopes, never bare inputs. A line without a
+      // `method` is neither file work nor a run request, so the channel handed it
+      // to the daemon, which answered "Invalid run ID." and then named the missing
+      // method: every file action on a channel took that detour.
+      const envelope = JSON.stringify({
+        method: 'root-operation',
+        protocolVersion: OVEN_PROTOCOL_VERSION,
+        input
+      })
+      const output = await this.withServiceRepair(id, () =>
+        this.send(id, envelope, {
+          timeoutMs: ROOT_OPERATION_TIMEOUT_MS,
+          mode: 'root-operation',
+          fallbackData: data
+        })
       )
+      try {
+        return this.decode<unknown>(output)
+      } catch (error) {
+        // A channel whose process predates this bundle still forwards the request
+        // to a daemon that may not know it. Replacing the channel is the repair,
+        // and the work then runs against the bundle on disk.
+        if (!staleChannelAnswer(error)) throw error
+        this.channel.dispose(id)
+        return this.decode<unknown>(await this.oneShot(id, data, 'root-operation'))
+      }
+    }
     // The command is built once, before any repair runs: a second attempt must
     // repeat the same call, never re-resolve the shell in the middle of it.
     const command = remoteServiceCommand(await remoteShell(this.ssh, id), ['root-operation'])
@@ -439,6 +466,7 @@ export class OvenService {
    */
   private async send(id: string, data: string, options: SendOptions = {}): Promise<string> {
     const mode = options.mode ?? 'request'
+    const fallback = options.fallbackData ?? data
     try {
       return await this.channel.request(id, data, options.timeoutMs)
     } catch (error) {
@@ -459,7 +487,7 @@ export class OvenService {
           (await this.refreshService(id, 'The Oven service is not running.'))
         )
           return await this.channel.request(id, data, options.timeoutMs)
-        return await this.oneShot(id, data, mode)
+        return await this.oneShot(id, fallback, mode)
       }
       // A channel opened before the installed bundle was replaced keeps running
       // the code it started with, so file work that bundle cannot answer comes
@@ -467,11 +495,11 @@ export class OvenService {
       // request: close it and run the operation against the bundle on disk.
       if (mode === 'root-operation' && staleChannelAnswer(error)) {
         this.channel.dispose(id)
-        return await this.oneShot(id, data, mode)
+        return await this.oneShot(id, fallback, mode)
       }
       if (!(error instanceof OvenServiceMissingError)) throw error
       await this.install(id)
-      return await this.oneShot(id, data, mode)
+      return await this.oneShot(id, fallback, mode)
     }
   }
 
