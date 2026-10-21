@@ -2,15 +2,17 @@ import { systemPreferences } from 'electron'
 import type { SpeechMicrophoneAccess } from '../../lib/speech/types'
 import { Logger } from '../system/logger'
 
-/**
- * macOS states that will never show a prompt again, so the only honest answer
- * left is where the user has to go to change their mind.
- */
 /** macOS states that will never show a prompt again, so the only honest answer
  * left is where the user has to go to change their mind. */
 const BLOCKED_MESSAGE =
   'Microphone access is blocked. Allow it in System Settings > Privacy & Security > Microphone.'
 const DECLINED_MESSAGE = 'Microphone access was not granted.'
+
+// Shared by every recording surface and the native capture path. A successful
+// request is authoritative for this process even if a later status read is
+// unresolved. Explicit denial/restriction still invalidates that decision.
+let grantedInSession = false
+let pendingAccess: Promise<SpeechMicrophoneAccess> | null = null
 
 /**
  * Whether microphone access is already granted, without asking for it.
@@ -51,14 +53,28 @@ export async function requestMicrophoneAccess(): Promise<SpeechMicrophoneAccess>
   if (process.platform !== 'darwin') return { granted: true }
   try {
     const status = systemPreferences.getMediaAccessStatus('microphone')
-    if (status === 'granted') return { granted: true }
+    if (status === 'granted') {
+      grantedInSession = true
+      return { granted: true }
+    }
     if (status === 'denied' || status === 'restricted') {
+      grantedInSession = false
       return { granted: false, message: BLOCKED_MESSAGE }
     }
+    if (grantedInSession) return { granted: true }
+    if (pendingAccess) return await pendingAccess
     // `not-determined` (and the API's `unknown`) is the only state that shows
-    // the system prompt, and it stays tied to this user gesture.
-    const granted = await systemPreferences.askForMediaAccess('microphone')
-    return granted ? { granted: true } : { granted: false, message: DECLINED_MESSAGE }
+    // the system prompt. Share it across overlapping recording gestures.
+    const request = systemPreferences.askForMediaAccess('microphone').then((granted) => {
+      grantedInSession = granted
+      return granted ? { granted: true } : { granted: false, message: DECLINED_MESSAGE }
+    })
+    pendingAccess = request
+    try {
+      return await request
+    } finally {
+      pendingAccess = null
+    }
   } catch (error) {
     Logger.error('Microphone access request failed:', error)
     return { granted: false, message: 'Microphone access could not be requested.' }
