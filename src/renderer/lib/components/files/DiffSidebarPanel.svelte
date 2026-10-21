@@ -272,7 +272,9 @@
           : nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
         const previousCheckpointId = this.selectedCheckpointId
         this.selectedCheckpointId =
-          nextTurns.find((checkpoint) => checkpoint.id === preferred)?.id ?? nextTurns[0]?.id ?? null
+          nextTurns.find((checkpoint) => checkpoint.id === preferred)?.id ??
+          nextTurns[0]?.id ??
+          null
         if (this.selectedCheckpointId !== previousCheckpointId) this.pageStart = 0
         this.writeback()
         void this.loadDiffs()
@@ -723,7 +725,9 @@
       <div class="min-w-0 flex-1 py-0.5">
         {#if checkpoint}
           <span class="flex items-center gap-1.5">
-            <span class="min-w-0 flex-1 truncate text-[0.6875rem] font-medium text-foreground">
+            <span
+              class="min-w-0 flex-1 truncate text-center text-[0.6875rem] font-medium text-foreground"
+            >
               {checkpoint.label}
             </span>
             {#if checkpoint.status === 'active'}
@@ -745,15 +749,20 @@
               {formatDateTimeCompact(checkpoint.completedAt ?? checkpoint.createdAt)}
             </span>
             <span class="shrink-0" aria-hidden="true">·</span>
-            <span class="shrink-0 tabular-nums">{checkpoint.changes.length.toLocaleString()} changes</span>
+            <span class="shrink-0 tabular-nums"
+              >{checkpoint.changes.length.toLocaleString()} changes</span
+            >
+            {#if checkpoint.failure}
+              <span class="shrink-0" aria-hidden="true">·</span>
+              <span class="min-w-0 truncate text-danger" title={checkpoint.failure}>
+                {checkpoint.failure}
+              </span>
+            {/if}
           </span>
         {:else}
           <span class="text-[0.625rem] font-medium tabular-nums text-muted">
             Turn {controller.turns.length - controller.selectedIndex} of {controller.turns.length}
           </span>
-        {/if}
-        {#if checkpoint?.failure}
-          <p class="mt-0.5 text-[0.625rem] leading-relaxed text-danger">{checkpoint.failure}</p>
         {/if}
       </div>
       <button
