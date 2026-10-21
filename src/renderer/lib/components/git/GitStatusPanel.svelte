@@ -120,6 +120,7 @@
   import PrMetadataDialog from './PrMetadataDialog.svelte'
   import { prSummaryChatContext, prSummaryExplainPrompt } from './git-status-panel-prompts'
   import PrViewSwitcher from './PrViewSwitcher.svelte'
+  import PrReviewMenu from './PrReviewMenu.svelte'
   import { stateGlyph, stateGlyphClass, stateLabel } from './deployment-state'
   import {
     PR_DETAIL_VIEWS,
@@ -2920,8 +2921,7 @@
         'pr-detail',
         'deployment-runs',
         'deployment-environments'
-      ]) ||
-      githubNotifications.loading
+      ]) || githubNotifications.loading
         ? 'animate-spin'
         : ''}
     />
@@ -3583,6 +3583,9 @@
         active={prDetailTab}
         onSelect={(id) => (prDetailTab = id)}
       />
+      {#if primaryRemote && isPanelRepository(notificationIdentity)}
+        <PrReviewMenu {projectId} pr={notificationPullRequest} remote={primaryRemote.name} />
+      {/if}
     {/if}
   {:else if activeTab === 'pulls'}
     {#if selectedPullRequest && githubIdentity}
@@ -3603,6 +3606,9 @@
         active={prDetailTab}
         onSelect={(id) => (prDetailTab = id)}
       />
+      {#if primaryRemote}
+        <PrReviewMenu {projectId} pr={selectedPullRequest} remote={primaryRemote.name} />
+      {/if}
     {:else}
       <PrStateFilter state={prListState} onSelect={selectPrListState} />
       <PrListOptionsMenu
@@ -4489,6 +4495,7 @@
           {threadId}
           identity={githubIdentity}
           summary={fullscreenActivePullRequest}
+          reviewRemote={primaryRemote?.name}
           variant="fullscreen"
           onBack={() => (fullscreenPullRequestId = PR_READER_LIST_TAB)}
           onAssignAgent={(pr) => void assignAgentToPullRequest(pr)}

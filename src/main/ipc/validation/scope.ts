@@ -9,7 +9,7 @@ import {
   validateBoolean,
   validateEntityId
 } from './primitives'
-import { validateBranchName } from './git'
+import { validateBranchName, validateRemoteName } from './git'
 
 const SCOPE_SLICES = new Set<ScopeSlice>([
   'todo',
@@ -147,13 +147,26 @@ export function validateScopeWorktreeCreateInput(
   const input = assertRecord(value, 'Scope worktree create input')
   rejectUnknownFields(
     input,
-    new Set(['title', 'runSetup', 'environmentMode', 'baseBranch', 'setupCommands']),
+    new Set(['title', 'runSetup', 'environmentMode', 'baseBranch', 'setupCommands', 'pullRequest']),
     'scope worktree create input'
   )
+  let pullRequest: { number: number; remote: string } | undefined
+  if (input.pullRequest !== undefined) {
+    if (input.baseBranch !== undefined) {
+      throw new TypeError('A PR review cannot also specify a source branch')
+    }
+    const pr = assertRecord(input.pullRequest, 'Pull request')
+    rejectUnknownFields(pr, new Set(['number', 'remote']), 'pull request')
+    pullRequest = {
+      number: validateBoundedInteger(pr.number, 'Pull request number', 1, Number.MAX_SAFE_INTEGER),
+      remote: validateRemoteName(pr.remote)
+    }
+  }
   return {
     title: validateBoundedString(input.title, 'Scope title', 1, 120),
     runSetup: validateBoolean(input.runSetup, 'Run setup'),
     environmentMode: validateEnvironmentMode(input.environmentMode),
+    ...(pullRequest ? { pullRequest } : {}),
     ...(input.baseBranch === undefined
       ? {}
       : { baseBranch: validateBranchName(input.baseBranch, 'Source branch') }),

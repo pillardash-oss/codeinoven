@@ -61,7 +61,7 @@ export type ScopeRemovalStage = (typeof SCOPE_REMOVAL_STAGES)[number]
 export type ScopeMergeStage = 'merge'
 
 /** Every step a job can sit on. The checklist compares steps by id, never by index. */
-export type ScopeJobStepId = ScopeWorktreeStage | ScopeRemovalStage | ScopeMergeStage
+export type ScopeJobStepId = ScopeWorktreeStage | ScopeRemovalStage | ScopeMergeStage | 'handoff'
 
 /** One checklist line: a stable id plus the sentence it renders. */
 export interface ScopeJobStep {
@@ -144,6 +144,8 @@ export interface ScopeJob {
   minimized: boolean
   startedAt: number
   finishedAt: number | null
+  /** Optional handoff from a completed background preparation job. */
+  action?: { label: string; run: () => void }
 }
 
 export interface ScopeCreateJobInput extends ScopeWorktreeCreateInput {
@@ -157,6 +159,8 @@ export interface ScopeCreateJobOptions {
   /** Thread that started the run; scope assignment lands here even after a thread switch. */
   targetThreadId?: string | null
   onCreated?: (bucketId: string) => void
+  /** Complete the scoped handoff before reporting the job ready. */
+  prepare?: (bucketId: string) => Promise<{ label: string; run: () => void }>
 }
 
 export interface ScopeRemoveJobInput {
@@ -289,7 +293,12 @@ class ScopeJobStore {
       isolated: input.isolated,
       // A scope that shares the project directory only names a bucket; only an
       // isolated run reaches the worktree, environment and setup steps.
-      steps: input.isolated ? worktreeSteps(input.runSetup) : SHARED_SCOPE_STEPS,
+      steps: [
+        ...(input.isolated ? worktreeSteps(input.runSetup) : SHARED_SCOPE_STEPS),
+        ...(options.prepare
+          ? [{ id: 'handoff' as const, label: 'Preparing the review thread' }]
+          : [])
+      ],
       setupCommandCount: input.setupCommands?.length ?? 0
     })
     void this.#runCreate(job.id, projectId, input, options)
@@ -455,17 +464,22 @@ class ScopeJobStore {
       if (input.isolated) {
         // Persist the entered configuration as project defaults BEFORE creating
         // so the saved defaults can never race ahead of this worktree.
-        await scopeState.setWorktreeDefaults(projectId, {
-          setupCommands: input.setupCommands ?? [],
-          runSetupByDefault: input.runSetup,
-          environmentMode: input.environmentMode
-        })
+        if (!input.pullRequest)
+          await scopeState.setWorktreeDefaults(projectId, {
+            setupCommands: input.setupCommands ?? [],
+            runSetupByDefault: input.runSetup,
+            environmentMode: input.environmentMode
+          })
         const descriptor = await scopeState.createWorktree(projectId, bucketId, input)
         if (descriptor) {
           this.#patch(id, {
             result: { branch: descriptor.branch, directoryName: descriptor.directoryName }
           })
         }
+      }
+      if (options.prepare) {
+        this.#patch(id, { activeStepId: 'handoff', stage: null })
+        this.#patch(id, { action: await options.prepare(bucketId) })
       }
       this.#finish(id, 'succeeded')
       // Handing the finished scope to the caller (select it, move a thread into
@@ -775,10 +789,11 @@ class ScopeJobStore {
     }
     if (event.stage === 'done') {
       // Settle here so an agent run (which has no runner) leaves `running`
-      // the moment its worktree exists. User runs also finish here; their
-      // runner's `#finish` right after is idempotent and its navigation
-      // handoff still runs.
-      this.#patch(job.id, { stage, status: 'succeeded', finishedAt: Date.now() })
+      // the moment its worktree exists. User runs settle in their runner after
+      // any remaining review handoff completes.
+      if (job.origin === 'agent') {
+        this.#patch(job.id, { stage, status: 'succeeded', finishedAt: Date.now() })
+      }
       return
     }
     this.#patchNonTerminal(job.id, event)

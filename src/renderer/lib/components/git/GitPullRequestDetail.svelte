@@ -46,6 +46,7 @@
   import { assignAgentToCheck, assignAgentToComment } from './git-status-panel-agent-actions'
   import GitPullRequestDetailMergeDialogs from './GitPullRequestDetailMergeDialogs.svelte'
   import PrMergeConfirmDialog from './PrMergeConfirmDialog.svelte'
+  import PrReviewMenu from './PrReviewMenu.svelte'
   import {
     buildConversation,
     conversationKindLabel,
@@ -81,6 +82,7 @@
     threadId: string
     identity: { owner: string; repo: string }
     summary: PullRequestSummary
+    reviewRemote?: string
     onBack: () => void
     /** Hand this pull request to an agent to triage, test, and report back on. */
     onAssignAgent: (pr: PullRequestSummary) => void
@@ -114,6 +116,7 @@
     threadId,
     identity,
     summary,
+    reviewRemote,
     onBack,
     onAssignAgent,
     onOpenThread,
@@ -737,6 +740,9 @@
           showChecksLabel
         />
         <span class="min-w-0 flex-1"></span>
+        {#if reviewRemote}
+          <PrReviewMenu {projectId} pr={summary} remote={reviewRemote} />
+        {/if}
         {#if onFullscreen}
           <button
             type="button"
