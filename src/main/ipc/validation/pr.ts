@@ -60,6 +60,12 @@ const WORKFLOW_RERUN_MODES = new Set<import('../../../lib/types').WorkflowRerunM
   'all',
   'failed'
 ])
+/** The run states the Deployments view filters by, which GitHub answers server-side. */
+const WORKFLOW_RUN_FILTERS = new Set<import('../../../lib/types').WorkflowRunFilter>([
+  'all',
+  'failed',
+  'succeeded'
+])
 /**
  * GitHub's eight reaction values, taken from the shared table the picker draws
  * from so the boundary can never reject an emoji the picker offers.
@@ -374,6 +380,18 @@ export function validateWorkflowRerunMode(
 /** Validate a 1-based PR listing page number. */
 export function validatePrPage(value: unknown): number {
   return validateBoundedInteger(value, 'Pull request page', 1, 1000)
+}
+
+/** Validate a 1-based page of a repository's workflow runs or deployments. */
+export function validateDeploymentPage(value: unknown): number {
+  return validateBoundedInteger(value, 'Deployment page', 1, 1000)
+}
+
+/** Validate which workflow runs a listing keeps. */
+export function validateWorkflowRunFilter(
+  value: unknown
+): import('../../../lib/types').WorkflowRunFilter {
+  return assertEnum(value, WORKFLOW_RUN_FILTERS, 'workflow run filter')
 }
 
 /**

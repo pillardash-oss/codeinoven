@@ -10,10 +10,12 @@ import {
   deploymentDetailKey,
   deploymentKey,
   deploymentLogKey,
+  deploymentPageKey,
   errorMessage,
   prBundleKey,
   prPageKey,
   workflowRunKey,
+  workflowRunPageKey,
   type GitOperation
 } from './git-store-helpers'
 import { GitDeploymentCache } from './git-store-deployments.svelte'
@@ -40,9 +42,10 @@ import type {
   GitHubAuthStatus,
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
-  GitHubDeploymentOverviewResult,
+  GitHubDeploymentPage,
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
+  GitHubWorkflowRunPage,
   IssueBundle,
   IssuePage,
   IssueReference,
@@ -62,7 +65,8 @@ import type {
   PullRequestPage,
   PullRequestSummary,
   RepositoryMentionUser,
-  WorkflowRerunMode
+  WorkflowRerunMode,
+  WorkflowRunFilter
 } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -496,11 +500,12 @@ export class GitState {
     return this.prs.mentionUsers
   }
 
-  get deploymentOverviews(): Record<
-    string,
-    { overview: GitHubDeploymentOverviewResult; fetchedAt: number }
-  > {
-    return this.deployments.overviews
+  get deploymentRunPages(): Record<string, { page: GitHubWorkflowRunPage; fetchedAt: number }> {
+    return this.deployments.runPages
+  }
+
+  get deploymentPages(): Record<string, { page: GitHubDeploymentPage; fetchedAt: number }> {
+    return this.deployments.deploymentPages
   }
 
   get deploymentDetails(): Record<string, { detail: GitHubDeploymentDetail; fetchedAt: number }> {
@@ -1868,13 +1873,57 @@ export class GitState {
     return this.prs.ensureAgentAssignments(projectId, numbers)
   }
 
-  ensureDeploymentOverview(
+  ensureDeploymentActivity(
     projectId: string,
     owner: string,
     repo: string,
     force = false
-  ): Promise<GitHubDeploymentOverviewResult | null> {
-    return this.deployments.ensureDeploymentOverview(projectId, owner, repo, force)
+  ): Promise<boolean | null> {
+    return this.deployments.ensureDeploymentActivity(projectId, owner, repo, force)
+  }
+
+  ensureWorkflowRunPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    filter: WorkflowRunFilter,
+    page: number,
+    force = false
+  ): Promise<void> {
+    return this.deployments.ensureWorkflowRunPage(projectId, owner, repo, filter, page, force)
+  }
+
+  ensureDeploymentPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    page: number,
+    force = false
+  ): Promise<void> {
+    return this.deployments.ensureDeploymentPage(projectId, owner, repo, page, force)
+  }
+
+  preloadWorkflowRunPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    filter: WorkflowRunFilter,
+    page: number
+  ): Promise<void> {
+    return this.deployments.preloadWorkflowRunPage(projectId, owner, repo, filter, page)
+  }
+
+  preloadDeploymentPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    page: number
+  ): Promise<void> {
+    return this.deployments.preloadDeploymentPage(projectId, owner, repo, page)
+  }
+
+  refreshDeploymentPages(projectId: string, owner: string, repo: string): Promise<void> {
+    return this.deployments.refreshDeploymentPages(projectId, owner, repo)
   }
 
   ensureDeploymentDetail(
@@ -2112,6 +2161,21 @@ export class GitState {
 
   static deploymentKey(owner: string, repo: string): string {
     return deploymentKey(owner, repo)
+  }
+
+  /** Cache key for one page of workflow runs, under the filter that produced it. */
+  static workflowRunPageKey(
+    owner: string,
+    repo: string,
+    filter: WorkflowRunFilter,
+    page: number
+  ): string {
+    return workflowRunPageKey(owner, repo, filter, page)
+  }
+
+  /** Cache key for one page of deployments, mirroring `workflowRunPageKey`. */
+  static deploymentPageKey(owner: string, repo: string, page: number): string {
+    return deploymentPageKey(owner, repo, page)
   }
 
   static deploymentDetailKey(owner: string, repo: string, deploymentId: number): string {

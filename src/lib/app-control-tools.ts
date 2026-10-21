@@ -63,7 +63,7 @@ const CALL_INPUT_SCHEMA: Record<string, unknown> = {
     channel: {
       type: 'string',
       description:
-        'Exact app IPC channel to invoke, from cio_app_catalog, e.g. git:status, deployment:overview, browser:createTab. Pass the arguments in their declared order in `args`.'
+        'Exact app IPC channel to invoke, from cio_app_catalog, e.g. git:status, deployment:runs, browser:createTab. Pass the arguments in their declared order in `args`.'
     },
     args: {
       type: 'array',

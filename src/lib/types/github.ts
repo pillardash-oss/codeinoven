@@ -1165,18 +1165,60 @@ export interface GitHubDeployment {
   latestStatus: GitHubDeploymentStatus | null
 }
 
-/** Read-only GitHub Actions and Deployments snapshot for a repository. */
-export interface GitHubDeploymentOverview {
-  workflowRuns: GitHubWorkflowRun[]
-  deployments: GitHubDeployment[]
-  fetchedAt: number
+/**
+ * Which workflow runs a listing keeps, as GitHub's own `status` filter names it.
+ *
+ * `all` asks for every state, and the other two name the conclusion a run settled
+ * on. Deliberately not every conclusion GitHub accepts: these are the two a reader
+ * filters by, and each one is a server-side qualifier rather than a client-side
+ * pass over the page that happens to be loaded.
+ */
+export type WorkflowRunFilter = 'all' | 'failed' | 'succeeded'
+
+/**
+ * One page of a repository's workflow runs.
+ *
+ * The Deployments view reads runs as their own paged listing, exactly as the pull
+ * request listing does, so older results stay reachable instead of stopping at the
+ * one page a snapshot happened to carry.
+ */
+export interface GitHubWorkflowRunPage {
+  items: GitHubWorkflowRun[]
+  /** The 1-based page this listing answers. */
+  page: number
+  /** Whether another page exists after this one. */
+  hasMore: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
+  /**
+   * A transient transport failure (offline, timeout) returned instead of a
+   * rejected IPC call, so the view holds on to the rows it already had rather
+   * than blanking them.
+   */
+  transientError?: string
+}
+
+/** One page of a repository's deployments, each with its latest status. */
+export interface GitHubDeploymentPage {
+  items: GitHubDeployment[]
+  /** The 1-based page this listing answers. */
+  page: number
+  /** Whether another page exists after this one. */
+  hasMore: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
+  /** A transient transport failure, handled as `GitHubWorkflowRunPage` does. */
+  transientError?: string
 }
 
 /**
- * `deployment:overview` IPC result. `hasDeployments` is derived from the
- * snapshot and drives whether the Deployments tab is shown at all.
+ * `deployment:activity` IPC result: whether the repository deploys at all.
+ *
+ * Only the fact is asked for, because it is the whole question: the Deployments
+ * view exists for a repository that has runs or deployments, and nothing else in
+ * the app renders its listing.
  */
-export interface GitHubDeploymentOverviewResult extends GitHubDeploymentOverview {
+export interface GitHubDeploymentActivityResult {
   hasDeployments: boolean
   /** Actionable repository-access failure returned without rejecting IPC. */
   accessError?: string

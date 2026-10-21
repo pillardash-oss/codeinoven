@@ -4,11 +4,12 @@ import type {
   GitHubDeploymentJob,
   GitHubDeploymentJobLog,
   GitHubDeploymentJobStep,
-  GitHubDeploymentOverview,
+  GitHubDeploymentPage,
   GitHubDeploymentStatus,
   GitRepositoryIdentity,
   GitHubWorkflowRun,
   GitHubWorkflowRunDetail,
+  GitHubWorkflowRunPage,
   IssueDetail,
   IssuePage,
   IssueReference,
@@ -44,7 +45,8 @@ import type {
   PullRequestSummary,
   RepositoryMentionUser,
   SetPrReactionInput,
-  WorkflowRerunMode
+  WorkflowRerunMode,
+  WorkflowRunFilter
 } from '../../lib/types'
 import type { IssueLinkInput, SearchIssueCandidatesInput } from '../git/git-provider.interface'
 import { capJobLogText } from '../../lib/github-job-log'
@@ -60,6 +62,8 @@ import type {
   ListIssuePageInput,
   ListPullRequestPageInput,
   ListPullRequestsInput,
+  ListWorkflowRunPageInput,
+  ListDeploymentPageInput,
   MergePullRequestInput,
   MinimizePrCommentInput,
   PrCommentTarget,
@@ -374,6 +378,18 @@ const LIST_SORTS: Record<PrListSort, string> = {
   'updated-asc': 'sort:updated-asc',
   'created-asc': 'sort:created-asc',
   'comments-asc': 'sort:comments-asc'
+}
+
+/**
+ * The `status` qualifier each workflow run filter asks GitHub for.
+ *
+ * GitHub's runs endpoint takes claims and conclusions in one parameter, so a
+ * settled filter names its conclusion and `all` sends nothing at all.
+ */
+const WORKFLOW_RUN_FILTER_STATUS: Record<WorkflowRunFilter, string | null> = {
+  all: null,
+  failed: 'failure',
+  succeeded: 'success'
 }
 
 /**
@@ -1564,22 +1580,53 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
-  async getDeploymentOverview(input: {
-    owner: string
-    repo: string
-  }): Promise<GitHubDeploymentOverview> {
-    const [runsResponse, deploymentsResponse] = await Promise.all([
-      this.request(`${this.repoPath(input)}/actions/runs?per_page=20`, { method: 'GET' }),
-      this.request(`${this.repoPath(input)}/deployments?per_page=12`, { method: 'GET' })
-    ])
-    const runsRecord = Array.isArray(runsResponse) ? {} : runsResponse
-    const rawRuns = Array.isArray(runsRecord['workflow_runs']) ? runsRecord['workflow_runs'] : []
-    const workflowRuns = rawRuns.flatMap((run): GitHubWorkflowRun[] => {
+  /**
+   * One page of the repository's workflow runs, newest first.
+   *
+   * Asks for one row beyond the page on purpose: a page-numbered listing can read
+   * that extra row without moving anything, so `hasMore` is the server's answer
+   * rather than a guess from a page that came back exactly full.
+   */
+  async listWorkflowRunPage(input: ListWorkflowRunPageInput): Promise<GitHubWorkflowRunPage> {
+    const perPage = Math.min(Math.max(input.perPage, 1), 50)
+    const params = new URLSearchParams({
+      per_page: String(perPage + 1),
+      page: String(input.page)
+    })
+    const status = WORKFLOW_RUN_FILTER_STATUS[input.filter]
+    if (status) params.set('status', status)
+    const response = await this.request(
+      `${this.repoPath(input)}/actions/runs?${params.toString()}`,
+      { method: 'GET' }
+    )
+    const record = Array.isArray(response) ? {} : response
+    const rawRuns = Array.isArray(record['workflow_runs']) ? record['workflow_runs'] : []
+    const items = rawRuns.slice(0, perPage).flatMap((run): GitHubWorkflowRun[] => {
       const mapped = this.toWorkflowRun(run)
       return mapped ? [mapped] : []
     })
-    const rawDeployments = Array.isArray(deploymentsResponse) ? deploymentsResponse : []
-    const deployments = await Promise.all(
+    return { items, page: input.page, hasMore: rawRuns.length > perPage }
+  }
+
+  /**
+   * One page of the repository's deployments, newest first, each carrying the
+   * latest status GitHub recorded for it.
+   *
+   * Statuses are fetched beside the page rather than in sequence, and a failed
+   * status read leaves that deployment standing without one: a listing that loses
+   * a row because its status timed out is worse than a row with no state yet.
+   */
+  async listDeploymentPage(input: ListDeploymentPageInput): Promise<GitHubDeploymentPage> {
+    const perPage = Math.min(Math.max(input.perPage, 1), 50)
+    const params = new URLSearchParams({
+      per_page: String(perPage + 1),
+      page: String(input.page)
+    })
+    const response = await this.request(`${this.repoPath(input)}/deployments?${params.toString()}`, {
+      method: 'GET'
+    })
+    const rawDeployments = (Array.isArray(response) ? response : []).slice(0, perPage)
+    const items = await Promise.all(
       rawDeployments.flatMap((deployment): Array<Promise<GitHubDeployment>> => {
         const mapped = this.toDeployment(deployment)
         if (!mapped) return []
@@ -1595,7 +1642,33 @@ export class GitHubProvider implements GitProvider {
         ]
       })
     )
-    return { workflowRuns, deployments, fetchedAt: Date.now() }
+    return {
+      items,
+      page: input.page,
+      hasMore: Array.isArray(response) && response.length > perPage
+    }
+  }
+
+  /**
+   * Whether the repository has any Actions or Deployments activity at all.
+   *
+   * Two one-row reads answer the question the Deployments view is gated on, so the
+   * panel never pays for a listing it is only asking about.
+   */
+  async hasDeploymentActivity(input: { owner: string; repo: string }): Promise<boolean> {
+    const base = this.repoPath(input)
+    const [runsResponse, deploymentsResponse] = await Promise.all([
+      this.request(`${base}/actions/runs?per_page=1`, { method: 'GET' }),
+      this.request(`${base}/deployments?per_page=1`, { method: 'GET' })
+    ])
+    const runsRecord = Array.isArray(runsResponse) ? {} : runsResponse
+    const runCount = typeof runsRecord['total_count'] === 'number' ? runsRecord['total_count'] : 0
+    const rawRuns = Array.isArray(runsRecord['workflow_runs']) ? runsRecord['workflow_runs'] : []
+    return (
+      runCount > 0 ||
+      rawRuns.length > 0 ||
+      (Array.isArray(deploymentsResponse) && deploymentsResponse.length > 0)
+    )
   }
 
   /**

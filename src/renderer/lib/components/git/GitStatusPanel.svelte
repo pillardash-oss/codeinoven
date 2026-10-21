@@ -566,7 +566,9 @@
       return
     }
     if (activeTab === 'deployments') {
-      await gitState.ensureDeploymentOverview(projectId, identity.owner, identity.repo, true)
+      // The view's page and filter live in the view, so the store re-reads the
+      // pages it holds for this repository instead: one per view in practice.
+      await gitState.refreshDeploymentPages(projectId, identity.owner, identity.repo)
     }
   }
 
@@ -782,22 +784,22 @@
   /**
    * Discover whether the repo has GitHub deployment activity so the Deployments
    * tab can appear on its own. Only meaningful while signed in with a GitHub
-   * origin remote. Routes through the store so the probe also warms the overview
-   * cache the Deployments tab reads   first visit renders instantly.
+   * origin remote, and only the fact is asked for: the view reads its own pages
+   * when it opens, so the probe must not pay for a listing it will not show.
    */
   async function detectDeployments(): Promise<void> {
     const identity = githubIdentity
     if (!githubConnected || !identity || detectingDeployments) return
     detectingDeployments = true
     try {
-      const overview = await gitState.ensureDeploymentOverview(
+      const hasActivity = await gitState.ensureDeploymentActivity(
         projectId,
         identity.owner,
         identity.repo
       )
-      if (overview) {
-        hasDeployments = overview.hasDeployments
-        cacheHasDeployments(projectId, overview.hasDeployments)
+      if (hasActivity !== null) {
+        hasDeployments = hasActivity
+        cacheHasDeployments(projectId, hasActivity)
       }
     } catch {
       // Sign-in or network failure   keep the current flag and try again later.
@@ -2912,7 +2914,13 @@
   >
     <CioRefresh
       size={12}
-      class={gitState.isBusy(['refresh', 'pr-list', 'pr-detail', 'deployments']) ||
+      class={gitState.isBusy([
+        'refresh',
+        'pr-list',
+        'pr-detail',
+        'deployment-runs',
+        'deployment-environments'
+      ]) ||
       githubNotifications.loading
         ? 'animate-spin'
         : ''}
