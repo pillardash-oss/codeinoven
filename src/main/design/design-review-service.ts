@@ -1,7 +1,7 @@
 /// <reference types="electron-vite/node" />
 import { createHash } from 'node:crypto'
-import { realpath } from 'node:fs/promises'
-import { relative, isAbsolute } from 'node:path'
+import { realpath, stat } from 'node:fs/promises'
+import { relative, isAbsolute, join } from 'node:path'
 import createReviewWorker from './design-review-worker.ts?nodeWorker'
 import { currentWorkRoot } from './work-roots-state'
 import type { Database } from '../database/database'
@@ -14,52 +14,70 @@ import {
   type DesignCraftReport,
   type DesignReviewAssessment
 } from '../../lib/design/design-review'
+import { VIDEO_REVIEW_RUBRIC, validateVideoReviewEvidence } from '../../lib/video/review'
+import { snapshotVideoSource } from '../video/video-evidence'
+import { loadCompositionManifest } from '../video/video-manifest'
 
 export async function runDesignReview(
   database: Database,
   context: { projectId: string; threadId: string },
   input: Record<string, unknown>,
-  critique: boolean
+  critique: boolean,
+  kind: 'design' | 'video' = 'design'
 ): Promise<unknown> {
   const project = await requireLocalProjectViaWorker(database, context.projectId)
   const folder = resolveServedFolder(
     project.path,
     input['directory'],
-    currentWorkRoot('design', context.projectId)
+    currentWorkRoot(kind, context.projectId)
   )
   const canonicalFolder = await realpath(folder.absolute)
   const canonicalProject = await realpath(project.path)
   const within = relative(canonicalProject, canonicalFolder)
   if (within.startsWith('..') || isAbsolute(within))
-    throw new Error('Design folder escapes the project')
+    throw new Error('Review folder escapes the project')
   if (typeof input['entry'] !== 'string' || !input['entry'].trim())
-    throw new Error('Review requires a screen entry')
+    throw new Error('Review requires an entry file')
   const entry = await resolveServedEntry(canonicalFolder, input['entry'])
-  if (!entry) throw new Error('Review requires a screen entry')
+  if (!entry) throw new Error('Review requires an entry file')
   const file = await realpath(entry.absolute)
   const relativeFile = relative(canonicalFolder, file)
   if (relativeFile.startsWith('..') || isAbsolute(relativeFile))
-    throw new Error('Screen escapes the design folder')
-  const craft = await new Promise<DesignCraftReport>((resolve, reject) => {
-    const worker = createReviewWorker({ workerData: file })
-    let settled = false
-    const finish = (error: Error | null, result?: DesignCraftReport): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      void worker.terminate()
-      if (error) reject(error)
-      else resolve(result!)
-    }
-    const timer = setTimeout(() => finish(new Error('Craft review timed out')), 15_000)
-    worker.on('message', (message: { error?: string; result?: DesignCraftReport }) =>
-      finish(message.error ? new Error(message.error) : null, message.result)
+    throw new Error('Review entry escapes the authored-work folder')
+  let reviewEvidence: ReturnType<typeof validateVideoReviewEvidence> | undefined
+  let craft: DesignCraftReport
+  if (kind === 'video') {
+    if ((await stat(join(canonicalFolder, 'composition.json'))).size > 64 * 1024)
+      throw new Error('Video critique accepts manifests up to 64 KiB')
+    const manifest = await loadCompositionManifest(canonicalFolder, folder.display)
+    reviewEvidence = validateVideoReviewEvidence(
+      input['reviewEvidence'],
+      manifest.duration,
+      manifest.fps
     )
-    worker.on('error', (error: Error) => finish(error))
-    worker.on('exit', (code: number) => {
-      if (!settled) finish(new Error(`Craft worker exited (${code})`))
+    const source = await snapshotVideoSource(canonicalFolder, new AbortController().signal)
+    craft = { hash: source.sha256, findings: [] }
+  } else
+    craft = await new Promise<DesignCraftReport>((resolve, reject) => {
+      const worker = createReviewWorker({ workerData: file })
+      let settled = false
+      const finish = (error: Error | null, result?: DesignCraftReport): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        void worker.terminate()
+        if (error) reject(error)
+        else resolve(result!)
+      }
+      const timer = setTimeout(() => finish(new Error('Craft review timed out')), 15_000)
+      worker.on('message', (message: { error?: string; result?: DesignCraftReport }) =>
+        finish(message.error ? new Error(message.error) : null, message.result)
+      )
+      worker.on('error', (error: Error) => finish(error))
+      worker.on('exit', (code: number) => {
+        if (!settled) finish(new Error(`Craft worker exited (${code})`))
+      })
     })
-  })
   if (!critique) return craft
   const raw = input['dimensions']
   if (!raw || typeof raw !== 'object' || Array.isArray(raw))
@@ -118,6 +136,7 @@ export async function runDesignReview(
   const provider =
     typeof settings['providerId'] === 'string' ? settings['providerId'] : String(row['provider_id'])
   const harness = typeof settings['harnessId'] === 'string' ? settings['harnessId'] : 'unknown'
+  const rubric = kind === 'video' ? VIDEO_REVIEW_RUBRIC : DESIGN_REVIEW_RUBRIC
   const id = createHash('sha256')
     .update(
       JSON.stringify([
@@ -128,14 +147,25 @@ export async function runDesignReview(
         harness,
         provider,
         model,
-        DESIGN_REVIEW_RUBRIC
+        rubric
       ])
     )
     .digest('hex')
   const report = {
     directory: folder.display,
     entry: entry.requested,
-    rubric: DESIGN_REVIEW_RUBRIC,
+    rubric,
+    ...(kind === 'video'
+      ? {
+          kind,
+          reviewEvidence,
+          limitations: [
+            'Scores and viewing observations are agent-assessed, not independently verified.',
+            'Screen HTML lint is not applied to video; visual and audio failures must be reported as critical issues.',
+            'Source hashes cover local non-hidden files only; a critique does not approve an exported MP4.'
+          ]
+        }
+      : {}),
     dimensions,
     score,
     threshold: DESIGN_REVIEW_THRESHOLD,
@@ -155,7 +185,7 @@ export async function runDesignReview(
       harness,
       provider,
       model,
-      DESIGN_REVIEW_RUBRIC,
+      rubric,
       score,
       passed ? 1 : 0,
       JSON.stringify(report),
@@ -163,7 +193,7 @@ export async function runDesignReview(
     ],
     { allowPrimaryFallback: false }
   )
-  if (!saved.ok) throw new Error(saved.error ?? 'Could not persist design critique')
+  if (!saved.ok) throw new Error(saved.error ?? `Could not persist ${kind} critique`)
   const retention = await database.executeViaWorker(
     'DELETE FROM design_reviews WHERE id IN (SELECT id FROM design_reviews ORDER BY created_at DESC LIMIT -1 OFFSET 5000)',
     [],

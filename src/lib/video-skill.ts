@@ -211,6 +211,22 @@ Then use operation \`capture\` to look at an exact frame: give it \`time\` in se
 
 Never reason about a frame you have not captured, and never report a composition as done on the strength of its code.
 
+## Grade the film before delivery
+
+After fixing observed defects, call \`critique\` once for the current composition with \`directory\`, \`entry\`, \`dimensions\`, \`fixes\`, \`criticalIssues\` and \`reviewEvidence\`. Use five equally weighted dimensions, each with a 0–10 \`score\` and concrete \`evidence\`:
+
+- \`philosophy\`: fit to the brief, audience, story and discovered brand identity.
+- \`hierarchy\`: readable typography, framing, contrast and clear attention throughout each scene.
+- \`detail\`: transitions, motion continuity, reading holds, captions and the ending or loop seam.
+- \`functionality\`: deterministic seeking, working playback, audio timing and levels, intentional silence where declared, and any requested export checks.
+- \`innovation\`: motion and visual decisions that communicate the idea instead of decorative effects or unchanged starter scenes.
+
+Supply \`reviewEvidence.frames\` as 3–24 objects with \`time\` in seconds and an \`evidence\` observation for each captured frame. Include the opening, middle and last frame, and inspect scene changes as needed. Supply \`reviewEvidence.playback\` describing observed playback, seeking and transitions, and \`reviewEvidence.audio\` describing what you checked about the soundtrack, speech, synchronization or intentional silence. Stills cannot prove timing or sound. If you cannot inspect playback or check audio, list the missing verification in \`criticalIssues\`; never invent an observation. Judge the intended viewing size, not just a large canvas.
+
+A film passes at a mean score of at least 8/10 with no unresolved critical issues. Brand violations, unreadable required copy, broken playback, missing required audio, caption failures and failed requested exports are critical regardless of the mean. Report the returned score, dimension scores, evidence and corrections in the conversation. A failure stays unfinished: explain what needs fixing rather than silently repeating critiques until a score passes. Reassess only after a substantive revision or when the user requests it.
+
+These are agent-assessed scores, not an independent benchmark or user approval. The app records a source-bound, model-attributed \`video-v1\` report and updates the same source/model/rubric sample on repeated assessment. It does not mix video grades into design rankings. Any later source edit requires a fresh review before claiming the changed film passed. A preview critique does not approve an exported MP4: inspect the actual exported frames and audio when delivering a file, and do not rewrite export evidence to claim approval.
+
 ## Design the film before you build it
 
 Timing is the last thing to get right, not the first. These decisions are what separate a launch film from a slideshow.

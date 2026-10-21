@@ -2768,6 +2768,7 @@ export class UtilityOrchestrationService {
       // makes media, and capture renders and pictures one frame.
       const executors = new Map<string, VideoCapabilityExecutor | null>([
         ['preview', this.videoPreviewExecutor],
+        ['critique', this.videoPreviewExecutor],
         ['checkpoint', this.videoPreviewExecutor],
         ['generate', this.mediaGenerationExecutor],
         ...[
