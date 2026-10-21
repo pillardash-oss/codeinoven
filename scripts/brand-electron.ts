@@ -76,6 +76,33 @@ function readPlistObject(path: string): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
+/**
+ * Compare two plist dictionaries by value.
+ *
+ * A raw `JSON.stringify` comparison is order-sensitive while a plist is not: an
+ * object that a previous pass already wrote correctly comes back from `plutil`
+ * with its keys in a different order, so a string comparison reports a change
+ * that does not exist, rewrites the file with identical bytes, and then fails
+ * its own "did the write land" guard because the text never differed.
+ */
+function plistValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false
+    return left.every((entry, index) => plistValuesEqual(entry, right[index]))
+  }
+  if (typeof left !== 'object' || left === null || typeof right !== 'object' || right === null)
+    return false
+  const leftRecord = left as Record<string, unknown>
+  const rightRecord = right as Record<string, unknown>
+  const leftKeys = Object.keys(leftRecord)
+  if (leftKeys.length !== Object.keys(rightRecord).length) return false
+  return leftKeys.every(
+    (key) =>
+      Object.hasOwn(rightRecord, key) && plistValuesEqual(leftRecord[key], rightRecord[key])
+  )
+}
+
 /** Remove one key everywhere it appears, including any copy left nested. */
 function removeKeyEverywhere(value: unknown, key: string): void {
   if (Array.isArray(value)) {
@@ -106,7 +133,6 @@ const managedKeys: [string, string][] = [
     `${developmentName} connects to the Ovens you add, such as a tablet on your Wi-Fi or a virtual machine on this Mac, over SSH.`
   ]
 ]
-const current = readFileSync(plistPath, 'utf8')
 const before = readPlistObject(plistPath)
 const after: Record<string, unknown> = JSON.parse(JSON.stringify(before)) as Record<string, unknown>
 for (const [key, value] of managedKeys) {
@@ -115,12 +141,16 @@ for (const [key, value] of managedKeys) {
   removeKeyEverywhere(after, key)
   after[key] = value
 }
-if (JSON.stringify(after) !== JSON.stringify(before)) {
+if (!plistValuesEqual(after, before)) {
   const converted = join(dirname(plistPath), 'Info.plist.converted')
   writeFileSync(converted, JSON.stringify(after), 'utf8')
-  execFileSync('/usr/bin/plutil', ['-convert', 'xml1', '-o', plistPath, converted])
-  rmSync(converted, { force: true })
-  if (readFileSync(plistPath, 'utf8') === current) throw new Error('Info.plist was not updated.')
+  try {
+    execFileSync('/usr/bin/plutil', ['-convert', 'xml1', '-o', plistPath, converted])
+  } finally {
+    rmSync(converted, { force: true })
+  }
+  if (!plistValuesEqual(readPlistObject(plistPath), after))
+    throw new Error('Info.plist was not updated.')
   resourcesChanged = true
 }
 
