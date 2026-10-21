@@ -1,7 +1,7 @@
 <script lang="ts">
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
-  import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import ScopeBadge from '../shared/ScopeBadge.svelte'
   import { Popover } from 'bits-ui'
   import { onMount } from 'svelte'
   import PickerMenuShell from '../shared/PickerMenuShell.svelte'
@@ -43,7 +43,9 @@
       )
   )
   let selected = $derived(
-    value === null ? null : (buckets.find((bucket) => bucket.id === value) ?? null)
+    value === null
+      ? null
+      : (scopeState.boards.get(projectId)?.buckets.find((bucket) => bucket.id === value) ?? null)
   )
   let label = $derived(
     value === null ? (newCheckoutLabel ?? 'Choose a scope') : (selected?.name ?? 'Choose a scope')
@@ -72,16 +74,17 @@
 
 <Popover.Root bind:open onOpenChange={(next) => (query = next ? '' : query)}>
   <Popover.Trigger
-    class="flex w-full min-w-0 items-center gap-2 border bg-elevated px-3 py-2 text-left transition-colors hover:bg-overlay"
+    class="flex w-full min-w-0 items-center gap-2 border bg-elevated px-3 py-2 text-left text-xs transition-colors hover:bg-overlay"
     title="Scope the agent runs in: {label}"
     aria-label="Scope the agent runs in: {label}"
   >
-    {#if value === null || selected?.root.kind === 'worktree'}
-      <CioFolderGit size={13} class="shrink-0 text-warning" />
+    {#if selected}
+      <ScopeBadge bucket={selected} variant="mark" size="sm" showIcon />
     {:else}
-      <CioFolder size={13} class="shrink-0 text-dimmed" />
+      <CioFolderGit size={13} class="shrink-0 text-warning" />
+      <span class="min-w-0 flex-1 truncate text-xs text-foreground">{label}</span>
     {/if}
-    <span class="min-w-0 flex-1 truncate text-xs text-foreground">{label}</span>
+    <span class="flex-1"></span>
     <span class="shrink-0 text-[0.625rem] text-dimmed">{detail}</span>
     <CioChevronDown size={11} class="shrink-0 text-dimmed" />
   </Popover.Trigger>
@@ -143,12 +146,8 @@
             aria-checked={value === bucket.id}
             onclick={() => choose(bucket.id)}
           >
-            {#if bucket.root.kind === 'worktree'}
-              <CioFolderGit size={12} class="shrink-0 text-warning" />
-            {:else}
-              <CioFolder size={12} class="shrink-0 text-dimmed" />
-            {/if}
-            <span class="min-w-0 flex-1 truncate">{bucket.name}</span>
+            <ScopeBadge {bucket} variant="mark" size="sm" showIcon />
+            <span class="flex-1"></span>
             <span class="max-w-32 shrink-0 truncate text-[0.625rem] text-dimmed"
               >{bucketHint(bucket)}</span
             >

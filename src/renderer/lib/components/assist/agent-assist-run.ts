@@ -1,7 +1,7 @@
-import { invoke } from '$lib/ipc.svelte'
+import { invoke, subscribe } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
+import { scopeJobStageLabel } from '$lib/stores/scope-jobs.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sendThreadMessageHeadless } from '$lib/stores/thread-delivery'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -14,6 +14,12 @@ import type {
   AgentAssistRequest,
   AgentAssistSelection
 } from './agent-assist-store.svelte'
+
+export interface AgentAssistProgress {
+  stage: 'project' | 'scope' | 'thread' | 'dispatch' | 'agent'
+  detail?: string
+  threadId?: string
+}
 
 /** Open the thread a handoff created, so its run is visible from the first token. */
 async function openAssistThread(projectId: string, threadId: string): Promise<void> {
@@ -73,7 +79,8 @@ function reportStartFailure(
 export async function runAgentAssist(
   request: AgentAssistRequest,
   selection: AgentAssistSelection,
-  delivery: AgentAssistDelivery
+  delivery: AgentAssistDelivery,
+  onProgress: (progress: AgentAssistProgress) => void = () => undefined
 ): Promise<void> {
   const project = await invoke('project:get', request.projectId)
   if (!project) throw new Error('This project is no longer available')
@@ -85,14 +92,20 @@ export async function runAgentAssist(
    *
    * A run that cannot start is not a handoff that failed to be created: the
    * thread exists, is on screen, and carries the failure (a provider or Oven
-   * problem lands there as its own card with the retry). Only the thread
-   * creation itself is allowed to abort the handoff.
+   * problem lands there as its own card with the retry). The background job
+   * also reports the failure, while preserving the prepared thread.
    */
   const prepare = async (scopeBucketId: string): Promise<string> => {
+    onProgress({ stage: 'thread', detail: 'Preparing the thread and prompt' })
     const prepared = await request.prepare({
       scopeBucketId,
       settings: selection.settings,
       project
+    })
+    onProgress({
+      stage: 'dispatch',
+      detail: delivery === 'draft' ? 'Opening the prompt' : 'Starting the agent',
+      threadId: prepared.threadId
     })
     await openAssistThread(request.projectId, prepared.threadId)
     if (delivery === 'immediate') {
@@ -108,9 +121,10 @@ export async function runAgentAssist(
       } catch (error) {
         // A submit-time failure (an unreachable Oven, a provider that refused
         // the session) is reported in the thread itself, as the card the user
-        // can act on and retry. The thread exists either way, so the handoff
-        // itself did not fail, and the scope job must not claim it did.
+        // can act on and retry. Propagate it to the background job too, so a
+        // refused start never looks like a successful review.
         reportStartFailure(request.projectId, prepared.threadId, selection, error)
+        throw error
       }
     } else {
       rendererRecovery.setDraft(
@@ -125,39 +139,40 @@ export async function runAgentAssist(
   }
 
   if (selection.scopeBucketId) {
+    onProgress({ stage: 'scope', detail: 'Using the selected checkout' })
     await prepare(selection.scopeBucketId)
     return
   }
 
   const checkout = request.newCheckout
   if (!checkout) throw new Error('This action needs a scope to run in')
+  onProgress({ stage: 'scope', detail: 'Preparing the isolated checkout' })
   await scopeState.ensureBoardLoaded(request.projectId)
   const defaults =
     scopeState.boards.get(request.projectId)?.worktreeDefaults ?? DEFAULT_SCOPE_WORKTREE_DEFAULTS
-  let threadId: string | null = null
-  // A checkout that takes minutes belongs in the scope dock, not in front of a
-  // dialog: confirm hands the run over, and the dock reports the rest.
-  scopeJobs.create(
-    request.projectId,
-    {
+  const bucket = await scopeState.createBucketForProject(request.projectId, checkout.title)
+  if (!bucket) throw new Error('The review scope could not be created')
+  // This handoff's job owns the full lifecycle, so the underlying managed
+  // checkout streams into it instead of opening a second progress panel.
+  const dispose = subscribe('scope:worktree:progress', (event) => {
+    if (event.projectId === request.projectId && event.scopeBucketId === bucket.id) {
+      onProgress({ stage: 'scope', detail: scopeJobStageLabel(event.stage) })
+    }
+  })
+  try {
+    const descriptor = await scopeState.createWorktree(request.projectId, bucket.id, {
       title: checkout.title,
-      isolated: true,
       ...(checkout.pullRequest ? { pullRequest: checkout.pullRequest } : {}),
       ...defaults,
       // Setup stays a deliberate next step: the checkout may hold code the user
       // has not trusted with install scripts yet.
       runSetup: false
-    },
-    {
-      prepare: async (bucketId) => {
-        threadId = await prepare(bucketId)
-        return {
-          label: 'Open thread',
-          run: () => {
-            if (threadId) void openAssistThread(request.projectId, threadId)
-          }
-        }
-      }
-    }
-  )
+    })
+    if (!descriptor) throw new Error('The isolated checkout could not be prepared')
+  } finally {
+    dispose()
+  }
+  await prepare(bucket.id)
 }
+
+export { openAssistThread }

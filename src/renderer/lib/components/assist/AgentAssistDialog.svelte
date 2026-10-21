@@ -1,5 +1,4 @@
 <script lang="ts">
-  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -21,7 +20,8 @@
   import AgentAssistPermissionField from './AgentAssistPermissionField.svelte'
   import AgentAssistScopeField from './AgentAssistScopeField.svelte'
   import type { AgentAssistDelivery, AgentAssistRequest } from './agent-assist-store.svelte'
-  import { runAgentAssist } from './agent-assist-run'
+  import { agentAssistJobs } from './agent-assist-jobs.svelte'
+  import ScopeBadge from '../shared/ScopeBadge.svelte'
 
   /**
    * The one setup every "with agent" control goes through.
@@ -63,8 +63,6 @@
   // svelte-ignore state_referenced_locally
   let scopeBucketId = $state<string | null>(request.scopeBucketId)
   let busy = $state(false)
-  let pendingDelivery = $state<AgentAssistDelivery | null>(null)
-  let errorMessage = $state('')
 
   const providers = $derived(
     providerCatalog.cached(request.projectId) ?? providerCatalog.allCached()
@@ -169,23 +167,13 @@
     }
   }
 
-  async function submit(delivery: AgentAssistDelivery): Promise<void> {
+  function submit(delivery: AgentAssistDelivery): void {
     if (!canSubmit) return
     busy = true
-    pendingDelivery = delivery
-    errorMessage = ''
-    try {
-      await runAgentAssist(request, { settings: confirmedSettings(), scopeBucketId }, delivery)
-      onClose()
-    } catch (error) {
-      errorMessage =
-        error instanceof Error && error.message
-          ? error.message
-          : 'The agent handoff could not be started.'
-    } finally {
-      busy = false
-      pendingDelivery = null
-    }
+    const confirmedRequest = request
+    const selection = { settings: confirmedSettings(), scopeBucketId }
+    onClose()
+    agentAssistJobs.start(confirmedRequest, selection, delivery)
   }
 
   /**
@@ -254,11 +242,13 @@
     <section class="space-y-1.5">
       <h2 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">Scope</h2>
       {#if request.scopeLocked}
-        <div class="flex items-center gap-2 border bg-elevated px-3 py-2">
-          <CioFolder size={13} class="shrink-0 text-muted" />
-          <span class="min-w-0 flex-1 truncate text-xs text-foreground">
-            {lockedScope?.name ?? 'This checkout'}
-          </span>
+        <div class="flex items-center gap-2 border bg-elevated px-3 py-2 text-xs">
+          {#if lockedScope}
+            <ScopeBadge bucket={lockedScope} variant="mark" size="sm" showIcon />
+          {:else}
+            <CioFolder size={13} class="shrink-0 text-muted" />
+            <span class="min-w-0 flex-1 truncate text-xs text-foreground">This checkout</span>
+          {/if}
           <span class="shrink-0 text-[0.625rem] text-dimmed">This checkout</span>
         </div>
         <p class="text-[0.625rem] leading-relaxed text-dimmed">
@@ -284,9 +274,6 @@
         {settings.harnessId} is not installed on this Oven. Choose a model that runs there.
       </p>
     {/if}
-    {#if errorMessage}
-      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{errorMessage}</p>
-    {/if}
   </div>
 
   {#snippet footer()}
@@ -306,7 +293,6 @@
       disabled={!canSubmit}
       onclick={() => void submit('draft')}
     >
-      {#if pendingDelivery === 'draft'}<CioSpinner size={13} class="animate-spin" />{/if}
       <span>Review prompt</span>
     </button>
     <button
@@ -317,7 +303,6 @@
       disabled={!canSubmit}
       onclick={() => void submit('immediate')}
     >
-      {#if pendingDelivery === 'immediate'}<CioSpinner size={13} class="animate-spin" />{/if}
       <span>Proceed immediately</span>
     </button>
   {/snippet}
