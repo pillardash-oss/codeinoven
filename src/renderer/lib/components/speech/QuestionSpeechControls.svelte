@@ -9,6 +9,7 @@
   import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import SeekBar from '$lib/components/ui/SeekBar.svelte'
 
   interface Props {
     messageId: string
@@ -23,9 +24,10 @@
   )
   // Full block range: past audio is real, future lines are calibrated estimates.
   const trackLength = $derived(Math.max(speechController.estimatedTotalDurationSeconds, 0.1))
-  const fillPercent = $derived.by(() => {
+  /** How much of the block is synthesized, which is what the track fills to. */
+  const synthesized = $derived.by(() => {
     if (trackLength <= 0) return 0
-    return Math.min(100, (speechController.generatedFrontierSeconds / trackLength) * 100)
+    return Math.min(1, speechController.generatedFrontierSeconds / trackLength)
   })
   const thumbPosition = $derived(speechController.elapsedPlaybackSeconds)
   let scrubbing = $state(false)
@@ -44,15 +46,9 @@
     void speechController.togglePlayback(messageId, markdown)
   }
 
-  function beginScrub(event: PointerEvent): void {
-    const input = event.currentTarget as HTMLInputElement
+  function beginScrub(value: number): void {
     scrubbing = true
-    scrubValue = Number(input.value)
-  }
-
-  function onScrubInput(event: Event): void {
-    const input = event.currentTarget as HTMLInputElement
-    scrubValue = Number(input.value)
+    scrubValue = value
   }
 
   function commitScrub(): void {
@@ -99,63 +95,24 @@
     <!-- Separate sibling control, not part of the play/pause button -->
     {#if ownsSession && (playbackState.state === 'playing' || (playbackState.state === 'paused' && speechController.seekControlsActive))}
       <div transition:slide={{ duration: 160 }}>
-        <input
-          class="question-tts-seek block h-7 w-32 cursor-pointer"
-          style="--fill:{fillPercent}%"
-          type="range"
-          min="0"
-          max={trackLength}
-          step="0.1"
+        <SeekBar
+          class="block w-32"
           value={scrubbing ? scrubValue : Math.min(thumbPosition, trackLength)}
+          min={0}
+          max={trackLength}
+          step={0.1}
+          fillRatio={synthesized}
+          label="Seek spoken audio"
           title="Seek spoken audio"
-          aria-label="Seek spoken audio"
           {disabled}
-          onpointerdown={beginScrub}
-          onpointerup={() => {
+          onScrubStart={beginScrub}
+          onScrubEnd={() => {
             scrubbing = false
           }}
-          oninput={onScrubInput}
-          onchange={commitScrub}
+          onInput={(value) => (scrubValue = value)}
+          onCommit={() => commitScrub()}
         />
       </div>
     {/if}
   </div>
 {/if}
-
-<style>
-  /* Two-tone track: filled (generated audio) vs unfilled (not yet synthesized). */
-  .question-tts-seek {
-    appearance: none;
-    -webkit-appearance: none;
-    height: 4px;
-    background: linear-gradient(
-      to right,
-      var(--color-primary) 0%,
-      var(--color-primary) var(--fill, 0%),
-      var(--color-border) var(--fill, 0%),
-      var(--color-border) 100%
-    );
-    outline-offset: 3px;
-  }
-  .question-tts-seek:focus-visible {
-    outline: 2px solid var(--color-info);
-  }
-  .question-tts-seek::-webkit-slider-thumb {
-    appearance: none;
-    -webkit-appearance: none;
-    height: 10px;
-    width: 10px;
-    background: var(--color-primary);
-    border: none;
-    box-shadow: 0 0 0 1px var(--color-app);
-    cursor: pointer;
-  }
-  .question-tts-seek::-moz-range-thumb {
-    height: 10px;
-    width: 10px;
-    background: var(--color-primary);
-    border: none;
-    box-shadow: 0 0 0 1px var(--color-app);
-    cursor: pointer;
-  }
-</style>

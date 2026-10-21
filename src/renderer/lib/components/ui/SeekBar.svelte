@@ -22,6 +22,15 @@
     label: string
     title?: string
     /**
+     * How much of the track is drawn as filled, as a share of the whole.
+     *
+     * Absent means the fill follows the head, which is what a plain playhead
+     * wants. Spoken audio passes its synthesized frontier here instead, because
+     * there the fill answers "how much of this can play" while the head answers
+     * "where am I".
+     */
+    fillRatio?: number
+    /**
      * Every move, so a scrub follows the thumb.
      *
      * A caller that pins the playhead on release only should treat this as a
@@ -30,6 +39,10 @@
     onInput: (value: number) => void
     /** The value the user settled on, on release. */
     onCommit?: (value: number) => void
+    /** A pointer landing on the track, where a caller starts its own scrub session. */
+    onScrubStart?: (value: number) => void
+    /** The pointer leaving the track, before the settled value is committed. */
+    onScrubEnd?: () => void
     /** Extra layout classes, such as the width the caller's row gives it. */
     class?: string
     disabled?: boolean
@@ -42,15 +55,18 @@
     step = 0.01,
     label,
     title = label,
+    fillRatio,
     onInput,
     onCommit,
+    onScrubStart,
+    onScrubEnd,
     class: layout = '',
     disabled = false
   }: Props = $props()
 
-  /** How much of the track is behind the head, as the gradient's stop. */
+  /** How much of the track is filled, as the gradient's stop. */
   const fill = $derived(
-    `${Math.min(100, Math.max(0, ((value - min) / Math.max(max - min, 1e-6)) * 100))}%`
+    `${Math.min(100, Math.max(0, (fillRatio ?? (value - min) / Math.max(max - min, 1e-6)) * 100))}%`
   )
 </script>
 
@@ -65,6 +81,8 @@
   {disabled}
   aria-label={label}
   {title}
+  onpointerdown={() => onScrubStart?.(value)}
+  onpointerup={() => onScrubEnd?.()}
   oninput={(event) => onInput(Number(event.currentTarget.value))}
   onchange={(event) => onCommit?.(Number(event.currentTarget.value))}
 />
