@@ -5,6 +5,8 @@ import type { AgentProviderIssueKind } from '../../lib/types'
 
 /** One thread awaiting provider reset or device connection recovery. */
 export interface PendingRetryRecord {
+  /** Live instance responsible for this wait; legacy records use the incumbent. */
+  ownerPid?: number
   sessionId: string
   projectId: string
   threadId: string
@@ -226,12 +228,14 @@ export class RetrySchedulerService {
       })
       return false
     }
+    record.ownerPid = process.pid
     this.pending.set(record.sessionId, record)
     void this.persist()
     Logger.info('Retry wait retained', {
       projectId: record.projectId,
       threadId: record.threadId,
       harnessId: record.harnessId,
+      ownerPid: record.ownerPid,
       issueKind: record.issueKind,
       retryAt: record.retryAt === undefined ? null : new Date(record.retryAt).toISOString(),
       automatic: (this.enabled || record.issueKind === 'network') && record.retryAt !== undefined
@@ -344,6 +348,11 @@ export class RetrySchedulerService {
       projectId,
       threadId,
       harnessId,
+      ...(typeof record.ownerPid === 'number' &&
+      Number.isInteger(record.ownerPid) &&
+      record.ownerPid > 0
+        ? { ownerPid: record.ownerPid }
+        : {}),
       ...(retryAt === undefined ? {} : { retryAt }),
       ...(typeof record.resetAt === 'number' && Number.isFinite(record.resetAt)
         ? { resetAt: record.resetAt }
@@ -389,14 +398,19 @@ export class RetrySchedulerService {
     void this.tickAsync()
   }
 
+  private ownsRetry(record: PendingRetryRecord): boolean {
+    if (record.ownerPid === process.pid) return true
+    if (record.ownerPid !== undefined && instanceRegistry.isRunOwnerAlive(record.ownerPid))
+      return false
+    return instanceRegistry.isIncumbentInstance()
+  }
+
   private async tickAsync(): Promise<void> {
     if (this.timerStopped || !this.continueThread) return
-    // The ledger of pending resets is shared by every instance using this config
-    // root, and each instance holds its own in-memory copy of it. Only the
-    // longest-running instance fires a continuation, so a second window can
-    // never resume a thread the first one already owns, and a fired record is
-    // removed from the shared ledger by exactly one process.
-    if (!instanceRegistry.isIncumbentInstance()) return
+    // A newly tracked wait exists only in its recording instance's memory.
+    // Requiring the incumbent here stranded every secondary-instance wait:
+    // the owner refused to fire and the incumbent never loaded the new record.
+    // Live owners fire their own waits; only orphaned/legacy waits are elected.
     const now = Date.now()
     const due: PendingRetryRecord[] = []
     for (const record of this.pending.values()) {
@@ -405,6 +419,7 @@ export class RetrySchedulerService {
         this.networkReachable(record) &&
         record.retryAt !== undefined &&
         record.retryAt <= now &&
+        this.ownsRetry(record) &&
         !this.resuming.has(record.sessionId)
       )
         due.push(record)
@@ -424,11 +439,12 @@ export class RetrySchedulerService {
         }
       }
     }
-    if (this.timerStopped || !this.continueThread || !instanceRegistry.isIncumbentInstance()) return
+    if (this.timerStopped || !this.continueThread) return
     const runnable = due.filter(
       (record) =>
         !vetoed.includes(record) &&
         !deferred.has(record) &&
+        this.ownsRetry(record) &&
         (this.enabled || record.issueKind === 'network') &&
         this.networkReachable(record)
     )

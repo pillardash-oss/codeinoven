@@ -24449,12 +24449,7 @@ export class ChatEngine {
         return
       }
       const currentStatus = this.sessionStatuses.get(event.sessionId)
-      if (
-        event.status.state === 'idle' &&
-        currentStatus?.state === 'waiting' &&
-        currentStatus.issue.kind === 'network'
-      )
-        return
+      if (event.status.state === 'idle' && this.isAutomaticRetryWaitActive(event.sessionId)) return
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
         this.sessionStatuses.set(event.sessionId, event.status)
       }
@@ -26211,6 +26206,7 @@ export class ChatEngine {
         (event.status.state !== 'working' && event.status.state !== 'idle')
       )
         return
+      if (event.status.state === 'idle' && this.isAutomaticRetryWaitActive(event.sessionId)) return
       const previous = this.sessionStatuses.get(event.sessionId)
       if (previous?.state === 'waiting' || previous?.state === 'error') {
         this.sessionStatuses.delete(event.sessionId)
