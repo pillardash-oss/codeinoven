@@ -20,10 +20,8 @@
     CloudDeployState,
     type CloudDeployMonitorTarget
   } from '$lib/stores/cloud-deploy.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { threadSettings } from '$lib/stores/thread-settings.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { agentAssist } from '../assist/agent-assist-store.svelte'
   import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
   import {
     deploymentStatusLabel,
@@ -32,7 +30,7 @@
     runtimeStatusTone
   } from '$lib/cloud/deployment-status'
   import Modal from '../ui/Modal.svelte'
-  import { DEFAULT_THREAD_TITLE } from '$shared/types'
+  import { DEFAULT_SCOPE_BUCKET_ID, DEFAULT_THREAD_TITLE } from '$shared/types'
   import EmptyState from '../ui/EmptyState.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
   import type { StatusTone } from '../ui/status-tone'
@@ -552,21 +550,26 @@
   async function startAgentRemediation(logText: string): Promise<void> {
     const container = selectedContainer
     if (!container) return
-    const project = await invoke('project:get', projectId).catch(() => null)
-    if (!project) return
-
-    const thread = await invoke('thread:create', {
+    agentAssist.open({
       projectId,
-      providerId: 'pi',
-      title: DEFAULT_THREAD_TITLE,
-      workingDirectory: project.path,
-      settings: { ...threadSettings.lastUsed }
-    }).catch(() => null)
-    if (!thread) return
-
-    const [prompt, attachments] = await remediationPrompt(container, logText, thread.id)
-    rendererRecovery.setDraft(projectId, thread.id, prompt, attachments, [])
-    workspaceState.openThread(thread, project)
+      title: `Diagnose ${container.label} with agent`,
+      summary:
+        'The agent reads the failing deployment and its log, then proposes a fix. It never redeploys.',
+      scopeBucketId: DEFAULT_SCOPE_BUCKET_ID,
+      prepare: async ({ project, settings, scopeBucketId }) => {
+        const thread = await invoke('thread:create', {
+          projectId,
+          providerId: settings.harnessId,
+          title: DEFAULT_THREAD_TITLE,
+          workingDirectory: project.path,
+          scopeBucketId,
+          settings
+        }).catch(() => null)
+        if (!thread) throw new Error('The diagnosis thread could not be created')
+        const [prompt, attachments] = await remediationPrompt(container, logText, thread.id)
+        return { threadId: thread.id, text: prompt, attachments }
+      }
+    })
   }
 
   /**

@@ -296,7 +296,7 @@ class ScopeJobStore {
       steps: [
         ...(input.isolated ? worktreeSteps(input.runSetup) : SHARED_SCOPE_STEPS),
         ...(options.prepare
-          ? [{ id: 'handoff' as const, label: 'Preparing the review thread' }]
+          ? [{ id: 'handoff' as const, label: 'Preparing the agent thread' }]
           : [])
       ],
       setupCommandCount: input.setupCommands?.length ?? 0

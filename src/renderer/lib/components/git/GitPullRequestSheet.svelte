@@ -9,12 +9,11 @@
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
   import { APP_SLUG } from '$shared/brand'
-  import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { prComposeAgentSettings } from '$lib/stores/pr-compose-agent-settings.svelte'
   import { classifyProviderIssue, providerIssueTitle } from '$shared/provider-issue'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { agentAssist } from '../assist/agent-assist-store.svelte'
   import {
     prLifecycleStore,
     type PrDraftSeed,
@@ -178,9 +177,6 @@
   let createErrorIsNoCommits = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
-  /** True while a prepared divergence-resolution thread is being opened. */
-  let openingResolveThread = $state(false)
-  let resolveThreadError = $state('')
   /** True while the panel is collapsed into its dock row (local fallback). */
   let localMinimized = $state(false)
   const minimized = $derived(minimizedProp ?? localMinimized)
@@ -620,41 +616,35 @@
     }
   }
 
-  /** Open a normal project thread with the blocked-push evidence prefilled. */
-  async function resolveDivergenceWithAgent(): Promise<void> {
-    if (!head || !base || openingResolveThread) return
-    openingResolveThread = true
-    resolveThreadError = ''
-    try {
-      const project = await invoke('project:get', projectId).catch(() => null)
-      if (!project) throw new Error('Could not open this project for the agent')
-      const settings = { ...threadSettings.lastUsed }
+  /** Hand the blocked push to an agent in the scope this sheet drafts in. */
+  function resolveDivergenceWithAgent(): void {
+    if (!head || !base) return
+    const divergedHead = head
+    const divergedBase = base
+    agentAssist.open({
+      projectId,
+      title: 'Resolve the diverged branch with agent',
+      summary: `The agent works out why ${divergedHead} and ${divergedBase} diverged and resolves it in this checkout.`,
       // The thread belongs to the scope this sheet drafts in, so a worktree's
       // diverged branch is resolved in that worktree, not the project root.
-      const thread = await invoke('thread:create', {
-        projectId,
-        providerId: settings.harnessId,
-        title: `Resolve diverged branch ${head}`,
-        workingDirectory: project.path,
-        scopeBucketId,
-        settings
-      }).catch(() => null)
-      if (!thread) throw new Error('Could not create the resolution thread')
-      rendererRecovery.setDraft(
-        projectId,
-        thread.id,
-        divergenceResolutionPrompt(head, base),
-        [],
-        []
-      )
-      workspaceState.openThread(thread, project)
-      handleMinimize()
-    } catch (reason) {
-      resolveThreadError =
-        reason instanceof Error ? reason.message : 'Could not open the resolution thread'
-    } finally {
-      openingResolveThread = false
-    }
+      scopeBucketId,
+      scopeLocked: true,
+      prepare: async ({ project, settings }) => {
+        const thread = await invoke('thread:create', {
+          projectId,
+          providerId: settings.harnessId,
+          title: `Resolve diverged branch ${divergedHead}`,
+          workingDirectory: project.path,
+          scopeBucketId,
+          settings
+        }).catch(() => null)
+        if (!thread) throw new Error('The resolution thread could not be created')
+        return {
+          threadId: thread.id,
+          text: divergenceResolutionPrompt(divergedHead, divergedBase)
+        }
+      }
+    })
   }
 
   async function openInBrowser(url: string): Promise<void> {
@@ -1005,10 +995,8 @@
           {headIsCurrent}
           {pushErrorDetails}
           {recoverMode}
-          {resolveThreadError}
-          {openingResolveThread}
           onRecover={(mode) => void recoverPush(mode)}
-          onResolveWithAgent={() => void resolveDivergenceWithAgent()}
+          onResolveWithAgent={resolveDivergenceWithAgent}
         />
       {/if}
 
