@@ -323,7 +323,7 @@ ${SKILLS_SECTION_BODY}`
   {
     id: 'pr-review',
     filename: 'pr-review.md',
-    title: 'Pull request review',
+    title: 'PR Review',
     description:
       'The brief an agent receives when a pull request is handed to it for review. The default only reviews and never edits; rewrite it when you want the agent to fix what it finds.',
     group: 'Review',

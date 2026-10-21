@@ -174,7 +174,7 @@
             </div>
           {/each}
         </div>
-        <h3 class="mt-4 text-xs font-semibold text-foreground">Pull request review tags</h3>
+        <h3 class="mt-4 text-xs font-semibold text-foreground">PR review tags</h3>
         <p class="mt-0.5 text-xs text-muted">
           Filled from the pull request each review is handed, so the prompt never names one.
         </p>
