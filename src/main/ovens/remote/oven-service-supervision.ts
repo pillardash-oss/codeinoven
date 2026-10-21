@@ -20,7 +20,10 @@
  * CLI and the remote service entry both bundle it, and neither has an app.
  */
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { posix } from 'node:path'
+
+// These paths belong to POSIX Ovens, regardless of the host generating them.
+const { join } = posix
 
 /** Where a Termux Oven keeps its supervisor's service definitions. */
 export const TERMUX_SERVICE_DIRECTORY = 'var/service'

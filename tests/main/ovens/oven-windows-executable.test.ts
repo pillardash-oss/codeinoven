@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   WINDOWS_OVEN_EXECUTABLE,
   prepareOvenExecutable
@@ -9,10 +11,17 @@ describe('oven executable naming', () => {
     expect(WINDOWS_OVEN_EXECUTABLE).toBe('codeinoven-oven connect.exe')
   })
 
-  it('leaves the runtime path alone where Task Manager naming does not apply', async () => {
-    // Only Windows shows a process by the path that started it, so nothing is
-    // created on this machine and the caller keeps the runtime it passed in.
+  it('names the runtime on Windows and keeps its original path elsewhere', async () => {
+    const scratch = join(process.cwd(), '.cio', 'tmp')
+    await mkdir(scratch, { recursive: true })
+    const root = await mkdtemp(join(scratch, 'oven-executable-'))
     const nodePath = process.execPath
-    await expect(prepareOvenExecutable(nodePath, '/tmp/cio-oven-check')).resolves.toBe(nodePath)
+    try {
+      const expected = process.platform === 'win32' ? join(root, WINDOWS_OVEN_EXECUTABLE) : nodePath
+      await expect(prepareOvenExecutable(nodePath, root)).resolves.toBe(expected)
+      expect((await stat(expected)).size).toBe((await stat(nodePath)).size)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
