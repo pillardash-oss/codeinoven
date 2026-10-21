@@ -1,6 +1,7 @@
 <script lang="ts">
   import { formatChangeSummary } from '$shared/change-breakdown'
 
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioBan from '@pdslng/cio-icon/CioBan.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
@@ -38,6 +39,7 @@
   // the view id remains shared.
   import PrIdentityRow from './PrIdentityRow.svelte'
   import BotBadge from './BotBadge.svelte'
+  import GitPullRequestStack from './GitPullRequestStack.svelte'
   import GitPullRequestDetailConversation from './GitPullRequestDetailConversation.svelte'
   import GitPullRequestDetailChanges from './GitPullRequestDetailChanges.svelte'
   import GitPullRequestDetailChecks from './GitPullRequestDetailChecks.svelte'
@@ -82,6 +84,7 @@
     identity: { owner: string; repo: string }
     summary: PullRequestSummary
     reviewRemote?: string
+    onOpenPullRequest: (pr: PullRequestSummary) => void
     onBack: () => void
     /** Hand this pull request to an agent to triage, test, and report back on. */
     onAssignAgent: (pr: PullRequestSummary) => void
@@ -117,6 +120,7 @@
     summary,
     reviewRemote,
     onBack,
+    onOpenPullRequest,
     onAssignAgent,
     onOpenThread,
     onOpenWorkflowRun,
@@ -310,11 +314,36 @@
    * narrow to hold both the tabs and the actions comfortably.
    */
   const tabs = $derived(
-    PR_DETAIL_VIEWS.map((view) => ({
-      ...view,
-      count: prViewCount(view.id, bundle, agentReports.length)
-    }))
+    PR_DETAIL_VIEWS.filter((view) => view.id !== 'stacks' || (bundle?.stack?.length ?? 0) > 1).map(
+      (view) => ({
+        ...view,
+        count: prViewCount(view.id, bundle, agentReports.length)
+      })
+    )
   )
+
+  let stackHistory = $state<PullRequestSummary[]>([])
+  const previousStackPr = $derived(stackHistory.at(-1))
+  const openedStackPr = $derived(stackHistory[0])
+  const rootStackPr = $derived(bundle?.stack?.[0])
+
+  function openStackPr(pr: PullRequestSummary): void {
+    if (pr.number !== number) {
+      const earlier = stackHistory.findIndex((entry) => entry.number === pr.number)
+      stackHistory =
+        earlier >= 0 ? stackHistory.slice(0, earlier) : [...stackHistory, detail ?? summary]
+      onOpenPullRequest(pr)
+    }
+    tab = 'conversation'
+  }
+
+  function backToStackPr(): void {
+    if (!previousStackPr) return
+    const previous = previousStackPr
+    stackHistory = stackHistory.slice(0, -1)
+    onOpenPullRequest(previous)
+    tab = 'conversation'
+  }
 
   async function refresh(): Promise<void> {
     await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
@@ -721,6 +750,39 @@
 {#snippet panelHead()}
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2.5">
+    {#if previousStackPr}
+      <div class="mb-2 flex items-center justify-between gap-2 text-[0.625rem]">
+        <button
+          type="button"
+          class="flex cursor-pointer items-center gap-1 text-primary hover:underline"
+          title={`Back to PR #${previousStackPr.number}`}
+          onclick={backToStackPr}
+        >
+          <CioArrowLeft size={12} /> Back #{previousStackPr.number}
+        </button>
+        {#if rootStackPr && rootStackPr.number !== number && rootStackPr.number !== openedStackPr?.number}
+          <button
+            type="button"
+            class="cursor-pointer text-muted hover:text-foreground"
+            title={`Open root PR #${rootStackPr.number}`}
+            onclick={() => openStackPr(rootStackPr)}>Root #{rootStackPr.number}</button
+          >
+        {/if}
+        {#if openedStackPr}
+          <button
+            type="button"
+            class="cursor-pointer text-muted hover:text-foreground"
+            title={`Return to the PR you opened, #${openedStackPr.number}`}
+            onclick={() => {
+              const opened = openedStackPr
+              stackHistory = []
+              onOpenPullRequest(opened)
+              tab = 'conversation'
+            }}>Opened #{openedStackPr.number}</button
+          >
+        {/if}
+      </div>
+    {/if}
     {#if variant === 'fullscreen'}
       <!--
         Rail only. The Git panel's action row carries the identity row for the
@@ -735,6 +797,8 @@
           {checks}
           {onBack}
           onOpenChecks={() => (tab = 'checks')}
+          stackCount={bundle?.stack?.length ?? 0}
+          onOpenStacks={() => (tab = 'stacks')}
           showChecksLabel
         />
         <span class="min-w-0 flex-1"></span>
@@ -821,6 +885,9 @@
         </span>
       {/if}
     </p>
+    {#if bundle?.stackError}
+      <p class="mt-2 text-[0.625rem] text-warning" role="status">{bundle.stackError}</p>
+    {/if}
   </div>
 
   {#if notice}
@@ -1057,6 +1124,15 @@
         onNotice={(message) => (notice = message)}
         onRefresh={refresh}
       />
+    {:else if tab === 'stacks'}
+      <div class="px-3 py-2">
+        <GitPullRequestStack
+          items={bundle?.stack ?? []}
+          currentNumber={number}
+          error={bundle?.stackError}
+          onOpen={openStackPr}
+        />
+      </div>
     {:else if tab === 'commits'}
       <GitPullRequestDetailChanges
         mode="commits"

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import type { PullRequestChecks, PullRequestDetail, PullRequestSummary } from '$shared/types'
   import {
@@ -21,10 +22,21 @@
      * Name the check state next to its glyph. The full screen rail has the room
      * for the words; the panel's action row does not.
      */
+    stackCount?: number
+    onOpenStacks?: () => void
     showChecksLabel?: boolean
   }
 
-  let { summary, detail, checks, onBack, onOpenChecks, showChecksLabel = false }: Props = $props()
+  let {
+    summary,
+    detail,
+    checks,
+    onBack,
+    onOpenChecks,
+    stackCount = 0,
+    onOpenStacks,
+    showChecksLabel = false
+  }: Props = $props()
 
   const state = $derived(detail?.state ?? summary.state)
   const draft = $derived(detail?.draft ?? summary.draft)
@@ -65,5 +77,17 @@
   >
     <ChecksIcon size={10} class={prChecksStateSpinning(checks.state) ? 'animate-spin' : ''} />
     {#if showChecksLabel}{prChecksStateLabel(checks.state)}{/if}
+  </button>
+{/if}
+
+{#if stackCount > 1 && onOpenStacks}
+  <button
+    type="button"
+    class="order-last ml-auto flex shrink-0 cursor-pointer items-center gap-1 p-1 text-muted hover:bg-elevated hover:text-foreground"
+    title={`View ${stackCount} stacked pull requests`}
+    aria-label="View stacked pull requests"
+    onclick={onOpenStacks}
+  >
+    <CioLayers size={13} /><span class="text-[0.5625rem] tabular-nums">{stackCount}</span>
   </button>
 {/if}

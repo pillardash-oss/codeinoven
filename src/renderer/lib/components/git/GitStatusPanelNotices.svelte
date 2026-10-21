@@ -45,11 +45,11 @@
 
   /**
    * What this project's remote last answered when a round trip did not finish.
-   * Read from the store's per-project record rather than from the failure that
+   * Read from the store's per-scope record rather than from the failure that
    * set it, so the notice is there when the panel is opened, however long after
    * the background fetch that found it, and so it outlives a project switch.
    */
-  const remoteIssue = $derived(gitState.remoteIssueFor(projectId))
+  const remoteIssue = $derived(gitState.remoteIssueFor(projectId, scopeBucketId))
   const RemoteIssueIcon = $derived(
     remoteIssue ? REMOTE_ISSUE_ICONS[remoteIssue.kind] : REMOTE_ISSUE_ICONS.unknown
   )
@@ -63,10 +63,10 @@
    * non-empty while its notice is drawn, because an empty condition is never
    * dismissible.
    */
-  const permissionId = $derived(`git.githubPermission:${projectId}`)
+  const permissionId = $derived(`git.githubPermission:${projectId}:${scopeBucketId ?? ''}`)
   const permissionCondition = $derived(gitState.githubPermission?.message ?? '')
 
-  const remoteIssueId = $derived(`git.remoteIssue:${projectId}`)
+  const remoteIssueId = $derived(`git.remoteIssue:${projectId}:${scopeBucketId ?? ''}`)
   const remoteIssueCondition = $derived(
     remoteIssue ? `${remoteIssue.kind}|${remoteIssue.detail}` : ''
   )

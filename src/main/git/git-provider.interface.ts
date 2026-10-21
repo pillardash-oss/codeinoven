@@ -30,6 +30,7 @@ import type {
   PullRequestCommit,
   PullRequestCompare,
   PullRequestDetail,
+  PullRequestSummary,
   PullRequestFile,
   PullRequestLabel,
   PullRequestMilestone,
@@ -374,6 +375,7 @@ export interface GitProvider {
   /** Permanently delete an issue comment. Only the author may do this. */
   deleteIssueComment(input: IssueCommentTarget): Promise<void>
   getPullRequest(input: PullRequestTarget): Promise<PullRequestDetail>
+  listPullRequestStack(input: PullRequestTarget): Promise<PullRequestSummary[]>
   listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]>
   listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]>
   createPullRequestComment(input: CreatePrCommentInput): Promise<PullRequestComment>

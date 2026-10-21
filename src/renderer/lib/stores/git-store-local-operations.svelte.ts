@@ -74,18 +74,7 @@ export class GitLocalOperations {
   stashes: GitStashEntry[] = $state([])
   error: string | null = $state(null)
   githubPermission: GitHubPermissionRequired | null = $state(null)
-  /**
-   * What each project's remote last answered when a round trip did not finish,
-   * keyed by project because that is the granularity a fetch runs at: managed
-   * scopes are worktrees of one repository and share `refs/remotes`.
-   *
-   * A remote the checkout cannot reach, authenticate against, or find is a
-   * state the panel describes in its own notice, never the error banner, and it
-   * survives the refreshes and project switches between the fetch that found it
-   * and the panel open that shows it. The next round trip that finishes clears
-   * it. Reactive, unlike the store's other bookkeeping, because the panel
-   * renders it.
-   */
+  /** Remote failures stay with the checkout that made the request. */
   private readonly remoteIssues = new SvelteMap<string, GitRemoteIssue>()
   /**
    * When true, the file explorer reveals only conflicted files (a mode like the
@@ -105,9 +94,12 @@ export class GitLocalOperations {
 
   constructor(private readonly access: GitLocalOperationAccess) {}
 
-  /** The remote verdict for one project, or null when its last round trip finished. */
-  remoteIssueFor(projectId: string): GitRemoteIssue | null {
-    return this.remoteIssues.get(projectId) ?? null
+  private remoteIssueKey(projectId: string, scopeBucketId?: string): string {
+    return JSON.stringify([projectId, scopeBucketId ?? null])
+  }
+
+  remoteIssueFor(projectId: string, scopeBucketId?: string): GitRemoteIssue | null {
+    return this.remoteIssues.get(this.remoteIssueKey(projectId, scopeBucketId)) ?? null
   }
 
   /**
@@ -115,9 +107,14 @@ export class GitLocalOperations {
    * trip finished. Called by every operation that talks to a remote, so a
    * notice disappears the moment one of them succeeds again.
    */
-  private noteRemoteIssue(projectId: string, issue: GitRemoteIssue | null): void {
-    if (issue) this.remoteIssues.set(projectId, issue)
-    else this.remoteIssues.delete(projectId)
+  private noteRemoteIssue(
+    projectId: string,
+    issue: GitRemoteIssue | null,
+    scopeBucketId?: string
+  ): void {
+    const key = this.remoteIssueKey(projectId, scopeBucketId)
+    if (issue) this.remoteIssues.set(key, issue)
+    else this.remoteIssues.delete(key)
   }
 
   /**
@@ -129,14 +126,20 @@ export class GitLocalOperations {
    * Returns the sentence for callers that hand an outcome back to their own UI,
    * which is what a failed push does.
    */
-  private failRemoteOperation(projectId: string, reason: unknown, fallback: string): string {
+  private failRemoteOperation(
+    projectId: string,
+    reason: unknown,
+    fallback: string,
+    scopeBucketId?: string
+  ): string {
     const issue = gitRemoteIssueOf(reason)
     if (issue) {
-      this.noteRemoteIssue(projectId, issue)
+      this.noteRemoteIssue(projectId, issue, scopeBucketId)
       return issue.message
     }
     const message = errorMessage(reason, fallback)
-    this.error = message
+    if (this.access.isActiveTarget(projectId) && this.access.scopeFor(projectId) === scopeBucketId)
+      this.error = message
     return message
   }
 
@@ -375,6 +378,7 @@ export class GitLocalOperations {
   }
 
   async deleteRemoteBranch(projectId: string, remote: string, name: string): Promise<void> {
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('push', true)
     this.error = null
     try {
@@ -382,10 +386,10 @@ export class GitLocalOperations {
         'git:deleteRemoteBranch',
         ...this.access.scopedGitArgs(projectId, remote, name)
       )
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.failRemoteOperation(projectId, reason, 'Remote branch deletion failed')
+      this.failRemoteOperation(projectId, reason, 'Remote branch deletion failed', scopeBucketId)
     } finally {
       this.access.markBusy('push', false)
     }
@@ -408,26 +412,31 @@ export class GitLocalOperations {
   }
 
   async fetch(projectId: string): Promise<void> {
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('fetch', true)
     this.error = null
     this.access.noteFetchAttempt(projectId)
     try {
       const status = await invokeGit('git:fetch', ...this.access.scopedGitArgs(projectId))
       // The remote answered, so whatever it last refused no longer stands.
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       // This fetch is normally started by the project opening rather than by a
       // click, so the user can have switched to another project while the round
       // trip was in flight. Publishing then would put one project's status in
       // the panel of another; `refresh` below already no-ops for a target that
       // is no longer active.
-      if (this.access.isActiveTarget(projectId)) this.status = status
+      if (
+        this.access.isActiveTarget(projectId) &&
+        this.access.scopeFor(projectId) === scopeBucketId
+      )
+        this.status = status
       // Branch tracking (ahead/behind) changes with every fetch - refresh it so
       // push decisions (like the PR sheet's "is there anything to push?") are
       // made against freshly fetched remote refs, not the last panel refresh.
       await this.access.refresh(projectId)
     } catch (reason) {
       // Offline, refused, or absent: the panel's notice, not the error banner.
-      this.failRemoteOperation(projectId, reason, 'Fetch failed')
+      this.failRemoteOperation(projectId, reason, 'Fetch failed', scopeBucketId)
     } finally {
       this.access.markBusy('fetch', false)
     }
@@ -435,6 +444,7 @@ export class GitLocalOperations {
 
   /** Updates one branch's remote-tracking ref only - the working tree is untouched. */
   async fetchBranch(projectId: string, remote: string, branch: string): Promise<void> {
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('fetch', true)
     this.error = null
     this.access.noteFetchAttempt(projectId)
@@ -443,16 +453,17 @@ export class GitLocalOperations {
         'git:fetchBranch',
         ...this.access.scopedGitArgs(projectId, remote, branch)
       )
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.failRemoteOperation(projectId, reason, 'Fetch failed')
+      this.failRemoteOperation(projectId, reason, 'Fetch failed', scopeBucketId)
     } finally {
       this.access.markBusy('fetch', false)
     }
   }
 
   async pull(projectId: string): Promise<void> {
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('pull', true)
     this.error = null
     // A pull fetches the upstream before it integrates, so the refs it moved
@@ -460,12 +471,12 @@ export class GitLocalOperations {
     this.access.noteFetchAttempt(projectId)
     try {
       this.status = await invokeGit('git:pull', ...this.access.scopedGitArgs(projectId))
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       // A pull moves remote-tracking refs, so re-read branches and their
       // ahead/behind counts instead of leaving the panel showing stale ones.
       await this.access.refresh(projectId)
     } catch (reason) {
-      this.failRemoteOperation(projectId, reason, 'Pull failed')
+      this.failRemoteOperation(projectId, reason, 'Pull failed', scopeBucketId)
     } finally {
       this.access.markBusy('pull', false)
     }
@@ -477,15 +488,15 @@ export class GitLocalOperations {
     remote?: string,
     branch?: string
   ): Promise<GitPushResult> {
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('push', true)
     this.error = null
     try {
       const options = { setUpstream, remote, branch }
-      const scopeBucketId = this.access.scopeFor(projectId)
       this.status = scopeBucketId
         ? await invokeGit('git:push', projectId, options, scopeBucketId)
         : await invokeGit('git:push', projectId, options)
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       await this.access.refresh(projectId)
       // Pushing changes what GitHub computes for the branch - force a fresh
       // conflict check instead of waiting for the next thread open.
@@ -498,7 +509,7 @@ export class GitLocalOperations {
       if (isPushRejected(message)) return { status: 'rejected', message }
       return {
         status: 'failed',
-        message: this.failRemoteOperation(projectId, reason, 'Push failed')
+        message: this.failRemoteOperation(projectId, reason, 'Push failed', scopeBucketId)
       }
     } finally {
       this.access.markBusy('push', false)
@@ -516,15 +527,15 @@ export class GitLocalOperations {
     branch: string,
     strategy: GitPullStrategy
   ): Promise<void> {
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('pull', true)
     this.error = null
     try {
       const options = { remote, branch, strategy }
-      const scopeBucketId = this.access.scopeFor(projectId)
       this.status = scopeBucketId
         ? await invokeGit('git:pullIntegrate', projectId, options, scopeBucketId)
         : await invokeGit('git:pullIntegrate', projectId, options)
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       // Same reason as pull: a pull moves remote-tracking refs, so the branch
       // list and its ahead/behind counts have to be re-read.
       await this.access.refresh(projectId)
@@ -535,7 +546,7 @@ export class GitLocalOperations {
           : strategy === 'ff-only'
             ? 'Fast-forward pull failed'
             : 'Pull with merge failed'
-      this.failRemoteOperation(projectId, reason, fallback)
+      this.failRemoteOperation(projectId, reason, fallback, scopeBucketId)
     } finally {
       this.access.markBusy('pull', false)
     }
@@ -580,7 +591,7 @@ export class GitLocalOperations {
       const result = scopeBucketId
         ? await invokeGit('git:syncWith', projectId, options, scopeBucketId)
         : await invokeGit('git:syncWith', projectId, options)
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       if (this.access.scopeFor(projectId) === scopeBucketId) {
         this.status = result.status
         if (result.status.conflicted.length === 0) this.conflictsMode = false
@@ -595,7 +606,8 @@ export class GitLocalOperations {
           ? `Syncing ${toward} that branch with rebase failed`
           : options.strategy === 'ff-only'
             ? `Syncing ${toward} that branch with a fast-forward failed`
-            : `Syncing ${toward} that branch with a merge failed`
+            : `Syncing ${toward} that branch with a merge failed`,
+        scopeBucketId
       )
       return null
     } finally {
@@ -743,6 +755,7 @@ export class GitLocalOperations {
    * button can finish the whole flow without manual follow-up.
    */
   async preparePrResolve(projectId: string, options: PrResolveOptions): Promise<void> {
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('merge', true)
     this.error = null
     try {
@@ -750,13 +763,18 @@ export class GitLocalOperations {
         'git:preparePrResolve',
         ...this.access.scopedGitArgs(projectId, options)
       )
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       this.prResolveSession = { ...options, projectId }
       await this.access.refresh(projectId)
     } catch (reason) {
       // Preparing the session fetches the PR's head and base, so an offline
       // device or an unreadable remote lands in the notice, not the banner.
-      this.failRemoteOperation(projectId, reason, 'Could not prepare PR conflict resolution')
+      this.failRemoteOperation(
+        projectId,
+        reason,
+        'Could not prepare PR conflict resolution',
+        scopeBucketId
+      )
     } finally {
       this.access.markBusy('merge', false)
     }
@@ -771,6 +789,7 @@ export class GitLocalOperations {
   async finishPrResolve(projectId: string): Promise<boolean> {
     const session = this.prResolveSession
     if (!session || session.projectId !== projectId) return false
+    const scopeBucketId = this.access.scopeFor(projectId)
     this.access.markBusy('push', true)
     this.error = null
     try {
@@ -779,14 +798,19 @@ export class GitLocalOperations {
         'git:finishPrResolve',
         ...this.access.scopedGitArgs(projectId, options)
       )
-      this.noteRemoteIssue(projectId, null)
+      this.noteRemoteIssue(projectId, null, scopeBucketId)
       this.prResolveSession = null
       await this.access.refresh(projectId)
       return true
     } catch (reason) {
       // Finishing pushes the resolution back to the PR, so the same remote
       // verdicts a push reports belong in the notice here too.
-      this.failRemoteOperation(projectId, reason, 'Could not finish the PR conflict resolution')
+      this.failRemoteOperation(
+        projectId,
+        reason,
+        'Could not finish the PR conflict resolution',
+        scopeBucketId
+      )
       return false
     } finally {
       this.access.markBusy('push', false)

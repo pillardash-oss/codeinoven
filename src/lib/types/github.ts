@@ -104,6 +104,9 @@ export interface PullRequestSummary {
   authorIsBot?: boolean
   headRef: string
   baseRef: string
+  stackCount?: number
+  headRepository?: string | null
+  baseRepository?: string | null
   createdAt: string
   updatedAt: string
   /**
@@ -581,6 +584,9 @@ export interface PullRequestMilestone {
  */
 export interface PullRequestBundle {
   detail: PullRequestDetail
+  /** Connected open PRs, ordered from the target branch toward dependent PRs. */
+  stack?: PullRequestSummary[]
+  stackError?: string
   commits: PullRequestCommit[]
   comments: PullRequestComment[]
   reviews: PullRequestReview[]
@@ -901,6 +907,12 @@ export type IssueTimelineEventKind =
   | 'ready_for_review'
   | 'converted_to_draft'
   | 'head_ref_deleted'
+  | 'committed'
+  | 'head_ref_force_pushed'
+  | 'base_ref_changed'
+  | 'base_ref_force_pushed'
+  | 'head_ref_restored'
+  | 'review_dismissed'
 
 /** Everything the issue detail view renders, fetched in one round trip. */
 export interface IssueBundle {

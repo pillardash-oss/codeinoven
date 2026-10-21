@@ -128,6 +128,22 @@ export class GitPullRequestCache {
    * follows it are one round trip rather than two racing ones.
    */
   private bundleRequests: Record<string, Promise<PullRequestBundle> | undefined> = {}
+  private bundleTargets: Record<
+    string,
+    Record<string, { owner: string; repo: string; number: number }>
+  > = {}
+
+  /** Mark cached reads stale after an agent updates this repository. Mounted readers revalidate. */
+  invalidateProject(projectId: string): Array<{ owner: string; repo: string; number: number }> {
+    const targets = this.bundleTargets[projectId] ?? {}
+    const stale: Record<string, PullRequestBundle> = {}
+    for (const key of Object.keys(targets)) {
+      const cached = this.bundles[key]
+      if (cached) stale[key] = { ...cached, fetchedAt: 0 }
+    }
+    if (Object.keys(stale).length > 0) this.bundles = { ...this.bundles, ...stale }
+    return Object.values(targets)
+  }
 
   /**
    * Warm-ups that failed, per key. Plain rather than `$state` because nothing
@@ -610,6 +626,8 @@ export class GitPullRequestCache {
     pullNumber: number,
     key: string
   ): Promise<PullRequestBundle> {
+    const targets = this.bundleTargets[projectId] ?? (this.bundleTargets[projectId] = {})
+    targets[key] = { owner, repo, number: pullNumber }
     const existing = this.bundleRequests[key]
     if (existing) return existing
     const request = invoke('pr:bundle', projectId, owner, repo, pullNumber)

@@ -220,12 +220,29 @@ export function buildConversation(
     })
   }
 
+  for (const commit of bundle.commits) {
+    const event: IssueTimelineEvent = {
+      id: `commit:${commit.sha}`,
+      kind: 'committed',
+      actorLogin: commit.authorName,
+      actorAvatarUrl: null,
+      actorIsBot: false,
+      createdAt: commit.date,
+      commitId: commit.sha
+    }
+    nodes.push({
+      kind: 'event',
+      key: event.id,
+      at: event.createdAt,
+      event,
+      line: { lead: 'added commit', commitId: commit.sha, trail: commit.message }
+    })
+  }
+
   const threads = buildThreads(bundle.reviewComments, bundle.files, bundle.reviewThreads)
 
   // What happened to the pull request, in the same stream as what was said about it.
-  // The provider has already dropped the events another part of the reader draws
-  // (the comments, the reviews, the commits), so every row here is one nothing else
-  // in this reader shows.
+  // Comments, reviews and commits are assembled from their richer collections.
   for (const event of timeline) {
     nodes.push({
       kind: 'event',

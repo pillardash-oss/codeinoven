@@ -598,6 +598,12 @@ export class GitHubProvider implements GitProvider {
         const summary = this.toGraphqlSummary(node, input.owner, input.repo)
         return summary ? [summary] : []
       })
+      if (items.length > 0) {
+        const stacks = await this.readPullRequestStacks(input).catch(
+          () => new Map<number, PullRequestSummary[]>()
+        )
+        for (const item of items) item.stackCount = stacks.get(item.number)?.length ?? 0
+      }
       const pageInfo = search ? this.readRecord(search, 'pageInfo') : null
       const hasMore = pageInfo?.['hasNextPage'] === true
       return {
@@ -780,9 +786,7 @@ export class GitHubProvider implements GitProvider {
    * later is simply absent rather than rendered as a row saying nothing.
    */
   async listIssueTimeline(input: IssueTarget): Promise<IssueTimelineEvent[]> {
-    const response = await this.request(`${this.issuePath(input)}/timeline?per_page=100`, {
-      method: 'GET'
-    })
+    const response = await this.readCollection(`${this.issuePath(input)}/timeline?per_page=100`)
     const items = Array.isArray(response) ? response : []
     const events = items.flatMap((item): IssueTimelineEvent[] => {
       const event = this.toTimelineEvent(item)
@@ -1009,10 +1013,93 @@ export class GitHubProvider implements GitProvider {
     await this.request(this.issueCommentPath(input), { method: 'DELETE' })
   }
 
-  async listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]> {
-    const response = await this.request(`${this.pullPath(input)}/commits?per_page=100`, {
-      method: 'GET'
+  /** Read pages sequentially so long conversations do not fan out requests. */
+  private async readCollection(path: string): Promise<unknown[]> {
+    const items: unknown[] = []
+    for (let page = 1; page <= 100; page += 1) {
+      const response = await this.request(`${path}${page === 1 ? '' : `&page=${page}`}`, {
+        method: 'GET'
+      })
+      if (!Array.isArray(response)) throw new Error('GitHub returned an invalid collection')
+      items.push(...response)
+      if (response.length < 100) return items
+    }
+    throw new Error('GitHub history exceeds the supported page limit')
+  }
+
+  async listPullRequestStack(input: PullRequestTarget): Promise<PullRequestSummary[]> {
+    return (await this.readPullRequestStacks(input)).get(input.pullNumber) ?? []
+  }
+
+  private async readPullRequestStacks(input: {
+    owner: string
+    repo: string
+  }): Promise<Map<number, PullRequestSummary[]>> {
+    const items = await this.readCollection(`${this.repoPath(input)}/pulls?state=open&per_page=100`)
+    const prs = items.flatMap((item) => {
+      const summary = this.toSummary(item, input.owner, input.repo)
+      return summary ? [summary] : []
     })
+    const headKey = (pr: PullRequestSummary): string | null =>
+      pr.headRepository && pr.headRef ? `${pr.headRepository.toLowerCase()}:${pr.headRef}` : null
+    const baseKey = (pr: PullRequestSummary): string | null =>
+      pr.baseRepository && pr.baseRef ? `${pr.baseRepository.toLowerCase()}:${pr.baseRef}` : null
+    const byHead = new Map<string, PullRequestSummary[]>()
+    const byBase = new Map<string, PullRequestSummary[]>()
+    for (const pr of prs) {
+      const head = headKey(pr)
+      const base = baseKey(pr)
+      if (head) {
+        const rows = byHead.get(head)
+        if (rows) rows.push(pr)
+        else byHead.set(head, [pr])
+      }
+      if (base) {
+        const rows = byBase.get(base)
+        if (rows) rows.push(pr)
+        else byBase.set(base, [pr])
+      }
+    }
+    const stacks = new Map<number, PullRequestSummary[]>()
+    const visited = new Set<number>()
+    for (const current of prs) {
+      if (visited.has(current.number)) continue
+      const depths = new Map<number, number>([[current.number, 0]])
+      const queue = [current]
+      const expandedParents = new Set<string>()
+      const expandedChildren = new Set<string>()
+      for (let index = 0; index < queue.length; index += 1) {
+        const pr = queue[index]
+        const depth = depths.get(pr.number) ?? 0
+        const base = baseKey(pr) ?? ''
+        const head = headKey(pr) ?? ''
+        const parents = expandedParents.has(base) ? [] : (byHead.get(base) ?? [])
+        const children = expandedChildren.has(head) ? [] : (byBase.get(head) ?? [])
+        expandedParents.add(base)
+        expandedChildren.add(head)
+        for (const [neighbors, offset] of [
+          [parents, -1],
+          [children, 1]
+        ] as const) {
+          for (const next of neighbors) {
+            if (depths.has(next.number)) continue
+            depths.set(next.number, depth + offset)
+            queue.push(next)
+          }
+        }
+      }
+      for (const pr of queue) visited.add(pr.number)
+      if (queue.length < 2) continue
+      queue.sort(
+        (a, b) => (depths.get(a.number) ?? 0) - (depths.get(b.number) ?? 0) || a.number - b.number
+      )
+      for (const pr of queue) stacks.set(pr.number, queue)
+    }
+    return stacks
+  }
+
+  async listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]> {
+    const response = await this.readCollection(`${this.pullPath(input)}/commits?per_page=100`)
     const items = Array.isArray(response) ? response : []
     return items.flatMap((item): PullRequestCommit[] => {
       if (typeof item !== 'object' || item === null) return []
@@ -1035,9 +1122,8 @@ export class GitHubProvider implements GitProvider {
 
   async listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]> {
     // PR conversation comments live on the issues endpoint in the GitHub API.
-    const response = await this.request(
-      `${this.repoPath(input)}/issues/${input.pullNumber}/comments?per_page=100`,
-      { method: 'GET' }
+    const response = await this.readCollection(
+      `${this.repoPath(input)}/issues/${input.pullNumber}/comments?per_page=100`
     )
     const items = Array.isArray(response) ? response : []
     return items.flatMap((item): PullRequestComment[] => {
@@ -1155,16 +1241,12 @@ export class GitHubProvider implements GitProvider {
   }
 
   async listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]> {
-    const response = await this.request(`${this.pullPath(input)}/files?per_page=100`, {
-      method: 'GET'
-    })
+    const response = await this.readCollection(`${this.pullPath(input)}/files?per_page=100`)
     return this.toFiles(response)
   }
 
   async listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]> {
-    const response = await this.request(`${this.pullPath(input)}/reviews?per_page=100`, {
-      method: 'GET'
-    })
+    const response = await this.readCollection(`${this.pullPath(input)}/reviews?per_page=100`)
     const items = Array.isArray(response) ? response : []
     return items.flatMap((item): PullRequestReview[] => {
       if (typeof item !== 'object' || item === null) return []
@@ -1191,9 +1273,7 @@ export class GitHubProvider implements GitProvider {
   async listPullRequestReviewComments(
     input: PullRequestTarget
   ): Promise<PullRequestReviewComment[]> {
-    const response = await this.request(`${this.pullPath(input)}/comments?per_page=100`, {
-      method: 'GET'
-    })
+    const response = await this.readCollection(`${this.pullPath(input)}/comments?per_page=100`)
     const items = Array.isArray(response) ? response : []
     return items.flatMap((item): PullRequestReviewComment[] => {
       const comment = this.toReviewComment(item, input)
@@ -1622,9 +1702,12 @@ export class GitHubProvider implements GitProvider {
       per_page: String(perPage + 1),
       page: String(input.page)
     })
-    const response = await this.request(`${this.repoPath(input)}/deployments?${params.toString()}`, {
-      method: 'GET'
-    })
+    const response = await this.request(
+      `${this.repoPath(input)}/deployments?${params.toString()}`,
+      {
+        method: 'GET'
+      }
+    )
     const rawDeployments = (Array.isArray(response) ? response : []).slice(0, perPage)
     const items = await Promise.all(
       rawDeployments.flatMap((deployment): Array<Promise<GitHubDeployment>> => {
@@ -2497,6 +2580,8 @@ export class GitHubProvider implements GitProvider {
       ...this.toAuthor(user),
       headRef: head ? (this.readString(head, 'ref') ?? '') : '',
       baseRef: base ? (this.readString(base, 'ref') ?? '') : '',
+      headRepository: this.readString(this.readRecord(head ?? {}, 'repo') ?? {}, 'full_name'),
+      baseRepository: this.readString(this.readRecord(base ?? {}, 'repo') ?? {}, 'full_name'),
       createdAt: this.readString(record, 'created_at') ?? '',
       updatedAt: this.readString(record, 'updated_at') ?? '',
       comments: this.readNumber(record, 'comments'),
@@ -2656,6 +2741,8 @@ export class GitHubProvider implements GitProvider {
         }
       case 'locked':
         return { ...event, lockReason: this.readString(record, 'lock_reason') }
+      case 'head_ref_force_pushed':
+      case 'base_ref_force_pushed':
       case 'referenced':
       case 'merged':
         return { ...event, commitId: this.readString(record, 'commit_id') }
@@ -2722,12 +2809,9 @@ export class GitHubProvider implements GitProvider {
    * mapped to a field event that says a field changed without pretending to know
    * which one.
    *
-   * The kinds no case here answers for are dropped, and three of them are dropped
-   * deliberately rather than by omission: `committed`, `reviewed` and `commented`
-   * are all drawn by another part of the reader. A force-push and a base-branch
-   * change are dropped because their payloads name a ref this mapper has not seen
-   * in a real event, and a row that could not say which branch moved would be worse
-   * than the silence.
+   * Comments and reviews arrive from their richer collection endpoints. Commits
+   * are added by the PR conversation builder so their author, message and date
+   * remain available without duplicating timeline records.
    */
   private toTimelineKind(raw: string | null): IssueTimelineEventKind | null {
     switch (raw) {
@@ -2753,6 +2837,11 @@ export class GitHubProvider implements GitProvider {
       case 'review_request_removed':
       case 'ready_for_review':
       case 'head_ref_deleted':
+      case 'head_ref_force_pushed':
+      case 'base_ref_changed':
+      case 'base_ref_force_pushed':
+      case 'head_ref_restored':
+      case 'review_dismissed':
         return raw
       case 'issue_field_added':
         return 'fields'
