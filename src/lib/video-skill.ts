@@ -73,6 +73,12 @@ Make a video as a small web project, then watch it in this app while the turn is
 
 ${authoredWorkCheckpointGuidance('video')}
 
+## Preview first, export on request
+
+The default deliverable is the editable composition and its live preview. Keep changes in the source, preview them, capture frames and grade the current revision. Do not call \`export\` automatically when creating a video, finishing a scene, passing critique or wrapping up a turn. A request to make or improve a video does not by itself request an MP4.
+
+Export only when the user explicitly asks for an export, render or downloadable video file, or directly starts an export from the app. Do not ask about exporting at the end of every edit. A previous export request does not authorize automatic re-exports after later edits unless the user explicitly asked to keep the exported file updated. Until export is requested, report the composition folder, preview URL and review result; the absence of an MP4 is not a defect or a reason to fail critique. Run exported-file checks and review exported frames and audio only when delivering a requested export.
+
 ## Establish the brand before the first frame
 
 Before scaffolding, choosing a visual direction or generating assets, look for DESIGN.md or DESIGNS.md case-insensitively at the project root, apps and src. Check those directories directly rather than recursively scanning the repository. Read every matching contract and apply the one relevant to this video; the root contract takes precedence unless the user explicitly requests another direction.

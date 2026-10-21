@@ -80,12 +80,18 @@ const VIDEO_SESSION_STEPS = `How to run the session:
    a generation link expires. When neither exists for work the composition needs,
    say which work needs one and ask; never choose a model yourself, and never
    leave an empty frame where a real asset was asked for.
-7. Before delivery, follow the playbook's grading step and call \`critique\` for
+7. Default to an editable composition and live preview. Do not export at the end
+   of creation or edits, or because critique passed. Export only when the user
+   explicitly requests a rendered/downloadable file or directly starts an export.
+   Do not repeatedly ask whether to export. A prior export request does not mean
+   every later edit should be exported unless the user explicitly requested that.
+8. Before delivery, follow the playbook's grading step and call \`critique\` for
    the current composition. Inspect opening, middle and closing frames, playback
    and audio. Supply evidence for all five dimensions and list unresolved critical
    issues. A mean below 8/10 or any critical issue means unfinished. Report the
    returned grade honestly; do not silently repeat assessments to chase a pass.
-8. Report in the user's terms: what a viewer sees, how long it runs, the shape it
+   An unrequested export is not required to pass this preview review.
+9. Report in the user's terms: what a viewer sees, how long it runs, the shape it
    is in, the folder the composition lives in, and the URL that shows it. If a
    decision was a guess, say which one and what would settle it.
 
@@ -125,7 +131,9 @@ ${VIDEO_SESSION_STEPS}`
 export function videoSessionContinuation(root: string): string {
   return `This thread is in a video session, and the video capability stays active. The composition folder is \`${root}\`, and the work belongs there: move anything of this composition that sits elsewhere into it, then keep working in the same composition folder, which keeps refreshing in its own preview tab as you write, and capture frames as you change them. Preserve the confirmed brand identity unless the user changes the direction. If brand discovery has not happened in this session, follow the playbook's brand-discovery step before editing frames. Report what changed and what a viewer now sees.
 
-Before calling the changed film finished, follow the playbook's grading step and call \`critique\` on the current revision with captured-frame, playback and audio evidence. A mean below 8/10 or any unresolved critical issue means unfinished. Report the returned grade; previous scores do not cover new edits.
+Keep this revision editable and preview it. Do not export or re-export after edits unless the user explicitly requests it; a previous export does not make later exports automatic. Do not repeatedly ask whether to export.
+
+Before calling the changed film finished, follow the playbook's grading step and call \`critique\` on the current revision with captured-frame, playback and audio evidence. A mean below 8/10 or any unresolved critical issue means unfinished. Report the returned grade; previous scores do not cover new edits. The absence of an unrequested export is not a critical issue.
 
 Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
 }
