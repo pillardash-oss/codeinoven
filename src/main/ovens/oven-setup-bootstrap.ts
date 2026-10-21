@@ -122,6 +122,8 @@ Tool 'npm' 'npm' @('--version')
 $pending = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending' -ErrorAction SilentlyContinue) -ne $null
 $pending = $pending -or ((Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired') -eq $true)
 Field 'reboot.required' $(if ($pending) { 'true' } else { 'false' })
+$sshd = Get-Service -Name sshd -ErrorAction SilentlyContinue
+Field 'sshd.startAtBoot' $(if (-not $sshd) { 'absent' } elseif ($sshd.StartType.ToString() -eq 'Automatic') { 'true' } else { 'false' })
 Field 'os.updates' '0'
 ${OVEN_HARNESS_COMMANDS.map(
   (
@@ -273,6 +275,15 @@ export function buildPreflightReport(
         }
       : {}),
     rebootRequired: fields.get('reboot.required') === 'true',
+    // Windows installs its SSH server as a manual service; reporting that here
+    // is what lets setup tell the user the one command that fixes it instead of
+    // failing silently after their next restart.
+    sshStartsAtBoot:
+      fields.get('sshd.startAtBoot') === 'true'
+        ? true
+        : fields.get('sshd.startAtBoot') === 'false'
+          ? false
+          : null,
     durationMs
   }
 }

@@ -66,6 +66,14 @@ for (const [key, value] of [
   [
     'NSMicrophoneUsageDescription',
     `Record audio for local dictation and transcription in ${developmentName}.`
+  ],
+  // macOS 15 and later deny every local-network connection from an app that
+  // carries no local-network description, and a development run that cannot
+  // reach a Wi-Fi tablet or a local virtual machine looks exactly like an Oven
+  // that is down. A packaged build gets the same key from electron-builder.yml.
+  [
+    'NSLocalNetworkUsageDescription',
+    `${developmentName} connects to the Ovens you add, such as a tablet on your Wi-Fi or a virtual machine on this Mac, over SSH.`
   ]
 ]) {
   const entry = new RegExp(`(<key>${key}</key>\\s*<string>)[^<]*(</string>)`)

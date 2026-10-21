@@ -415,6 +415,14 @@ export interface OvenPreflightReport {
   osUpdateRequired: boolean
   osUpdateDetail?: string
   rebootRequired: boolean
+  /**
+   * Whether this Windows Oven's OpenSSH server starts with the machine.
+   *
+   * Windows installs `sshd` as a manual service, so a restart leaves the Oven
+   * answering nothing until someone starts SSH by hand. `null` means the Oven
+   * is not Windows, or the service could not be read.
+   */
+  sshStartsAtBoot?: boolean | null
   durationMs: number
 }
 
@@ -432,6 +440,7 @@ export interface OvenPreflightIssue {
     | 'harness-broken'
     | 'os-update-pending'
     | 'reboot-required'
+    | 'windows-ssh-manual'
   message: string
   /** Blocks setup outright rather than merely warning. */
   blocking: boolean
@@ -457,6 +466,12 @@ export interface OvenPreflightAssessment {
   osUpdateRequired: boolean
   osUpdateDetail?: string
   rebootRequired: boolean
+  /**
+   * Whether this Windows Oven's SSH server starts with the machine.
+   *
+   * `null` means the Oven is not Windows, or its service could not be read.
+   */
+  sshStartsAtBoot?: boolean | null
 }
 
 export type OvenSetupStepStatus =
